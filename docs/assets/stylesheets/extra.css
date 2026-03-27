@@ -1,0 +1,36 @@
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+  width: auto;
+}
+
+.hero-logo-panel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 2.5rem 0;
+  padding: 1rem 0;
+}
+
+.hero-logo-mark {
+  display: block;
+  width: min(420px, 100%);
+  height: auto;
+}
+
+.hero-acronym {
+  margin: -1rem 0 2rem;
+  text-align: center;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  color: var(--md-default-fg-color--light);
+}
+
+.app-preview-video {
+  display: block;
+  width: 100%;
+  max-width: 1100px;
+  margin: 1.5rem auto 2rem;
+  border-radius: 14px;
+}

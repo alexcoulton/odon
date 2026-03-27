@@ -1,0 +1,13 @@
+pub(crate) mod canvas_overlays;
+pub(crate) mod channels_panel;
+pub(crate) mod contrast;
+pub(crate) mod group_layers;
+pub(crate) mod icons;
+pub(crate) mod layer_list;
+pub(crate) mod left_panel;
+pub(crate) mod range_slider;
+pub(crate) mod right_panel;
+pub(crate) mod roi_browser;
+pub(crate) mod style;
+pub(crate) mod tooltip;
+pub(crate) mod top_bar;

@@ -1,0 +1,51 @@
+site_name: odon
+site_description: User documentation for the odon spatial proteomics viewer
+site_dir: site
+docs_dir: docs
+theme:
+  name: material
+  logo: assets/images/logo.white.transparent.png
+  favicon: assets/images/favicon.odon.png
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+extra_css:
+  - assets/stylesheets/extra.css
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Workflows:
+      - Viewing Channels: workflows/viewing.md
+      - Mosaic Mode: workflows/mosaic.md
+      - Objects and Overlays: workflows/objects-and-overlays.md
+      - Thresholding: workflows/thresholding.md
+  - Data Sources:
+      - Overview: data-sources/overview.md
+      - OME-Zarr: data-sources/ome-zarr.md
+      - SpatialData and Xenium: data-sources/spatialdata-and-xenium.md
+      - Projects and Samplesheets: data-sources/projects-and-samplesheets.md
+  - Reference:
+      - Controls: reference/controls.md
+      - CLI: reference/cli.md
+  - Advanced:
+      - Current Limitations: advanced/current-limitations.md

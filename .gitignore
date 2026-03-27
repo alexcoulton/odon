@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Rust
+/target/
+*.profraw
+*.profdata
+
+# Logs
+*.log
+src/odon.log
+
+# Python / docs
+.venv/
+.venv-docs/
+__pycache__/
+*.pyc
+
+# Generated documentation
+/site/
+
+# Local data / fixtures
+/test_data/
+/img/
+
+# Editors
+.idea/
+.vscode/
+
+# Misc
+*.swp

@@ -1,0 +1,47 @@
+[package]
+name = "odon"
+version = "0.1.0"
+edition = "2024"
+default-run = "odon"
+
+[features]
+# Remote object storage / HTTP dataset loading (S3/R2, HTTP(S)).
+# This is implemented incrementally; enabling it will require adding additional deps.
+remote = []
+
+[dependencies]
+anyhow = "1.0.102"
+crossbeam-channel = "0.5.15"
+eframe = "0.33.3"
+egui_glow = "0.33.3"
+glow = "0.16.0"
+image = "0.25.9"
+lru = "0.16.3"
+ndarray = "0.17.2"
+parking_lot = "0.12.5"
+bytemuck = "1.23.2"
+lyon_path = "1.0.16"
+lyon_tessellation = "1.0.16"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "time"] }
+yaml_serde = "0.10.3"
+zarrs = "0.23.3"
+quick-xml = "0.38.4"
+
+# Custom napari-style cell threshold overlay
+parquet = { version = "58.0.0", features = ["arrow"] }
+arrow-array = "58.0.0"
+arrow-schema = "58.0.0"
+zarrs_http = "0.3.1"
+zarrs_object_store = "0.6.2"
+object_store = { version = "0.13", features = ["aws"] }
+csv = "1.3.1"
+rfd = "0.14"
+muda = "0.17.1"
+tiff = "0.10"
+zip = "2"
+sysinfo = "0.37.2"
+
+[patch.crates-io]
+tiff = { path = "vendor/tiff" }
