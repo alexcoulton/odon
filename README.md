@@ -4,13 +4,9 @@
   <img src="docs/assets/images/logo.upscaled.white.cropped.png" alt="odon logo" width="520">
 </p>
 
-`odon` is an ultra-fast native Rust desktop viewer for multiplexed spatial proteomics and spatial transcriptomics data.
+`odon` is an ultra-fast native Rust desktop viewer for multiplexed spatial proteomics and spatial transcriptomics data, specifically for OME-Zarr files.
 
 `odon` derives its name from the dragonfly (Odonata), which are reported to exhibit ultra-fast sensitivity to flickering light.
-
-Multiplex imaging datasets are large, high-dimensional, and often awkward to inspect efficiently, especially at whole-slide or cohort scale. Visual review is still essential for rapid detection of staining artefacts, protein aggregates, non-specific signal, segmentation errors, and other acquisition issues that are often easier to detect by eye than by downstream analysis alone. `odon` is designed to make that inspection fast on standard laptops rather than requiring a heavily provisioned workstation.
-
-The viewer is built primarily around the OME-Zarr imaging format, with annotations and object overlays via GeoJSON and GeoParquet, plus secondary support for SpatialData, Xenium containers, and TIFF / OME-TIFF. Data can be loaded locally or streamed directly from HTTP and S3-compatible object storage using viewport-driven tile loading. The rendering engine is optimized for rapid interaction with large high-plex datasets, including whole-slide imagery, large segmentation overlays, and mosaic views spanning many regions of interest.
 
 ## Getting odon
 
