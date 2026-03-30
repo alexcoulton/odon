@@ -4,7 +4,9 @@
   <img src="docs/assets/images/logo.upscaled.white.cropped.png" alt="odon logo" width="520">
 </p>
 
-`odon` is a native desktop viewer for multiplexed spatial proteomics and spatial transcriptomics data.
+`odon` is an ultra-fast native Rust desktop viewer for multiplexed spatial proteomics and spatial transcriptomics data.
+
+`odon` derives its name from the dragonfly (Odonata), which are reported to exhibit ultra-fast sensitivity to flickering light.
 
 Multiplex imaging datasets are large, high-dimensional, and often awkward to inspect efficiently, especially at whole-slide or cohort scale. Visual review is still essential for rapid detection of staining artefacts, protein aggregates, non-specific signal, segmentation errors, and other acquisition issues that are often easier to detect by eye than by downstream analysis alone. `odon` is designed to make that inspection fast on standard laptops rather than requiring a heavily provisioned workstation.
 
