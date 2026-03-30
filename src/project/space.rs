@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +59,191 @@ struct ProjectFileV5 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectFileV6 {
+    version: u32,
+    #[serde(default)]
+    config: ProjectConfig,
+    #[serde(default)]
+    state: ProjectState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+struct ProjectState {
+    #[serde(default)]
+    browser: ProjectBrowserState,
+    #[serde(default)]
+    roi_views: BTreeMap<String, ProjectRoiViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mosaic: Option<ProjectMosaicViewState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+struct ProjectBrowserState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    focused: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    selected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectRoiViewState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_groups: Option<ProjectLayerGroups>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_order: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ProjectChannelViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_channel: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overlay_visibility: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overlay_offsets_world: BTreeMap<String, [f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmentation: Option<ProjectSegmentationViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ProjectCameraState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ProjectUiState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_layers: Vec<ProjectAnnotationLayerState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectChannelViewState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_world: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_rad: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectCameraState {
+    pub center_world_lvl0: [f32; 2],
+    pub zoom_screen_per_lvl0_px: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectSegmentationViewState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlines_color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlines_opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlines_width_px: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectUiState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_left_panel: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_right_panel: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth_pixels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_tile_debug: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_scale_bar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_level: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_level: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectAnnotationCategoryStyleState {
+    pub name: String,
+    pub visible: bool,
+    pub color_rgb: [u8; 3],
+    pub shape: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectAnnotationLayerState {
+    pub id: u64,
+    pub name: String,
+    pub visible: bool,
+    pub radius_screen_px: f32,
+    pub opacity: f32,
+    pub stroke_width: f32,
+    pub stroke_color_rgb: [u8; 3],
+    pub stroke_color_alpha: u8,
+    pub offset_world: [f32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parquet_path: Option<String>,
+    pub roi_id_column: String,
+    pub x_column: String,
+    pub y_column: String,
+    pub value_column: String,
+    pub selected_value_column: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub category_styles: Vec<ProjectAnnotationCategoryStyleState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_shape: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_range: Option<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectMosaicViewState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_order: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ProjectChannelViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_channel: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overlay_visibility: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_secondary_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_by_secondary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_group_labels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_gap: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_text_labels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ProjectCameraState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ProjectUiState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_layers: Vec<ProjectAnnotationLayerState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectItem {
     pub path: PathBuf,
     #[serde(default)]
@@ -75,6 +260,7 @@ pub enum ProjectSpaceAction {
 #[derive(Debug, Default, Clone)]
 pub struct ProjectSpace {
     config: ProjectConfig,
+    state: ProjectState,
     focused: Option<String>,
     selected: HashSet<String>,
     config_generation: u64,
@@ -91,6 +277,30 @@ pub struct ProjectSpace {
 }
 
 impl ProjectSpace {
+    fn browser_state(&self) -> ProjectBrowserState {
+        let mut selected = self.selected.iter().cloned().collect::<Vec<_>>();
+        selected.sort();
+        ProjectBrowserState {
+            focused: self.focused.clone(),
+            selected,
+        }
+    }
+
+    fn state_for_save(&self) -> ProjectState {
+        let mut state = self.state.clone();
+        state.browser = self.browser_state();
+        let valid_roi_keys = self
+            .config
+            .rois
+            .iter()
+            .filter_map(ProjectRoi::source_key)
+            .collect::<HashSet<_>>();
+        state
+            .roi_views
+            .retain(|source_key, _| valid_roi_keys.contains(source_key));
+        state
+    }
+
     pub fn config(&self) -> &ProjectConfig {
         &self.config
     }
@@ -122,11 +332,11 @@ impl ProjectSpace {
 
     pub fn save_to_file(&mut self, path: &Path) -> anyhow::Result<()> {
         self.save_path = path.to_string_lossy().to_string();
-        let file = ProjectFileV5 {
-            version: 5,
+        self.state = self.state_for_save();
+        let file = ProjectFileV6 {
+            version: 6,
             config: self.config.clone(),
-            focused: self.focused.clone(),
-            selected: self.selected.iter().cloned().collect(),
+            state: self.state.clone(),
         };
         let text = serde_json::to_string_pretty(&file)?;
         fs::write(path, text)?;
@@ -254,6 +464,66 @@ impl ProjectSpace {
             .map(|it| it.mask_layers.as_slice())
     }
 
+    fn ensure_roi_for_source(&mut self, source: &DatasetSource) {
+        let source_key = source.source_key();
+        if self.config.rois.iter().any(|roi| roi.source_key().as_deref() == Some(source_key.as_str())) {
+            return;
+        }
+
+        let display_name = source.display_name();
+        let default_dataset = self
+            .config
+            .default_dataset
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let mut roi = ProjectRoi {
+            id: display_name.clone(),
+            source: None,
+            path: None,
+            dataset: source.is_local().then_some(default_dataset),
+            display_name: Some(display_name),
+            segpath: None,
+            mask_layers: Vec::new(),
+            channel_order: Vec::new(),
+            meta: Default::default(),
+        };
+        roi.set_dataset_source(source.clone());
+        self.config.rois.push(roi);
+    }
+
+    fn roi_view_state_mut(&mut self, source: &DatasetSource) -> &mut ProjectRoiViewState {
+        self.ensure_roi_for_source(source);
+        self.state
+            .roi_views
+            .entry(source.source_key())
+            .or_default()
+    }
+
+    pub fn roi_view_state(&self, source: &DatasetSource) -> Option<&ProjectRoiViewState> {
+        self.state.roi_views.get(&source.source_key())
+    }
+
+    pub fn set_roi_view_state(&mut self, source: &DatasetSource, view: ProjectRoiViewState) {
+        let dst = self.roi_view_state_mut(source);
+        if *dst == view {
+            return;
+        }
+        *dst = view;
+        self.config_generation = self.config_generation.wrapping_add(1);
+    }
+
+    pub fn mosaic_view_state(&self) -> Option<&ProjectMosaicViewState> {
+        self.state.mosaic.as_ref()
+    }
+
+    pub fn set_mosaic_view_state(&mut self, view: ProjectMosaicViewState) {
+        if self.state.mosaic.as_ref() == Some(&view) {
+            return;
+        }
+        self.state.mosaic = Some(view);
+        self.config_generation = self.config_generation.wrapping_add(1);
+    }
+
     pub fn set_roi_mask_layers(&mut self, roi_path: &Path, layers: Vec<ProjectMaskLayer>) {
         let key = roi_path
             .canonicalize()
@@ -283,6 +553,7 @@ impl ProjectSpace {
             display_name,
             segpath: None,
             mask_layers: layers,
+            channel_order: Vec::new(),
             meta: Default::default(),
         };
         roi.set_dataset_source(DatasetSource::Local(key));
@@ -349,6 +620,7 @@ impl ProjectSpace {
             display_name: Some(display_name),
             segpath: None,
             mask_layers: Vec::new(),
+            channel_order: Vec::new(),
             meta: Default::default(),
         };
         roi.set_dataset_source(source);
@@ -1205,6 +1477,7 @@ impl ProjectSpace {
                 display_name: Some(row.id),
                 segpath,
                 mask_layers: Vec::new(),
+                channel_order: Vec::new(),
                 meta,
             };
             roi.set_dataset_source(DatasetSource::Local(resolved_path));
@@ -1282,11 +1555,11 @@ impl ProjectSpace {
             self.status = "Save path is empty.".to_string();
             return;
         }
-        let file = ProjectFileV5 {
-            version: 5,
+        self.state = self.state_for_save();
+        let file = ProjectFileV6 {
+            version: 6,
             config: self.config.clone(),
-            focused: self.focused.clone(),
-            selected: self.selected.iter().cloned().collect(),
+            state: self.state.clone(),
         };
         match serde_json::to_string_pretty(&file) {
             Ok(text) => match fs::write(&path, text) {
@@ -1319,9 +1592,10 @@ impl ProjectSpace {
             .unwrap_or(1);
 
         self.config = ProjectConfig::default();
+        self.state = ProjectState::default();
         self.roi_browse.clear();
 
-        let (mut config, focused, selected): (ProjectConfig, Option<String>, Vec<String>) =
+        let (mut config, mut state): (ProjectConfig, ProjectState) =
             match version {
                 1 => {
                     let file: ProjectFileV1 = match serde_json::from_str(&text) {
@@ -1351,6 +1625,7 @@ impl ProjectSpace {
                                 display_name: it.display_name,
                                 segpath: None,
                                 mask_layers: Vec::new(),
+                                channel_order: Vec::new(),
                                 meta: Default::default(),
                             };
                             roi.set_dataset_source(DatasetSource::Local(it.path));
@@ -1362,8 +1637,13 @@ impl ProjectSpace {
                             rois,
                             ..Default::default()
                         },
-                        focused,
-                        Vec::new(),
+                        ProjectState {
+                            browser: ProjectBrowserState {
+                                focused,
+                                selected: Vec::new(),
+                            },
+                            ..Default::default()
+                        },
                     )
                 }
                 2 => {
@@ -1389,6 +1669,7 @@ impl ProjectSpace {
                                 display_name: it.display_name,
                                 segpath: None,
                                 mask_layers: Vec::new(),
+                                channel_order: Vec::new(),
                                 meta: Default::default(),
                             };
                             roi.set_dataset_source(DatasetSource::Local(it.path));
@@ -1400,12 +1681,19 @@ impl ProjectSpace {
                             rois,
                             ..Default::default()
                         },
-                        file.focused
-                            .map(|path| DatasetSource::Local(path).source_key()),
-                        file.selected
-                            .into_iter()
-                            .map(|path| DatasetSource::Local(path).source_key())
-                            .collect(),
+                        ProjectState {
+                            browser: ProjectBrowserState {
+                                focused: file
+                                    .focused
+                                    .map(|path| DatasetSource::Local(path).source_key()),
+                                selected: file
+                                    .selected
+                                    .into_iter()
+                                    .map(|path| DatasetSource::Local(path).source_key())
+                                    .collect(),
+                            },
+                            ..Default::default()
+                        },
                     )
                 }
                 3 => {
@@ -1431,6 +1719,7 @@ impl ProjectSpace {
                                 display_name: it.display_name,
                                 segpath: None,
                                 mask_layers: Vec::new(),
+                                channel_order: Vec::new(),
                                 meta: Default::default(),
                             };
                             roi.set_dataset_source(DatasetSource::Local(it.path));
@@ -1442,12 +1731,19 @@ impl ProjectSpace {
                             rois,
                             ..Default::default()
                         },
-                        file.focused
-                            .map(|path| DatasetSource::Local(path).source_key()),
-                        file.selected
-                            .into_iter()
-                            .map(|path| DatasetSource::Local(path).source_key())
-                            .collect(),
+                        ProjectState {
+                            browser: ProjectBrowserState {
+                                focused: file
+                                    .focused
+                                    .map(|path| DatasetSource::Local(path).source_key()),
+                                selected: file
+                                    .selected
+                                    .into_iter()
+                                    .map(|path| DatasetSource::Local(path).source_key())
+                                    .collect(),
+                            },
+                            ..Default::default()
+                        },
                     )
                 }
                 4 => {
@@ -1460,12 +1756,19 @@ impl ProjectSpace {
                     };
                     (
                         file.config,
-                        file.focused
-                            .map(|path| DatasetSource::Local(path).source_key()),
-                        file.selected
-                            .into_iter()
-                            .map(|path| DatasetSource::Local(path).source_key())
-                            .collect(),
+                        ProjectState {
+                            browser: ProjectBrowserState {
+                                focused: file
+                                    .focused
+                                    .map(|path| DatasetSource::Local(path).source_key()),
+                                selected: file
+                                    .selected
+                                    .into_iter()
+                                    .map(|path| DatasetSource::Local(path).source_key())
+                                    .collect(),
+                            },
+                            ..Default::default()
+                        },
                     )
                 }
                 5 => {
@@ -1476,7 +1779,26 @@ impl ProjectSpace {
                             return;
                         }
                     };
-                    (file.config, file.focused, file.selected)
+                    (
+                        file.config,
+                        ProjectState {
+                            browser: ProjectBrowserState {
+                                focused: file.focused,
+                                selected: file.selected,
+                            },
+                            ..Default::default()
+                        },
+                    )
+                }
+                6 => {
+                    let file: ProjectFileV6 = match serde_json::from_str(&text) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.status = format!("Load failed: {e}");
+                            return;
+                        }
+                    };
+                    (file.config, file.state)
                 }
                 _ => {
                     self.status = format!("Unsupported project version: {version}");
@@ -1544,11 +1866,31 @@ impl ProjectSpace {
             }
             cleaned.push(roi);
         }
+
+        for roi in &mut cleaned {
+            let key = roi.source_key();
+            if let Some(key) = key {
+                if !roi.channel_order.is_empty() {
+                    let view = state.roi_views.entry(key).or_default();
+                    if view.channel_order.is_empty() {
+                        view.channel_order = std::mem::take(&mut roi.channel_order);
+                    } else {
+                        roi.channel_order.clear();
+                    }
+                }
+            }
+        }
+
         config.rois = cleaned;
         self.config = config;
+        self.state = state;
         self.config_generation = self.config_generation.wrapping_add(1);
 
-        self.focused = focused
+        self.focused = self
+            .state
+            .browser
+            .focused
+            .clone()
             .filter(|key| {
                 self.config
                     .rois
@@ -1558,7 +1900,7 @@ impl ProjectSpace {
             .or_else(|| self.config.rois.first().and_then(ProjectRoi::source_key));
 
         self.selected.clear();
-        for key in selected {
+        for key in self.state.browser.selected.clone() {
             if self
                 .config
                 .rois

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use ndarray::Array2;
 use rfd::FileDialog;
 use zarrs::array::{Array, ArraySubset};
 
-use crate::annotations::AnnotationPointsLayer;
+use crate::annotations::{AnnotationPointsLayer, AnnotationShape};
 use crate::camera::Camera;
 use crate::imaging::channel_max::{ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader};
 use crate::custom::cell_thresholds::{CellThresholdsAction, CellThresholdsPanel};
@@ -35,11 +35,16 @@ use crate::app_support::memory::{
 };
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
+use crate::data::project_config::ProjectLayerGroups;
 use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
 use crate::render::points::PointsLayer;
 use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
 use crate::data::project_config::ProjectRoi;
-use crate::project::{ProjectSpace, ProjectSpaceAction};
+use crate::project::{
+    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
+    ProjectChannelViewState, ProjectRoiViewState, ProjectSegmentationViewState, ProjectSpace,
+    ProjectSpaceAction, ProjectUiState,
+};
 use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
@@ -117,6 +122,23 @@ enum LeftTab {
     Project,
 }
 
+impl LeftTab {
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::Layers => "layers",
+            Self::Project => "project",
+        }
+    }
+
+    fn from_storage_key(value: &str) -> Option<Self> {
+        match value {
+            "layers" => Some(Self::Layers),
+            "project" => Some(Self::Project),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightTab {
     Properties,
@@ -124,6 +146,29 @@ enum RightTab {
     Measurements,
     Memory,
     RoiSelector,
+}
+
+impl RightTab {
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::Properties => "properties",
+            Self::Analysis => "analysis",
+            Self::Measurements => "measurements",
+            Self::Memory => "memory",
+            Self::RoiSelector => "roi_selector",
+        }
+    }
+
+    fn from_storage_key(value: &str) -> Option<Self> {
+        match value {
+            "properties" => Some(Self::Properties),
+            "analysis" => Some(Self::Analysis),
+            "measurements" => Some(Self::Measurements),
+            "memory" => Some(Self::Memory),
+            "roi_selector" => Some(Self::RoiSelector),
+            _ => None,
+        }
+    }
 }
 
 type LayerGroup = layer_list::LayerGroup;
@@ -238,11 +283,11 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn layer_groups(&self) -> crate::data::project_config::ProjectLayerGroups {
-        self.project_space.layer_groups().clone()
+        self.current_layer_groups()
     }
 
     fn set_layer_groups(&mut self, groups: crate::data::project_config::ProjectLayerGroups) {
-        self.project_space.update_layer_groups(|g| *g = groups);
+        self.set_current_layer_groups(groups);
     }
 
     fn channels_changed(&mut self) {
@@ -1794,13 +1839,211 @@ impl OmeZarrViewerApp {
         self.pending_request.take()
     }
 
-    pub fn take_project_space(&mut self) -> ProjectSpace {
+    fn sync_current_view_state_into_project_space(&mut self) {
         self.sync_mask_layers_into_project_space();
+        let layer_groups = self
+            .project_space
+            .roi_view_state(&self.dataset.source)
+            .and_then(|view| view.layer_groups.clone());
+        let overlay_order = self
+            .overlay_layer_order
+            .iter()
+            .copied()
+            .map(Self::layer_id_storage_key)
+            .collect::<Vec<_>>();
+        let overlay_visibility = self
+            .overlay_layer_order
+            .iter()
+            .copied()
+            .filter_map(|id| {
+                self.layer_visible_value(id)
+                    .map(|visible| (Self::layer_id_storage_key(id), visible))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let overlay_offsets_world = self
+            .overlay_layer_order
+            .iter()
+            .copied()
+            .filter_map(|id| {
+                let off = self.layer_offset_world(id);
+                ((off.x.abs() > 1e-6) || (off.y.abs() > 1e-6))
+                    .then(|| (Self::layer_id_storage_key(id), [off.x, off.y]))
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.project_space.set_roi_view_state(
+            &self.dataset.source,
+            ProjectRoiViewState {
+                layer_groups,
+                channel_order: self.channel_layer_order.clone(),
+                channels: self
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, ch)| ProjectChannelViewState {
+                        visible: Some(ch.visible),
+                        color_rgb: Some(ch.color_rgb),
+                        window: ch.window.map(|(lo, hi)| [lo, hi]),
+                        offset_world: self
+                            .channel_offsets_world
+                            .get(idx)
+                            .map(|off| [off.x, off.y]),
+                        scale: self.channel_scales.get(idx).map(|scale| [scale.x, scale.y]),
+                        rotation_rad: self.channel_rotations_rad.get(idx).copied(),
+                    })
+                    .collect(),
+                active_channel: Some(self.selected_channel),
+                active_layer: Some(Self::layer_id_storage_key(self.active_layer)),
+                overlay_order,
+                overlay_visibility,
+                overlay_offsets_world,
+                segmentation: Some(ProjectSegmentationViewState {
+                    label_name: (!self.seg_label_selected.is_empty())
+                        .then(|| self.seg_label_selected.clone()),
+                    outlines_color_rgb: Some(self.cells_outlines_color_rgb),
+                    outlines_opacity: Some(self.cells_outlines_opacity),
+                    outlines_width_px: Some(self.cells_outlines_width_px),
+                }),
+                camera: Some(self.project_camera_state()),
+                ui: Some(self.project_ui_state()),
+                annotation_layers: self
+                    .annotation_layers
+                    .iter()
+                    .map(|layer| self.project_annotation_layer_state(layer))
+                    .collect(),
+            },
+        );
+    }
+
+    fn current_layer_groups(&self) -> ProjectLayerGroups {
+        self.project_space
+            .roi_view_state(&self.dataset.source)
+            .and_then(|view| view.layer_groups.clone())
+            .unwrap_or_default()
+    }
+
+    fn set_current_layer_groups(&mut self, groups: ProjectLayerGroups) {
+        let mut view = self
+            .project_space
+            .roi_view_state(&self.dataset.source)
+            .cloned()
+            .unwrap_or_default();
+        view.layer_groups = Some(groups);
+        self.project_space
+            .set_roi_view_state(&self.dataset.source, view);
+    }
+
+    fn apply_view_state_from_project_space(&mut self) {
+        let saved_view = self
+            .project_space
+            .roi_view_state(&self.dataset.source)
+            .cloned();
+        if let Some(view) = saved_view.as_ref() {
+            self.channel_window_overrides.clear();
+            if let Some(ui) = view.ui.as_ref() {
+                self.apply_project_ui_state(ui);
+            }
+            if !view.channel_order.is_empty() {
+                self.channel_layer_order = view.channel_order.clone();
+            }
+            for (idx, saved) in view.channels.iter().enumerate() {
+                let Some(ch) = self.channels.get_mut(idx) else {
+                    continue;
+                };
+                if let Some(visible) = saved.visible {
+                    ch.visible = visible;
+                }
+                if let Some(color_rgb) = saved.color_rgb {
+                    ch.color_rgb = color_rgb;
+                }
+                if let Some([lo, hi]) = saved.window {
+                    ch.window = Some((lo, hi));
+                    self.channel_window_overrides
+                        .insert(ch.name.clone(), (lo, hi));
+                }
+                if let Some([x, y]) = saved.offset_world
+                    && let Some(dst) = self.channel_offsets_world.get_mut(idx)
+                {
+                    *dst = egui::vec2(x, y);
+                }
+                if let Some([x, y]) = saved.scale
+                    && let Some(dst) = self.channel_scales.get_mut(idx)
+                {
+                    *dst = egui::vec2(x, y);
+                }
+                if let Some(rotation_rad) = saved.rotation_rad
+                    && let Some(dst) = self.channel_rotations_rad.get_mut(idx)
+                {
+                    *dst = rotation_rad;
+                }
+            }
+            if let Some(segmentation) = view.segmentation.as_ref() {
+                if let Some(label_name) = segmentation.label_name.as_ref() {
+                    self.seg_label_selected = label_name.clone();
+                    self.seg_label_input = self.seg_label_selected.clone();
+                }
+                if let Some(outlines_color_rgb) = segmentation.outlines_color_rgb {
+                    self.cells_outlines_color_rgb = outlines_color_rgb;
+                }
+                if let Some(outlines_opacity) = segmentation.outlines_opacity {
+                    self.cells_outlines_opacity = outlines_opacity;
+                }
+                if let Some(outlines_width_px) = segmentation.outlines_width_px {
+                    self.cells_outlines_width_px = outlines_width_px;
+                }
+            }
+            if !view.overlay_order.is_empty() {
+                self.overlay_layer_order = view
+                    .overlay_order
+                    .iter()
+                    .filter_map(|id| self.parse_layer_id_storage_key(id))
+                    .collect();
+            }
+            if let Some(active_channel) = view.active_channel {
+                self.selected_channel = active_channel.min(self.channels.len().saturating_sub(1));
+            }
+            if let Some(camera) = view.camera.as_ref() {
+                self.apply_project_camera_state(camera);
+            }
+            self.restore_annotation_layers(&view.annotation_layers);
+        }
+        self.rebuild_layer_orders();
+        if let Some(view) = saved_view.as_ref() {
+            for (id, visible) in &view.overlay_visibility {
+                if let Some(layer_id) = self.parse_layer_id_storage_key(id)
+                    && let Some(dst) = self.layer_visible_mut(layer_id)
+                {
+                    *dst = *visible;
+                }
+            }
+            for (id, [x, y]) in &view.overlay_offsets_world {
+                if let Some(layer_id) = self.parse_layer_id_storage_key(id)
+                    && let Some(dst) = self.layer_offset_world_mut(layer_id)
+                {
+                    *dst = egui::vec2(*x, *y);
+                }
+            }
+            if let Some(active_layer) = view
+                .active_layer
+                .as_deref()
+                .and_then(|id| self.parse_layer_id_storage_key(id))
+            {
+                self.set_active_layer(active_layer);
+            } else if !self.channels.is_empty() {
+                self.set_active_layer(LayerId::Channel(
+                    self.selected_channel.min(self.channels.len().saturating_sub(1)),
+                ));
+            }
+        }
+    }
+
+    pub fn take_project_space(&mut self) -> ProjectSpace {
+        self.sync_current_view_state_into_project_space();
         std::mem::take(&mut self.project_space)
     }
 
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
+        self.apply_view_state_from_project_space();
         self.project_cfg_seen = u64::MAX;
         self.restore_mask_layers_from_project_space();
         self.auto_load_project_roi_segmentation();
@@ -3399,7 +3642,7 @@ impl OmeZarrViewerApp {
         // Persist editable, project-backed state before replacing the dataset, then rebuild the
         // viewer around the new source while preserving the user's channel preferences and an
         // approximate camera position in normalized image coordinates.
-        self.sync_mask_layers_into_project_space();
+        self.sync_current_view_state_into_project_space();
 
         let prev_channels = self.channels.clone();
         let prev_selected_name = self
@@ -3601,8 +3844,6 @@ impl OmeZarrViewerApp {
             self.active_layer = LayerId::Channel(self.selected_channel);
         }
 
-        self.rebuild_layer_orders();
-
         let new_world_w = self
             .dataset
             .levels
@@ -3617,6 +3858,13 @@ impl OmeZarrViewerApp {
             .unwrap_or(0.0);
         self.camera.center_world_lvl0 = egui::pos2(new_world_w * fx, new_world_h * fy);
         self.camera.zoom_screen_per_lvl0_px = old_zoom;
+        self.apply_view_state_from_project_space();
+        self.chanmax_pending = self
+            .channels
+            .iter()
+            .map(|c| !self.channel_window_overrides.contains_key(&c.name))
+            .collect();
+        self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
 
         self.cache = TileCache::new(256);
         self.pending.clear();
@@ -5165,7 +5413,7 @@ impl OmeZarrViewerApp {
             .id_salt("layers-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let mut groups_cfg = self.project_space.layer_groups().clone();
+                let mut groups_cfg = self.current_layer_groups();
                 let mut groups_changed = false;
 
                 // Overlays master visibility toggle.
@@ -5466,8 +5714,7 @@ impl OmeZarrViewerApp {
 
     fn open_group_layers_dialog_channels(&mut self, members: Vec<usize>) {
         let existing = self
-            .project_space
-            .layer_groups()
+            .current_layer_groups()
             .channel_groups
             .iter()
             .map(|g| g.name.clone())
@@ -5481,8 +5728,7 @@ impl OmeZarrViewerApp {
 
     fn open_group_layers_dialog_annotations(&mut self, members: Vec<u64>) {
         let existing = self
-            .project_space
-            .layer_groups()
+            .current_layer_groups()
             .annotation_groups
             .iter()
             .map(|g| g.name.clone())
@@ -5561,14 +5807,15 @@ impl OmeZarrViewerApp {
                     .and_then(|idx| self.channels.get(*idx))
                     .map(|ch| {
                         layer_groups::effective_channel_color_rgb(
-                            self.project_space.layer_groups(),
+                            &self.current_layer_groups(),
                             &ch.name,
                             ch.color_rgb,
                         )
                     })
                     .unwrap_or([255, 255, 255]);
 
-                self.project_space.update_layer_groups(|groups| {
+                let mut groups = self.current_layer_groups();
+                {
                     let existing_ids = groups
                         .channel_groups
                         .iter()
@@ -5594,11 +5841,13 @@ impl OmeZarrViewerApp {
                             );
                         }
                     }
-                });
+                }
+                self.set_current_layer_groups(groups);
                 self.bump_render_id();
             }
             GroupLayersTarget::Annotations(layer_ids) => {
-                self.project_space.update_layer_groups(|groups| {
+                let mut groups = self.current_layer_groups();
+                {
                     let existing_ids = groups
                         .annotation_groups
                         .iter()
@@ -5624,7 +5873,8 @@ impl OmeZarrViewerApp {
                             },
                         );
                     }
-                });
+                }
+                self.set_current_layer_groups(groups);
                 self.bump_render_id();
             }
         }
@@ -6184,7 +6434,7 @@ impl OmeZarrViewerApp {
                     ui.label("Annotation layer not found.");
                     return;
                 };
-                let mut groups_cfg = self.project_space.layer_groups().clone();
+                let mut groups_cfg = self.current_layer_groups();
                 let mut groups_changed = false;
                 let mut delete_clicked = false;
                 ui.horizontal(|ui| {
@@ -6357,7 +6607,7 @@ impl OmeZarrViewerApp {
 
                 if groups_changed {
                     let new_groups = groups_cfg;
-                    self.project_space.update_layer_groups(|g| *g = new_groups);
+                    self.set_current_layer_groups(new_groups);
                     self.bump_render_id();
                 }
             }
@@ -6693,6 +6943,239 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn layer_id_storage_key(id: LayerId) -> String {
+        match id {
+            LayerId::Channel(idx) => format!("channel:{idx}"),
+            LayerId::SpatialImage(id) => format!("spatial_image:{id}"),
+            LayerId::SegmentationLabels => "segmentation_labels".to_string(),
+            LayerId::SegmentationGeoJson => "segmentation_geojson".to_string(),
+            LayerId::SegmentationObjects => "segmentation_objects".to_string(),
+            LayerId::Mask(id) => format!("mask:{id}"),
+            LayerId::Points => "points".to_string(),
+            LayerId::Annotation(id) => format!("annotation:{id}"),
+            LayerId::SpatialShape(id) => format!("spatial_shape:{id}"),
+            LayerId::SpatialPoints => "spatial_points".to_string(),
+            LayerId::XeniumCells => "xenium_cells".to_string(),
+            LayerId::XeniumTranscripts => "xenium_transcripts".to_string(),
+        }
+    }
+
+    fn parse_layer_id_storage_key(&self, value: &str) -> Option<LayerId> {
+        if let Some(raw) = value.strip_prefix("channel:") {
+            return raw.parse::<usize>().ok().map(LayerId::Channel);
+        }
+        if let Some(raw) = value.strip_prefix("spatial_image:") {
+            return raw.parse::<u64>().ok().map(LayerId::SpatialImage);
+        }
+        if let Some(raw) = value.strip_prefix("mask:") {
+            return raw.parse::<u64>().ok().map(LayerId::Mask);
+        }
+        if let Some(raw) = value.strip_prefix("annotation:") {
+            return raw.parse::<u64>().ok().map(LayerId::Annotation);
+        }
+        if let Some(raw) = value.strip_prefix("spatial_shape:") {
+            return raw.parse::<u64>().ok().map(LayerId::SpatialShape);
+        }
+        match value {
+            "segmentation_labels" => Some(LayerId::SegmentationLabels),
+            "segmentation_geojson" => Some(LayerId::SegmentationGeoJson),
+            "segmentation_objects" => Some(LayerId::SegmentationObjects),
+            "points" => Some(LayerId::Points),
+            "spatial_points" => Some(LayerId::SpatialPoints),
+            "xenium_cells" => Some(LayerId::XeniumCells),
+            "xenium_transcripts" => Some(LayerId::XeniumTranscripts),
+            _ => None,
+        }
+    }
+
+    fn project_camera_state(&self) -> ProjectCameraState {
+        ProjectCameraState {
+            center_world_lvl0: [self.camera.center_world_lvl0.x, self.camera.center_world_lvl0.y],
+            zoom_screen_per_lvl0_px: self.camera.zoom_screen_per_lvl0_px,
+        }
+    }
+
+    fn apply_project_camera_state(&mut self, state: &ProjectCameraState) {
+        self.camera.center_world_lvl0 =
+            egui::pos2(state.center_world_lvl0[0], state.center_world_lvl0[1]);
+        if state.zoom_screen_per_lvl0_px.is_finite() && state.zoom_screen_per_lvl0_px > 0.0 {
+            self.camera.zoom_screen_per_lvl0_px = state.zoom_screen_per_lvl0_px;
+        }
+    }
+
+    fn project_ui_state(&self) -> ProjectUiState {
+        ProjectUiState {
+            show_left_panel: Some(self.show_left_panel),
+            show_right_panel: Some(self.show_right_panel),
+            left_tab: Some(self.left_tab.storage_key().to_string()),
+            right_tab: Some(self.right_tab.storage_key().to_string()),
+            smooth_pixels: Some(self.smooth_pixels),
+            show_tile_debug: Some(self.show_tile_debug),
+            show_scale_bar: Some(self.show_scale_bar),
+            auto_level: Some(self.auto_level),
+            manual_level: Some(self.manual_level),
+        }
+    }
+
+    fn project_path_string(&self, path: &Path) -> String {
+        if let Some(project_dir) = self.project_space.project_dir()
+            && let Ok(relative) = path.strip_prefix(&project_dir)
+        {
+            return relative.to_string_lossy().to_string();
+        }
+        path.to_string_lossy().to_string()
+    }
+
+    fn resolve_project_path(&self, path: &str) -> PathBuf {
+        let path_buf = PathBuf::from(path);
+        if path_buf.is_absolute() {
+            path_buf
+        } else {
+            self.project_space
+                .project_dir()
+                .map(|dir| dir.join(&path_buf))
+                .unwrap_or(path_buf)
+        }
+    }
+
+    fn project_annotation_layer_state(
+        &self,
+        layer: &AnnotationPointsLayer,
+    ) -> ProjectAnnotationLayerState {
+        ProjectAnnotationLayerState {
+            id: layer.id,
+            name: layer.name.clone(),
+            visible: layer.visible,
+            radius_screen_px: layer.style.radius_screen_px,
+            opacity: layer.style.opacity,
+            stroke_width: layer.style.stroke.width,
+            stroke_color_rgb: [
+                layer.style.stroke.color.r(),
+                layer.style.stroke.color.g(),
+                layer.style.stroke.color.b(),
+            ],
+            stroke_color_alpha: layer.style.stroke.color.a(),
+            offset_world: [layer.offset_world.x, layer.offset_world.y],
+            parquet_path: layer
+                .parquet
+                .path
+                .as_deref()
+                .map(|path| self.project_path_string(path)),
+            roi_id_column: layer.parquet.roi_id_column.clone(),
+            x_column: layer.parquet.x_column.clone(),
+            y_column: layer.parquet.y_column.clone(),
+            value_column: layer.parquet.value_column.clone(),
+            selected_value_column: layer.selected_value_column.clone(),
+            category_styles: layer
+                .category_styles
+                .iter()
+                .map(|style| ProjectAnnotationCategoryStyleState {
+                    name: style.name.clone(),
+                    visible: style.visible,
+                    color_rgb: [style.color.r(), style.color.g(), style.color.b()],
+                    shape: style.shape.storage_key().to_string(),
+                })
+                .collect(),
+            continuous_shape: Some(layer.continuous_shape.storage_key().to_string()),
+            continuous_range: layer.continuous_range.map(|(lo, hi)| [lo, hi]),
+        }
+    }
+
+    fn restore_annotation_layers(&mut self, layers: &[ProjectAnnotationLayerState]) {
+        self.annotation_layers.clear();
+        self.next_annotation_layer_id = 1;
+        for saved in layers {
+            let mut layer = AnnotationPointsLayer::new(saved.id, saved.name.clone());
+            layer.visible = saved.visible;
+            layer.style.radius_screen_px = saved.radius_screen_px;
+            layer.style.opacity = saved.opacity;
+            layer.style.stroke.width = saved.stroke_width;
+            layer.style.stroke.color = egui::Color32::from_rgba_unmultiplied(
+                saved.stroke_color_rgb[0],
+                saved.stroke_color_rgb[1],
+                saved.stroke_color_rgb[2],
+                saved.stroke_color_alpha,
+            );
+            layer.offset_world = egui::vec2(saved.offset_world[0], saved.offset_world[1]);
+            layer.parquet.path = saved
+                .parquet_path
+                .as_deref()
+                .map(|path| self.resolve_project_path(path));
+            layer.parquet.roi_id_column = saved.roi_id_column.clone();
+            layer.parquet.x_column = saved.x_column.clone();
+            layer.parquet.y_column = saved.y_column.clone();
+            layer.parquet.value_column = saved.value_column.clone();
+            layer.selected_value_column = saved.selected_value_column.clone();
+            layer.category_styles = saved
+                .category_styles
+                .iter()
+                .map(|style| crate::annotations::AnnotationCategoryStyle {
+                    name: style.name.clone(),
+                    visible: style.visible,
+                    color: egui::Color32::from_rgb(
+                        style.color_rgb[0],
+                        style.color_rgb[1],
+                        style.color_rgb[2],
+                    ),
+                    shape: AnnotationShape::from_storage_key(&style.shape)
+                        .unwrap_or(AnnotationShape::Circle),
+                })
+                .collect();
+            if let Some(shape) = saved
+                .continuous_shape
+                .as_deref()
+                .and_then(AnnotationShape::from_storage_key)
+            {
+                layer.continuous_shape = shape;
+            }
+            layer.continuous_range = saved.continuous_range.map(|[lo, hi]| (lo, hi));
+            if layer.parquet.path.is_some() {
+                layer.request_schema_load();
+                layer.request_load();
+            }
+            self.next_annotation_layer_id = self.next_annotation_layer_id.max(saved.id + 1);
+            self.annotation_layers.push(layer);
+        }
+    }
+
+    fn apply_project_ui_state(&mut self, state: &ProjectUiState) {
+        if let Some(show_left_panel) = state.show_left_panel {
+            self.show_left_panel = show_left_panel;
+        }
+        if let Some(show_right_panel) = state.show_right_panel {
+            self.show_right_panel = show_right_panel;
+        }
+        if let Some(left_tab) = state.left_tab.as_deref().and_then(LeftTab::from_storage_key) {
+            self.left_tab = left_tab;
+        }
+        if let Some(right_tab) = state
+            .right_tab
+            .as_deref()
+            .and_then(RightTab::from_storage_key)
+        {
+            self.right_tab = right_tab;
+        }
+        if let Some(smooth_pixels) = state.smooth_pixels {
+            self.smooth_pixels = smooth_pixels;
+            if let Some(tiles_gl) = self.tiles_gl.as_ref() {
+                tiles_gl.set_smooth_pixels(self.smooth_pixels);
+            }
+            self.spatial_image_layers.set_smooth_pixels(self.smooth_pixels);
+        }
+        if let Some(show_tile_debug) = state.show_tile_debug {
+            self.show_tile_debug = show_tile_debug;
+        }
+        if let Some(show_scale_bar) = state.show_scale_bar {
+            self.show_scale_bar = show_scale_bar;
+        }
+        if let Some(auto_level) = state.auto_level {
+            self.auto_level = auto_level;
+        }
+        if let Some(manual_level) = state.manual_level {
+            self.manual_level = manual_level;
+        }
+    }
+
     fn set_active_layer(&mut self, id: LayerId) {
         self.active_layer = id;
         if let LayerId::Channel(idx) = id {
@@ -6704,7 +7187,7 @@ impl OmeZarrViewerApp {
     }
 
     fn channel_indices_in_group(&self, group_id: u64) -> Vec<usize> {
-        let groups = self.project_space.layer_groups();
+        let groups = self.current_layer_groups();
         self.channel_layer_order
             .iter()
             .copied()
@@ -6980,6 +7463,45 @@ impl OmeZarrViewerApp {
                 .transcripts
                 .as_mut()
                 .map(|t| &mut t.visible),
+        }
+    }
+
+    fn layer_visible_value(&self, id: LayerId) -> Option<bool> {
+        match id {
+            LayerId::Channel(idx) => self.channels.get(idx).map(|c| c.visible),
+            LayerId::SpatialImage(id) => self
+                .spatial_image_layers
+                .images
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.visible),
+            LayerId::SegmentationLabels => Some(self.cells_outlines_visible),
+            LayerId::SegmentationGeoJson => Some(self.seg_geojson.visible),
+            LayerId::SegmentationObjects => Some(self.seg_objects.visible),
+            LayerId::Mask(id) => self
+                .mask_layers
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.visible),
+            LayerId::Points => Some(self.cell_points.visible),
+            LayerId::Annotation(id) => self
+                .annotation_layers
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.visible),
+            LayerId::SpatialShape(id) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.visible),
+            LayerId::SpatialPoints => self.spatial_layers.points.as_ref().map(|p| p.visible),
+            LayerId::XeniumCells => self.xenium_layers.cells.as_ref().map(|c| c.visible),
+            LayerId::XeniumTranscripts => self
+                .xenium_layers
+                .transcripts
+                .as_ref()
+                .map(|t| t.visible),
         }
     }
 
@@ -7295,7 +7817,7 @@ impl OmeZarrViewerApp {
         ui.label(format!("Channel: {selected_name}"));
 
         // Optional group + inherit/override semantics (Napari-like).
-        let mut groups_cfg = self.project_space.layer_groups().clone();
+        let mut groups_cfg = self.current_layer_groups();
         let mut groups_changed = false;
         let mut selected_group: Option<u64> = groups_cfg
             .channel_members
@@ -7455,7 +7977,7 @@ impl OmeZarrViewerApp {
 
         if groups_changed {
             let new_groups = groups_cfg;
-            self.project_space.update_layer_groups(|g| *g = new_groups);
+            self.set_current_layer_groups(new_groups);
             self.bump_render_id();
         }
 
@@ -8741,9 +9263,10 @@ impl OmeZarrViewerApp {
                         })
                         .unwrap_or_else(|| "ROI".to_string());
                     let off = self.layer_offset_world(LayerId::Annotation(id));
+                    let current_groups = self.current_layer_groups();
                     if let Some(layer) = self.annotation_layers.iter_mut().find(|l| l.id == id) {
                         let group_tint = layer_groups::effective_annotation_tint(
-                            self.project_space.layer_groups(),
+                            &current_groups,
                             id,
                         );
                         layer.offset_world = off;
@@ -8989,7 +9512,7 @@ impl OmeZarrViewerApp {
             .as_ref()
             .is_some_and(|s| s.settings.include_legend)
         {
-            let groups = self.project_space.layer_groups();
+            let groups = self.current_layer_groups();
             let order = if self.channel_layer_order.len() == self.channels.len() {
                 self.channel_layer_order.clone()
             } else {
@@ -9004,7 +9527,7 @@ impl OmeZarrViewerApp {
                     continue;
                 }
                 let rgb = layer_groups::effective_channel_color_rgb(
-                    groups,
+                    &groups,
                     ch.name.as_str(),
                     ch.color_rgb,
                 );
@@ -10069,7 +10592,7 @@ impl OmeZarrViewerApp {
 
     fn render_channels_for_request(&self, _level: usize) -> Vec<RenderChannel> {
         let mut out = Vec::new();
-        let groups = self.project_space.layer_groups();
+        let groups = self.current_layer_groups();
         let order = if self.channel_layer_order.len() == self.channels.len() {
             self.channel_layer_order.clone()
         } else {
@@ -10084,7 +10607,7 @@ impl OmeZarrViewerApp {
                 continue;
             }
             let rgb =
-                layer_groups::effective_channel_color_rgb(groups, ch.name.as_str(), ch.color_rgb);
+                layer_groups::effective_channel_color_rgb(&groups, ch.name.as_str(), ch.color_rgb);
             out.push(RenderChannel {
                 index: ch.index as u64,
                 color_rgb: [
@@ -10162,13 +10685,13 @@ impl OmeZarrViewerApp {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.dataset.source.hash(&mut hasher);
         self.channel_layer_order.hash(&mut hasher);
-        let groups = self.project_space.layer_groups();
+        let groups = self.current_layer_groups();
         for &idx in &self.channel_layer_order {
             if let Some(ch) = self.channels.get(idx) {
                 ch.index.hash(&mut hasher);
                 ch.visible.hash(&mut hasher);
                 let rgb = layer_groups::effective_channel_color_rgb(
-                    groups,
+                    &groups,
                     ch.name.as_str(),
                     ch.color_rgb,
                 );

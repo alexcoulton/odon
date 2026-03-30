@@ -41,6 +41,25 @@ impl AnnotationShape {
             AnnotationShape::Cross => "Cross",
         }
     }
+
+    pub fn storage_key(self) -> &'static str {
+        match self {
+            AnnotationShape::Circle => "circle",
+            AnnotationShape::Square => "square",
+            AnnotationShape::Diamond => "diamond",
+            AnnotationShape::Cross => "cross",
+        }
+    }
+
+    pub fn from_storage_key(value: &str) -> Option<Self> {
+        match value {
+            "circle" => Some(Self::Circle),
+            "square" => Some(Self::Square),
+            "diamond" => Some(Self::Diamond),
+            "cross" => Some(Self::Cross),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -291,15 +310,31 @@ impl AnnotationPointsLayer {
     }
 
     fn apply_dataset(&mut self, ds: AnnotationDataset) {
+        let previous_category_styles = self
+            .category_styles
+            .iter()
+            .cloned()
+            .map(|style| (style.name.clone(), style))
+            .collect::<HashMap<_, _>>();
+        let previous_continuous_range = self.continuous_range;
         let ds = Arc::new(ds);
         self.generation = self.generation.wrapping_add(1).max(1);
         self.dataset = Some(ds.clone());
         self.parquet.value_column = self.selected_value_column.clone();
-        self.continuous_range = Some((ds.value_min, ds.value_max))
-            .filter(|_| ds.mode == AnnotationValueMode::Continuous);
+        self.continuous_range = if ds.mode == AnnotationValueMode::Continuous {
+            previous_continuous_range.or(Some((ds.value_min, ds.value_max)))
+        } else {
+            None
+        };
 
         if ds.mode == AnnotationValueMode::Categorical {
-            self.category_styles = default_category_styles(&ds.categories);
+            let mut category_styles = default_category_styles(&ds.categories);
+            for style in &mut category_styles {
+                if let Some(saved) = previous_category_styles.get(&style.name) {
+                    *style = saved.clone();
+                }
+            }
+            self.category_styles = category_styles;
         } else {
             self.category_styles.clear();
         }

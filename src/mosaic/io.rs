@@ -604,6 +604,8 @@ fn all_global_channels(source: &MosaicSource) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::estimate_level_ram_bytes;
     use crate::data::ome::{Dims, LevelInfo};
 

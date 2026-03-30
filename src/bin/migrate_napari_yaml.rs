@@ -265,6 +265,7 @@ fn discover_rois_for_dataset(
                         display_name: Some(roi_id),
                         segpath: None,
                         mask_layers: Vec::new(),
+                        channel_order: Vec::new(),
                         meta: Default::default(),
                     };
                     roi.set_dataset_source(DatasetSource::Local(canonical_or(root)));
@@ -344,6 +345,7 @@ fn discover_rois_for_dataset(
                             display_name: Some(id),
                             segpath: None,
                             mask_layers: Vec::new(),
+                            channel_order: Vec::new(),
                             meta: Default::default(),
                         };
                         roi.set_dataset_source(DatasetSource::Local(canonical_or(root)));

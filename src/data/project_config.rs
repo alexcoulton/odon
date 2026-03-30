@@ -55,7 +55,7 @@ pub struct ProjectConfig {
     pub layer_groups: ProjectLayerGroups,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ProjectLayerGroups {
     /// One-level groups for channel layers, keyed by channel name.
     #[serde(default)]
@@ -72,7 +72,7 @@ pub struct ProjectLayerGroups {
     pub annotation_members: HashMap<u64, ProjectAnnotationGroupMember>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectChannelGroup {
     pub id: u64,
     pub name: String,
@@ -93,14 +93,14 @@ impl Default for ProjectChannelGroup {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectChannelGroupMember {
     pub group_id: u64,
     #[serde(default = "default_true")]
     pub inherit_color: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectAnnotationGroup {
     pub id: u64,
     pub name: String,
@@ -128,7 +128,7 @@ impl Default for ProjectAnnotationGroup {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectAnnotationGroupMember {
     pub group_id: u64,
     #[serde(default = "default_true")]
@@ -158,6 +158,9 @@ pub struct ProjectRoi {
     /// self-contained without relying on external sidecar files.
     #[serde(default)]
     pub mask_layers: Vec<ProjectMaskLayer>,
+    /// Optional saved channel layer order for this ROI in the single-image viewer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_order: Vec<usize>,
     /// Arbitrary metadata columns (for mosaic sorting/grouping/labels).
     #[serde(default)]
     pub meta: HashMap<String, String>,
