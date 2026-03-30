@@ -20,6 +20,8 @@ mod xenium;
 
 use std::path::PathBuf;
 
+use eframe::egui;
+
 use crate::data::ome;
 
 fn print_usage() {
@@ -246,7 +248,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let native_options = eframe::NativeOptions::default();
+    let viewport = load_app_icon()
+        .map(|icon| egui::ViewportBuilder::default().with_icon(icon))
+        .unwrap_or_default();
+    let native_options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
     eframe::run_native(
         "odon",
         native_options,
@@ -288,6 +296,18 @@ fn main() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok(())
+}
+
+fn load_app_icon() -> Option<egui::IconData> {
+    let image = image::load_from_memory(include_bytes!("../assets/odon.png"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Some(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
 }
 
 fn check_tile(dataset: &ome::OmeZarrDataset) -> anyhow::Result<()> {
