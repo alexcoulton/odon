@@ -1,70 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-use eframe::egui;
-
 use crate::custom::roi_selector::{MasksConfig, RoiEntry};
-use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedMasksPath {
     pub geojson_path: PathBuf,
     pub downsample_factor: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExclusionMasksLayer {
-    pub visible: bool,
-    pub opacity: f32,
-    pub width_screen_px: f32,
-    pub color_rgb: [u8; 3],
-    pub polylines_world: Vec<Vec<egui::Pos2>>,
-    pub loaded_geojson: Option<PathBuf>,
-}
-
-impl Default for ExclusionMasksLayer {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            opacity: 0.85,
-            width_screen_px: 1.5,
-            color_rgb: [50, 220, 255],
-            polylines_world: Vec::new(),
-            loaded_geojson: None,
-        }
-    }
-}
-
-impl ExclusionMasksLayer {
-    pub fn clear(&mut self) {
-        self.polylines_world.clear();
-        self.loaded_geojson = None;
-    }
-
-    pub fn load_for_roi(
-        &mut self,
-        roi_root: &Path,
-        cfg: &MasksConfig,
-        entry: Option<&RoiEntry>,
-    ) -> anyhow::Result<usize> {
-        let resolved = resolve_masks_geojson_path_and_downsample(roi_root, cfg, entry)?;
-        let polylines = load_geojson_polylines_world(
-            &resolved.geojson_path,
-            resolved.downsample_factor,
-            PolygonRingMode::AllRings,
-        )
-        .with_context(|| {
-            format!(
-                "failed to load masks: {}",
-                resolved.geojson_path.to_string_lossy()
-            )
-        })?;
-
-        self.polylines_world = polylines;
-        self.loaded_geojson = Some(resolved.geojson_path);
-        self.visible = true;
-        Ok(self.polylines_world.len())
-    }
 }
 
 pub fn resolve_masks_geojson_path_and_downsample(

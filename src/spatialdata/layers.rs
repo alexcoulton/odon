@@ -10,12 +10,12 @@ use crate::features::points::{
     FeaturePickerItem, FeaturePointLod, FeaturePointSeries, color_for_feature,
     normalize_feature_key, select_draw_payload, show_feature_picker,
 };
+use crate::objects::ObjectsLayer;
 use crate::render::line_bins::LineSegmentsBins;
 use crate::render::line_bins_gl::{LineBinsGlDrawData, LineBinsGlDrawParams, LineBinsGlRenderer};
 use crate::render::point_bins::PointIndexBins;
 use crate::render::points::PointsStyle;
 use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
-use crate::objects::ObjectsLayer;
 use crate::spatialdata::{
     PointsLoadOptions, PointsMeta, ShapesLoadOptions, ShapesRenderKind, detect_shapes_render_kind,
     load_points_sample, load_shapes_circle_polylines, load_shapes_points,
@@ -85,10 +85,6 @@ impl SpatialDataLayers {
         );
         self.shapes.push(layer);
         id
-    }
-
-    pub fn load_points(&mut self, element: &SpatialDataElement, max_points: usize) {
-        self.load_points_with_image_size(element, max_points, None);
     }
 
     pub fn load_points_with_image_size(
@@ -364,19 +360,6 @@ impl SpatialShapesLayer {
         }
     }
 
-    pub fn is_loaded(&self) -> bool {
-        if let Some(layer) = self.object_layer.as_ref() {
-            return layer.has_data();
-        }
-        match self.data.as_ref() {
-            Some(SpatialShapesData::Lines(b)) => !b.segments.is_empty(),
-            Some(SpatialShapesData::Points {
-                positions_world, ..
-            }) => !positions_world.is_empty(),
-            None => false,
-        }
-    }
-
     pub fn is_loading(&self) -> bool {
         self.load_rx.is_some()
             || self
@@ -599,14 +582,6 @@ impl SpatialShapesLayer {
         true
     }
 
-    pub fn status_text(&self) -> String {
-        self.object_layer
-            .as_ref()
-            .map(|l| l.status().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| self.status.clone())
-    }
-
     pub fn clear_selection(&mut self) {
         if let Some(layer) = self.object_layer.as_mut() {
             layer.clear_selection();
@@ -704,7 +679,6 @@ struct SpatialFeatureCache {
     positions_world: Arc<Vec<egui::Pos2>>,
     raw_indices: Arc<Vec<u32>>,
     values: Arc<Vec<f32>>,
-    lod_levels: Arc<Vec<FeaturePointLod>>,
 }
 
 #[derive(Debug)]
@@ -849,12 +823,6 @@ impl SpatialPointsLayer {
                 }
             }
         }
-    }
-
-    pub fn is_loaded(&self) -> bool {
-        self.hover_positions_world
-            .as_ref()
-            .is_some_and(|p| !p.is_empty())
     }
 
     pub fn is_loading(&self) -> bool {
@@ -1002,53 +970,6 @@ impl SpatialPointsLayer {
             self.bounds_world = None;
             self.bins = None;
         }
-    }
-
-    fn rebuild_feature_cache(&mut self) {
-        let Some(feature_meta) = self.meta.as_ref().and_then(|m| m.feature.as_ref()) else {
-            self.feature_cache.clear();
-            self.clear_feature_draw_data();
-            return;
-        };
-        let Some(all_positions) = self.positions_world.as_ref() else {
-            self.feature_cache.clear();
-            self.clear_feature_draw_data();
-            return;
-        };
-
-        let mut positions_by_id = vec![Vec::<egui::Pos2>::new(); feature_meta.dict.len()];
-        let mut raw_indices_by_id = vec![Vec::<u32>::new(); feature_meta.dict.len()];
-        for (raw_i, &feature_id) in feature_meta.ids.iter().enumerate() {
-            let feature_i = feature_id as usize;
-            let Some(bucket) = positions_by_id.get_mut(feature_i) else {
-                continue;
-            };
-            let Some(raw_bucket) = raw_indices_by_id.get_mut(feature_i) else {
-                continue;
-            };
-            let Some(&p) = all_positions.get(raw_i) else {
-                continue;
-            };
-            bucket.push(p);
-            raw_bucket.push(raw_i as u32);
-        }
-
-        self.feature_cache = positions_by_id
-            .into_iter()
-            .zip(raw_indices_by_id)
-            .map(|(positions_world, raw_indices)| {
-                if positions_world.is_empty() {
-                    return None;
-                }
-                let values = vec![1.0f32; positions_world.len()];
-                Some(Arc::new(SpatialFeatureCache {
-                    positions_world: Arc::new(positions_world),
-                    raw_indices: Arc::new(raw_indices),
-                    values: Arc::new(values),
-                    lod_levels: Arc::new(Vec::new()),
-                }))
-            })
-            .collect();
     }
 
     fn apply_feature_selection(&mut self) {
@@ -1468,7 +1389,7 @@ impl SpatialPointsLayer {
                 .add(
                     egui::DragValue::new(&mut self.style.stroke_positive.width)
                         .speed(0.25)
-                        .clamp_range(0.0..=10.0),
+                        .range(0.0..=10.0),
                 )
                 .changed();
             changed |= ui
@@ -1534,7 +1455,7 @@ impl SpatialPointsLayer {
             .add(
                 egui::DragValue::new(&mut self.scale_mul)
                     .speed(0.01)
-                    .clamp_range(0.0001..=10_000.0)
+                    .range(0.0001..=10_000.0)
                     .prefix("Scale × "),
             )
             .changed()
@@ -1644,7 +1565,7 @@ impl SpatialPointsLayer {
                 ui.add(
                     egui::DragValue::new(&mut self.options.max_points)
                         .speed(1)
-                        .clamp_range(1..=200_000_000)
+                        .range(1..=200_000_000)
                         .prefix("Max points "),
                 )
                 .on_hover_text("Reload to apply.");
@@ -1945,7 +1866,6 @@ fn prepare_spatial_points_from_parts(
                     positions_world: Arc::new(positions_world),
                     raw_indices: Arc::new(raw_indices),
                     values: Arc::new(values),
-                    lod_levels: Arc::new(Vec::new()),
                 }))
             })
             .collect()

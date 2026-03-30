@@ -673,8 +673,6 @@ enum TileState {
         data: Vec<u16>,
     },
     Uploaded {
-        width: usize,
-        height: usize,
         tex: glow::Texture,
         filter: TextureFilter,
     },
@@ -791,8 +789,6 @@ impl Inner {
             } => {
                 let tex = upload_r16_texture(gl, *width, *height, data, self.desired_filter)?;
                 *state = TileState::Uploaded {
-                    width: *width,
-                    height: *height,
                     tex,
                     filter: self.desired_filter,
                 };

@@ -24,8 +24,6 @@ pub struct LabelTileRequest {
 #[derive(Debug, Clone)]
 pub struct LabelTileResponse {
     pub key: LabelTileKey,
-    pub width: usize,
-    pub height: usize,
     pub tex_width: usize,
     pub tex_height: usize,
     pub data_u32: Vec<u32>,
@@ -50,10 +48,6 @@ impl<T> LabelTileCache<T> {
         }
     }
 
-    pub fn get(&mut self, key: &LabelTileKey) -> Option<&T> {
-        self.cache.get(key)
-    }
-
     pub fn get_mut(&mut self, key: &LabelTileKey) -> Option<&mut T> {
         self.cache.get_mut(key)
     }
@@ -69,10 +63,6 @@ impl<T> LabelTileCache<T> {
         }
         self.in_flight.insert(key);
         true
-    }
-
-    pub fn cancel_in_flight(&mut self, key: &LabelTileKey) {
-        self.in_flight.remove(key);
     }
 
     pub fn drain(&mut self) -> Vec<(LabelTileKey, T)> {
@@ -268,8 +258,6 @@ fn label_tile_loader_thread(
 
         let _ = tx_rsp.send(LabelTileResponse {
             key: req.key,
-            width,
-            height,
             tex_width,
             tex_height,
             data_u32: halo,

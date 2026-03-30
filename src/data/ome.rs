@@ -77,19 +77,14 @@ pub struct RootZattrs {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Multiscale {
-    pub version: Option<String>,
     pub name: Option<String>,
     pub axes: Vec<Axis>,
     pub datasets: Vec<MultiscaleDataset>,
-    #[serde(default)]
-    pub r#type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Axis {
     pub name: String,
-    #[serde(rename = "type")]
-    pub axis_type: Option<String>,
     pub unit: Option<String>,
 }
 
@@ -106,18 +101,14 @@ pub struct MultiscaleDataset {
 pub enum CoordTransform {
     #[serde(rename = "scale")]
     Scale { scale: Vec<f32> },
-    #[serde(rename = "translation")]
-    Translation { translation: Vec<f32> },
     #[serde(other)]
     Other,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Omero {
-    pub name: Option<String>,
     #[serde(default)]
     pub channels: Vec<OmeroChannel>,
-    pub rdefs: Option<OmeroRdefs>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -133,18 +124,6 @@ pub struct OmeroChannel {
 pub struct OmeroWindow {
     pub start: f32,
     pub end: f32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OmeroRdefs {
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ZarrayV2 {
-    pub shape: Vec<u64>,
-    pub chunks: Vec<u64>,
-    pub dtype: String,
 }
 
 impl OmeZarrDataset {
@@ -447,7 +426,7 @@ pub(crate) fn is_supported_image_dtype(dtype: &str) -> bool {
     )
 }
 
-pub(crate) fn retrieve_image_subset_u16(
+pub fn retrieve_image_subset_u16(
     array: &Array<dyn ReadableStorageTraits>,
     subset: &ArraySubset,
     dtype: &str,

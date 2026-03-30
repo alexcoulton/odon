@@ -12,58 +12,59 @@ use rfd::FileDialog;
 use zarrs::array::{Array, ArraySubset};
 
 use crate::annotations::{AnnotationPointsLayer, AnnotationShape};
-use crate::camera::Camera;
-use crate::imaging::channel_max::{ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader};
-use crate::custom::cell_thresholds::{CellThresholdsAction, CellThresholdsPanel};
-use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
-use crate::masks::resolve_masks_geojson_path_and_downsample;
-use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
-use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
-use crate::ui::icons::{Icon, icon_button};
-use crate::render::labels::{LabelZarrDataset, discover_label_names_local};
-use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
-use crate::render::labels_raw::{
-    LabelTileKey, LabelTileLoaderHandle, LabelTileRequest, spawn_label_tile_loader,
-};
-use crate::project::groups as layer_groups;
-use crate::masks::MaskLayer;
-use crate::masks::save_mask_layers_geojson;
 use crate::app_support::memory::{
     MemoryChannelRow, PendingMemoryAction, SystemMemorySnapshot, format_bytes, memory_risk,
     refresh_system_memory_if_needed, ui_memory_channel_selector, ui_memory_overview,
     ui_pending_memory_action_dialog,
-};
-use crate::data::ome::retrieve_image_subset_u16;
-use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
-use crate::data::project_config::ProjectLayerGroups;
-use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
-use crate::render::points::PointsLayer;
-use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
-use crate::data::project_config::ProjectRoi;
-use crate::project::{
-    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectRoiViewState, ProjectSegmentationViewState, ProjectSpace,
-    ProjectSpaceAction, ProjectUiState,
-};
-use crate::data::remote_store::{
-    S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
-    build_s3_store, list_s3_prefix,
 };
 use crate::app_support::repaint as repaint_control;
 use crate::app_support::screenshot::{
     ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
     next_numbered_screenshot_path,
 };
-use crate::objects::GeoJsonSegmentationLayer;
-use crate::objects::ObjectsLayer;
-use crate::spatialdata::SpatialImageLayers;
-use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2, discover_spatialdata};
-use crate::spatialdata::SpatialDataLayers;
-use crate::render::threshold_preview_gl::{
-    ThresholdPreviewGlDrawData, ThresholdPreviewGlDrawParams, ThresholdPreviewGlRenderer,
+use crate::camera::Camera;
+use crate::custom::cell_thresholds::CellThresholdsPanel;
+use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
+use crate::data::ome::retrieve_image_subset_u16;
+use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
+use crate::data::project_config::ProjectLayerGroups;
+use crate::data::project_config::ProjectRoi;
+use crate::data::remote_store::{
+    S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
+    build_s3_store, list_s3_prefix,
 };
+use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::geometry::threshold_regions::{
     ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
+};
+use crate::imaging::channel_max::{
+    ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader,
+};
+use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
+use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
+use crate::imaging::tiling::{
+    TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect,
+};
+use crate::masks::MaskLayer;
+use crate::masks::resolve_masks_geojson_path_and_downsample;
+use crate::masks::save_mask_layers_geojson;
+use crate::objects::GeoJsonSegmentationLayer;
+use crate::objects::ObjectsLayer;
+use crate::project::groups as layer_groups;
+use crate::project::{
+    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
+    ProjectChannelViewState, ProjectRoiViewState, ProjectSegmentationViewState, ProjectSpace,
+    ProjectSpaceAction, ProjectUiState,
+};
+use crate::render::labels::{LabelZarrDataset, discover_label_names_local};
+use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
+use crate::render::labels_raw::{
+    LabelTileKey, LabelTileLoaderHandle, LabelTileRequest, spawn_label_tile_loader,
+};
+use crate::render::points::PointsLayer;
+use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
+use crate::render::threshold_preview_gl::{
+    ThresholdPreviewGlDrawData, ThresholdPreviewGlDrawParams, ThresholdPreviewGlRenderer,
 };
 use crate::render::tiles::{
     RenderChannel, TileCache, TileKey, TileRequest, TileResponse, TileWorkerResponse,
@@ -73,11 +74,14 @@ use crate::render::tiles_gl::{ChannelDraw, TileDraw, TilesGl};
 use crate::render::tiles_raw::{
     RawTileKey, RawTileLoaderHandle, RawTileRequest, RawTileWorkerResponse, spawn_raw_tile_loader,
 };
-use crate::imaging::tiling::{TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect};
+use crate::spatialdata::SpatialDataLayers;
+use crate::spatialdata::SpatialImageLayers;
+use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2, discover_spatialdata};
 use crate::ui::canvas_overlays;
 use crate::ui::channels_panel::{self, ChannelListHost};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
+use crate::ui::icons::{Icon, icon_button};
 use crate::ui::layer_list;
 use crate::ui::left_panel;
 use crate::ui::right_panel;
@@ -581,8 +585,6 @@ struct LayerTransformState {
 
 #[derive(Debug, Clone)]
 pub enum ViewerRequest {
-    OpenMosaic(Vec<PathBuf>),
-    OpenSingle(PathBuf),
     OpenProjectRoi(ProjectRoi),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
@@ -601,7 +603,6 @@ struct LabelToWorld {
     scale_y: f32,
     offset_x: f32,
     offset_y: f32,
-    approx_downsample: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -658,19 +659,16 @@ fn build_tiff_dataset(
         vec![
             crate::data::ome::Axis {
                 name: "c".to_string(),
-                axis_type: Some("channel".to_string()),
                 unit: None,
             },
             crate::data::ome::Axis {
                 name: "y".to_string(),
-                axis_type: Some("space".to_string()),
                 unit: pixel_size_xy
                     .as_ref()
                     .and_then(|(_, units)| units[0].clone()),
             },
             crate::data::ome::Axis {
                 name: "x".to_string(),
-                axis_type: Some("space".to_string()),
                 unit: pixel_size_xy
                     .as_ref()
                     .and_then(|(_, units)| units[1].clone()),
@@ -680,14 +678,12 @@ fn build_tiff_dataset(
         vec![
             crate::data::ome::Axis {
                 name: "y".to_string(),
-                axis_type: Some("space".to_string()),
                 unit: pixel_size_xy
                     .as_ref()
                     .and_then(|(_, units)| units[0].clone()),
             },
             crate::data::ome::Axis {
                 name: "x".to_string(),
-                axis_type: Some("space".to_string()),
                 unit: pixel_size_xy
                     .as_ref()
                     .and_then(|(_, units)| units[1].clone()),
@@ -695,7 +691,6 @@ fn build_tiff_dataset(
         ]
     };
     let multiscale = crate::data::ome::Multiscale {
-        version: None,
         name: Some(dataset_name),
         axes,
         datasets: levels
@@ -719,7 +714,6 @@ fn build_tiff_dataset(
                 }],
             })
             .collect(),
-        r#type: Some("image".to_string()),
     };
 
     OmeZarrDataset {
@@ -2030,7 +2024,8 @@ impl OmeZarrViewerApp {
                 self.set_active_layer(active_layer);
             } else if !self.channels.is_empty() {
                 self.set_active_layer(LayerId::Channel(
-                    self.selected_channel.min(self.channels.len().saturating_sub(1)),
+                    self.selected_channel
+                        .min(self.channels.len().saturating_sub(1)),
                 ));
             }
         }
@@ -2339,10 +2334,6 @@ impl OmeZarrViewerApp {
             source_geojson: None,
         });
         id
-    }
-
-    pub fn request_close_dialog(&mut self) {
-        self.close_dialog_open = true;
     }
 
     pub fn confirm_or_request_close_dialog(&mut self) -> bool {
@@ -3266,43 +3257,6 @@ impl OmeZarrViewerApp {
         }
     }
 
-    fn handle_cell_thresholds_action(&mut self, action: CellThresholdsAction) {
-        match action {
-            CellThresholdsAction::CycleImageChannel(step) => {
-                self.cycle_image_channel(step);
-            }
-            CellThresholdsAction::NudgeImageContrastMax(delta) => {
-                self.nudge_selected_channel_max(delta);
-            }
-        }
-    }
-
-    fn cycle_image_channel(&mut self, step: i32) {
-        if self.channels.is_empty() {
-            return;
-        }
-        let n = self.channels.len() as i32;
-        let cur = (self
-            .selected_channel
-            .min(self.channels.len().saturating_sub(1))) as i32;
-        let next = (cur + step).rem_euclid(n) as usize;
-
-        for ch in &mut self.channels {
-            ch.visible = false;
-        }
-        if let Some(ch) = self.channels.get_mut(next) {
-            ch.visible = true;
-        }
-        self.selected_channel = next;
-        self.active_layer = LayerId::Channel(next);
-        self.hist_dirty = true;
-        self.bump_render_id();
-
-        if let Some(ch) = self.channels.get(next) {
-            let _ = self.cell_thresholds.sync_marker_from_channel_name(&ch.name);
-        }
-    }
-
     fn sync_analysis_follow_active_channel_state(&mut self) {
         self.seg_objects
             .ensure_object_property_analysis_warmup_started(&self.channels, self.selected_channel);
@@ -3327,27 +3281,6 @@ impl OmeZarrViewerApp {
             );
             objects.sync_analysis_follow_active_channel(&self.channels, self.selected_channel);
         }
-    }
-
-    fn nudge_selected_channel_max(&mut self, delta: f32) {
-        let abs_max = self.dataset.abs_max.max(1.0);
-        let idx = self
-            .selected_channel
-            .min(self.channels.len().saturating_sub(1));
-        let Some(ch) = self.channels.get_mut(idx) else {
-            return;
-        };
-        let name = ch.name.clone();
-        let (mut lo, mut hi) = ch.window.unwrap_or((0.0, abs_max));
-        lo = lo.clamp(0.0, abs_max);
-        hi = (hi + delta).clamp(0.0, abs_max);
-        if hi <= lo {
-            hi = (lo + 1.0).min(abs_max);
-        }
-        ch.window = Some((lo, hi));
-        self.channel_window_overrides.insert(name, (lo, hi));
-        self.hist_dirty = true;
-        self.bump_render_id();
     }
 
     fn auto_load_project_roi_segmentation(&mut self) {
@@ -4638,7 +4571,8 @@ impl OmeZarrViewerApp {
                 }
                 let store = build_http_store(&url)?;
                 let source = crate::data::dataset_source::DatasetSource::Http { base_url: url };
-                let dataset = crate::data::ome::OmeZarrDataset::open_with_store(source, store.clone())?;
+                let dataset =
+                    crate::data::ome::OmeZarrDataset::open_with_store(source, store.clone())?;
                 self.switch_dataset_with_store(ctx, dataset, store, None)
             }
             RemoteMode::S3 => {
@@ -4677,7 +4611,8 @@ impl OmeZarrViewerApp {
                     bucket,
                     prefix,
                 };
-                let dataset = crate::data::ome::OmeZarrDataset::open_with_store(source, store.clone())?;
+                let dataset =
+                    crate::data::ome::OmeZarrDataset::open_with_store(source, store.clone())?;
                 self.switch_dataset_with_store(ctx, dataset, store, Some(runtime))
             }
         }
@@ -5674,7 +5609,7 @@ impl OmeZarrViewerApp {
                                 .clicked()
                             {
                                 self.open_group_layers_dialog_annotations(selected_annotations);
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     }
@@ -5686,6 +5621,10 @@ impl OmeZarrViewerApp {
                             .retain(|_k, m| m.group_id != group_id);
                         groups_changed = true;
                     }
+                }
+                if groups_changed {
+                    self.set_current_layer_groups(groups_cfg);
+                    self.bump_render_id();
                 }
                 ui.separator();
                 channels_panel::show(self, ui, ctx);
@@ -5759,12 +5698,9 @@ impl OmeZarrViewerApp {
                 let mut name_output = egui::TextEdit::singleline(&mut dialog.name).show(ui);
                 if dialog.focus_name_on_open {
                     name_output.response.request_focus();
-                    name_output
-                        .state
-                        .cursor
-                        .set_char_range(Some(egui::text::CCursorRange::select_all(
-                            &name_output.galley,
-                        )));
+                    name_output.state.cursor.set_char_range(Some(
+                        egui::text::CCursorRange::select_all(&name_output.galley),
+                    ));
                     name_output.state.store(ui.ctx(), name_output.response.id);
                     dialog.focus_name_on_open = false;
                 }
@@ -5854,16 +5790,16 @@ impl OmeZarrViewerApp {
                         .map(|g| g.id)
                         .collect::<Vec<_>>();
                     let gid = layer_groups::next_group_id(&existing_ids);
-                    groups
-                        .annotation_groups
-                        .push(crate::data::project_config::ProjectAnnotationGroup {
+                    groups.annotation_groups.push(
+                        crate::data::project_config::ProjectAnnotationGroup {
                             id: gid,
                             name,
                             expanded: true,
                             visible: true,
                             tint_rgb: None,
                             tint_strength: 0.35,
-                        });
+                        },
+                    );
                     for id in layer_ids {
                         groups.annotation_members.insert(
                             id,
@@ -6218,8 +6154,12 @@ impl OmeZarrViewerApp {
                     ui.horizontal(|ui| {
                         let risk = self.memory_risk(estimate);
                         let load_label = match risk.as_ref().map(|risk| risk.level) {
-                            Some(crate::app_support::memory::MemoryRiskLevel::Danger) => "Load danger",
-                            Some(crate::app_support::memory::MemoryRiskLevel::Warning) => "Load warning",
+                            Some(crate::app_support::memory::MemoryRiskLevel::Danger) => {
+                                "Load danger"
+                            }
+                            Some(crate::app_support::memory::MemoryRiskLevel::Warning) => {
+                                "Load warning"
+                            }
                             None => "Load",
                         };
                         if ui
@@ -6306,7 +6246,7 @@ impl OmeZarrViewerApp {
                     .add(
                         egui::DragValue::new(&mut scale.x)
                             .speed(0.02)
-                            .clamp_range(0.01..=100.0)
+                            .range(0.01..=100.0)
                             .prefix("x "),
                     )
                     .changed();
@@ -6314,7 +6254,7 @@ impl OmeZarrViewerApp {
                     .add(
                         egui::DragValue::new(&mut scale.y)
                             .speed(0.02)
-                            .clamp_range(0.01..=100.0)
+                            .range(0.01..=100.0)
                             .prefix("y "),
                     )
                     .changed();
@@ -6330,7 +6270,7 @@ impl OmeZarrViewerApp {
                     .add(
                         egui::DragValue::new(&mut deg)
                             .speed(1.0)
-                            .clamp_range(-360.0..=360.0)
+                            .range(-360.0..=360.0)
                             .suffix(" deg"),
                     )
                     .changed()
@@ -6408,7 +6348,7 @@ impl OmeZarrViewerApp {
                     ui.add(
                         egui::DragValue::new(&mut self.cell_points.style.stroke_positive.width)
                             .speed(0.25)
-                            .clamp_range(0.0..=10.0),
+                            .range(0.0..=10.0),
                     );
                     ui.color_edit_button_srgba(&mut self.cell_points.style.stroke_positive.color);
                 });
@@ -6424,7 +6364,7 @@ impl OmeZarrViewerApp {
                     ui.add(
                         egui::DragValue::new(&mut self.cell_points.style.stroke_negative.width)
                             .speed(0.25)
-                            .clamp_range(0.0..=10.0),
+                            .range(0.0..=10.0),
                     );
                     ui.color_edit_button_srgba(&mut self.cell_points.style.stroke_negative.color);
                 });
@@ -6436,7 +6376,6 @@ impl OmeZarrViewerApp {
                 };
                 let mut groups_cfg = self.current_layer_groups();
                 let mut groups_changed = false;
-                let mut delete_clicked = false;
                 ui.horizontal(|ui| {
                     ui.label("Name");
                     ui.text_edit_singleline(&mut self.annotation_layers[idx].name);
@@ -6590,8 +6529,7 @@ impl OmeZarrViewerApp {
                     self.bump_render_id();
                 }
                 ui.separator();
-                delete_clicked = ui.button("Delete layer").clicked();
-                if delete_clicked {
+                if ui.button("Delete layer").clicked() {
                     self.annotation_layers.remove(idx);
                     if self.active_layer == LayerId::Annotation(id) {
                         self.active_layer = if !self.channels.is_empty() {
@@ -6734,15 +6672,14 @@ impl OmeZarrViewerApp {
             LayerId::SpatialPoints => {
                 if self.spatial_layers.points.is_some() {
                     let positive_targets = self.available_object_selection_targets();
-                    let mut changed = false;
-                    let mut bounds: Option<egui::Rect> = None;
-                    let positive_cell_request;
-                    {
+                    let (mut changed, bounds, positive_cell_request) = {
                         let layer = self.spatial_layers.points.as_mut().expect("checked");
-                        changed = layer.ui_properties(ui, &positive_targets);
-                        bounds = layer.bounds_world();
-                        positive_cell_request = layer.take_positive_cell_selection_request();
-                    }
+                        (
+                            layer.ui_properties(ui, &positive_targets),
+                            layer.bounds_world(),
+                            layer.take_positive_cell_selection_request(),
+                        )
+                    };
                     if let Some((cell_ids, target)) = positive_cell_request {
                         let status = if let Some((matched_layers, matched_objects)) =
                             self.select_objects_by_ids_target(&cell_ids, target)
@@ -6990,7 +6927,10 @@ impl OmeZarrViewerApp {
 
     fn project_camera_state(&self) -> ProjectCameraState {
         ProjectCameraState {
-            center_world_lvl0: [self.camera.center_world_lvl0.x, self.camera.center_world_lvl0.y],
+            center_world_lvl0: [
+                self.camera.center_world_lvl0.x,
+                self.camera.center_world_lvl0.y,
+            ],
             zoom_screen_per_lvl0_px: self.camera.zoom_screen_per_lvl0_px,
         }
     }
@@ -7145,7 +7085,11 @@ impl OmeZarrViewerApp {
         if let Some(show_right_panel) = state.show_right_panel {
             self.show_right_panel = show_right_panel;
         }
-        if let Some(left_tab) = state.left_tab.as_deref().and_then(LeftTab::from_storage_key) {
+        if let Some(left_tab) = state
+            .left_tab
+            .as_deref()
+            .and_then(LeftTab::from_storage_key)
+        {
             self.left_tab = left_tab;
         }
         if let Some(right_tab) = state
@@ -7160,7 +7104,8 @@ impl OmeZarrViewerApp {
             if let Some(tiles_gl) = self.tiles_gl.as_ref() {
                 tiles_gl.set_smooth_pixels(self.smooth_pixels);
             }
-            self.spatial_image_layers.set_smooth_pixels(self.smooth_pixels);
+            self.spatial_image_layers
+                .set_smooth_pixels(self.smooth_pixels);
         }
         if let Some(show_tile_debug) = state.show_tile_debug {
             self.show_tile_debug = show_tile_debug;
@@ -7497,11 +7442,9 @@ impl OmeZarrViewerApp {
                 .map(|s| s.visible),
             LayerId::SpatialPoints => self.spatial_layers.points.as_ref().map(|p| p.visible),
             LayerId::XeniumCells => self.xenium_layers.cells.as_ref().map(|c| c.visible),
-            LayerId::XeniumTranscripts => self
-                .xenium_layers
-                .transcripts
-                .as_ref()
-                .map(|t| t.visible),
+            LayerId::XeniumTranscripts => {
+                self.xenium_layers.transcripts.as_ref().map(|t| t.visible)
+            }
         }
     }
 
@@ -9265,10 +9208,8 @@ impl OmeZarrViewerApp {
                     let off = self.layer_offset_world(LayerId::Annotation(id));
                     let current_groups = self.current_layer_groups();
                     if let Some(layer) = self.annotation_layers.iter_mut().find(|l| l.id == id) {
-                        let group_tint = layer_groups::effective_annotation_tint(
-                            &current_groups,
-                            id,
-                        );
+                        let group_tint =
+                            layer_groups::effective_annotation_tint(&current_groups, id);
                         layer.offset_world = off;
                         layer.draw_single(
                             ui,
@@ -9593,10 +9534,10 @@ impl OmeZarrViewerApp {
                 let viewport_w_px = (viewport.width().max(1.0) * ppp).round().max(1.0) as i32;
                 let viewport_h_px = (viewport.height().max(1.0) * ppp).round().max(1.0) as i32;
 
-                let mut x_px = ((capture_rect.min.x - viewport.min.x) * ppp)
+                let x_px = ((capture_rect.min.x - viewport.min.x) * ppp)
                     .round()
                     .max(0.0) as i32;
-                let mut y_px = ((viewport.max.y - capture_rect.max.y) * ppp)
+                let y_px = ((viewport.max.y - capture_rect.max.y) * ppp)
                     .round()
                     .max(0.0) as i32;
                 let mut w_px = (capture_rect.width() * ppp).round().max(1.0) as i32;
@@ -9826,7 +9767,6 @@ impl OmeZarrViewerApp {
                 scale_y: level_info.downsample,
                 offset_x: 0.0,
                 offset_y: 0.0,
-                approx_downsample: level_info.downsample,
             });
 
             let inv_x = 1.0 / xform.scale_x.max(1e-6);
@@ -9909,7 +9849,6 @@ impl OmeZarrViewerApp {
                 scale_y: level_info.downsample,
                 offset_x: 0.0,
                 offset_y: 0.0,
-                approx_downsample: level_info.downsample,
             });
             for key in needed {
                 let (_world_rect, screen_rect) =
@@ -10276,10 +10215,7 @@ impl OmeZarrViewerApp {
 
     fn available_object_selection_targets(
         &self,
-    ) -> Vec<(
-        crate::spatialdata::PositiveCellSelectionTarget,
-        String,
-    )> {
+    ) -> Vec<(crate::spatialdata::PositiveCellSelectionTarget, String)> {
         let mut targets = Vec::new();
         if self.seg_objects.has_data() {
             targets.push((
@@ -10381,7 +10317,11 @@ impl OmeZarrViewerApp {
         )
     }
 
-    fn sort_tile_keys_near_center(&self, level_info: &crate::data::ome::LevelInfo, keys: &mut [TileKey]) {
+    fn sort_tile_keys_near_center(
+        &self,
+        level_info: &crate::data::ome::LevelInfo,
+        keys: &mut [TileKey],
+    ) {
         // Request the tiles nearest the current viewport center first so zoom-in refines where the
         // user is looking before spending bandwidth on peripheral tiles.
         let y_dim = self.dataset.dims.y;
@@ -10868,7 +10808,11 @@ impl OmeZarrViewerApp {
     fn drain_screenshots(&mut self) {
         while let Ok(resp) = self.screenshot_worker.rx.try_recv() {
             match resp {
-                crate::app_support::screenshot::ScreenshotWorkerResp::Saved { id, path, result } => {
+                crate::app_support::screenshot::ScreenshotWorkerResp::Saved {
+                    id,
+                    path,
+                    result,
+                } => {
                     if self.screenshot_in_flight == Some(id) {
                         self.screenshot_in_flight = None;
                     }
@@ -10964,7 +10908,6 @@ fn compute_label_to_world_xforms(
             scale_y: mapped_scale_y,
             offset_x: image_transform.translation[0],
             offset_y: image_transform.translation[1],
-            approx_downsample: mapped_scale_x.max(mapped_scale_y).max(1e-6),
         });
     }
 

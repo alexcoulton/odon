@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use zarrs::storage::{
-    Bytes, MaybeBytesIterator, StorageError, StoreKey,
-    byte_range::{ByteRange, ByteRangeIterator},
+    Bytes, MaybeBytesIterator, StorageError, StoreKey, byte_range::ByteRangeIterator,
 };
 use zip::ZipArchive;
 
@@ -16,7 +15,6 @@ use zip::ZipArchive;
 /// This is intentionally read-only and keyed by the exact zip entry name.
 #[derive(Debug)]
 pub struct ZipStore {
-    zip_path: PathBuf,
     inner: Mutex<ZipArchive<File>>,
     index: HashMap<String, usize>,
 }
@@ -35,7 +33,6 @@ impl ZipStore {
             }
         }
         Ok(Arc::new(Self {
-            zip_path,
             inner: Mutex::new(z),
             index,
         }))

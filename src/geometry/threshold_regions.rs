@@ -50,15 +50,6 @@ pub fn extract_threshold_region_mask(
     }
 }
 
-pub fn extract_threshold_region_polygons(
-    plane: &Array2<u16>,
-    threshold: u16,
-    min_component_pixels: usize,
-) -> Vec<Vec<egui::Pos2>> {
-    let mask = extract_threshold_region_mask(plane, threshold, min_component_pixels);
-    threshold_region_mask_to_polygons(&mask)
-}
-
 pub fn threshold_region_mask_to_polygons(mask: &ThresholdRegionMask) -> Vec<Vec<egui::Pos2>> {
     if mask.width == 0 || mask.height == 0 || mask.included.is_empty() {
         return Vec::new();

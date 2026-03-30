@@ -4,16 +4,6 @@ use anyhow::Context;
 
 use crate::data::zarr_attrs::read_node_attributes;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpatialDataElementKind {
-    Image,
-    Label,
-    Points,
-    Shapes,
-    Table,
-    Other,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct SpatialDataTransform2 {
     pub scale: [f32; 2],
@@ -52,7 +42,6 @@ impl SpatialDataTransform2 {
 
 #[derive(Debug, Clone)]
 pub struct SpatialDataElement {
-    pub kind: SpatialDataElementKind,
     pub name: String,
     /// Path to the element group, relative to the SpatialData root.
     pub rel_group: PathBuf,
@@ -136,7 +125,6 @@ fn discover_images(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
         let transform = parse_transform2(&attrs);
 
         out.images.push(SpatialDataElement {
-            kind: SpatialDataElementKind::Image,
             name,
             rel_group: PathBuf::from("images").join(
                 path.file_name()
@@ -187,7 +175,6 @@ fn discover_points(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
             .map(|s| s.to_string());
         let parquet = path.join("points.parquet");
         out.points.push(SpatialDataElement {
-            kind: SpatialDataElementKind::Points,
             name,
             rel_group: PathBuf::from("points").join(
                 path.file_name()
@@ -241,7 +228,6 @@ fn discover_labels(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
         }
         let transform = parse_transform2(&attrs);
         out.labels.push(SpatialDataElement {
-            kind: SpatialDataElementKind::Label,
             name,
             rel_group: PathBuf::from("labels").join(
                 path.file_name()
@@ -287,7 +273,6 @@ fn discover_shapes(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
         let transform = parse_transform2(&attrs);
         let parquet = path.join("shapes.parquet");
         out.shapes.push(SpatialDataElement {
-            kind: SpatialDataElementKind::Shapes,
             name,
             rel_group: PathBuf::from("shapes").join(
                 path.file_name()
@@ -324,7 +309,6 @@ fn discover_tables(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
             .unwrap_or("table")
             .to_string();
         out.tables.push(SpatialDataElement {
-            kind: SpatialDataElementKind::Table,
             name,
             rel_group: PathBuf::from("tables").join(
                 path.file_name()

@@ -10,8 +10,12 @@ use crate::data::dataset_kind::{
     LocalDatasetKind, can_open_in_mosaic, classify_local_dataset_path, normalize_local_dataset_path,
 };
 use crate::data::dataset_source::DatasetSource;
-use crate::data::project_config::{ProjectConfig, ProjectLayerGroups, ProjectMaskLayer, ProjectRoi};
-use crate::data::samplesheet::{SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv};
+use crate::data::project_config::{
+    ProjectConfig, ProjectLayerGroups, ProjectMaskLayer, ProjectRoi,
+};
+use crate::data::samplesheet::{
+    SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
+};
 use crate::ui::roi_browser::RoiBrowseState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,7 +470,12 @@ impl ProjectSpace {
 
     fn ensure_roi_for_source(&mut self, source: &DatasetSource) {
         let source_key = source.source_key();
-        if self.config.rois.iter().any(|roi| roi.source_key().as_deref() == Some(source_key.as_str())) {
+        if self
+            .config
+            .rois
+            .iter()
+            .any(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
+        {
             return;
         }
 
@@ -493,10 +502,7 @@ impl ProjectSpace {
 
     fn roi_view_state_mut(&mut self, source: &DatasetSource) -> &mut ProjectRoiViewState {
         self.ensure_roi_for_source(source);
-        self.state
-            .roi_views
-            .entry(source.source_key())
-            .or_default()
+        self.state.roi_views.entry(source.source_key()).or_default()
     }
 
     pub fn roi_view_state(&self, source: &DatasetSource) -> Option<&ProjectRoiViewState> {
@@ -1051,8 +1057,7 @@ impl ProjectSpace {
 
                             if is_focused {
                                 let stroke = ui.visuals().selection.stroke;
-                                let stroke =
-                                    egui::Stroke::new(stroke.width.max(2.0), stroke.color);
+                                let stroke = egui::Stroke::new(stroke.width.max(2.0), stroke.color);
                                 ui.painter().rect_stroke(
                                     resp.rect.shrink(0.5),
                                     egui::CornerRadius::same(6),
@@ -1595,216 +1600,215 @@ impl ProjectSpace {
         self.state = ProjectState::default();
         self.roi_browse.clear();
 
-        let (mut config, mut state): (ProjectConfig, ProjectState) =
-            match version {
-                1 => {
-                    let file: ProjectFileV1 = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    let focused = file.selected.and_then(|i| {
-                        file.items
-                            .get(i)
-                            .map(|it| DatasetSource::Local(it.path.clone()).source_key())
-                    });
-                    let rois = file
-                        .items
-                        .into_iter()
-                        .map(|it| {
-                            let mut roi = ProjectRoi {
-                                id: it
-                                    .display_name
-                                    .clone()
-                                    .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
-                                source: None,
-                                path: None,
-                                dataset: None,
-                                display_name: it.display_name,
-                                segpath: None,
-                                mask_layers: Vec::new(),
-                                channel_order: Vec::new(),
-                                meta: Default::default(),
-                            };
-                            roi.set_dataset_source(DatasetSource::Local(it.path));
-                            roi
-                        })
-                        .collect();
-                    (
-                        ProjectConfig {
-                            rois,
-                            ..Default::default()
+        let (mut config, mut state): (ProjectConfig, ProjectState) = match version {
+            1 => {
+                let file: ProjectFileV1 = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                let focused = file.selected.and_then(|i| {
+                    file.items
+                        .get(i)
+                        .map(|it| DatasetSource::Local(it.path.clone()).source_key())
+                });
+                let rois = file
+                    .items
+                    .into_iter()
+                    .map(|it| {
+                        let mut roi = ProjectRoi {
+                            id: it
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
+                            source: None,
+                            path: None,
+                            dataset: None,
+                            display_name: it.display_name,
+                            segpath: None,
+                            mask_layers: Vec::new(),
+                            channel_order: Vec::new(),
+                            meta: Default::default(),
+                        };
+                        roi.set_dataset_source(DatasetSource::Local(it.path));
+                        roi
+                    })
+                    .collect();
+                (
+                    ProjectConfig {
+                        rois,
+                        ..Default::default()
+                    },
+                    ProjectState {
+                        browser: ProjectBrowserState {
+                            focused,
+                            selected: Vec::new(),
                         },
-                        ProjectState {
-                            browser: ProjectBrowserState {
-                                focused,
-                                selected: Vec::new(),
-                            },
-                            ..Default::default()
+                        ..Default::default()
+                    },
+                )
+            }
+            2 => {
+                let file: ProjectFileV2 = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                let rois = file
+                    .items
+                    .into_iter()
+                    .map(|it| {
+                        let mut roi = ProjectRoi {
+                            id: it
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
+                            source: None,
+                            path: None,
+                            dataset: None,
+                            display_name: it.display_name,
+                            segpath: None,
+                            mask_layers: Vec::new(),
+                            channel_order: Vec::new(),
+                            meta: Default::default(),
+                        };
+                        roi.set_dataset_source(DatasetSource::Local(it.path));
+                        roi
+                    })
+                    .collect();
+                (
+                    ProjectConfig {
+                        rois,
+                        ..Default::default()
+                    },
+                    ProjectState {
+                        browser: ProjectBrowserState {
+                            focused: file
+                                .focused
+                                .map(|path| DatasetSource::Local(path).source_key()),
+                            selected: file
+                                .selected
+                                .into_iter()
+                                .map(|path| DatasetSource::Local(path).source_key())
+                                .collect(),
                         },
-                    )
-                }
-                2 => {
-                    let file: ProjectFileV2 = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    let rois = file
-                        .items
-                        .into_iter()
-                        .map(|it| {
-                            let mut roi = ProjectRoi {
-                                id: it
-                                    .display_name
-                                    .clone()
-                                    .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
-                                source: None,
-                                path: None,
-                                dataset: None,
-                                display_name: it.display_name,
-                                segpath: None,
-                                mask_layers: Vec::new(),
-                                channel_order: Vec::new(),
-                                meta: Default::default(),
-                            };
-                            roi.set_dataset_source(DatasetSource::Local(it.path));
-                            roi
-                        })
-                        .collect();
-                    (
-                        ProjectConfig {
-                            rois,
-                            ..Default::default()
+                        ..Default::default()
+                    },
+                )
+            }
+            3 => {
+                let file: ProjectFileV3Legacy = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                let rois = file
+                    .items
+                    .into_iter()
+                    .map(|it| {
+                        let mut roi = ProjectRoi {
+                            id: it
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
+                            source: None,
+                            path: None,
+                            dataset: None,
+                            display_name: it.display_name,
+                            segpath: None,
+                            mask_layers: Vec::new(),
+                            channel_order: Vec::new(),
+                            meta: Default::default(),
+                        };
+                        roi.set_dataset_source(DatasetSource::Local(it.path));
+                        roi
+                    })
+                    .collect();
+                (
+                    ProjectConfig {
+                        rois,
+                        ..Default::default()
+                    },
+                    ProjectState {
+                        browser: ProjectBrowserState {
+                            focused: file
+                                .focused
+                                .map(|path| DatasetSource::Local(path).source_key()),
+                            selected: file
+                                .selected
+                                .into_iter()
+                                .map(|path| DatasetSource::Local(path).source_key())
+                                .collect(),
                         },
-                        ProjectState {
-                            browser: ProjectBrowserState {
-                                focused: file
-                                    .focused
-                                    .map(|path| DatasetSource::Local(path).source_key()),
-                                selected: file
-                                    .selected
-                                    .into_iter()
-                                    .map(|path| DatasetSource::Local(path).source_key())
-                                    .collect(),
-                            },
-                            ..Default::default()
+                        ..Default::default()
+                    },
+                )
+            }
+            4 => {
+                let file: ProjectFileV4 = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                (
+                    file.config,
+                    ProjectState {
+                        browser: ProjectBrowserState {
+                            focused: file
+                                .focused
+                                .map(|path| DatasetSource::Local(path).source_key()),
+                            selected: file
+                                .selected
+                                .into_iter()
+                                .map(|path| DatasetSource::Local(path).source_key())
+                                .collect(),
                         },
-                    )
-                }
-                3 => {
-                    let file: ProjectFileV3Legacy = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    let rois = file
-                        .items
-                        .into_iter()
-                        .map(|it| {
-                            let mut roi = ProjectRoi {
-                                id: it
-                                    .display_name
-                                    .clone()
-                                    .unwrap_or_else(|| it.path.to_string_lossy().to_string()),
-                                source: None,
-                                path: None,
-                                dataset: None,
-                                display_name: it.display_name,
-                                segpath: None,
-                                mask_layers: Vec::new(),
-                                channel_order: Vec::new(),
-                                meta: Default::default(),
-                            };
-                            roi.set_dataset_source(DatasetSource::Local(it.path));
-                            roi
-                        })
-                        .collect();
-                    (
-                        ProjectConfig {
-                            rois,
-                            ..Default::default()
+                        ..Default::default()
+                    },
+                )
+            }
+            5 => {
+                let file: ProjectFileV5 = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                (
+                    file.config,
+                    ProjectState {
+                        browser: ProjectBrowserState {
+                            focused: file.focused,
+                            selected: file.selected,
                         },
-                        ProjectState {
-                            browser: ProjectBrowserState {
-                                focused: file
-                                    .focused
-                                    .map(|path| DatasetSource::Local(path).source_key()),
-                                selected: file
-                                    .selected
-                                    .into_iter()
-                                    .map(|path| DatasetSource::Local(path).source_key())
-                                    .collect(),
-                            },
-                            ..Default::default()
-                        },
-                    )
-                }
-                4 => {
-                    let file: ProjectFileV4 = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    (
-                        file.config,
-                        ProjectState {
-                            browser: ProjectBrowserState {
-                                focused: file
-                                    .focused
-                                    .map(|path| DatasetSource::Local(path).source_key()),
-                                selected: file
-                                    .selected
-                                    .into_iter()
-                                    .map(|path| DatasetSource::Local(path).source_key())
-                                    .collect(),
-                            },
-                            ..Default::default()
-                        },
-                    )
-                }
-                5 => {
-                    let file: ProjectFileV5 = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    (
-                        file.config,
-                        ProjectState {
-                            browser: ProjectBrowserState {
-                                focused: file.focused,
-                                selected: file.selected,
-                            },
-                            ..Default::default()
-                        },
-                    )
-                }
-                6 => {
-                    let file: ProjectFileV6 = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.status = format!("Load failed: {e}");
-                            return;
-                        }
-                    };
-                    (file.config, file.state)
-                }
-                _ => {
-                    self.status = format!("Unsupported project version: {version}");
-                    return;
-                }
-            };
+                        ..Default::default()
+                    },
+                )
+            }
+            6 => {
+                let file: ProjectFileV6 = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.status = format!("Load failed: {e}");
+                        return;
+                    }
+                };
+                (file.config, file.state)
+            }
+            _ => {
+                self.status = format!("Unsupported project version: {version}");
+                return;
+            }
+        };
         self.project_file_path = Some(path.clone());
 
         let mut seen: HashSet<String> = HashSet::new();

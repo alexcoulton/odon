@@ -119,10 +119,6 @@ pub struct OmeTiffData {
 }
 
 impl TiffPyramid {
-    pub fn open(path: &Path) -> anyhow::Result<Self> {
-        Self::open_with_selection(path, TiffPlaneSelection { z: 0, t: 0 })
-    }
-
     pub fn open_with_selection(
         path: &Path,
         plane_selection: TiffPlaneSelection,
@@ -1164,7 +1160,6 @@ fn parse_ome_xml(xml: &str) -> anyhow::Result<OmeTiffMetadata> {
                     local_name(name.as_ref()) == b"TiffData"
                 };
                 if is_pixels && !in_first_pixels {
-                    in_first_pixels = true;
                     apply_pixels_attrs(&mut metadata, e, &reader)?;
                     break;
                 } else if is_channel && in_first_pixels {
@@ -1772,7 +1767,6 @@ fn tiff_channel_max_loader_thread(
             request_id: req.request_id,
             channel: req.channel,
             p97,
-            max: max_v,
         });
     }
 

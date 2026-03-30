@@ -142,7 +142,9 @@ fn fontawesome_ttf_search_paths() -> Vec<PathBuf> {
         out.push(PathBuf::from(p));
     }
     out.extend(resource_search_paths("assets/fonts/fa-solid-900.ttf"));
-    out.extend(resource_search_paths("assets/fontawesome/webfonts/fa-solid-900.ttf"));
+    out.extend(resource_search_paths(
+        "assets/fontawesome/webfonts/fa-solid-900.ttf",
+    ));
     dedupe_paths(&mut out);
     out
 }

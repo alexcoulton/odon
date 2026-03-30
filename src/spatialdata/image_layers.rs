@@ -5,13 +5,13 @@ use eframe::egui;
 
 use crate::camera::Camera;
 use crate::data::ome::{ChannelInfo, OmeZarrDataset};
-use crate::spatialdata::SpatialDataElement;
+use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
 use crate::render::tiles::{RenderChannel, recommended_tile_loader_threads};
 use crate::render::tiles_gl::{ChannelDraw, TileDraw, TilesGl};
 use crate::render::tiles_raw::{
     RawTileKey, RawTileLoaderHandle, RawTileWorkerResponse, spawn_raw_tile_loader,
 };
-use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
+use crate::spatialdata::SpatialDataElement;
 
 #[derive(Debug, Default)]
 pub struct SpatialImageLayers {

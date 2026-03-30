@@ -111,66 +111,6 @@ impl GeoJsonSegmentationLayer {
         }
     }
 
-    pub fn ui_left_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.visible, "");
-            ui.label("Segmentation (GeoJSON)");
-        });
-        ui.horizontal(|ui| {
-            ui.add_enabled(
-                self.visible,
-                egui::Slider::new(&mut self.opacity, 0.0..=1.0)
-                    .text("Opacity")
-                    .show_value(true)
-                    .clamping(egui::SliderClamping::Always),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.add_enabled(
-                self.visible,
-                egui::Slider::new(&mut self.width_screen_px, 0.25..=4.0)
-                    .text("Width")
-                    .show_value(true)
-                    .clamping(egui::SliderClamping::Always),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.add_enabled(
-                self.visible,
-                egui::DragValue::new(&mut self.downsample_factor)
-                    .speed(0.1)
-                    .prefix("Downsample "),
-            );
-            if ui
-                .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Reload"))
-                .clicked()
-            {
-                if let Some(path) = self.loaded_geojson.clone() {
-                    self.request_load(path, self.downsample_factor);
-                }
-            }
-            if ui
-                .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Clear"))
-                .clicked()
-            {
-                self.clear();
-            }
-        });
-        if let Some(path) = self.loaded_geojson.as_ref() {
-            ui.label(
-                path.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("geojson")
-                    .to_string(),
-            );
-        } else {
-            ui.label("Not loaded");
-        }
-        if !self.status.is_empty() {
-            ui.label(self.status.clone());
-        }
-    }
-
     pub fn ui_properties(&mut self, ui: &mut egui::Ui, default_dir: &Path) {
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.visible, "Visible");
@@ -217,19 +157,6 @@ impl GeoJsonSegmentationLayer {
         if !self.status.is_empty() {
             ui.label(self.status.clone());
         }
-    }
-
-    pub fn load_from_path(&mut self, path: &Path, downsample_factor: f32) -> anyhow::Result<usize> {
-        let polylines =
-            load_geojson_polylines_world(path, downsample_factor, PolygonRingMode::ExteriorOnly)?;
-        let Some(bins) = LineSegmentsBins::build_from_polylines(&polylines, 2048.0) else {
-            anyhow::bail!("no valid segments after parsing");
-        };
-        self.bins = Some(Arc::new(bins));
-        self.loaded_geojson = Some(path.to_path_buf());
-        self.visible = true;
-        self.generation = self.generation.wrapping_add(1).max(1);
-        Ok(self.bins.as_ref().map(|b| b.segments.len()).unwrap_or(0))
     }
 
     pub fn is_busy(&self) -> bool {

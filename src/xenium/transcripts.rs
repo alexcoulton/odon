@@ -7,23 +7,13 @@ use serde_json::Value;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
-use crate::render::point_bins::PointIndexBins;
 use crate::xenium::ZipStore;
-
-fn normalize_gene_key(s: &str) -> String {
-    s.trim()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .to_ascii_uppercase()
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct XeniumTranscriptsMeta {
     pub gene_names: Vec<String>,
     pub gene_indices: HashMap<String, u16>,
     pub grid_keys_lvl0: Vec<String>,
-    pub grid_size_um: f32,
 }
 
 fn parse_json_stream_last_object(bytes: &[u8]) -> anyhow::Result<serde_json::Map<String, Value>> {
@@ -74,13 +64,6 @@ pub fn load_transcripts_meta(transcripts_zarr_zip: &Path) -> anyhow::Result<Xeni
         .ok_or_else(|| anyhow!("missing grids/.zattrs"))?;
     let grids_map = parse_json_stream_last_object(grids_attrs_bytes.as_ref())?;
 
-    let grid_size_um = grids_map
-        .get("grid_size")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_f64())
-        .unwrap_or(250.0) as f32;
-
     let mut grid_keys_lvl0: Vec<String> = Vec::new();
     if let Some(keys_levels) = grids_map.get("grid_keys").and_then(|v| v.as_array()) {
         if let Some(keys0) = keys_levels.first().and_then(|v| v.as_array()) {
@@ -96,21 +79,7 @@ pub fn load_transcripts_meta(transcripts_zarr_zip: &Path) -> anyhow::Result<Xeni
         gene_names,
         gene_indices,
         grid_keys_lvl0,
-        grid_size_um,
     })
-}
-
-#[derive(Debug, Clone)]
-pub struct XeniumTranscriptPoint {
-    pub world_px: eframe::egui::Pos2,
-    pub gene_id: u16,
-    pub qv: f32,
-    pub transcript_id: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct XeniumTranscriptsPayload {
-    pub points: Vec<XeniumTranscriptPoint>,
 }
 
 #[derive(Debug, Clone)]
@@ -120,146 +89,6 @@ pub struct XeniumTranscriptsAllPayload {
     /// Transcript ids, if present. If missing, the vector will be empty for that gene.
     pub id_by_gene: Vec<Vec<u64>>,
     pub total_points: usize,
-}
-
-pub fn load_transcripts_gene_points(
-    transcripts_zarr_zip: &Path,
-    meta: &XeniumTranscriptsMeta,
-    gene_upper: &str,
-    pixel_size_um: f32,
-    max_points: usize,
-) -> anyhow::Result<XeniumTranscriptsPayload> {
-    let store = ZipStore::open(transcripts_zarr_zip).context("open transcripts.zarr.zip")?;
-    let store: Arc<dyn ReadableStorageTraits> = store;
-
-    let gene_key = normalize_gene_key(gene_upper);
-    let gene_id = meta.gene_indices.get(&gene_key).copied().or_else(|| {
-        // Fallback: some producers may omit gene_indices; use the index in gene_names.
-        meta.gene_names
-            .iter()
-            .position(|g| normalize_gene_key(g) == gene_key)
-            .and_then(|i| u16::try_from(i).ok())
-    });
-    let Some(gene_id) = gene_id else {
-        anyhow::bail!("unknown gene: {gene_upper}");
-    };
-
-    let inv_px = 1.0 / pixel_size_um.max(1e-6);
-
-    let mut out: Vec<XeniumTranscriptPoint> = Vec::new();
-    for key in &meta.grid_keys_lvl0 {
-        if max_points > 0 && out.len() >= max_points {
-            break;
-        }
-
-        let base = format!("/grids/0/{key}");
-        let loc_arr: Array<dyn ReadableStorageTraits> =
-            match Array::open(store.clone(), &(base.clone() + "/location")) {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-        let gene_arr: Array<dyn ReadableStorageTraits> =
-            match Array::open(store.clone(), &(base.clone() + "/gene_identity")) {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-        let qv_arr: Option<Array<dyn ReadableStorageTraits>> =
-            Array::open(store.clone(), &(base.clone() + "/quality_score")).ok();
-        let id_arr: Option<Array<dyn ReadableStorageTraits>> =
-            Array::open(store.clone(), &(base.clone() + "/id")).ok();
-
-        let loc_shape = loc_arr.shape().to_vec();
-        if loc_shape.len() != 2 || loc_shape.get(1).copied().unwrap_or(0) < 2 {
-            continue;
-        }
-        let n = loc_shape[0];
-        if n == 0 {
-            continue;
-        }
-        let subset_all = ArraySubset::new_with_ranges(&[0..n, 0..loc_shape[1]]);
-        let loc: ndarray::ArrayD<f32> = loc_arr.retrieve_array_subset(&subset_all)?;
-        let loc = loc
-            .into_dimensionality::<ndarray::Ix2>()
-            .map_err(|_| anyhow!("location dimensionality"))?;
-
-        let gshape = gene_arr.shape().to_vec();
-        let gsubset = if gshape.len() == 2 {
-            ArraySubset::new_with_ranges(&[0..n, 0..1])
-        } else {
-            ArraySubset::new_with_ranges(&[0..n])
-        };
-        let gids: ndarray::ArrayD<u16> = gene_arr.retrieve_array_subset(&gsubset)?;
-        let gids: Vec<u16> = gids.iter().copied().collect();
-
-        let qvs: Option<Vec<f32>> = if let Some(qv_arr) = qv_arr {
-            let qshape = qv_arr.shape().to_vec();
-            let qsubset = if qshape.len() == 2 {
-                ArraySubset::new_with_ranges(&[0..n, 0..1])
-            } else {
-                ArraySubset::new_with_ranges(&[0..n])
-            };
-            match (|| -> anyhow::Result<ndarray::ArrayD<f32>> {
-                Ok(qv_arr.retrieve_array_subset(&qsubset)?)
-            })() {
-                Ok(q) => Some(q.iter().copied().collect()),
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-
-        let ids: Option<Vec<u64>> = if let Some(id_arr) = id_arr {
-            let ishape = id_arr.shape().to_vec();
-            let isubset = if ishape.len() == 2 {
-                ArraySubset::new_with_ranges(&[0..n, 0..1])
-            } else {
-                ArraySubset::new_with_ranges(&[0..n])
-            };
-            // id appears to be an integer-like array, but can vary.
-            if let Ok(ids_u64) = (|| -> anyhow::Result<ndarray::ArrayD<u64>> {
-                Ok(id_arr.retrieve_array_subset(&isubset)?)
-            })() {
-                Some(ids_u64.iter().copied().collect())
-            } else if let Ok(ids_u32) = (|| -> anyhow::Result<ndarray::ArrayD<u32>> {
-                Ok(id_arr.retrieve_array_subset(&isubset)?)
-            })() {
-                Some(ids_u32.iter().map(|&v| v as u64).collect())
-            } else if let Ok(ids_u16) = (|| -> anyhow::Result<ndarray::ArrayD<u16>> {
-                Ok(id_arr.retrieve_array_subset(&isubset)?)
-            })() {
-                Some(ids_u16.iter().map(|&v| v as u64).collect())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        for i in 0..(n as usize) {
-            if max_points > 0 && out.len() >= max_points {
-                break;
-            }
-            let gid = *gids.get(i).unwrap_or(&u16::MAX);
-            if gid != gene_id {
-                continue;
-            }
-            let x_um = loc[(i, 0)];
-            let y_um = loc[(i, 1)];
-            if !x_um.is_finite() || !y_um.is_finite() {
-                continue;
-            }
-            let qv = qvs.as_ref().and_then(|v| v.get(i)).copied().unwrap_or(0.0);
-            let tid = ids.as_ref().and_then(|v| v.get(i)).copied();
-            out.push(XeniumTranscriptPoint {
-                world_px: eframe::egui::pos2(x_um * inv_px, y_um * inv_px),
-                gene_id: gid,
-                qv,
-                transcript_id: tid,
-            });
-        }
-    }
-
-    Ok(XeniumTranscriptsPayload { points: out })
 }
 
 pub fn load_transcripts_all_points(
@@ -409,9 +238,4 @@ pub fn load_transcripts_all_points(
         id_by_gene,
         total_points: total,
     })
-}
-
-pub fn build_bins(points: &[XeniumTranscriptPoint], bin_world: f32) -> Option<Arc<PointIndexBins>> {
-    let positions: Vec<eframe::egui::Pos2> = points.iter().map(|p| p.world_px).collect();
-    PointIndexBins::build(&positions, bin_world).map(Arc::new)
 }

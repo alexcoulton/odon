@@ -21,10 +21,6 @@ pub struct MaskLayer {
 }
 
 impl MaskLayer {
-    pub fn is_empty(&self) -> bool {
-        self.polygons_world.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.polygons_world.clear();
     }

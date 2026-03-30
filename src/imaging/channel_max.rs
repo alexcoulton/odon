@@ -19,7 +19,6 @@ pub struct ChannelMaxResponse {
     pub request_id: u64,
     pub channel: u64,
     pub p97: u16,
-    pub max: u16,
 }
 
 #[derive(Debug)]
@@ -168,7 +167,6 @@ fn channel_max_loader_thread(
             request_id: req.request_id,
             channel: req.channel,
             p97,
-            max: max_v,
         });
     }
 

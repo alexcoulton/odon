@@ -12,17 +12,6 @@ use eframe::egui;
 use glow::HasContext;
 use rfd::FileDialog;
 
-use crate::annotations::{AnnotationCategoryStyle, AnnotationPointsLayer, AnnotationShape};
-use crate::app::S3DatasetSelection;
-use crate::camera::Camera;
-use crate::data::dataset_source::DatasetSource;
-use crate::ui::icons::Icon;
-use crate::project::groups as layer_groups;
-use crate::app_support::memory::{
-    MemoryChannelRow, MemoryRisk, MemoryRiskLevel, PendingMemoryAction, SystemMemorySnapshot,
-    format_bytes, memory_risk, refresh_system_memory_if_needed, ui_memory_channel_selector,
-    ui_memory_overview, ui_pending_memory_action_dialog,
-};
 use self::io::{
     MosaicPinnedLevelStatus, MosaicPinnedLevels, MosaicRawTileKey, MosaicRawTileLoaderHandle,
     MosaicRawTileRequest, MosaicRawTileWorkerResponse, MosaicSource,
@@ -30,24 +19,35 @@ use self::io::{
 };
 use self::segmentation_geojson::MosaicGeoJsonSegmentationOverlay;
 use self::tiles_gl::{ChannelDraw, MosaicTileDraw, MosaicTilesGl};
-use crate::data::ome::OmeZarrDataset;
-use crate::data::project_config::{ProjectLayerGroups, ProjectRoi};
-use crate::project::{
-    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectMosaicViewState, ProjectSpace, ProjectUiState,
+use crate::annotations::{AnnotationCategoryStyle, AnnotationPointsLayer, AnnotationShape};
+use crate::app::S3DatasetSelection;
+use crate::app_support::memory::{
+    MemoryChannelRow, MemoryRisk, MemoryRiskLevel, PendingMemoryAction, SystemMemorySnapshot,
+    format_bytes, memory_risk, refresh_system_memory_if_needed, ui_memory_channel_selector,
+    ui_memory_overview, ui_pending_memory_action_dialog,
 };
-use crate::data::remote_store::{build_http_store, build_s3_store};
 use crate::app_support::repaint as repaint_control;
-use crate::data::samplesheet::load_samplesheet_csv;
 use crate::app_support::screenshot::{
     ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
     next_numbered_screenshot_path,
 };
+use crate::camera::Camera;
+use crate::data::dataset_source::DatasetSource;
+use crate::data::ome::OmeZarrDataset;
+use crate::data::project_config::{ProjectLayerGroups, ProjectRoi};
+use crate::data::remote_store::{build_http_store, build_s3_store};
+use crate::data::samplesheet::load_samplesheet_csv;
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
+use crate::project::groups as layer_groups;
+use crate::project::{
+    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
+    ProjectChannelViewState, ProjectMosaicViewState, ProjectSpace, ProjectUiState,
+};
 use crate::ui::canvas_overlays;
 use crate::ui::channels_panel::{self, ChannelListHost};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
+use crate::ui::icons::Icon;
 use crate::ui::layer_list;
 use crate::ui::left_panel;
 use crate::ui::right_panel;
@@ -189,7 +189,7 @@ pub struct MosaicViewerApp {
     pinned_levels: MosaicPinnedLevels,
     loader: MosaicRawTileLoaderHandle,
     tiles_gl: MosaicTilesGl,
-    remote_runtimes: Vec<Arc<tokio::runtime::Runtime>>,
+    _remote_runtimes: Vec<Arc<tokio::runtime::Runtime>>,
 
     camera: Camera,
     last_canvas_rect: Option<egui::Rect>,
@@ -405,8 +405,6 @@ impl ChannelListHost for MosaicViewerApp {
 #[derive(Debug, Clone)]
 pub enum MosaicRequest {
     BackToSingle,
-    OpenSingle(PathBuf),
-    OpenMosaic(Vec<PathBuf>),
     OpenProjectRoi(ProjectRoi),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
@@ -455,7 +453,10 @@ impl MosaicViewerApp {
 
     fn project_camera_state(&self) -> ProjectCameraState {
         ProjectCameraState {
-            center_world_lvl0: [self.camera.center_world_lvl0.x, self.camera.center_world_lvl0.y],
+            center_world_lvl0: [
+                self.camera.center_world_lvl0.x,
+                self.camera.center_world_lvl0.y,
+            ],
             zoom_screen_per_lvl0_px: self.camera.zoom_screen_per_lvl0_px,
         }
     }
@@ -610,7 +611,11 @@ impl MosaicViewerApp {
         if let Some(show_right_panel) = state.show_right_panel {
             self.show_right_panel = show_right_panel;
         }
-        if let Some(left_tab) = state.left_tab.as_deref().and_then(LeftTab::from_storage_key) {
+        if let Some(left_tab) = state
+            .left_tab
+            .as_deref()
+            .and_then(LeftTab::from_storage_key)
+        {
             self.left_tab = left_tab;
         }
         if let Some(right_tab) = state
@@ -634,54 +639,55 @@ impl MosaicViewerApp {
     }
 
     pub fn take_project_space(&mut self) -> ProjectSpace {
-        self.project_space.set_mosaic_view_state(ProjectMosaicViewState {
-            channel_order: self.channel_layer_order.clone(),
-            channels: self
-                .channels
-                .iter()
-                .map(|ch| ProjectChannelViewState {
-                    visible: Some(ch.visible),
-                    color_rgb: Some(ch.color_rgb),
-                    window: ch.window.map(|(lo, hi)| [lo, hi]),
-                    offset_world: None,
-                    scale: None,
-                    rotation_rad: None,
-                })
-                .collect(),
-            active_channel: Some(self.selected_channel),
-            active_layer: Some(Self::layer_id_storage_key(self.active_layer)),
-            overlay_order: self
-                .overlay_layer_order
-                .iter()
-                .copied()
-                .map(Self::layer_id_storage_key)
-                .collect(),
-            overlay_visibility: self
-                .overlay_layer_order
-                .iter()
-                .copied()
-                .filter_map(|id| {
-                    self.layer_visible_value(id)
-                        .map(|visible| (Self::layer_id_storage_key(id), visible))
-                })
-                .collect::<BTreeMap<_, _>>(),
-            sort_by: Some(self.sort_by.clone()),
-            sort_secondary_enabled: Some(self.sort_secondary_enabled),
-            sort_by_secondary: Some(self.sort_by_secondary.clone()),
-            group_by: Some(self.group_by.clone()),
-            show_group_labels: Some(self.show_group_labels),
-            group_gap: Some(self.group_gap),
-            layout_mode: Some(self.layout_mode.storage_key().to_string()),
-            show_text_labels: Some(self.show_text_labels),
-            label_columns: self.label_columns.clone(),
-            camera: Some(self.project_camera_state()),
-            ui: Some(self.project_ui_state()),
-            annotation_layers: self
-                .annotation_layers
-                .iter()
-                .map(|layer| self.project_annotation_layer_state(layer))
-                .collect(),
-        });
+        self.project_space
+            .set_mosaic_view_state(ProjectMosaicViewState {
+                channel_order: self.channel_layer_order.clone(),
+                channels: self
+                    .channels
+                    .iter()
+                    .map(|ch| ProjectChannelViewState {
+                        visible: Some(ch.visible),
+                        color_rgb: Some(ch.color_rgb),
+                        window: ch.window.map(|(lo, hi)| [lo, hi]),
+                        offset_world: None,
+                        scale: None,
+                        rotation_rad: None,
+                    })
+                    .collect(),
+                active_channel: Some(self.selected_channel),
+                active_layer: Some(Self::layer_id_storage_key(self.active_layer)),
+                overlay_order: self
+                    .overlay_layer_order
+                    .iter()
+                    .copied()
+                    .map(Self::layer_id_storage_key)
+                    .collect(),
+                overlay_visibility: self
+                    .overlay_layer_order
+                    .iter()
+                    .copied()
+                    .filter_map(|id| {
+                        self.layer_visible_value(id)
+                            .map(|visible| (Self::layer_id_storage_key(id), visible))
+                    })
+                    .collect::<BTreeMap<_, _>>(),
+                sort_by: Some(self.sort_by.clone()),
+                sort_secondary_enabled: Some(self.sort_secondary_enabled),
+                sort_by_secondary: Some(self.sort_by_secondary.clone()),
+                group_by: Some(self.group_by.clone()),
+                show_group_labels: Some(self.show_group_labels),
+                group_gap: Some(self.group_gap),
+                layout_mode: Some(self.layout_mode.storage_key().to_string()),
+                show_text_labels: Some(self.show_text_labels),
+                label_columns: self.label_columns.clone(),
+                camera: Some(self.project_camera_state()),
+                ui: Some(self.project_ui_state()),
+                annotation_layers: self
+                    .annotation_layers
+                    .iter()
+                    .map(|layer| self.project_annotation_layer_state(layer))
+                    .collect(),
+            });
         self.project_space.update_layer_groups(|g| {
             *g = self.layer_groups.clone();
         });
@@ -787,7 +793,8 @@ impl MosaicViewerApp {
                 self.set_active_layer(active_layer);
             } else if !self.channels.is_empty() {
                 self.set_active_layer(MosaicLayerId::Channel(
-                    self.selected_channel.min(self.channels.len().saturating_sub(1)),
+                    self.selected_channel
+                        .min(self.channels.len().saturating_sub(1)),
                 ));
             }
         }
@@ -797,20 +804,8 @@ impl MosaicViewerApp {
         self.project_space = project_space;
     }
 
-    pub fn take_layer_groups(&mut self) -> ProjectLayerGroups {
-        std::mem::take(&mut self.layer_groups)
-    }
-
-    pub fn layer_groups(&self) -> &ProjectLayerGroups {
-        &self.layer_groups
-    }
-
     pub fn take_request(&mut self) -> Option<MosaicRequest> {
         self.pending_request.take()
-    }
-
-    pub fn request_close_dialog(&mut self) {
-        self.close_dialog_open = true;
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
@@ -1020,7 +1015,7 @@ impl MosaicViewerApp {
             pinned_levels,
             loader,
             tiles_gl: MosaicTilesGl::new(12_000),
-            remote_runtimes: Vec::new(),
+            _remote_runtimes: Vec::new(),
             camera,
             last_canvas_rect: None,
             mosaic_bounds,
@@ -1243,7 +1238,7 @@ impl MosaicViewerApp {
             pinned_levels,
             loader,
             tiles_gl: MosaicTilesGl::new(12_000),
-            remote_runtimes,
+            _remote_runtimes: remote_runtimes,
             camera,
             last_canvas_rect: None,
             mosaic_bounds,
@@ -1499,7 +1494,7 @@ impl MosaicViewerApp {
             pinned_levels,
             loader,
             tiles_gl: MosaicTilesGl::new(12_000),
-            remote_runtimes,
+            _remote_runtimes: remote_runtimes,
             camera,
             last_canvas_rect: None,
             mosaic_bounds,
@@ -1775,7 +1770,7 @@ impl MosaicViewerApp {
             pinned_levels,
             loader,
             tiles_gl: MosaicTilesGl::new(12_000),
-            remote_runtimes,
+            _remote_runtimes: remote_runtimes,
             camera,
             last_canvas_rect: None,
             mosaic_bounds,
@@ -1995,7 +1990,7 @@ impl MosaicViewerApp {
             pinned_levels,
             loader,
             tiles_gl: MosaicTilesGl::new(12_000),
-            remote_runtimes: Vec::new(),
+            _remote_runtimes: Vec::new(),
             camera,
             last_canvas_rect: None,
             mosaic_bounds,
@@ -3038,7 +3033,7 @@ impl MosaicViewerApp {
                     .clicked()
                 {
                     self.open_group_layers_dialog_annotations(selected_annotations);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         }
@@ -3121,12 +3116,9 @@ impl MosaicViewerApp {
                 let mut name_output = egui::TextEdit::singleline(&mut dialog.name).show(ui);
                 if dialog.focus_name_on_open {
                     name_output.response.request_focus();
-                    name_output
-                        .state
-                        .cursor
-                        .set_char_range(Some(egui::text::CCursorRange::select_all(
-                            &name_output.galley,
-                        )));
+                    name_output.state.cursor.set_char_range(Some(
+                        egui::text::CCursorRange::select_all(&name_output.galley),
+                    ));
                     name_output.state.store(ui.ctx(), name_output.response.id);
                     dialog.focus_name_on_open = false;
                 }
@@ -3232,7 +3224,11 @@ impl MosaicViewerApp {
     fn drain_screenshots(&mut self) {
         while let Ok(resp) = self.screenshot_worker.rx.try_recv() {
             match resp {
-                crate::app_support::screenshot::ScreenshotWorkerResp::Saved { id, path, result } => {
+                crate::app_support::screenshot::ScreenshotWorkerResp::Saved {
+                    id,
+                    path,
+                    result,
+                } => {
                     if self.screenshot_in_flight == Some(id) {
                         self.screenshot_in_flight = None;
                     }
@@ -3267,14 +3263,14 @@ impl MosaicViewerApp {
                     .map(|g| g.id)
                     .collect::<Vec<_>>();
                 let gid = layer_groups::next_group_id(&existing_ids);
-                self.layer_groups
-                    .channel_groups
-                    .push(crate::data::project_config::ProjectChannelGroup {
+                self.layer_groups.channel_groups.push(
+                    crate::data::project_config::ProjectChannelGroup {
                         id: gid,
                         name,
                         expanded: true,
                         color_rgb: first_color,
-                    });
+                    },
+                );
                 for idx in indices {
                     if let Some(ch) = self.channels.get(idx) {
                         self.layer_groups.channel_members.insert(
@@ -4074,14 +4070,14 @@ impl MosaicViewerApp {
                     .map(|g| g.id)
                     .collect::<Vec<_>>();
                 let id = layer_groups::next_group_id(&existing);
-                self.layer_groups
-                    .channel_groups
-                    .push(crate::data::project_config::ProjectChannelGroup {
+                self.layer_groups.channel_groups.push(
+                    crate::data::project_config::ProjectChannelGroup {
                         id,
                         name: format!("Group {id}"),
                         expanded: true,
                         color_rgb: [255, 255, 255],
-                    });
+                    },
+                );
                 selected_group = Some(id);
                 groups_changed = true;
             }

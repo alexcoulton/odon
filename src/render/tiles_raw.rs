@@ -62,10 +62,6 @@ impl<T> RawTileCache<T> {
         self.cache.contains(key)
     }
 
-    pub fn get(&mut self, key: &RawTileKey) -> Option<&T> {
-        self.cache.get(key)
-    }
-
     pub fn get_mut(&mut self, key: &RawTileKey) -> Option<&mut T> {
         self.cache.get_mut(key)
     }

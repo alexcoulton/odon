@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
@@ -10,14 +9,8 @@ use eframe::egui;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::render::points::{Point, PointsLayer, PointsStyle};
 use crate::data::project_config::{ProjectConfig, ProjectDatasetConfig};
-
-#[derive(Debug, Clone)]
-pub enum CellThresholdsAction {
-    CycleImageChannel(i32),
-    NudgeImageContrastMax(f32),
-}
+use crate::render::points::{Point, PointsLayer};
 
 #[derive(Debug, Clone)]
 pub struct CellThresholdsPanel {
@@ -42,9 +35,7 @@ pub struct CellThresholdsPanel {
     marker_choices: Vec<MarkerChoice>,
     marker_base_lookup: HashMap<String, usize>,
     selected_marker: usize,
-    scale_mode: ScaleMode,
     threshold: f32,
-    threshold_touched: bool,
     values_min: f32,
     values_max: f32,
     positions_world: Arc<Vec<egui::Pos2>>,
@@ -53,21 +44,10 @@ pub struct CellThresholdsPanel {
     last_loaded_key: Option<LoadKey>,
     positive_count: usize,
     total_count: usize,
-    hist_values_generation: u64,
-    hist: Option<ValueHistogram>,
-
     points_visible: bool,
-    style: PointsStyle,
 
     thresholds_csv_path: Option<PathBuf>,
     thresholds_loaded: HashMap<(String, String, String), ThresholdCsvRow>,
-    threshold_meta_loaded: HashMap<(String, String, String), ThresholdMeta>,
-    threshold_dirty: HashMap<(String, String, String), ThresholdCsvRow>,
-    notes: String,
-    working: bool,
-    autosave_csv: bool,
-    autosave_pending: bool,
-    autosave_last_edit: Instant,
 
     auto_thresholds_path: Option<PathBuf>,
     auto_thresholds: HashMap<(String, String), AutoThresholdRecord>,
@@ -80,11 +60,6 @@ pub struct CellThresholdsPanel {
     tx: crossbeam_channel::Sender<LoadRequest>,
     rx: crossbeam_channel::Receiver<LoadResponse>,
     last_loaded_request_id: u64,
-
-    write_request_id: u64,
-    tx_write: crossbeam_channel::Sender<WriteRequest>,
-    rx_write: crossbeam_channel::Receiver<WriteResponse>,
-    last_write_response_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -92,12 +67,6 @@ struct MarkerChoice {
     display: String,
     column: String,
     marker_key: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScaleMode {
-    Raw,
-    Arcsinh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,32 +90,11 @@ struct AutoThresholdRecord {
 }
 
 #[derive(Debug, Clone)]
-struct ThresholdMeta {
-    method: AutoMethod,
-    kmeans_k: Option<u8>,
-    positive_ge: Option<u8>,
-}
-
-#[derive(Debug, Clone)]
 struct ThresholdCsvRow {
-    roi: String,
-    marker: String,
-    source: String,
-    raw_threshold: f32,
     arcsinh_threshold: f32,
     method: String,
     kmeans_k: Option<u8>,
     positive_ge: Option<u8>,
-    notes: String,
-    working: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ValueHistogram {
-    min: f32,
-    max: f32,
-    bins: Vec<u32>,
-    max_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +116,6 @@ impl CellsSource {
 struct LoadKey {
     roi_label: String,
     marker_column: String,
-    scale_mode: ScaleMode,
     coord_downsample_bits: u32,
 }
 
@@ -189,20 +136,6 @@ struct LoadResponse {
     max: f32,
 }
 
-#[derive(Debug, Clone)]
-struct WriteRequest {
-    request_id: u64,
-    csv_path: PathBuf,
-    rows: Vec<ThresholdCsvRow>,
-}
-
-#[derive(Debug, Clone)]
-struct WriteResponse {
-    request_id: u64,
-    ok: bool,
-    status: String,
-}
-
 impl CellThresholdsPanel {
     pub fn set_project_config(&mut self, project: ProjectConfig) {
         self.project = project;
@@ -210,147 +143,10 @@ impl CellThresholdsPanel {
         self.reload_config(&root);
     }
 
-    fn recompute_histogram(&mut self) {
-        let values = self.values.as_ref();
-        if values.is_empty() {
-            self.hist = None;
-            self.hist_values_generation = self.values_generation;
-            return;
-        }
-        let (min, max) = finite_min_max(values).unwrap_or((0.0, 1.0));
-        let min = min.min(max);
-        let max = max.max(min + 1e-6);
-
-        const BINS: usize = 256;
-        let mut bins = vec![0u32; BINS];
-        let inv = (BINS as f32) / (max - min);
-
-        // Cap work for very large point clouds.
-        let max_samples = 2_000_000usize;
-        let step = (values.len() / max_samples).max(1);
-        for &v in values.iter().step_by(step) {
-            if !v.is_finite() {
-                continue;
-            }
-            let mut idx = ((v - min) * inv).floor() as i32;
-            if idx < 0 {
-                idx = 0;
-            }
-            if idx as usize >= BINS {
-                idx = (BINS as i32) - 1;
-            }
-            bins[idx as usize] = bins[idx as usize].saturating_add(1);
-        }
-        let max_count = bins.iter().copied().max().unwrap_or(1).max(1);
-
-        self.hist = Some(ValueHistogram {
-            min,
-            max,
-            bins,
-            max_count,
-        });
-        self.hist_values_generation = self.values_generation;
-    }
-
-    fn ui_histogram(&mut self, ui: &mut egui::Ui) -> bool {
-        let Some(hist) = self.hist.as_ref() else {
-            return false;
-        };
-        let height = 110.0;
-        let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), height),
-            egui::Sense::click_and_drag(),
-        );
-        let painter = ui.painter();
-
-        painter.rect_filled(
-            rect,
-            egui::CornerRadius::same(4),
-            ui.visuals().extreme_bg_color,
-        );
-        painter.rect_stroke(
-            rect,
-            egui::CornerRadius::same(4),
-            ui.visuals().widgets.noninteractive.bg_stroke,
-            egui::StrokeKind::Middle,
-        );
-
-        let bins = &hist.bins;
-        if bins.is_empty() {
-            return false;
-        }
-
-        let bar_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
-        let stroke = egui::Stroke::new(1.0, bar_color.linear_multiply(0.75));
-
-        let w = rect.width().max(1.0);
-        let h = rect.height().max(1.0);
-        let n = bins.len().max(1) as f32;
-        for (i, &c) in bins.iter().enumerate() {
-            if c == 0 {
-                continue;
-            }
-            let x0 = rect.left() + (i as f32 + 0.5) * (w / n);
-            let frac = (c as f32) / (hist.max_count as f32);
-            let bh = (frac * (h - 6.0)).clamp(0.0, h);
-            let y0 = rect.bottom() - 3.0;
-            let y1 = (y0 - bh).max(rect.top() + 3.0);
-            painter.line_segment([egui::pos2(x0, y0), egui::pos2(x0, y1)], stroke);
-        }
-
-        // Threshold line.
-        let t = self.threshold.clamp(hist.min, hist.max);
-        let tx = if (hist.max - hist.min) > 0.0 {
-            rect.left() + ((t - hist.min) / (hist.max - hist.min)) * w
-        } else {
-            rect.left()
-        };
-        let sel = ui.visuals().selection.stroke;
-        painter.line_segment(
-            [egui::pos2(tx, rect.top()), egui::pos2(tx, rect.bottom())],
-            egui::Stroke::new(sel.width.max(2.0), sel.color),
-        );
-
-        // Hover tooltip with value.
-        if resp.hovered() {
-            if let Some(pos) = resp.hover_pos() {
-                let frac = ((pos.x - rect.left()) / w).clamp(0.0, 1.0);
-                let v = hist.min + frac * (hist.max - hist.min);
-                let layer_id =
-                    egui::LayerId::new(egui::Order::Tooltip, ui.id().with("ct_hist_tip_layer"));
-                egui::show_tooltip_at_pointer(
-                    ui.ctx(),
-                    layer_id,
-                    ui.id().with("ct_hist_tip"),
-                    |ui: &mut egui::Ui| {
-                        ui.label(format!("Value: {:.4}", v));
-                        ui.label(format!("Threshold: {:.4}", self.threshold));
-                    },
-                );
-            }
-        }
-
-        // Click/drag to set threshold.
-        let mut changed = false;
-        if resp.clicked() || resp.dragged() {
-            if let Some(pos) = resp.interact_pointer_pos() {
-                let frac = ((pos.x - rect.left()) / w).clamp(0.0, 1.0);
-                let v = hist.min + frac * (hist.max - hist.min);
-                if v.is_finite() {
-                    self.threshold = v.clamp(hist.min, hist.max);
-                    changed = true;
-                }
-            }
-        }
-
-        changed
-    }
-
     pub fn new(dataset_root: &Path, ome_multiscale_name: Option<&str>) -> Self {
         let roi_label = infer_roi_label(dataset_root, ome_multiscale_name);
 
         let (tx, rx) = spawn_loader_thread();
-        let (tx_write, rx_write) = spawn_writer_thread();
 
         let mut panel = Self {
             enabled: false,
@@ -369,9 +165,7 @@ impl CellThresholdsPanel {
             marker_choices: Vec::new(),
             marker_base_lookup: HashMap::new(),
             selected_marker: 0,
-            scale_mode: ScaleMode::Arcsinh,
             threshold: 0.0,
-            threshold_touched: false,
             values_min: 0.0,
             values_max: 1.0,
             positions_world: Arc::new(Vec::new()),
@@ -380,21 +174,9 @@ impl CellThresholdsPanel {
             last_loaded_key: None,
             positive_count: 0,
             total_count: 0,
-            hist_values_generation: 0,
-            hist: None,
             points_visible: true,
-            style: PointsStyle::default(),
             thresholds_csv_path: None,
             thresholds_loaded: HashMap::new(),
-            threshold_meta_loaded: HashMap::new(),
-            threshold_dirty: HashMap::new(),
-            notes: String::new(),
-            working: true,
-            autosave_csv: false,
-            autosave_pending: false,
-            autosave_last_edit: Instant::now()
-                .checked_sub(Duration::from_secs(3600))
-                .unwrap_or_else(Instant::now),
             auto_thresholds_path: None,
             auto_thresholds: HashMap::new(),
             auto_method: AutoMethod::Manual,
@@ -405,10 +187,6 @@ impl CellThresholdsPanel {
             tx,
             rx,
             last_loaded_request_id: 0,
-            write_request_id: 0,
-            tx_write,
-            rx_write,
-            last_write_response_id: 0,
         };
 
         panel.reload_config(dataset_root);
@@ -429,7 +207,6 @@ impl CellThresholdsPanel {
         self.values_generation = self.values_generation.wrapping_add(1);
         self.positions_world = Arc::new(Vec::new());
         self.values = Arc::new(Vec::new());
-        self.hist = None;
         self.values_min = 0.0;
         self.values_max = 1.0;
         self.positive_count = 0;
@@ -445,8 +222,6 @@ impl CellThresholdsPanel {
         // Keep panel state in sync with the global layer visibility toggle.
         self.points_visible = points_layer.visible;
         self.drain_loader(points_layer);
-        self.drain_writer();
-        self.maybe_flush_autosave();
     }
 
     pub fn gpu_points(&self) -> Option<(u64, Arc<Vec<egui::Pos2>>, Arc<Vec<f32>>)> {
@@ -467,388 +242,6 @@ impl CellThresholdsPanel {
         self.threshold
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        points_layer: &mut PointsLayer,
-    ) -> Option<CellThresholdsAction> {
-        ui.heading("Cell Thresholds");
-
-        if !self.enabled {
-            ui.label(&self.status);
-            points_layer.visible = false;
-            self.points_visible = points_layer.visible;
-            ui.add_space(8.0);
-            if ui.button("Reload config").clicked() {
-                let root = self.dataset_root.clone();
-                self.reload_config(&root);
-            }
-            return None;
-        }
-
-        self.drain_loader(points_layer);
-        self.drain_writer();
-        self.maybe_flush_autosave();
-
-        let mut action: Option<CellThresholdsAction> = None;
-
-        ui.horizontal(|ui| {
-            // `points_layer.visible` is the source of truth (toggled from the left panel "Layers").
-            self.points_visible = points_layer.visible;
-            let mut v = self.points_visible;
-            if ui.checkbox(&mut v, "Show points").changed() {
-                points_layer.visible = v;
-                self.points_visible = v;
-            }
-        });
-
-        ui.horizontal(|ui| {
-            if ui.button("Previous Channel").clicked() {
-                action = Some(CellThresholdsAction::CycleImageChannel(-1));
-            }
-            if ui.button("Next Channel").clicked() {
-                action = Some(CellThresholdsAction::CycleImageChannel(1));
-            }
-        });
-        ui.horizontal(|ui| {
-            for (delta, label) in [
-                (-1000.0f32, "Max -1000"),
-                (-100.0f32, "Max -100"),
-                (100.0f32, "Max +100"),
-                (1000.0f32, "Max +1000"),
-            ] {
-                if ui.button(label).clicked() {
-                    action = Some(CellThresholdsAction::NudgeImageContrastMax(delta));
-                }
-            }
-        });
-
-        let mut roi_changed = false;
-        ui.horizontal(|ui| {
-            ui.label("ROI");
-            let edit = ui.text_edit_singleline(&mut self.roi_label);
-            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                roi_changed = true;
-            }
-            if ui.button("Reload").clicked() {
-                roi_changed = true;
-            }
-        });
-
-        ui.separator();
-        ui.label(format!(
-            "Dataset: {}",
-            self.dataset_name.as_deref().unwrap_or("-")
-        ));
-        ui.label(format!(
-            "Parquet: {}",
-            self.parquet_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| "-".to_string())
-        ));
-        ui.label(format!(
-            "Project: {} ROIs, {} datasets",
-            self.project.rois.len(),
-            self.project.datasets.len()
-        ));
-        ui.label(format!("Status: {}", self.status));
-
-        ui.separator();
-        let old_scale = self.scale_mode;
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.scale_mode, ScaleMode::Raw, "raw");
-            ui.selectable_value(&mut self.scale_mode, ScaleMode::Arcsinh, "arcsinh");
-        });
-        let scale_changed = old_scale != self.scale_mode;
-
-        let mut source_changed = false;
-        if self.cells_source_available.len() >= 2 {
-            let before = self.cells_source;
-            ui.horizontal(|ui| {
-                ui.label("Source");
-                egui::ComboBox::from_id_salt("cells-source")
-                    .selected_text(self.cells_source.as_str())
-                    .show_ui(ui, |ui| {
-                        for src in self.cells_source_available.clone() {
-                            ui.selectable_value(&mut self.cells_source, src, src.as_str());
-                        }
-                    });
-            });
-            source_changed = before != self.cells_source;
-            if source_changed {
-                let prev_display = self
-                    .marker_choices
-                    .get(self.selected_marker)
-                    .map(|m| m.display.clone());
-                self.parquet_path = self.parquet_path_for_source(&self.dataset_root);
-                if let Some(parquet_path) = self.parquet_path.clone() {
-                    let channel_labels = read_channel_labels(
-                        &self.dataset_root,
-                        self.channels_index_path.as_deref(),
-                    );
-                    if let Ok(choices) =
-                        list_marker_choices(&parquet_path, &channel_labels, &self.marker_stat)
-                    {
-                        self.marker_choices = choices;
-                        self.rebuild_marker_base_lookup();
-                        if let Some(want) = prev_display {
-                            if let Some(i) =
-                                self.marker_choices.iter().position(|m| m.display == want)
-                            {
-                                self.selected_marker = i;
-                            } else {
-                                self.selected_marker = 0;
-                            }
-                        } else {
-                            self.selected_marker = 0;
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut marker_changed = false;
-        egui::ComboBox::from_label("Marker")
-            .selected_text(
-                self.marker_choices
-                    .get(self.selected_marker)
-                    .map(|m| m.display.as_str())
-                    .unwrap_or("-"),
-            )
-            .show_ui(ui, |ui| {
-                for (i, m) in self.marker_choices.iter().enumerate() {
-                    marker_changed |= ui
-                        .selectable_value(&mut self.selected_marker, i, &m.display)
-                        .changed();
-                }
-            });
-
-        let mut method_changed = false;
-        let mut kcutoff_changed = false;
-        let has_auto = self.auto_threshold_for_current().is_some();
-        ui.horizontal(|ui| {
-            ui.label("Method");
-            let selected_text = match self.auto_method {
-                AutoMethod::Manual => "Manual".to_string(),
-                AutoMethod::KMeans => format!("KMeans (k={})", self.auto_kmeans_k.max(2)),
-                AutoMethod::Otsu => "Otsu".to_string(),
-            };
-            egui::ComboBox::from_id_salt("auto-method")
-                .selected_text(selected_text)
-                .show_ui(ui, |ui| {
-                    method_changed |= ui
-                        .selectable_value(&mut self.auto_method, AutoMethod::Manual, "Manual")
-                        .changed();
-                    ui.add_enabled_ui(has_auto, |ui| {
-                        method_changed |= ui
-                            .selectable_value(
-                                &mut self.auto_method,
-                                AutoMethod::KMeans,
-                                format!("KMeans (k={})", self.auto_kmeans_k.max(2)),
-                            )
-                            .changed();
-                        method_changed |= ui
-                            .selectable_value(&mut self.auto_method, AutoMethod::Otsu, "Otsu")
-                            .changed();
-                    });
-                });
-        });
-
-        ui.horizontal(|ui| {
-            let max_ge = self
-                .auto_threshold_for_current()
-                .map(|a| a.kmeans_k)
-                .unwrap_or(self.auto_kmeans_k)
-                .max(2);
-            let mut ge = self.auto_positive_ge.clamp(2, max_ge);
-            ui.add_enabled_ui(self.auto_method == AutoMethod::KMeans && has_auto, |ui| {
-                egui::ComboBox::from_label("Positive >=")
-                    .selected_text(format!("{ge}"))
-                    .show_ui(ui, |ui| {
-                        for v in 2..=max_ge {
-                            kcutoff_changed |=
-                                ui.selectable_value(&mut ge, v, format!("{v}")).changed();
-                        }
-                    });
-            });
-            if ui.add_enabled(has_auto, egui::Button::new("K -")).clicked() {
-                ge = ge.saturating_sub(1).max(2);
-                kcutoff_changed = true;
-                self.auto_method = AutoMethod::KMeans;
-            }
-            if ui.add_enabled(has_auto, egui::Button::new("K +")).clicked() {
-                ge = (ge + 1).min(max_ge);
-                kcutoff_changed = true;
-                self.auto_method = AutoMethod::KMeans;
-            }
-            self.auto_positive_ge = ge;
-        });
-
-        let mut write_clicked = false;
-        let mut autosave_toggled = false;
-        ui.horizontal(|ui| {
-            write_clicked |= ui
-                .add_enabled(
-                    self.thresholds_csv_path.is_some(),
-                    egui::Button::new("Write CSV"),
-                )
-                .clicked();
-            autosave_toggled |= ui
-                .add_enabled(
-                    self.thresholds_csv_path.is_some(),
-                    egui::Checkbox::new(&mut self.autosave_csv, "Auto-save CSV"),
-                )
-                .changed();
-        });
-
-        ui.label(self.threshold_loaded_label_text());
-
-        let abs_min = self.values_min;
-        let abs_max = self.values_max.max(abs_min + 1e-6);
-        if self.hist_values_generation != self.values_generation {
-            self.recompute_histogram();
-        }
-        let mut threshold_changed = self.ui_histogram(ui);
-        threshold_changed |= ui
-            .add(egui::Slider::new(&mut self.threshold, abs_min..=abs_max).text("Threshold"))
-            .changed();
-        ui.horizontal(|ui| {
-            threshold_changed |= ui
-                .add(
-                    egui::DragValue::new(&mut self.threshold)
-                        .speed(((abs_max - abs_min) / 500.0).max(0.1)),
-                )
-                .changed();
-            for (delta, label) in [
-                (-1000.0, "-1000"),
-                (-100.0, "-100"),
-                (100.0, "+100"),
-                (1000.0, "+1000"),
-            ] {
-                if ui.button(label).clicked() {
-                    self.threshold = (self.threshold + delta).clamp(abs_min, abs_max);
-                    threshold_changed = true;
-                }
-            }
-        });
-        if self.scale_mode == ScaleMode::Arcsinh {
-            ui.label(format!(
-                "Raw ~ {:.3}",
-                (self.threshold as f64).sinh() as f32
-            ));
-        }
-        ui.label(format!(
-            "{} / {} cells >= {:.3}",
-            self.positive_count, self.total_count, self.threshold
-        ));
-
-        ui.separator();
-        let mut not_working = !self.working;
-        let working_changed = ui
-            .add_enabled(
-                self.thresholds_csv_path.is_some(),
-                egui::Checkbox::new(&mut not_working, "Not working"),
-            )
-            .changed();
-        if working_changed {
-            self.working = !not_working;
-        }
-        ui.label("Notes");
-        let notes_changed = ui
-            .add_enabled(
-                self.thresholds_csv_path.is_some(),
-                egui::TextEdit::multiline(&mut self.notes).desired_rows(3),
-            )
-            .changed();
-        let save_note_clicked = ui
-            .add_enabled(
-                self.thresholds_csv_path.is_some(),
-                egui::Button::new("Save note"),
-            )
-            .clicked();
-
-        ui.separator();
-        ui.label("Point style");
-        ui.add(egui::Slider::new(&mut self.style.radius_screen_px, 1.0..=20.0).text("Size"));
-        ui.horizontal(|ui| {
-            ui.label("Pos");
-            ui.color_edit_button_srgba(&mut self.style.fill_positive);
-            ui.label("Neg");
-            ui.color_edit_button_srgba(&mut self.style.fill_negative);
-        });
-        ui.horizontal(|ui| {
-            ui.label("Stroke");
-            let mut stroke_color = self.style.stroke_positive.color;
-            ui.color_edit_button_srgba(&mut stroke_color);
-            self.style.stroke_positive.color = stroke_color;
-            ui.add(egui::Slider::new(&mut self.style.stroke_positive.width, 0.0..=4.0).text("W"));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Neg stroke");
-            let mut stroke_color = self.style.stroke_negative.color;
-            ui.color_edit_button_srgba(&mut stroke_color);
-            self.style.stroke_negative.color = stroke_color;
-            ui.add(egui::Slider::new(&mut self.style.stroke_negative.width, 0.0..=4.0).text("W"));
-        });
-        points_layer.style = self.style.clone();
-
-        if roi_changed || source_changed {
-            // Avoid showing stale ROI points while a new ROI/source load is in flight.
-            points_layer.points.clear();
-            self.positions_world = Arc::new(Vec::new());
-            self.values = Arc::new(Vec::new());
-            self.values_generation = self.values_generation.wrapping_add(1);
-            self.hist = None;
-            self.positive_count = 0;
-            self.total_count = 0;
-        }
-
-        if marker_changed || roi_changed || scale_changed || source_changed {
-            self.restore_persisted_state_for_current();
-            self.request_load();
-        }
-
-        if autosave_toggled {
-            // Toggle doesn't mark the data dirty, but if we have pending changes and the user
-            // just enabled autosave, schedule a flush.
-            self.autosave_pending = self.autosave_csv && !self.threshold_dirty.is_empty();
-            self.autosave_last_edit = Instant::now();
-        }
-
-        if method_changed || kcutoff_changed {
-            if self.auto_method != AutoMethod::Manual {
-                self.apply_auto_threshold_if_available();
-                self.threshold_touched = false;
-                self.apply_threshold(points_layer);
-            }
-            self.mark_dirty_current();
-            self.schedule_autosave();
-        }
-
-        // Apply threshold to the already-loaded points (fast).
-        if threshold_changed {
-            if self.auto_method != AutoMethod::Manual {
-                self.auto_method = AutoMethod::Manual;
-            }
-            self.threshold_touched = true;
-            self.apply_threshold(points_layer);
-            self.mark_dirty_current();
-            self.schedule_autosave();
-        }
-
-        if working_changed || notes_changed {
-            self.mark_dirty_current();
-            self.schedule_autosave();
-        }
-
-        if write_clicked || save_note_clicked {
-            let _ = self.enqueue_write_current();
-        }
-
-        action
-    }
-
     pub fn request_load(&mut self) {
         let Some(path) = self.parquet_path.clone() else {
             return;
@@ -857,12 +250,10 @@ impl CellThresholdsPanel {
             return;
         };
         self.status = "Loading...".to_string();
-        self.threshold_touched = false;
         self.load_request_id = self.load_request_id.wrapping_add(1);
         let key = LoadKey {
             roi_label: self.roi_label.clone(),
             marker_column: marker.column,
-            scale_mode: self.scale_mode,
             coord_downsample_bits: self.coord_downsample.to_bits(),
         };
         let req = LoadRequest {
@@ -895,7 +286,6 @@ impl CellThresholdsPanel {
             self.values_max = msg.max.max(self.values_min + 1e-6);
             self.status = format!("Loaded {} points.", self.positions_world.len());
             self.total_count = self.values.len();
-            self.recompute_histogram();
 
             points_layer.points = self
                 .positions_world
@@ -906,7 +296,6 @@ impl CellThresholdsPanel {
                     positive: false,
                 })
                 .collect();
-            points_layer.style = self.style.clone();
             points_layer.visible = self.points_visible;
 
             let key_changed = self.last_loaded_key.as_ref().is_none_or(|k| *k != key);
@@ -1028,47 +417,11 @@ impl CellThresholdsPanel {
         None
     }
 
-    fn threshold_loaded_label_text(&self) -> String {
-        let Some((roi, marker, source)) = self.current_key() else {
-            return "Threshold: -".to_string();
-        };
-        let mut loaded =
-            self.thresholds_loaded
-                .contains_key(&(roi.clone(), marker.clone(), source.clone()));
-        let mut modified =
-            self.threshold_dirty
-                .contains_key(&(roi.clone(), marker.clone(), source.clone()));
-        if !loaded && !source.is_empty() {
-            loaded =
-                self.thresholds_loaded
-                    .contains_key(&(roi.clone(), marker.clone(), String::new()));
-        }
-        if !modified && !source.is_empty() {
-            modified =
-                self.threshold_dirty
-                    .contains_key(&(roi.clone(), marker.clone(), String::new()));
-        }
-
-        let method_text = match self.auto_method {
-            AutoMethod::Manual => "manual".to_string(),
-            AutoMethod::Otsu => "otsu".to_string(),
-            AutoMethod::KMeans => format!(
-                "kmeans(k={}) >={}",
-                self.auto_kmeans_k.max(2),
-                self.auto_positive_ge.max(2)
-            ),
-        };
-        let state = if loaded { "loaded" } else { "not loaded" };
-        let suffix = if modified { " (modified)" } else { "" };
-        format!("Threshold: {state} | method={method_text}{suffix}")
-    }
-
     fn restore_persisted_state_for_current(&mut self) {
         let Some((roi, marker, source)) = self.current_key() else {
             return;
         };
 
-        // Prefer dirty (in-memory edits), then loaded CSV.
         let mut keys = vec![(roi.clone(), marker.clone(), source.clone())];
         if !source.is_empty() {
             keys.push((roi.clone(), marker.clone(), String::new()));
@@ -1078,27 +431,14 @@ impl CellThresholdsPanel {
         }
         let mut row = None;
         for k in &keys {
-            row = self.threshold_dirty.get(k).cloned();
+            row = self.thresholds_loaded.get(k).cloned();
             if row.is_some() {
                 break;
             }
         }
-        if row.is_none() {
-            for k in &keys {
-                row = self.thresholds_loaded.get(k).cloned();
-                if row.is_some() {
-                    break;
-                }
-            }
-        }
 
         if let Some(row) = row {
-            self.notes = row.notes.clone();
-            self.working = row.working;
-            self.threshold = match self.scale_mode {
-                ScaleMode::Raw => row.raw_threshold,
-                ScaleMode::Arcsinh => row.arcsinh_threshold,
-            };
+            self.threshold = row.arcsinh_threshold;
             let method = row.method.trim().to_ascii_lowercase();
             if method == "kmeans" {
                 self.auto_method = AutoMethod::KMeans;
@@ -1113,17 +453,12 @@ impl CellThresholdsPanel {
             } else {
                 self.auto_method = AutoMethod::Manual;
             }
-            self.threshold_touched = false;
             return;
         }
 
-        // No CSV state; default to auto mode if available.
-        self.notes.clear();
-        self.working = true;
         if self.auto_threshold_for_current().is_some() {
             self.auto_method = AutoMethod::KMeans;
             self.apply_auto_threshold_if_available();
-            self.threshold_touched = false;
         } else {
             self.auto_method = AutoMethod::Manual;
         }
@@ -1148,119 +483,7 @@ impl CellThresholdsPanel {
             return;
         };
 
-        self.threshold = match self.scale_mode {
-            ScaleMode::Arcsinh => thr_arcsinh,
-            ScaleMode::Raw => (thr_arcsinh as f64).sinh() as f32,
-        };
-    }
-
-    fn mark_dirty_current(&mut self) {
-        let Some((roi, marker, source)) = self.current_key() else {
-            return;
-        };
-        let (raw, arcsinh) = match self.scale_mode {
-            ScaleMode::Raw => {
-                let raw = self.threshold;
-                let arcsinh = (raw as f64).asinh() as f32;
-                (raw, arcsinh)
-            }
-            ScaleMode::Arcsinh => {
-                let arcsinh = self.threshold;
-                let raw = (arcsinh as f64).sinh() as f32;
-                (raw, arcsinh)
-            }
-        };
-
-        let (method, kmeans_k, positive_ge) = match self.auto_method {
-            AutoMethod::Manual => ("manual".to_string(), None, None),
-            AutoMethod::Otsu => ("otsu".to_string(), None, None),
-            AutoMethod::KMeans => (
-                "kmeans".to_string(),
-                Some(self.auto_kmeans_k.max(2)),
-                Some(self.auto_positive_ge.max(2)),
-            ),
-        };
-
-        self.threshold_dirty.insert(
-            (roi.clone(), marker.clone(), source.clone()),
-            ThresholdCsvRow {
-                roi,
-                marker,
-                source,
-                raw_threshold: raw,
-                arcsinh_threshold: arcsinh,
-                method,
-                kmeans_k,
-                positive_ge,
-                notes: self.notes.clone(),
-                working: self.working,
-            },
-        );
-    }
-
-    fn schedule_autosave(&mut self) {
-        if !self.autosave_csv {
-            return;
-        }
-        if self.thresholds_csv_path.is_none() {
-            return;
-        }
-        self.autosave_pending = true;
-        self.autosave_last_edit = Instant::now();
-    }
-
-    fn maybe_flush_autosave(&mut self) {
-        if !self.autosave_pending || !self.autosave_csv {
-            return;
-        }
-        if self.thresholds_csv_path.is_none() {
-            self.autosave_pending = false;
-            return;
-        }
-        if self.autosave_last_edit.elapsed() < Duration::from_millis(650) {
-            return;
-        }
-        let _ = self.enqueue_write_all_dirty();
-        self.autosave_pending = false;
-    }
-
-    fn enqueue_write_current(&mut self) -> anyhow::Result<()> {
-        self.mark_dirty_current();
-        self.enqueue_write_all_dirty()
-    }
-
-    fn enqueue_write_all_dirty(&mut self) -> anyhow::Result<()> {
-        let Some(path) = self.thresholds_csv_path.clone() else {
-            anyhow::bail!("no thresholds_csv configured");
-        };
-        if self.threshold_dirty.is_empty() {
-            return Ok(());
-        }
-
-        self.write_request_id = self.write_request_id.wrapping_add(1);
-        let rows = self.threshold_dirty.values().cloned().collect::<Vec<_>>();
-        let req = WriteRequest {
-            request_id: self.write_request_id,
-            csv_path: path,
-            rows,
-        };
-        let _ = self.tx_write.send(req);
-        Ok(())
-    }
-
-    fn drain_writer(&mut self) {
-        while let Ok(msg) = self.rx_write.try_recv() {
-            if msg.request_id < self.last_write_response_id {
-                continue;
-            }
-            self.last_write_response_id = msg.request_id;
-            self.status = msg.status;
-            if msg.ok {
-                for (k, v) in self.threshold_dirty.drain() {
-                    self.thresholds_loaded.insert(k, v);
-                }
-            }
-        }
+        self.threshold = thr_arcsinh;
     }
 
     pub fn sync_marker_from_channel_name(&mut self, channel_name: &str) -> bool {
@@ -1317,17 +540,11 @@ impl CellThresholdsPanel {
             .map(expand_tilde)
             .map(PathBuf::from);
         self.thresholds_loaded.clear();
-        self.threshold_meta_loaded.clear();
-        self.threshold_dirty.clear();
-        self.autosave_pending = false;
-        self.notes.clear();
-        self.working = true;
 
         if let Some(p) = self.thresholds_csv_path.as_ref() {
             match load_thresholds_csv(p) {
-                Ok((rows, meta)) => {
+                Ok(rows) => {
                     self.thresholds_loaded = rows;
-                    self.threshold_meta_loaded = meta;
                 }
                 Err(err) => {
                     // Keep the UI usable even if the CSV can't be read yet.
@@ -1587,200 +804,6 @@ fn loader_thread(
     Ok(())
 }
 
-fn spawn_writer_thread() -> (
-    crossbeam_channel::Sender<WriteRequest>,
-    crossbeam_channel::Receiver<WriteResponse>,
-) {
-    let (tx_req, rx_req) = crossbeam_channel::unbounded::<WriteRequest>();
-    let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<WriteResponse>();
-
-    std::thread::Builder::new()
-        .name("thresholds-csv-writer".to_string())
-        .spawn(move || {
-            if let Err(err) = writer_thread(rx_req, tx_rsp) {
-                eprintln!("thresholds csv writer thread exited: {err:?}");
-            }
-        })
-        .expect("failed to spawn thresholds csv writer thread");
-
-    (tx_req, rx_rsp)
-}
-
-fn writer_thread(
-    rx_req: crossbeam_channel::Receiver<WriteRequest>,
-    tx_rsp: crossbeam_channel::Sender<WriteResponse>,
-) -> anyhow::Result<()> {
-    for req in rx_req.iter() {
-        let result = write_thresholds_csv(&req.csv_path, &req.rows);
-        let (ok, status) = match result {
-            Ok(()) => (
-                true,
-                format!("Wrote thresholds: {}", req.csv_path.to_string_lossy()),
-            ),
-            Err(err) => (false, format!("Write CSV failed: {err}")),
-        };
-        let _ = tx_rsp.send(WriteResponse {
-            request_id: req.request_id,
-            ok,
-            status,
-        });
-    }
-    Ok(())
-}
-
-fn write_thresholds_csv(path: &Path, updates: &[ThresholdCsvRow]) -> anyhow::Result<()> {
-    if updates.is_empty() {
-        return Ok(());
-    }
-
-    let (mut headers, mut rows) = if path.exists() {
-        let text = fs::read_to_string(path).with_context(|| {
-            format!("failed to read thresholds csv: {}", path.to_string_lossy())
-        })?;
-        let mut recs = parse_csv(&text);
-        if recs.is_empty() {
-            (Vec::new(), Vec::new())
-        } else {
-            let hdr = recs.remove(0);
-            (hdr, recs)
-        }
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
-    if headers.is_empty() {
-        headers = vec![
-            "roi".to_string(),
-            "marker".to_string(),
-            "raw_threshold".to_string(),
-            "arcsinh_threshold".to_string(),
-            "method".to_string(),
-            "kmeans_k".to_string(),
-            "positive_ge".to_string(),
-            "source".to_string(),
-            "notes".to_string(),
-            "working".to_string(),
-        ];
-    }
-
-    let mut col_index: HashMap<String, usize> = HashMap::new();
-    for (i, h) in headers.iter().enumerate() {
-        col_index.insert(h.to_ascii_lowercase(), i);
-    }
-
-    let mut ensure_col = |name: &str| -> usize {
-        let key = name.to_ascii_lowercase();
-        if let Some(&i) = col_index.get(&key) {
-            return i;
-        }
-        let i = headers.len();
-        headers.push(name.to_string());
-        col_index.insert(key, i);
-        for r in rows.iter_mut() {
-            while r.len() < headers.len() {
-                r.push(String::new());
-            }
-        }
-        i
-    };
-
-    let i_roi = ensure_col("roi");
-    let i_marker = ensure_col("marker");
-    let i_raw = ensure_col("raw_threshold");
-    let i_arc = ensure_col("arcsinh_threshold");
-    let i_method = ensure_col("method");
-    let i_k = ensure_col("kmeans_k");
-    let i_ge = ensure_col("positive_ge");
-    let i_source = ensure_col("source");
-    let i_notes = ensure_col("notes");
-    let i_work = ensure_col("working");
-
-    let mut row_lookup: HashMap<(String, String, String), usize> = HashMap::new();
-    for (ri, r) in rows.iter().enumerate() {
-        let roi = r.get(i_roi).cloned().unwrap_or_default();
-        let marker = r.get(i_marker).cloned().unwrap_or_default();
-        let source = r
-            .get(i_source)
-            .map(|s| s.trim().to_ascii_lowercase())
-            .unwrap_or_default();
-        let key = (normalize_roi_label(&roi), marker, source);
-        row_lookup.entry(key).or_insert(ri);
-    }
-
-    for up in updates {
-        let key = (
-            normalize_roi_label(&up.roi),
-            up.marker.clone(),
-            up.source.trim().to_ascii_lowercase(),
-        );
-        let ri = if let Some(&idx) = row_lookup.get(&key) {
-            idx
-        } else {
-            let idx = rows.len();
-            rows.push(vec![String::new(); headers.len()]);
-            row_lookup.insert(key.clone(), idx);
-            idx
-        };
-        let r = &mut rows[ri];
-        while r.len() < headers.len() {
-            r.push(String::new());
-        }
-        r[i_roi] = key.0.clone();
-        r[i_marker] = key.1.clone();
-        r[i_raw] = format!("{:.15}", up.raw_threshold as f64);
-        r[i_arc] = format!("{:.6}", up.arcsinh_threshold as f64);
-        r[i_method] = up.method.clone();
-        r[i_k] = up.kmeans_k.map(|v| v.to_string()).unwrap_or_default();
-        r[i_ge] = up.positive_ge.map(|v| v.to_string()).unwrap_or_default();
-        r[i_source] = up.source.trim().to_ascii_lowercase();
-        r[i_notes] = up.notes.clone();
-        r[i_work] = if up.working {
-            "TRUE".to_string()
-        } else {
-            "FALSE".to_string()
-        };
-    }
-
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create thresholds csv parent dir: {}",
-                    parent.to_string_lossy()
-                )
-            })?;
-        }
-    }
-
-    let mut out = String::new();
-    out.push_str(&csv_join_record(&headers));
-    out.push('\n');
-    for mut r in rows {
-        while r.len() < headers.len() {
-            r.push(String::new());
-        }
-        out.push_str(&csv_join_record(&r));
-        out.push('\n');
-    }
-
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, out)
-        .with_context(|| format!("failed to write temp csv: {}", tmp.to_string_lossy()))?;
-
-    if path.exists() {
-        let _ = fs::remove_file(path);
-    }
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "failed to move temp csv into place: {} -> {}",
-            tmp.to_string_lossy(),
-            path.to_string_lossy()
-        )
-    })?;
-
-    Ok(())
-}
-
 fn load_points_for_marker(req: &LoadRequest) -> anyhow::Result<LoadResponse> {
     let file = fs::File::open(&req.parquet_path).with_context(|| {
         format!(
@@ -1835,7 +858,6 @@ fn load_points_for_marker(req: &LoadRequest) -> anyhow::Result<LoadResponse> {
             m_i,
             &roi_norm,
             inv_down as f64,
-            req.key.scale_mode,
             &mut positions,
             &mut values,
         )?;
@@ -1861,7 +883,6 @@ fn extract_batch(
     m_i: usize,
     roi_norm: &str,
     inv_downsample: f64,
-    scale_mode: ScaleMode,
     out_positions: &mut Vec<egui::Pos2>,
     out_values: &mut Vec<f32>,
 ) -> anyhow::Result<()> {
@@ -1889,9 +910,7 @@ fn extract_batch(
         if !v.is_finite() {
             continue;
         }
-        if scale_mode == ScaleMode::Arcsinh {
-            v = v.asinh();
-        }
+        v = v.asinh();
 
         out_positions.push(egui::pos2(x as f32, y as f32));
         out_values.push(v as f32);
@@ -2344,36 +1363,6 @@ fn parse_csv(text: &str) -> Vec<Vec<String>> {
     out
 }
 
-fn csv_escape(field: &str) -> String {
-    let needs_quotes = field.contains(['"', ',', '\n', '\r']);
-    if !needs_quotes {
-        return field.to_string();
-    }
-    let mut out = String::with_capacity(field.len() + 2);
-    out.push('"');
-    for ch in field.chars() {
-        if ch == '"' {
-            out.push('"');
-            out.push('"');
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn csv_join_record(fields: &[String]) -> String {
-    let mut out = String::new();
-    for (i, f) in fields.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str(&csv_escape(f));
-    }
-    out
-}
-
 fn sanitize_marker_token(label: &str) -> String {
     let mut out = String::with_capacity(label.len());
     let mut prev_us = false;
@@ -2432,19 +1421,16 @@ fn base_marker_label(label: &str) -> String {
 
 fn load_thresholds_csv(
     path: &Path,
-) -> anyhow::Result<(
-    HashMap<(String, String, String), ThresholdCsvRow>,
-    HashMap<(String, String, String), ThresholdMeta>,
-)> {
+) -> anyhow::Result<HashMap<(String, String, String), ThresholdCsvRow>> {
     if !path.exists() {
-        return Ok((HashMap::new(), HashMap::new()));
+        return Ok(HashMap::new());
     }
 
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed to read thresholds csv: {}", path.to_string_lossy()))?;
     let mut recs = parse_csv(&text);
     if recs.is_empty() {
-        return Ok((HashMap::new(), HashMap::new()));
+        return Ok(HashMap::new());
     }
     let header_row = recs.remove(0);
     let headers = header_row
@@ -2463,11 +1449,8 @@ fn load_thresholds_csv(
     let i_k = idx("kmeans_k");
     let i_ge = idx("positive_ge");
     let i_source = idx("source");
-    let i_notes = idx("notes");
-    let i_work = idx("working");
 
     let mut rows = HashMap::new();
-    let mut meta = HashMap::new();
 
     for rec in recs {
         let roi = normalize_roi_label(rec.get(i_roi).map(|s| s.as_str()).unwrap_or("").trim());
@@ -2504,48 +1487,17 @@ fn load_thresholds_csv(
         let positive_ge = i_ge
             .and_then(|i| rec.get(i))
             .and_then(|s| s.trim().parse::<u8>().ok());
-        let notes = i_notes
-            .and_then(|i| rec.get(i))
-            .map_or("", |v| v.as_str())
-            .to_string();
-        let working = i_work
-            .and_then(|i| rec.get(i))
-            .map(|s| s.trim().eq_ignore_ascii_case("true") || s.trim() == "1")
-            .unwrap_or(true);
 
         let row = ThresholdCsvRow {
-            roi: roi.clone(),
-            marker: marker.clone(),
-            source: source.clone(),
-            raw_threshold,
             arcsinh_threshold,
             method: method.clone(),
             kmeans_k,
             positive_ge,
-            notes,
-            working,
         };
         rows.insert((roi.clone(), marker.clone(), source.clone()), row);
-
-        let m = method.to_ascii_lowercase();
-        let method = if m == "kmeans" {
-            AutoMethod::KMeans
-        } else if m == "otsu" {
-            AutoMethod::Otsu
-        } else {
-            AutoMethod::Manual
-        };
-        meta.insert(
-            (roi, marker, source),
-            ThresholdMeta {
-                method,
-                kmeans_k,
-                positive_ge,
-            },
-        );
     }
 
-    Ok((rows, meta))
+    Ok(rows)
 }
 
 fn load_auto_thresholds_json(

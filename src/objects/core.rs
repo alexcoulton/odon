@@ -1,6 +1,6 @@
 use super::analysis::{
-    analysis_progress_status, apply_histogram_value_transform, compute_histogram_f32,
-    kmeans_threshold_levels, numeric_json_value, quantile_threshold_levels,
+    apply_histogram_value_transform, compute_histogram_f32, kmeans_threshold_levels,
+    numeric_json_value, quantile_threshold_levels,
 };
 use super::render::{
     build_color_groups_for_property, build_object_fill_mesh, build_object_selection_render_lods,
@@ -266,101 +266,6 @@ impl ObjectsLayer {
                 Err(TryRecvError::Disconnected) => {
                     self.bulk_measurement_rx = None;
                     self.bulk_measurement_cancel = None;
-                    break;
-                }
-            }
-        }
-
-        loop {
-            let Some(rx) = self.analysis_rx.as_ref() else {
-                break;
-            };
-            match rx.try_recv() {
-                Ok(AnalysisBatchEvent::Progress {
-                    request_id,
-                    phase,
-                    completed,
-                    total,
-                }) => {
-                    if request_id == self.analysis_request_id {
-                        self.analysis_progress_completed = completed.min(total);
-                        self.analysis_progress_total = total;
-                        self.analysis_status = analysis_progress_status(phase, completed, total);
-                    }
-                }
-                Ok(AnalysisBatchEvent::Finished {
-                    request_id,
-                    result,
-                    cancelled,
-                    error,
-                }) => {
-                    if request_id == self.analysis_request_id {
-                        self.analysis_rx = None;
-                        self.analysis_cancel = None;
-                        if let Some(err) = error {
-                            self.analysis_status = format!("Analysis failed: {err}");
-                            self.analysis_results = None;
-                        } else if cancelled {
-                            self.analysis_status = format!(
-                                "Analysis cancelled at {} / {} chunks.",
-                                self.analysis_progress_completed, self.analysis_progress_total
-                            );
-                        } else if let Some(result) = result {
-                            match &result {
-                                AnalysisResults::Measurements(result) => {
-                                    self.analysis_progress_completed =
-                                        result.rows.len() + result.failed_count;
-                                    self.analysis_progress_total = self.analysis_progress_completed;
-                                    self.analysis_status = format!(
-                                        "Measured {} cell(s) from {} at level {} (downsample {:.2}x). Failed: {}.",
-                                        result.rows.len(),
-                                        result.scope_label,
-                                        result.level_index,
-                                        result.level_downsample,
-                                        result.failed_count
-                                    );
-                                    self.analysis_hist_channel = self
-                                        .analysis_hist_channel
-                                        .min(result.channels.len().saturating_sub(1));
-                                    self.analysis_scatter_x_channel = self
-                                        .analysis_scatter_x_channel
-                                        .min(result.channels.len().saturating_sub(1));
-                                    self.analysis_scatter_y_channel = self
-                                        .analysis_scatter_y_channel
-                                        .min(result.channels.len().saturating_sub(1));
-                                }
-                                AnalysisResults::SpatialTable(result) => {
-                                    self.analysis_progress_completed = result.rows.len();
-                                    self.analysis_progress_total = result.rows.len();
-                                    self.analysis_status = format!(
-                                        "Loaded {} matched row(s) from SpatialData table '{}' via {}. Unmatched objects: {}.",
-                                        result.rows.len(),
-                                        result.table_name,
-                                        result.join_key,
-                                        result.unmatched_object_count
-                                    );
-                                    self.analysis_hist_channel = self
-                                        .analysis_hist_channel
-                                        .min(result.numeric_columns.len().saturating_sub(1));
-                                    self.analysis_scatter_x_channel = self
-                                        .analysis_scatter_x_channel
-                                        .min(result.numeric_columns.len().saturating_sub(1));
-                                    self.analysis_scatter_y_channel = self
-                                        .analysis_scatter_y_channel
-                                        .min(result.numeric_columns.len().saturating_sub(1));
-                                }
-                            }
-                            self.analysis_results = Some(result);
-                            self.analysis_hist_brush = None;
-                            self.analysis_scatter_brush = None;
-                        }
-                    }
-                    break;
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.analysis_rx = None;
-                    self.analysis_cancel = None;
                     break;
                 }
             }
@@ -1094,44 +999,8 @@ impl ObjectsLayer {
         }
     }
 
-    pub fn load_geojson(&mut self, path: PathBuf, downsample_factor: f32) {
-        self.request_load(path, downsample_factor, None);
-    }
-
     pub fn load_path(&mut self, path: PathBuf, downsample_factor: f32) {
         self.request_load(path, downsample_factor, None);
-    }
-
-    pub fn load_geojson_with_transform(
-        &mut self,
-        path: PathBuf,
-        downsample_factor: f32,
-        display_transform: SpatialDataTransform2,
-    ) {
-        let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
-        self.load_rx = Some(rx);
-        self.property_load_rx = None;
-        self.property_load_key = None;
-        self.status = format!("Loading objects: {}", path.to_string_lossy());
-
-        std::thread::Builder::new()
-            .name("seg-objects-geojson-transform-loader".to_string())
-            .spawn(move || {
-                let msg = parse_geojson_objects(&path, downsample_factor).and_then(|objects| {
-                    load_result_from_objects(
-                        path.clone(),
-                        downsample_factor,
-                        display_transform,
-                        ObjectDisplayMode::Polygons,
-                        objects,
-                        None,
-                    )
-                });
-                if let Ok(msg) = msg {
-                    let _ = tx.send(msg);
-                }
-            })
-            .ok();
     }
 
     pub fn load_objects_with_transform(
@@ -1536,20 +1405,11 @@ impl ObjectsLayer {
         self.selected_object_index
     }
 
-    pub fn available_color_properties(&self) -> &[String] {
-        &self.color_property_keys
-    }
-
     pub fn available_property_columns(&self) -> &[String] {
         self.lazy_parquet_source
             .as_ref()
             .map(|source| source.available_property_columns.as_slice())
             .unwrap_or(self.color_property_keys.as_slice())
-    }
-
-    pub fn active_color_property(&self) -> Option<&str> {
-        (self.color_mode == ObjectColorMode::ByProperty && !self.color_property_key.is_empty())
-            .then_some(self.color_property_key.as_str())
     }
 
     pub fn active_color_legend_entries(&mut self) -> Option<Vec<ObjectColorLegendEntry>> {
@@ -1797,7 +1657,6 @@ impl ObjectsLayer {
             local_to_world_offset.y + self.display_transform.translation[1],
         );
         Some(SelectedObjectDetails {
-            index: idx,
             id: obj.id.clone(),
             area_px: obj.area_px,
             perimeter_px: obj.perimeter_px,
@@ -2013,12 +1872,8 @@ impl ObjectsLayer {
         });
     }
 
-    pub fn is_measuring(&self) -> bool {
-        self.measurement_rx.is_some()
-    }
-
     pub fn is_analyzing(&self) -> bool {
-        self.analysis_rx.is_some()
+        false
     }
 
     fn request_load(
@@ -2122,10 +1977,6 @@ impl ObjectsLayer {
         self.selected_object_indices
             .retain(|idx| indices.contains(idx));
         self.rebuild_selection_render_lods();
-        self.measurement_data = None;
-        if self.measurement_rx.is_none() {
-            self.measurement_status.clear();
-        }
         self.mark_live_analysis_selection_dirty();
         self.invalidate_table_cache();
     }
@@ -2646,11 +2497,6 @@ impl ObjectsLayer {
             }
         }
         out
-    }
-
-    fn selected_object(&self) -> Option<&GeoJsonObjectFeature> {
-        let idx = self.selected_object_index?;
-        self.objects.as_ref()?.get(idx)
     }
 
     pub(super) fn invalidate_table_cache(&mut self) {

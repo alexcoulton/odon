@@ -11,7 +11,6 @@ use crate::ui::roi_browser::RoiBrowseState;
 pub struct RoiEntry {
     pub dataset_name: String,
     pub display_name: String,
-    pub key: String,
     pub roi_short: String,
     pub source_key: Option<String>,
     pub local_path: Option<PathBuf>,
@@ -379,7 +378,6 @@ fn roi_to_entry(r: &ProjectRoi, dataset_name: &str) -> RoiEntry {
     RoiEntry {
         dataset_name: dataset_name.to_string(),
         display_name,
-        key: r.id.clone(),
         roi_short,
         sample_name: None,
         source_key,

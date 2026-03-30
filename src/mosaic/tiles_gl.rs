@@ -83,17 +83,6 @@ impl MosaicTilesGl {
         self.inner.lock().insert_pending(resp);
     }
 
-    pub fn reset(&self) {
-        let mut inner = self.inner.lock();
-        inner.in_flight.clear();
-        inner.pending_count = 0;
-        while let Some((_k, v)) = inner.cache.pop_lru() {
-            if let TileState::Uploaded { tex, .. } = v {
-                inner.textures_to_delete.push(tex);
-            }
-        }
-    }
-
     pub fn prune_in_flight(&self, keep: &HashSet<MosaicRawTileKey>) {
         let mut inner = self.inner.lock();
         inner.in_flight.retain(|k| keep.contains(k));
@@ -239,8 +228,6 @@ enum TileState {
         data: Vec<u16>,
     },
     Uploaded {
-        width: usize,
-        height: usize,
         tex: glow::Texture,
         filter: TextureFilter,
     },
@@ -356,8 +343,6 @@ impl Inner {
             } => {
                 let tex = upload_r16_texture(gl, *width, *height, data, self.desired_filter)?;
                 *state = TileState::Uploaded {
-                    width: *width,
-                    height: *height,
                     tex,
                     filter: self.desired_filter,
                 };

@@ -29,7 +29,6 @@ pub struct Point {
 
 #[derive(Debug, Clone)]
 pub struct PointsLayer {
-    pub name: String,
     pub visible: bool,
     pub style: PointsStyle,
     pub points: Vec<Point>,
@@ -37,8 +36,8 @@ pub struct PointsLayer {
 
 impl PointsLayer {
     pub fn new(name: impl Into<String>) -> Self {
+        let _ = name.into();
         Self {
-            name: name.into(),
             visible: true,
             style: PointsStyle::default(),
             points: Vec::new(),

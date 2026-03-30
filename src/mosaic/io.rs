@@ -62,10 +62,7 @@ pub struct MosaicRawTileResponse {
 #[derive(Debug, Clone)]
 pub enum MosaicRawTileWorkerResponse {
     Tile(MosaicRawTileResponse),
-    Dropped {
-        key: MosaicRawTileKey,
-        generation: u64,
-    },
+    Dropped { key: MosaicRawTileKey },
 }
 
 #[derive(Debug)]
@@ -268,6 +265,7 @@ impl Default for MosaicPinnedLevels {
     }
 }
 
+#[cfg(test)]
 pub fn estimate_level_ram_bytes(source: &MosaicSource, level: usize) -> Option<u64> {
     estimate_level_ram_bytes_for_channels(source, level, None)
 }
@@ -354,7 +352,6 @@ pub fn spawn_mosaic_raw_tile_loader(
 }
 
 struct WorkerDataset {
-    store: Arc<dyn ReadableStorageTraits>,
     arrays: Vec<Array<dyn ReadableStorageTraits>>,
 }
 
@@ -370,10 +367,7 @@ fn mosaic_raw_tile_worker(
     for req in rx_req.iter() {
         let key = req.key;
         if req.generation != latest_generation.load(Ordering::Relaxed) {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped {
-                key,
-                generation: req.generation,
-            });
+            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped { key });
             continue;
         }
         let Some(src) = sources.get(key.dataset_id) else {
@@ -397,7 +391,7 @@ fn mosaic_raw_tile_worker(
                 let zarr_path = format!("/{}", lvl.path.trim_start_matches('/'));
                 arrays.push(Array::open(store.clone(), &zarr_path)?);
             }
-            opened.insert(key.dataset_id, WorkerDataset { store, arrays });
+            opened.insert(key.dataset_id, WorkerDataset { arrays });
             opened.get_mut(&key.dataset_id).unwrap()
         };
 
@@ -457,10 +451,7 @@ fn mosaic_raw_tile_worker(
             continue;
         }
         if req.generation != latest_generation.load(Ordering::Relaxed) {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped {
-                key,
-                generation: req.generation,
-            });
+            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped { key });
             continue;
         }
 
@@ -612,7 +603,9 @@ mod tests {
     #[test]
     fn estimates_ram_for_cyx_level() {
         let source = super::MosaicSource {
-            source: crate::data::dataset_source::DatasetSource::Local(std::path::PathBuf::from("dummy")),
+            source: crate::data::dataset_source::DatasetSource::Local(std::path::PathBuf::from(
+                "dummy",
+            )),
             store: Arc::new(zarrs::filesystem::FilesystemStore::new(".").unwrap()),
             levels: vec![LevelInfo {
                 index: 2,

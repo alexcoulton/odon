@@ -7,19 +7,19 @@ use eframe::egui;
 use crate::app::{
     LabelPromptSessionPreference, OmeZarrViewerApp, S3DatasetSelection, ViewerRequest,
 };
+use crate::app_support::menu::{NativeMenu, NativeMenuAction};
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
 };
 use crate::data::dataset_source::DatasetSource;
-use crate::mosaic::{MosaicRequest, MosaicViewerApp};
-use crate::app_support::menu::{NativeMenu, NativeMenuAction};
 use crate::data::ome::OmeZarrDataset;
 use crate::data::project_config::ProjectRoi;
-use crate::project::{ProjectSpace, ProjectSpaceAction};
 use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
+use crate::mosaic::{MosaicRequest, MosaicViewerApp};
+use crate::project::{ProjectSpace, ProjectSpaceAction};
 use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::discover_xenium_explorer;
@@ -899,7 +899,7 @@ impl RootApp {
                                             x.root.clone(),
                                             x.cells_zarr_zip.clone(),
                                             x.transcripts_zarr_zip.clone(),
-                                            x.manifest.pixel_size,
+                                            x.pixel_size_um,
                                         );
                                         app.set_project_space(project_space);
                                         self.mode = Mode::Single(app);
@@ -923,7 +923,7 @@ impl RootApp {
                                         morph_tiff,
                                         x.cells_zarr_zip.clone(),
                                         x.transcripts_zarr_zip.clone(),
-                                        x.manifest.pixel_size,
+                                        x.pixel_size_um,
                                     ) {
                                         Ok(mut app) => {
                                             app.set_show_scale_bar(self.view_show_scale_bar);
@@ -1279,7 +1279,7 @@ impl RootApp {
                         ui.add(
                             egui::DragValue::new(&mut dlg.points_max)
                                 .speed(1)
-                                .clamp_range(0..=200_000_000)
+                                .range(0..=200_000_000)
                                 .prefix("Max "),
                         )
                         .on_hover_text("0 means no cap (load all).");
@@ -1383,7 +1383,7 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        let mut open_mosaic: Option<Vec<PathBuf>> = None;
+        let open_mosaic: Option<Vec<PathBuf>> = None;
         let mut open_remote_single: Option<(
             OmeZarrDataset,
             Arc<dyn zarrs::storage::ReadableStorageTraits>,
@@ -1674,13 +1674,6 @@ impl eframe::App for RootApp {
                 self.label_prompt_preference = app.label_prompt_preference();
                 if let Some(req) = app.take_request() {
                     match req {
-                        ViewerRequest::OpenMosaic(paths) => {
-                            open_mosaic = Some(paths);
-                        }
-                        ViewerRequest::OpenSingle(path) => {
-                            let ps = app.take_project_space();
-                            open_single = Some((path, ps));
-                        }
                         ViewerRequest::OpenProjectRoi(roi) => {
                             let ps = app.take_project_space();
                             open_project_roi = Some((roi, ps));
@@ -1711,13 +1704,6 @@ impl eframe::App for RootApp {
                     match req {
                         MosaicRequest::BackToSingle => {
                             back_to_single = true;
-                        }
-                        MosaicRequest::OpenSingle(path) => {
-                            let ps = mosaic.take_project_space();
-                            open_single = Some((path, ps));
-                        }
-                        MosaicRequest::OpenMosaic(paths) => {
-                            open_mosaic = Some(paths);
                         }
                         MosaicRequest::OpenProjectRoi(roi) => {
                             let ps = mosaic.take_project_space();

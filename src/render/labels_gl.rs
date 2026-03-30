@@ -45,10 +45,6 @@ impl LabelsGl {
         self.inner.lock().cache.mark_in_flight(key)
     }
 
-    pub fn cancel_in_flight(&self, key: &LabelTileKey) {
-        self.inner.lock().cache.cancel_in_flight(key)
-    }
-
     pub fn insert_pending(&self, resp: LabelTileResponse) {
         self.inner.lock().insert_pending(resp);
     }

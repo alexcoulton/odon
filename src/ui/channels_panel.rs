@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
 
-use crate::ui::icons::Icon;
+use crate::data::project_config::{
+    ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups,
+};
 use crate::project::groups as layer_groups;
-use crate::data::project_config::{ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups};
+use crate::ui::icons::Icon;
 use crate::ui::layer_list as ui_layer_list;
 
 pub(crate) trait ChannelListHost {
@@ -185,8 +187,11 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
                     );
                     let (swatch_rect, _) =
                         ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(swatch_rect, egui::CornerRadius::same(3), swatch_color);
+                    ui.painter().rect_filled(
+                        swatch_rect,
+                        egui::CornerRadius::same(3),
+                        swatch_color,
+                    );
 
                     ui.add(egui::Label::new(group_name.clone()).selectable(false));
                     ui.label(
@@ -199,7 +204,9 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
 
             let row_rect = frame.frame.widget_rect(frame.content_ui.min_rect());
             let frame_resp = frame.allocate_space(ui);
-            let row_hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| row_rect.contains(p));
+            let row_hovered = ui
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| row_rect.contains(p));
             if row_hovered
                 && ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary))
                 && ui
@@ -428,7 +435,7 @@ fn render_channel_row<H: ChannelListHost>(
             .clicked()
         {
             host.open_group_layers_dialog_channels(selected);
-            ui.close_menu();
+            ui.close();
         }
     });
 }

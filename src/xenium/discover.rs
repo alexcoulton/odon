@@ -8,8 +8,7 @@ use crate::{log_debug, log_info};
 #[derive(Debug, Clone)]
 pub struct XeniumDiscovery {
     pub root: PathBuf,
-    pub manifest_path: PathBuf,
-    pub manifest: XeniumManifest,
+    pub pixel_size_um: f32,
     pub morphology_mip_omezarr: Option<PathBuf>,
     pub morphology_mip_tiff: Option<PathBuf>,
     pub transcripts_zarr_zip: Option<PathBuf>,
@@ -90,8 +89,7 @@ pub fn discover_xenium_explorer(root: &Path) -> anyhow::Result<XeniumDiscovery> 
 
     Ok(XeniumDiscovery {
         root,
-        manifest_path,
-        manifest,
+        pixel_size_um: manifest.pixel_size,
         morphology_mip_omezarr,
         morphology_mip_tiff,
         transcripts_zarr_zip,

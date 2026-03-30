@@ -178,7 +178,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             ui.label("Load");
             ui.add(
                 egui::DragValue::new(&mut self.max_concurrent_loads)
-                    .clamp_range(1..=8)
+                    .range(1..=8)
                     .speed(1),
             )
             .on_hover_text("Maximum number of GeoJSON files to load concurrently.");

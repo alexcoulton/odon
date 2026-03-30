@@ -30,7 +30,6 @@ pub struct LayerRowResponse {
     pub selected_clicked: bool,
     pub changed: bool,
     pub visible_changed: Option<bool>,
-    pub color_rgb_changed: Option<[u8; 3]>,
     pub row_response: egui::Response,
 }
 
@@ -114,15 +113,14 @@ pub fn ui_layer_row<K: Copy + Eq + std::hash::Hash>(
     let mut changed = false;
     let mut selected_clicked = false;
     let mut visible_changed: Option<bool> = None;
-    let mut color_rgb_changed: Option<[u8; 3]> = None;
     let mut checkbox_rect: Option<egui::Rect> = None;
     let mut menu_response = row.clone();
 
     if !is_dragged {
-        let mut row_ui = ui.child_ui(
-            rect.shrink2(egui::vec2(6.0, 0.0)),
-            egui::Layout::left_to_right(egui::Align::Center),
-            None,
+        let mut row_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(egui::vec2(6.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         row_ui.add_enabled_ui(opts.available, |ui| {
             // Layer type icon.
@@ -167,7 +165,6 @@ pub fn ui_layer_row<K: Copy + Eq + std::hash::Hash>(
                 menu_response = menu_response.union(color_resp.clone());
                 if color_resp.changed() {
                     changed = true;
-                    color_rgb_changed = Some(rgb);
                 }
             }
         });
@@ -216,7 +213,6 @@ pub fn ui_layer_row<K: Copy + Eq + std::hash::Hash>(
         selected_clicked,
         changed,
         visible_changed,
-        color_rgb_changed,
         row_response: menu_response,
     }
 }

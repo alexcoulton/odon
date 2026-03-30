@@ -165,14 +165,6 @@ pub struct AnnotationPointsLayer {
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
     pub name: String,
-    pub kind: ColumnKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColumnKind {
-    Utf8,
-    Numeric,
-    Other,
 }
 
 impl AnnotationPointsLayer {
@@ -199,14 +191,6 @@ impl AnnotationPointsLayer {
             schema_rx: None,
             load_rx: None,
         }
-    }
-
-    pub fn is_configured(&self) -> bool {
-        self.parquet.path.is_some()
-            && !self.parquet.roi_id_column.trim().is_empty()
-            && !self.parquet.x_column.trim().is_empty()
-            && !self.parquet.y_column.trim().is_empty()
-            && !self.parquet.value_column.trim().is_empty()
     }
 
     pub fn has_pending_work(&self) -> bool {
@@ -1160,25 +1144,8 @@ fn read_parquet_columns(path: &Path) -> anyhow::Result<Vec<ColumnInfo>> {
     let schema = builder.schema();
     let mut out = Vec::new();
     for f in schema.fields() {
-        use arrow_schema::DataType;
-        let kind = match f.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => ColumnKind::Utf8,
-            DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => ColumnKind::Numeric,
-            _ => ColumnKind::Other,
-        };
         out.push(ColumnInfo {
             name: f.name().to_string(),
-            kind,
         });
     }
     Ok(out)

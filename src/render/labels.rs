@@ -4,7 +4,9 @@ use anyhow::{Context, anyhow};
 use zarrs::array::Array;
 use zarrs::storage::ReadableStorageTraits;
 
-use crate::data::ome::{Axis, CoordTransform, Dims, LevelInfo, Multiscale, OmeZarrDataset, RootZattrs};
+use crate::data::ome::{
+    Axis, CoordTransform, Dims, LevelInfo, Multiscale, OmeZarrDataset, RootZattrs,
+};
 use crate::data::zarr_attrs::{normalize_ngff_attributes, read_node_attributes_store};
 
 pub fn discover_label_names_local(root: &Path) -> Vec<String> {
@@ -43,7 +45,6 @@ fn looks_like_zarr_group_dir(dir: &Path) -> bool {
 #[derive(Debug, Clone)]
 pub struct LabelZarrDataset {
     pub label_name: String,
-    pub multiscale: Multiscale,
     pub levels: Vec<LevelInfo>,
     pub dims: Dims,
 }
@@ -74,7 +75,6 @@ impl LabelZarrDataset {
 
         Ok(Some(Self {
             label_name: label_name.to_string(),
-            multiscale,
             levels,
             dims,
         }))
@@ -83,7 +83,6 @@ impl LabelZarrDataset {
     pub fn from_root_dataset(dataset: &OmeZarrDataset) -> Self {
         Self {
             label_name: Self::root_label_name(dataset),
-            multiscale: dataset.multiscale.clone(),
             levels: dataset.levels.clone(),
             dims: dataset.dims.clone(),
         }

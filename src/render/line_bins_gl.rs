@@ -241,59 +241,6 @@ impl LineBinsGlRenderer {
             gl.use_program(None);
         }
     }
-
-    /// Returns the number of non-empty bins that were missing on the last rendered frame.
-    ///
-    /// This is updated inside `paint_many` and is intended to be used for repaint scheduling
-    /// without doing expensive per-frame scans over all bins.
-    pub fn last_frame_missing_bins(&self) -> usize {
-        let inner = self.inner.lock();
-        inner.last_frame_missing_bins
-    }
-
-    /// Counts how many non-empty bins in the current view are not yet uploaded to the GPU.
-    ///
-    /// This is intended to drive repaint scheduling (so we keep repainting until the overlay is
-    /// fully uploaded), without keeping the app in a busy loop when everything is ready.
-    pub fn missing_bins_in_view(
-        &self,
-        items: &[LineBinsGlDrawItem],
-        max_bins_to_check: usize,
-    ) -> usize {
-        if items.is_empty() {
-            return 0;
-        }
-        let mut inner = self.inner.lock();
-        let mut missing = 0usize;
-        let mut checked = 0usize;
-        for it in items {
-            if !it.params.visible {
-                continue;
-            }
-            let bins = it.data.bins.as_ref();
-            if bins.segments.is_empty() {
-                continue;
-            }
-            let (bx0, by0, bx1, by1) = bins.bin_range_for_world_rect(it.visible_world);
-            for by in by0..=by1 {
-                for bx in bx0..=bx1 {
-                    if checked >= max_bins_to_check {
-                        return missing;
-                    }
-                    checked += 1;
-                    let bin_index = by * bins.bins_w + bx;
-                    if bins.bin_slice(bin_index).is_empty() {
-                        continue;
-                    }
-                    let key = (it.data.cache_id, it.data.generation, bin_index);
-                    if !inner.bins.contains(&key) {
-                        missing += 1;
-                    }
-                }
-            }
-        }
-        missing
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -328,13 +275,6 @@ impl Inner {
             buffers_to_delete: Vec::new(),
             last_frame_missing_bins: 0,
         }
-    }
-
-    fn clear_gpu(&mut self, gl: &Arc<glow::Context>) {
-        while let Some((_k, v)) = self.bins.pop_lru() {
-            self.buffers_to_delete.push(v.vbo);
-        }
-        self.delete_queued(gl);
     }
 
     fn delete_queued(&mut self, gl: &Arc<glow::Context>) {

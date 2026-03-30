@@ -1,8 +1,6 @@
 pub(crate) mod geojson;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,10 +10,9 @@ use crossbeam_channel::Receiver;
 use eframe::egui;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
-use tiff::decoder::{Decoder, DecodingResult};
-use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
+use crate::data::ome::{ChannelInfo, OmeZarrDataset};
 use crate::features::points::FeaturePointLod;
 use crate::render::line_bins::{LineSegmentsBins, ObjectLineSegmentsBins};
 use crate::render::line_bins_gl::{
@@ -23,7 +20,6 @@ use crate::render::line_bins_gl::{
     ObjectLineBinsGlDrawData, ObjectLineBinsGlDrawItem, ObjectLineBinsGlDrawParams,
     ObjectLineBinsGlRenderer,
 };
-use crate::data::ome::{ChannelInfo, OmeZarrDataset, retrieve_image_subset_u16};
 use crate::render::points::PointsStyle;
 use crate::render::points_gl::PointsGlRenderer;
 use crate::render::polygon_fill_gl::{
@@ -31,10 +27,8 @@ use crate::render::polygon_fill_gl::{
     PolygonFillGlDrawData, PolygonFillGlDrawItem, PolygonFillGlDrawParams, PolygonFillGlRenderer,
 };
 use crate::spatialdata::{
-    ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTableMeta,
-    SpatialDataTransform2, SpatialTableAnalysis, inspect_shapes_object_schema,
-    load_numeric_column_for_rows, load_shapes_objects, load_shapes_xy_point_objects,
-    load_table_analysis, load_table_meta,
+    ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,
+    inspect_shapes_object_schema, load_shapes_objects, load_shapes_xy_point_objects,
 };
 
 mod analysis;
@@ -60,7 +54,6 @@ pub struct ObjectFeature {
 
 #[derive(Debug, Clone)]
 pub struct SelectedObjectDetails {
-    pub index: usize,
     pub id: String,
     pub area_px: f32,
     pub perimeter_px: f32,
@@ -146,12 +139,6 @@ pub struct ObjectsLayer {
     primary_selected_point_positions_world: Option<Arc<Vec<egui::Pos2>>>,
     primary_selected_point_values: Option<Arc<Vec<f32>>>,
     selection_generation: u64,
-    measurement_target: Option<MeasurementTarget>,
-    measurement_resolved_target: Option<MeasurementTarget>,
-    measurement_data: Option<ObjectMeasurementSet>,
-    measurement_request_id: u64,
-    measurement_rx: Option<Receiver<MeasurementResult>>,
-    measurement_status: String,
     bulk_measurement_request_id: u64,
     bulk_measurement_rx: Option<Receiver<BulkMeasurementEvent>>,
     bulk_measurement_cancel: Option<Arc<AtomicBool>>,
@@ -163,23 +150,7 @@ pub struct ObjectsLayer {
     bulk_measurement_concurrency: usize,
     bulk_measurement_filtered_only: bool,
     bulk_measurement_prefix: String,
-    analysis_request_id: u64,
-    analysis_rx: Option<Receiver<AnalysisBatchEvent>>,
-    analysis_cancel: Option<Arc<AtomicBool>>,
-    analysis_progress_completed: usize,
-    analysis_progress_total: usize,
-    analysis_status: String,
-    analysis_results: Option<AnalysisResults>,
-    analysis_level: usize,
-    analysis_source: AnalysisSource,
-    analysis_backend: AnalysisBackend,
-    analysis_external_label_mask: Option<Arc<ExternalLabelMask>>,
-    analysis_spatial_table_index: usize,
-    analysis_spatial_join_key: String,
-    analysis_spatial_meta: Option<SpatialDataTableMeta>,
-    analysis_spatial_meta_table_name: String,
     analysis_plot_mode: AnalysisPlotMode,
-    analysis_metric: AnalysisMetric,
     analysis_hist_channel: usize,
     analysis_scatter_x_channel: usize,
     analysis_scatter_y_channel: usize,
@@ -235,7 +206,6 @@ pub struct ObjectsLayer {
     bounds_local: Option<egui::Rect>,
     generation: u64,
     gl: LineBinsGlRenderer,
-    gl_selection: LineBinsGlRenderer,
     gl_object_selection: ObjectLineBinsGlRenderer,
     gl_fill: PolygonFillGlRenderer,
     gl_object_fill: ObjectFillGlRenderer,
@@ -358,30 +328,6 @@ enum ObjectLoadOptions {
     Csv(ObjectCsvLoadOptions),
 }
 
-#[derive(Debug, Clone)]
-struct ObjectMeasurementSet {
-    object_index: usize,
-    object_id: String,
-    pixel_count: usize,
-    channels: Vec<ObjectChannelMeasurement>,
-}
-
-#[derive(Debug, Clone)]
-struct ObjectChannelMeasurement {
-    channel_index: usize,
-    channel_name: String,
-    mean: f32,
-    max: u16,
-    integrated: u64,
-}
-
-#[derive(Debug)]
-struct MeasurementResult {
-    request_id: u64,
-    data: Option<ObjectMeasurementSet>,
-    error: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BulkMeasurementMetric {
     Mean,
@@ -448,70 +394,6 @@ enum AnalysisWarmupEvent {
 }
 
 #[derive(Debug, Clone)]
-struct AnalysisBatchTable {
-    scope_label: String,
-    level_index: usize,
-    level_downsample: f32,
-    channels: Vec<AnalysisChannelSchema>,
-    rows: Vec<AnalysisMeasurementRow>,
-    failed_count: usize,
-}
-
-#[derive(Debug, Clone)]
-enum AnalysisResults {
-    Measurements(AnalysisBatchTable),
-    SpatialTable(SpatialTableAnalysis),
-}
-
-#[derive(Debug, Clone)]
-struct AnalysisChannelSchema {
-    channel_index: usize,
-    channel_name: String,
-}
-
-#[derive(Debug, Clone)]
-struct AnalysisMeasurementRow {
-    object_index: usize,
-    object_id: String,
-    pixel_count: usize,
-    mean_values: Vec<f32>,
-    max_values: Vec<u16>,
-    integrated_values: Vec<u64>,
-}
-
-#[derive(Debug, Clone)]
-struct PreparedAnalysisObject {
-    object_index: usize,
-    object_id: String,
-    polygons_level: Vec<Vec<egui::Pos2>>,
-    bbox_level_px: [u64; 4],
-}
-
-#[derive(Debug, Clone)]
-struct AnalysisAccumulator {
-    object_index: usize,
-    object_id: String,
-    pixel_count: usize,
-    max_values: Vec<u16>,
-    integrated_values: Vec<u64>,
-}
-
-#[derive(Debug, Clone)]
-struct ExternalLabelMask {
-    path: PathBuf,
-    width: usize,
-    height: usize,
-    labels: Arc<Vec<u32>>,
-}
-
-#[derive(Debug, Clone)]
-struct AnalysisChunkJob {
-    tile_y: u64,
-    tile_x: u64,
-    prepared_indices: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
 struct SelectionFillMesh {
     vertices_local: Arc<Vec<[f32; 2]>>,
     bounds_local: egui::Rect,
@@ -528,36 +410,6 @@ struct ObjectFillMesh {
 struct ObjectSelectionRenderLod {
     lod: u8,
     bins: Arc<ObjectLineSegmentsBins>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnalysisProgressPhase {
-    PreparingObjects,
-    BuildingChunkIndex,
-    PreparingLabelTargets,
-    MeasuringChunks,
-}
-
-#[derive(Debug)]
-enum AnalysisBatchEvent {
-    Progress {
-        request_id: u64,
-        phase: AnalysisProgressPhase,
-        completed: usize,
-        total: usize,
-    },
-    Finished {
-        request_id: u64,
-        result: Option<AnalysisResults>,
-        cancelled: bool,
-        error: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct MeasurementTarget {
-    object_index: usize,
-    local_to_world_offset: egui::Vec2,
 }
 
 #[derive(Debug, Clone)]
@@ -586,7 +438,6 @@ struct ObjectColorGroups {
 #[derive(Debug, Clone)]
 struct ObjectColorGroup {
     value_label: String,
-    count: usize,
     color_rgb: [u8; 3],
     lods: Vec<ObjectRenderLod>,
     point_positions_world: Arc<Vec<egui::Pos2>>,
@@ -662,26 +513,6 @@ struct HistogramLevelSelection {
     level_index: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnalysisMetric {
-    Mean,
-    Max,
-    Integrated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnalysisBackend {
-    Polygons,
-    ExternalLabelMask,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnalysisSource {
-    ObjectProperties,
-    ImageMeasurements,
-    SpatialDataTable,
-}
-
 impl Default for ObjectsLayer {
     fn default() -> Self {
         Self {
@@ -737,12 +568,6 @@ impl Default for ObjectsLayer {
             primary_selected_point_positions_world: None,
             primary_selected_point_values: None,
             selection_generation: 1,
-            measurement_target: None,
-            measurement_resolved_target: None,
-            measurement_data: None,
-            measurement_request_id: 0,
-            measurement_rx: None,
-            measurement_status: String::new(),
             bulk_measurement_request_id: 0,
             bulk_measurement_rx: None,
             bulk_measurement_cancel: None,
@@ -756,23 +581,7 @@ impl Default for ObjectsLayer {
                 .unwrap_or(4),
             bulk_measurement_filtered_only: false,
             bulk_measurement_prefix: "mean_intensity_".to_string(),
-            analysis_request_id: 0,
-            analysis_rx: None,
-            analysis_cancel: None,
-            analysis_progress_completed: 0,
-            analysis_progress_total: 0,
-            analysis_status: String::new(),
-            analysis_results: None,
-            analysis_level: 0,
-            analysis_source: AnalysisSource::ObjectProperties,
-            analysis_backend: AnalysisBackend::Polygons,
-            analysis_external_label_mask: None,
-            analysis_spatial_table_index: 0,
-            analysis_spatial_join_key: String::new(),
-            analysis_spatial_meta: None,
-            analysis_spatial_meta_table_name: String::new(),
             analysis_plot_mode: AnalysisPlotMode::Histogram,
-            analysis_metric: AnalysisMetric::Mean,
             analysis_hist_channel: 0,
             analysis_scatter_x_channel: 0,
             analysis_scatter_y_channel: 0,
@@ -826,7 +635,6 @@ impl Default for ObjectsLayer {
             bounds_local: None,
             generation: 1,
             gl: LineBinsGlRenderer::new(2048),
-            gl_selection: LineBinsGlRenderer::new(256),
             gl_object_selection: ObjectLineBinsGlRenderer::new(256, 4),
             gl_fill: PolygonFillGlRenderer::new(8),
             gl_object_fill: ObjectFillGlRenderer::new(4, 4),

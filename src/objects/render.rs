@@ -819,8 +819,6 @@ impl ObjectsLayer {
             self.selected_object_index = if objects.is_empty() { None } else { Some(0) };
         }
         self.rebuild_selection_render_lods();
-        self.measurement_data = None;
-        self.measurement_status.clear();
         self.invalidate_table_cache();
     }
 
@@ -1139,23 +1137,6 @@ impl ObjectsLayer {
 
     fn point_pick_radius_world(&self, camera: &crate::camera::Camera) -> f32 {
         (self.point_radius_screen_px() + 4.0) / camera.zoom_screen_per_lvl0_px.max(1e-6)
-    }
-
-    fn point_fill_color_for_object(&self, obj: &GeoJsonObjectFeature) -> egui::Color32 {
-        let alpha = (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        if self.color_mode == ObjectColorMode::ByProperty && !self.color_property_key.is_empty() {
-            if let Some(value) = obj.properties.get(&self.color_property_key) {
-                let label = point_property_value_label(value);
-                let rgb = hashed_color_rgb(&self.color_property_key, &label);
-                return egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha);
-            }
-        }
-        egui::Color32::from_rgba_unmultiplied(
-            self.color_rgb[0],
-            self.color_rgb[1],
-            self.color_rgb[2],
-            alpha,
-        )
     }
 
     fn effective_color_group_rgb(
@@ -1499,16 +1480,6 @@ impl ObjectsLayer {
     }
 }
 
-fn point_property_value_label(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Bool(v) => v.to_string(),
-        serde_json::Value::Number(v) => v.to_string(),
-        serde_json::Value::String(v) => v.clone(),
-        other => other.to_string(),
-    }
-}
-
 fn build_selection_fill_mesh(
     objects: &[GeoJsonObjectFeature],
 ) -> anyhow::Result<SelectionFillMesh> {
@@ -1824,13 +1795,6 @@ pub(super) fn build_object_selection_render_lods(
     build_object_selection_render_lods_from_polylines(&polylines_world)
 }
 
-fn build_selection_render_lods(
-    objects: &[GeoJsonObjectFeature],
-) -> anyhow::Result<Vec<ObjectRenderLod>> {
-    let polylines_world = flatten_object_polylines(objects);
-    build_selection_render_lods_from_polylines(&polylines_world)
-}
-
 fn build_render_lods_from_polylines(
     polylines_world: &[Vec<egui::Pos2>],
 ) -> anyhow::Result<Vec<ObjectRenderLod>> {
@@ -1868,39 +1832,6 @@ fn build_render_lods_from_polylines(
 
     if out.is_empty() {
         anyhow::bail!("no valid renderable object outlines after parsing");
-    }
-    Ok(out)
-}
-
-fn build_selection_render_lods_from_polylines(
-    polylines_world: &[Vec<egui::Pos2>],
-) -> anyhow::Result<Vec<ObjectRenderLod>> {
-    if polylines_world.is_empty() {
-        anyhow::bail!("no valid object outlines available for selection rendering");
-    }
-
-    let lod_specs: &[(u8, f32, f32)] = &[(0, 1.0, 65_536.0), (1, 8.0, 1_000_000.0)];
-
-    let mut out = Vec::new();
-    for (lod, step, bin_size) in lod_specs {
-        let step = step.max(1.0);
-        let bin_size = bin_size.max(1024.0);
-        let lines = if *lod == 0 {
-            polylines_world.to_vec()
-        } else {
-            quantize_polylines(polylines_world, step)
-        };
-        let Some(bins) = LineSegmentsBins::build_from_polylines(&lines, bin_size) else {
-            continue;
-        };
-        out.push(ObjectRenderLod {
-            lod: *lod,
-            bins: Arc::new(bins),
-        });
-    }
-
-    if out.is_empty() {
-        anyhow::bail!("no valid renderable selection outlines after parsing");
     }
     Ok(out)
 }
@@ -2044,7 +1975,6 @@ where
 
         groups.push(ObjectColorGroup {
             color_rgb: hashed_color_rgb(property_key, &value_label),
-            count: counts.get(&value_label).copied().unwrap_or(0),
             value_label,
             lods,
             point_values: Arc::new(vec![1.0; point_positions.len()]),

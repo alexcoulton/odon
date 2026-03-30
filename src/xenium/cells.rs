@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
@@ -10,7 +10,6 @@ use crate::xenium::ZipStore;
 
 #[derive(Debug, Clone, Copy)]
 pub enum XeniumPolygonSet {
-    Nucleus = 0,
     Cell = 1,
 }
 

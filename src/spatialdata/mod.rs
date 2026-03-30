@@ -3,7 +3,6 @@ mod image_layers;
 mod layers;
 mod parquet_points;
 mod parquet_shapes;
-mod table;
 
 pub use discover::{
     SpatialDataDiscovery, SpatialDataElement, SpatialDataTransform2, discover_spatialdata,
@@ -16,8 +15,4 @@ pub use parquet_shapes::{
     inspect_shapes_object_schema, load_shapes_circle_polylines, load_shapes_objects,
     load_shapes_points, load_shapes_polylines_exterior, load_shapes_xy_point_objects,
     shapes_support_object_layer,
-};
-pub use table::{
-    SpatialDataTableMeta, SpatialTableAnalysis, load_numeric_column_for_rows, load_table_analysis,
-    load_table_meta,
 };
