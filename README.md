@@ -21,6 +21,12 @@ Release builds are intended to be the main distribution path for:
 - Windows
 - Linux
 
+## Read the paper
+
+https://www.biorxiv.org/content/10.64898/2026.03.30.715233v1
+
+Please cite us if you benefit from Odon!
+
 ## What odon is for
 
 `odon` is intended for rapid visual exploration of spatial omics data, especially when you need to:
