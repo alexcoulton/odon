@@ -1,0 +1,117 @@
+{
+  "multiscales": [
+    {
+      "version": "0.4",
+      "name": "synthetic-5ch",
+      "axes": [
+        {
+          "name": "c",
+          "type": "channel"
+        },
+        {
+          "name": "y",
+          "type": "space",
+          "unit": "micrometer"
+        },
+        {
+          "name": "x",
+          "type": "space",
+          "unit": "micrometer"
+        }
+      ],
+      "datasets": [
+        {
+          "path": "0",
+          "coordinateTransformations": [
+            {
+              "type": "scale",
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          ]
+        },
+        {
+          "path": "1",
+          "coordinateTransformations": [
+            {
+              "type": "scale",
+              "scale": [
+                1.0,
+                2.0,
+                2.0
+              ]
+            }
+          ]
+        },
+        {
+          "path": "2",
+          "coordinateTransformations": [
+            {
+              "type": "scale",
+              "scale": [
+                1.0,
+                4.0,
+                4.0
+              ]
+            }
+          ]
+        },
+        {
+          "path": "3",
+          "coordinateTransformations": [
+            {
+              "type": "scale",
+              "scale": [
+                1.0,
+                8.0,
+                8.0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "omero": {
+    "channels": [
+      {
+        "label": "DAPI",
+        "window": {
+          "start": 0,
+          "end": 60000
+        }
+      },
+      {
+        "label": "CD3",
+        "window": {
+          "start": 0,
+          "end": 42000
+        }
+      },
+      {
+        "label": "PanCK",
+        "window": {
+          "start": 0,
+          "end": 42000
+        }
+      },
+      {
+        "label": "Ki67",
+        "window": {
+          "start": 0,
+          "end": 50000
+        }
+      },
+      {
+        "label": "Collagen",
+        "window": {
+          "start": 0,
+          "end": 36000
+        }
+      }
+    ]
+  }
+}
