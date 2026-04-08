@@ -104,11 +104,43 @@ uv pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
+## Synthetic OME-Zarr Fixture
+
+The repository includes a small checked-in 5-channel OME-Zarr fixture at [`fixtures/synthetic_5ch.ome.zarr`](fixtures/synthetic_5ch.ome.zarr) for loader tests and manual viewer checks.
+
+Regenerate it with:
+
+```bash
+python3 scripts/generate_ome_zarr_fixture.py --overwrite
+```
+
+## TIFF To OME-Zarr Conversion
+
+[`scripts/tif_to_omezarr.py`](scripts/tif_to_omezarr.py) converts TIFF imagery into OME-Zarr using `tifffile`, `zarr`, and `ome-zarr`.
+
+It was used to convert `.tif` files from the Synapse repository into the OME-Zarr datasets used for testing in the manuscript.
+
+The script infers axes from the TIFF dimensionality:
+
+- `YX` for 2D images
+- `CYX` for 3D channel-first images
+- `CZYX` for 4D channel-first volumes
+- `TCZYX` for 5D time-series channel-first volumes
+
+It then writes an OME-Zarr hierarchy and generates a multiscale pyramid with `ome-zarr`'s `Scaler`.
+
+Example:
+
+```bash
+python3 scripts/tif_to_omezarr.py input.tif output.ome.zarr
+```
+
 ## Repository layout
 
 - `src/`: Rust application source
 - `assets/`: runtime assets bundled with the app
 - `docs/`: MkDocs user documentation
+- `fixtures/`: small checked-in synthetic datasets for tests and manual checks
 - `scripts/`: utility and packaging scripts
 - `vendor/`: vendored crate patches
 
