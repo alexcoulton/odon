@@ -614,3 +614,40 @@ fn int_bits_to_max(bits: u32) -> f32 {
     let max = (1u128.checked_shl(bits - 1).unwrap_or(0)).saturating_sub(1);
     (max as f64).min(f64::from(f32::MAX)) as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use zarrs::array::{Array, ArraySubset};
+
+    fn fixture_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr")
+    }
+
+    #[test]
+    fn opens_checked_in_synthetic_fixture() {
+        let fixture = fixture_root();
+        let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open OME-Zarr fixture");
+
+        assert_eq!(dataset.channels.len(), 5);
+        assert_eq!(dataset.channels[0].name, "DAPI");
+        assert_eq!(dataset.channels[4].name, "Collagen");
+        assert_eq!(dataset.levels.len(), 4);
+        assert_eq!(dataset.levels[0].shape, vec![5, 512, 512]);
+        assert_eq!(dataset.levels[1].shape, vec![5, 256, 256]);
+        assert_eq!(dataset.dims.c, Some(0));
+        assert_eq!(dataset.dims.y, 1);
+        assert_eq!(dataset.dims.x, 2);
+        assert!(dataset.channels[0].visible);
+        assert!(is_supported_image_dtype(&dataset.levels[0].dtype));
+
+        let array: Array<dyn zarrs::storage::ReadableStorageTraits> =
+            Array::open(store, "/0").expect("open level 0");
+        let subset = ArraySubset::new_with_ranges(&[0..1, 0..64, 0..64]);
+        let tile = retrieve_image_subset_u16(&array, &subset, &dataset.levels[0].dtype)
+            .expect("retrieve tile");
+        assert_eq!(tile.shape(), &[1, 64, 64]);
+    }
+}
