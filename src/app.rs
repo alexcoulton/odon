@@ -3812,6 +3812,10 @@ impl OmeZarrViewerApp {
         self.hist_last_sent = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
+        self.pinned_levels = PinnedLevels::new();
+        self.pending_memory_load = None;
+        self.memory_status.clear();
+        self.memory_selected_channels = (0..self.channels.len()).collect();
 
         self.request_default_channel_maxes();
         self.roi_selector
