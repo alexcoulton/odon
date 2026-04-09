@@ -297,38 +297,5 @@ fn squeeze_to_yx(
     y_dim_orig: usize,
     x_dim_orig: usize,
 ) -> Option<ndarray::Array2<u32>> {
-    use ndarray::Axis;
-
-    let mut arr = data;
-    let mut y_dim = y_dim_orig;
-    let mut x_dim = x_dim_orig;
-
-    for dim in (0..arr.ndim()).rev() {
-        if dim == y_dim || dim == x_dim {
-            continue;
-        }
-        if arr.shape().get(dim).copied().unwrap_or(0) != 1 {
-            return None;
-        }
-        arr = arr.index_axis_move(Axis(dim), 0);
-        if dim < y_dim {
-            y_dim = y_dim.saturating_sub(1);
-        }
-        if dim < x_dim {
-            x_dim = x_dim.saturating_sub(1);
-        }
-    }
-
-    if arr.ndim() != 2 {
-        return None;
-    }
-
-    let mut a2 = arr.into_dimensionality::<ndarray::Ix2>().ok()?;
-    match (y_dim, x_dim) {
-        (0, 1) => {}
-        (1, 0) => a2.swap_axes(0, 1),
-        _ => return None,
-    }
-
-    Some(a2)
+    crate::render::array_dims::squeeze_to_yx(data, y_dim_orig, x_dim_orig)
 }

@@ -8,6 +8,7 @@ use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 
 use crate::data::ome::retrieve_image_subset_u16;
+use crate::render::array_dims::squeeze_to_yx;
 use crate::{log_debug, log_warn};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
@@ -274,16 +275,12 @@ fn raw_tile_loader_thread(
             }
         };
 
-        let data = match if c_dim.is_some() {
-            data.into_dimensionality::<ndarray::Ix3>()
-                .ok()
-                .map(|a| a.index_axis(ndarray::Axis(0), 0).to_owned())
-        } else {
-            data.into_dimensionality::<ndarray::Ix2>().ok()
-        } {
+        let data = match squeeze_to_yx(data, y_dim, x_dim) {
             Some(data) => data,
             None => {
-                let error = "unexpected array dimensionality for raw tile".to_string();
+                let error =
+                    "unexpected array dimensionality for raw tile (expected y/x plus singleton dims)"
+                        .to_string();
                 if debug_io {
                     log_warn!(
                         "{worker_name}: fail lvl={} tile=({}, {}) ch={} after {:?}: {}",

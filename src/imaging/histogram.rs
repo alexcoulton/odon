@@ -4,6 +4,7 @@ use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::data::ome::retrieve_image_subset_u16;
+use crate::render::array_dims::squeeze_to_yx;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
@@ -148,14 +149,8 @@ fn histogram_loader_thread(
             }
         };
 
-        let plane: ndarray::Array2<u16> = if c_dim.is_some() {
-            data.into_dimensionality::<ndarray::Ix3>()
-                .ok()
-                .map(|a| a.index_axis(ndarray::Axis(0), 0).to_owned())
-        } else {
-            data.into_dimensionality::<ndarray::Ix2>().ok()
-        }
-        .context("unexpected array dimensionality for histogram")?;
+        let plane: ndarray::Array2<u16> = squeeze_to_yx(data, y_dim, x_dim)
+            .context("unexpected array dimensionality for histogram (expected y/x plus singleton dims)")?;
 
         let mut values: Vec<u16> = plane.iter().copied().collect();
         values.retain(|v| (*v as f32).is_finite());

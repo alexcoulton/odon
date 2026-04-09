@@ -1,3 +1,4 @@
+pub(crate) mod array_dims;
 pub(crate) mod labels;
 pub(crate) mod labels_gl;
 pub(crate) mod labels_raw;

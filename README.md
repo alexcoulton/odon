@@ -57,6 +57,43 @@ Detailed user documentation is available at:
 
 The documentation source lives in [`docs/`](docs/), with MkDocs configured by [`mkdocs.yml`](mkdocs.yml).
 
+## General Conversion With bioformats2raw
+
+For broader conversion from existing microscopy formats into pyramidal OME-Zarr, we recommend [`bioformats2raw`](https://github.com/glencoesoftware/bioformats2raw).
+
+Install with conda:
+
+```bash
+conda install -c ome bioformats2raw
+```
+
+A validated command pattern for odon is:
+
+```bash
+bioformats2raw input_file output.ome.zarr \
+  --series 0 \
+  --scale-format-string '%2$d/' \
+  --resolutions 5 \
+  -c zlib
+```
+
+This writes a single multiscale image pyramid with resolution levels at the dataset root, which is a layout odon opens directly.
+
+Key options:
+
+- `--series 0`: convert a single image series
+- `--scale-format-string '%2$d/'`: place pyramid levels at the OME-Zarr root
+- `--resolutions 5`: generate five pyramid levels
+- `-c zlib`: use zlib compression
+
+For files with multiple image series, convert each required series separately using the appropriate `--series` index.
+
+After conversion, verify:
+
+- channel count and order
+- channel names
+- pyramid loading across zoom levels
+
 ## Compiling odon from source
 
 If you want to build `odon` yourself instead of using the release binaries:
@@ -113,6 +150,7 @@ Regenerate it with:
 ```bash
 python3 scripts/generate_ome_zarr_fixture.py --overwrite
 ```
+
 
 ## TIFF To OME-Zarr Conversion
 
