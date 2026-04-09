@@ -2435,7 +2435,10 @@ impl ObjectsLayer {
 
         if !self.analysis_property_thresholds.is_empty() {
             push_column(
-                "_odon_live_threshold",
+                &live_threshold_call_export_column_name(
+                    &self.analysis_property_thresholds,
+                    self.analysis_live_threshold_channel_name.as_deref(),
+                ),
                 objects
                     .iter()
                     .map(|obj| {
@@ -2449,7 +2452,7 @@ impl ObjectsLayer {
         }
 
         for element in &self.analysis_threshold_elements {
-            let column_name = format!("_odon_threshold_{}", sanitize_export_key(&element.name));
+            let column_name = threshold_call_export_column_name(element);
             push_column(
                 &column_name,
                 objects
@@ -3659,30 +3662,6 @@ fn export_column_to_arrow_array(
                 Arc::new(builder.finish()) as arrow_array::ArrayRef,
             ))
         }
-    }
-}
-
-fn sanitize_export_key(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut prev_underscore = false;
-    for ch in name.chars() {
-        let normalized = if ch.is_ascii_alphanumeric() {
-            prev_underscore = false;
-            ch.to_ascii_lowercase()
-        } else {
-            if prev_underscore {
-                continue;
-            }
-            prev_underscore = true;
-            '_'
-        };
-        out.push(normalized);
-    }
-    let out = out.trim_matches('_');
-    if out.is_empty() {
-        "unnamed".to_string()
-    } else {
-        out.to_string()
     }
 }
 

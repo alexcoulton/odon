@@ -196,8 +196,25 @@ impl ObjectsLayer {
         if !self.bulk_measurement_status.is_empty() {
             ui.label(self.bulk_measurement_status.clone());
         }
+        ui.separator();
+        ui.label("Persist results");
+        ui.horizontal(|ui| {
+            if ui.button("Export Enriched GeoParquet...").clicked()
+                && let Err(err) = self.export_objects_geoparquet_with_dialog()
+            {
+                self.status = format!("Export GeoParquet failed: {err}");
+            }
+            if ui.button("Export Enriched CSV...").clicked()
+                && let Err(err) = self.export_objects_csv_with_dialog()
+            {
+                self.status = format!("Export CSV failed: {err}");
+            }
+        });
         ui.small(
             "Results are attached back onto objects as numeric properties using the chosen prefix, so they become available in Analysis immediately.",
+        );
+        ui.small(
+            "Use export to save those enriched object properties. CSV and GeoParquet exports also include derived call and selection columns.",
         );
         if self.bulk_measurement_metric == BulkMeasurementMetric::Median {
             ui.small(

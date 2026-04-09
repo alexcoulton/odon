@@ -22,7 +22,129 @@ impl ObjectsLayer {
             return;
         }
         self.save_live_threshold_rules();
+        self.sync_marker_call_selection_to_active_channel(channels, selected_channel);
         self.sync_histogram_to_active_channel(channels, selected_channel, &numeric_columns);
+    }
+
+    fn selected_threshold_call(&self) -> Option<&ThresholdSetElement> {
+        self.analysis_threshold_selected_element
+            .filter(|idx| *idx < self.analysis_threshold_elements.len())
+            .and_then(|idx| self.analysis_threshold_elements.get(idx))
+    }
+
+    fn selected_threshold_call_marker_name(&self) -> Option<&str> {
+        self.selected_threshold_call()
+            .and_then(threshold_call_bound_channel_name)
+    }
+
+    fn effective_threshold_channel_name(
+        &self,
+        active_channel_name: Option<&str>,
+    ) -> Option<String> {
+        if let Some(bound) = self.selected_threshold_call_marker_name() {
+            return Some(bound.to_string());
+        }
+        if self.analysis_follow_active_channel {
+            active_channel_name.map(ToOwned::to_owned)
+        } else {
+            self.analysis_live_threshold_channel_name
+                .clone()
+                .or_else(|| active_channel_name.map(ToOwned::to_owned))
+        }
+    }
+
+    fn selected_call_marker_mismatch<'a>(
+        &self,
+        active_channel_name: Option<&'a str>,
+    ) -> Option<(&'a str, String)> {
+        let Some(active_channel_name) = active_channel_name else {
+            return None;
+        };
+        let Some(bound_marker) = self.selected_threshold_call_marker_name() else {
+            return None;
+        };
+        (bound_marker != active_channel_name)
+            .then(|| (active_channel_name, bound_marker.to_string()))
+    }
+
+    fn create_threshold_call_for_channel(&mut self, channel_name: &str) {
+        self.analysis_threshold_elements.push(ThresholdSetElement {
+            name: self.unique_threshold_call_name(&format!("{channel_name} positive")),
+            scope: Some(ThresholdCallScope::Marker {
+                channel_name: channel_name.to_string(),
+            }),
+            rules: Vec::new(),
+        });
+        let idx = self.analysis_threshold_elements.len() - 1;
+        self.load_threshold_element(idx, Some(channel_name));
+    }
+
+    fn marker_call_index_for_channel(&self, channel_name: &str) -> Option<usize> {
+        self.analysis_threshold_elements.iter().position(|element| {
+            matches!(
+                threshold_call_scope(element),
+                ThresholdCallScope::Marker { channel_name: ref bound }
+                if bound == channel_name
+            )
+        })
+    }
+
+    fn ensure_marker_call_for_channel(&mut self, channel_name: &str) -> usize {
+        if let Some(idx) = self.marker_call_index_for_channel(channel_name) {
+            return idx;
+        }
+        self.analysis_threshold_elements.push(ThresholdSetElement {
+            name: self.unique_threshold_call_name(&format!("{channel_name} positive")),
+            scope: Some(ThresholdCallScope::Marker {
+                channel_name: channel_name.to_string(),
+            }),
+            rules: Vec::new(),
+        });
+        self.analysis_threshold_elements.len() - 1
+    }
+
+    fn sync_marker_call_selection_to_active_channel(
+        &mut self,
+        channels: &[ChannelInfo],
+        selected_channel: usize,
+    ) {
+        if !self.analysis_follow_active_channel {
+            return;
+        }
+        let Some(active_channel_name) = self.active_channel_name(channels, selected_channel) else {
+            return;
+        };
+        if matches!(
+            self.selected_threshold_call().map(threshold_call_scope),
+            Some(ThresholdCallScope::Composite)
+        ) {
+            return;
+        }
+        let idx = self.ensure_marker_call_for_channel(active_channel_name);
+        if self.analysis_threshold_selected_element != Some(idx) {
+            self.load_threshold_element(idx, Some(active_channel_name));
+        }
+    }
+
+    fn convert_selected_threshold_call_to_composite(&mut self) {
+        let Some(idx) = self
+            .analysis_threshold_selected_element
+            .filter(|idx| *idx < self.analysis_threshold_elements.len())
+        else {
+            return;
+        };
+        let Some(element) = self.analysis_threshold_elements.get_mut(idx) else {
+            return;
+        };
+        element.scope = Some(ThresholdCallScope::Composite);
+    }
+
+    fn normalize_threshold_call_elements(&mut self) {
+        for element in &mut self.analysis_threshold_elements {
+            if element.scope.is_none() {
+                element.scope = Some(infer_threshold_call_scope(&element.rules));
+            }
+        }
     }
 
     pub fn ui_analysis(
@@ -61,6 +183,7 @@ impl ObjectsLayer {
             ));
         }
         self.ui_selection_elements_editor(ui);
+        self.normalize_threshold_call_elements();
         ui.label("Source: Object properties");
         self.ui_threshold_set_editor(ui, _channels, selected_channel);
         self.ui_object_properties_analysis(
@@ -806,37 +929,29 @@ impl ObjectsLayer {
         selected_channel: usize,
     ) {
         ui.separator();
-        ui.collapsing("Threshold Set", |ui| {
+        ui.collapsing("Calls", |ui| {
+            ui.small("Turn measured marker intensities into reusable boolean calls.");
             ui.horizontal(|ui| {
-                ui.label("Name");
+                ui.label("Preset name");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.analysis_threshold_set_name)
                         .desired_width(220.0),
                 );
-                if ui.button("Save...").clicked() {
+                if ui.button("Save Preset...").clicked() {
                     self.save_threshold_set_dialog();
                 }
-                if ui.button("Load...").clicked() {
+                if ui.button("Load Preset...").clicked() {
                     self.load_threshold_set_dialog();
                 }
             });
-            ui.horizontal(|ui| {
-                if ui.button("Export GeoParquet...").clicked()
-                    && let Err(err) = self.export_objects_geoparquet_with_dialog()
-                {
-                    self.status = format!("Export GeoParquet failed: {err}");
-                }
-                if ui.button("Export CSV...").clicked()
-                    && let Err(err) = self.export_objects_csv_with_dialog()
-                {
-                    self.status = format!("Export CSV failed: {err}");
-                }
-            });
+            ui.small(
+                "Call presets save call definitions only. Measurement results are exported from the Measurements tab.",
+            );
             let prev_follow_active_channel = self.analysis_follow_active_channel;
             ui.horizontal(|ui| {
                 ui.checkbox(
                     &mut self.analysis_follow_active_channel,
-                    "Follow active channel",
+                    "Bind edits to active marker",
                 );
                 if ui.button("Mapping settings...").clicked() {
                     self.analysis_channel_mapping_popup_open = true;
@@ -845,6 +960,7 @@ impl ObjectsLayer {
             if self.analysis_follow_active_channel != prev_follow_active_channel {
                 self.save_live_threshold_rules();
                 if self.analysis_follow_active_channel {
+                    self.sync_marker_call_selection_to_active_channel(channels, selected_channel);
                     let active_channel = self.active_channel_name(channels, selected_channel);
                     self.load_live_threshold_rules(active_channel);
                 } else if let Some(idx) = self
@@ -861,22 +977,45 @@ impl ObjectsLayer {
             if self.analysis_follow_active_channel
                 && let Some(name) = self.active_channel_name(channels, selected_channel)
             {
-                ui.label(format!("Active channel: {name}"));
+                ui.label(format!("Current marker: {name}"));
             }
             self.ui_channel_mapping_popup(ui, channels, selected_channel);
+            let active_marker_name = self.active_channel_name(channels, selected_channel);
             ui.horizontal(|ui| {
                 let selected_idx = self
                     .analysis_threshold_selected_element
                     .filter(|idx| *idx < self.analysis_threshold_elements.len());
-                if ui.button("New element").clicked() {
-                    let next_idx = self.analysis_threshold_elements.len() + 1;
+                let new_call_label = if self.analysis_follow_active_channel && active_marker_name.is_some() {
+                    "New call for active marker"
+                } else {
+                    "New call"
+                };
+                if ui.button(new_call_label).clicked() {
+                    if self.analysis_follow_active_channel
+                        && let Some(channel_name) = active_marker_name
+                    {
+                        self.create_threshold_call_for_channel(channel_name);
+                    } else {
+                        self.analysis_threshold_elements.push(ThresholdSetElement {
+                            name: self.new_threshold_call_name(channels, selected_channel),
+                            scope: Some(ThresholdCallScope::Composite),
+                            rules: Vec::new(),
+                        });
+                        self.load_threshold_element(
+                            self.analysis_threshold_elements.len() - 1,
+                            active_marker_name,
+                        );
+                    }
+                }
+                if ui.button("New composite call").clicked() {
                     self.analysis_threshold_elements.push(ThresholdSetElement {
-                        name: format!("Element {next_idx}"),
+                        name: self.unique_threshold_call_name("Composite call"),
+                        scope: Some(ThresholdCallScope::Composite),
                         rules: Vec::new(),
                     });
                     self.load_threshold_element(
                         self.analysis_threshold_elements.len() - 1,
-                        self.active_channel_name(channels, selected_channel),
+                        active_marker_name,
                     );
                 }
                 if ui
@@ -898,7 +1037,7 @@ impl ObjectsLayer {
                 }
             });
             if self.analysis_threshold_elements.is_empty() {
-                ui.label("No elements yet. Threshold edits will populate the selected element.");
+                ui.label("No calls yet. Threshold edits will populate the selected call.");
             } else {
                 let mut clicked_idx = None;
                 egui::ScrollArea::vertical()
@@ -911,20 +1050,23 @@ impl ObjectsLayer {
                             ui.horizontal(|ui| {
                                 let selected =
                                     self.analysis_threshold_selected_element == Some(idx);
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        format!(
-                                            "{} ({} rule{})",
-                                            element.name,
-                                            element.rules.len(),
-                                            if element.rules.len() == 1 { "" } else { "s" }
-                                        ),
-                                    )
-                                    .clicked()
-                                {
-                                    clicked_idx = Some(idx);
-                                }
+                                ui.vertical(|ui| {
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            threshold_call_display_name(&element.name),
+                                        )
+                                        .clicked()
+                                    {
+                                        clicked_idx = Some(idx);
+                                    }
+                                    ui.small(format!(
+                        "{} • {} rule{}",
+                        threshold_call_scope_text(element),
+                        element.rules.len(),
+                        if element.rules.len() == 1 { "" } else { "s" }
+                    ));
+                                });
                                 ui.add(
                                     egui::TextEdit::singleline(&mut element.name)
                                         .desired_width(140.0),
@@ -938,8 +1080,77 @@ impl ObjectsLayer {
                         self.active_channel_name(channels, selected_channel),
                     );
                 }
+                if let Some(idx) = self
+                    .analysis_threshold_selected_element
+                    .filter(|idx| *idx < self.analysis_threshold_elements.len())
+                    && let Some(element) = self.analysis_threshold_elements.get(idx)
+                {
+                    ui.small(format!("Type: {}", threshold_call_type_label(element)));
+                    ui.small(format!(
+                        "Scope: {}",
+                        threshold_call_scope_text(element)
+                    ));
+                    ui.small(format!(
+                        "Export column: {}",
+                        threshold_call_export_column_name(element)
+                    ));
+                    if let Some((active_marker_name, bound_marker)) =
+                        self.selected_call_marker_mismatch(active_marker_name)
+                    {
+                        ui.label(format!(
+                            "Selected call is bound to {bound_marker}. Threshold edits still apply to {bound_marker}, not {active_marker_name}."
+                        ));
+                        ui.horizontal(|ui| {
+                            if ui.button(format!("Create call for {active_marker_name}")).clicked() {
+                                self.create_threshold_call_for_channel(active_marker_name);
+                            }
+                            if ui.button("Convert to composite").clicked() {
+                                self.convert_selected_threshold_call_to_composite();
+                            }
+                        });
+                    } else if matches!(
+                        threshold_call_scope(element),
+                        ThresholdCallScope::Marker { .. }
+                    ) && ui.button("Convert to composite").clicked()
+                    {
+                        self.convert_selected_threshold_call_to_composite();
+                    }
+                }
             }
         });
+    }
+
+    fn new_threshold_call_name(&self, channels: &[ChannelInfo], selected_channel: usize) -> String {
+        let fallback = format!("Call {}", self.analysis_threshold_elements.len() + 1);
+        let base = if self.analysis_follow_active_channel {
+            self.active_channel_name(channels, selected_channel)
+                .map(|name| format!("{name} positive"))
+                .unwrap_or(fallback)
+        } else {
+            self.unique_threshold_call_name("Composite call")
+        };
+        self.unique_threshold_call_name(&base)
+    }
+
+    fn unique_threshold_call_name(&self, base: &str) -> String {
+        let trimmed = base.trim();
+        let base = if trimmed.is_empty() { "Call" } else { trimmed };
+        let names = self
+            .analysis_threshold_elements
+            .iter()
+            .map(|element| element.name.trim().to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        if !names.contains(&base.to_ascii_lowercase()) {
+            return base.to_string();
+        }
+        let mut idx = 2usize;
+        loop {
+            let candidate = format!("{base} {idx}");
+            if !names.contains(&candidate.to_ascii_lowercase()) {
+                return candidate;
+            }
+            idx += 1;
+        }
     }
 
     fn sync_histogram_editor_to_column(&mut self, column_name: &str) {
@@ -1111,23 +1322,25 @@ impl ObjectsLayer {
         selected_channel: usize,
         numeric_columns: &[String],
     ) {
-        if !self.analysis_follow_active_channel || numeric_columns.is_empty() {
+        if numeric_columns.is_empty() {
             return;
         }
-        let Some(channel_name) = self.active_channel_name(channels, selected_channel) else {
+        let Some(channel_name) = self
+            .effective_threshold_channel_name(self.active_channel_name(channels, selected_channel))
+        else {
             return;
         };
 
-        if self.analysis_live_threshold_channel_name.as_deref() != Some(channel_name) {
-            self.load_live_threshold_rules(Some(channel_name));
+        if self.analysis_live_threshold_channel_name.as_deref() != Some(channel_name.as_str()) {
+            self.load_live_threshold_rules(Some(channel_name.as_str()));
         }
 
         let target_column = self
             .saved_threshold_rules()
             .iter()
-            .find(|rule| rule.channel_name.as_deref() == Some(channel_name))
+            .find(|rule| rule.channel_name.as_deref() == Some(channel_name.as_str()))
             .map(|rule| rule.column_key.clone())
-            .or_else(|| self.mapped_column_for_channel(channel_name, channels, numeric_columns));
+            .or_else(|| self.mapped_column_for_channel(&channel_name, channels, numeric_columns));
 
         let Some(target_column) = target_column else {
             return;
@@ -1138,7 +1351,7 @@ impl ObjectsLayer {
         else {
             return;
         };
-        self.assign_channel_to_column_rule(&target_column, Some(channel_name));
+        self.assign_channel_to_column_rule(&target_column, Some(channel_name.as_str()));
         if self.analysis_hist_channel != idx {
             self.analysis_hist_channel = idx;
             self.analysis_hist_drag_rule = None;
@@ -1306,41 +1519,69 @@ impl ObjectsLayer {
 
     fn extract_live_threshold_rules(
         &self,
-        rules: &[ObjectPropertyThresholdRule],
+        element: &ThresholdSetElement,
         channel_name: Option<&str>,
     ) -> Vec<ObjectPropertyThresholdRule> {
-        if !self.analysis_follow_active_channel {
-            return rules.to_vec();
-        }
+        match threshold_call_scope(element) {
+            ThresholdCallScope::Marker { channel_name } => {
+                let mut rules = element.rules.clone();
+                for rule in &mut rules {
+                    rule.channel_name = Some(channel_name.clone());
+                }
+                rules
+            }
+            ThresholdCallScope::Composite => {
+                if !self.analysis_follow_active_channel {
+                    return element.rules.clone();
+                }
 
-        let Some(channel_name) = channel_name else {
-            return Vec::new();
-        };
-        let tagged = rules
-            .iter()
-            .filter(|rule| rule.channel_name.as_deref() == Some(channel_name))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !tagged.is_empty() {
-            return tagged;
-        }
+                let Some(channel_name) = channel_name else {
+                    return Vec::new();
+                };
+                let tagged = element
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.channel_name.as_deref() == Some(channel_name))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !tagged.is_empty() {
+                    return tagged;
+                }
 
-        // Backward compatibility for older threshold sets that predate per-channel tagging.
-        if rules.iter().all(|rule| rule.channel_name.is_none()) {
-            return rules.to_vec();
-        }
+                // Backward compatibility for older threshold sets that predate per-channel tagging.
+                if element.rules.iter().all(|rule| rule.channel_name.is_none()) {
+                    return element.rules.to_vec();
+                }
 
-        Vec::new()
+                Vec::new()
+            }
+        }
     }
 
     fn load_live_threshold_rules(&mut self, channel_name: Option<&str>) {
-        let rules = self.saved_threshold_rules();
-        self.analysis_property_thresholds = self.extract_live_threshold_rules(&rules, channel_name);
-        self.analysis_live_threshold_channel_name = if self.analysis_follow_active_channel {
-            channel_name.map(ToOwned::to_owned)
+        if let Some(element) = self.selected_threshold_call().cloned() {
+            let live_channel_name = match threshold_call_scope(&element) {
+                ThresholdCallScope::Marker { channel_name } => Some(channel_name),
+                ThresholdCallScope::Composite => {
+                    if self.analysis_follow_active_channel {
+                        channel_name.map(ToOwned::to_owned)
+                    } else {
+                        None
+                    }
+                }
+            };
+            self.analysis_property_thresholds =
+                self.extract_live_threshold_rules(&element, live_channel_name.as_deref());
+            self.analysis_live_threshold_channel_name = live_channel_name;
         } else {
-            None
-        };
+            let live_channel_name = if self.analysis_follow_active_channel {
+                channel_name.map(ToOwned::to_owned)
+            } else {
+                None
+            };
+            self.analysis_property_thresholds = self.analysis_property_thresholds.clone();
+            self.analysis_live_threshold_channel_name = live_channel_name;
+        }
         self.analysis_hist_drag_rule = None;
         self.analysis_hist_focus_object_index = None;
         self.analysis_hist_snapped_level = None;
@@ -1355,26 +1596,59 @@ impl ObjectsLayer {
             .analysis_threshold_selected_element
             .filter(|idx| *idx < self.analysis_threshold_elements.len())
         {
-            if self.analysis_follow_active_channel {
-                let active_channel = self.analysis_live_threshold_channel_name.clone();
-                let mut merged = self.analysis_threshold_elements[idx].rules.clone();
-                if let Some(channel_name) = active_channel.as_deref() {
-                    merged.retain(|rule| rule.channel_name.as_deref() != Some(channel_name));
-                } else {
-                    merged.clear();
+            let Some(element) = self.analysis_threshold_elements.get(idx).cloned() else {
+                return;
+            };
+            match threshold_call_scope(&element) {
+                ThresholdCallScope::Marker { channel_name } => {
+                    let mut rules = self.analysis_property_thresholds.clone();
+                    for rule in &mut rules {
+                        rule.channel_name = Some(channel_name.clone());
+                    }
+                    self.analysis_threshold_elements[idx].scope =
+                        Some(ThresholdCallScope::Marker { channel_name });
+                    self.analysis_threshold_elements[idx].rules = rules;
                 }
-                merged.extend(self.analysis_property_thresholds.clone());
-                self.analysis_threshold_elements[idx].rules = merged;
-            } else {
-                self.analysis_threshold_elements[idx].rules =
-                    self.analysis_property_thresholds.clone();
+                ThresholdCallScope::Composite => {
+                    if self.analysis_follow_active_channel {
+                        let active_channel = self.analysis_live_threshold_channel_name.clone();
+                        let mut merged = self.analysis_threshold_elements[idx].rules.clone();
+                        if let Some(channel_name) = active_channel.as_deref() {
+                            merged
+                                .retain(|rule| rule.channel_name.as_deref() != Some(channel_name));
+                        } else {
+                            merged.clear();
+                        }
+                        merged.extend(self.analysis_property_thresholds.clone());
+                        self.analysis_threshold_elements[idx].rules = merged;
+                    } else {
+                        self.analysis_threshold_elements[idx].rules =
+                            self.analysis_property_thresholds.clone();
+                    }
+                    self.analysis_threshold_elements[idx].scope =
+                        Some(ThresholdCallScope::Composite);
+                }
             }
         } else if !self.analysis_property_thresholds.is_empty() {
-            let next_idx = self.analysis_threshold_elements.len() + 1;
+            let scope = self
+                .analysis_live_threshold_channel_name
+                .as_ref()
+                .map(|channel_name| ThresholdCallScope::Marker {
+                    channel_name: channel_name.clone(),
+                })
+                .unwrap_or(ThresholdCallScope::Composite);
             self.analysis_threshold_elements.push(ThresholdSetElement {
-                name: format!("Element {next_idx}"),
+                name: self.unique_threshold_call_name("Call"),
+                scope: Some(scope.clone()),
                 rules: self.analysis_property_thresholds.clone(),
             });
+            if let Some(element) = self.analysis_threshold_elements.last_mut()
+                && let ThresholdCallScope::Marker { channel_name } = scope
+            {
+                for rule in &mut element.rules {
+                    rule.channel_name = Some(channel_name.clone());
+                }
+            }
             self.analysis_threshold_selected_element =
                 Some(self.analysis_threshold_elements.len() - 1);
         }
@@ -1385,13 +1659,19 @@ impl ObjectsLayer {
             return;
         };
         self.analysis_threshold_selected_element = Some(idx);
-        self.analysis_property_thresholds =
-            self.extract_live_threshold_rules(&element.rules, active_channel_name);
-        self.analysis_live_threshold_channel_name = if self.analysis_follow_active_channel {
-            active_channel_name.map(ToOwned::to_owned)
-        } else {
-            None
+        let live_channel_name = match threshold_call_scope(&element) {
+            ThresholdCallScope::Marker { channel_name } => Some(channel_name),
+            ThresholdCallScope::Composite => {
+                if self.analysis_follow_active_channel {
+                    active_channel_name.map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            }
         };
+        self.analysis_property_thresholds =
+            self.extract_live_threshold_rules(&element, live_channel_name.as_deref());
+        self.analysis_live_threshold_channel_name = live_channel_name;
         self.analysis_hist_drag_rule = None;
         self.analysis_hist_focus_object_index = None;
         if let Some(rule) = self.analysis_property_thresholds.first() {
@@ -1408,9 +1688,9 @@ impl ObjectsLayer {
 
     fn save_threshold_set_dialog(&self) {
         let Some(path) = FileDialog::new()
-            .add_filter("Threshold set", &["json"])
-            .set_title("Save threshold set")
-            .set_file_name("threshold_set.json")
+            .add_filter("Call preset", &["json"])
+            .set_title("Save call preset")
+            .set_file_name("call_preset.json")
             .save_file()
         else {
             return;
@@ -1426,8 +1706,8 @@ impl ObjectsLayer {
 
     fn load_threshold_set_dialog(&mut self) {
         let Some(path) = FileDialog::new()
-            .add_filter("Threshold set", &["json"])
-            .set_title("Load threshold set")
+            .add_filter("Call preset", &["json"])
+            .set_title("Load call preset")
             .pick_file()
         else {
             return;
@@ -1440,6 +1720,7 @@ impl ObjectsLayer {
         };
         self.analysis_threshold_set_name = payload.name;
         self.analysis_threshold_elements = payload.elements;
+        self.normalize_threshold_call_elements();
         self.analysis_threshold_selected_element = if self.analysis_threshold_elements.is_empty() {
             None
         } else {

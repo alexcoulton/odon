@@ -1,6 +1,6 @@
 pub(crate) mod geojson;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -486,9 +486,18 @@ struct ObjectPropertyThresholdRule {
     value_transform: HistogramValueTransform,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ThresholdCallScope {
+    Marker { channel_name: String },
+    Composite,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ThresholdSetElement {
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<ThresholdCallScope>,
     rules: Vec<ObjectPropertyThresholdRule>,
 }
 
@@ -502,6 +511,155 @@ struct SelectionElement {
 struct ThresholdSetFile {
     name: String,
     elements: Vec<ThresholdSetElement>,
+}
+
+fn sanitize_export_key(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut prev_underscore = false;
+    for ch in name.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            prev_underscore = false;
+            ch.to_ascii_lowercase()
+        } else {
+            if prev_underscore {
+                continue;
+            }
+            prev_underscore = true;
+            '_'
+        };
+        out.push(normalized);
+    }
+    let out = out.trim_matches('_');
+    if out.is_empty() {
+        "unnamed".to_string()
+    } else {
+        out.to_string()
+    }
+}
+
+fn threshold_call_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "Unnamed call".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn infer_threshold_call_scope(rules: &[ObjectPropertyThresholdRule]) -> ThresholdCallScope {
+    match threshold_call_single_channel_name(rules) {
+        Some(channel_name) => ThresholdCallScope::Marker {
+            channel_name: channel_name.to_string(),
+        },
+        None => ThresholdCallScope::Composite,
+    }
+}
+
+fn threshold_call_scope(element: &ThresholdSetElement) -> ThresholdCallScope {
+    element
+        .scope
+        .clone()
+        .unwrap_or_else(|| infer_threshold_call_scope(&element.rules))
+}
+
+fn threshold_call_bound_channel_name(element: &ThresholdSetElement) -> Option<&str> {
+    match element.scope.as_ref() {
+        Some(ThresholdCallScope::Marker { channel_name }) => Some(channel_name.as_str()),
+        Some(ThresholdCallScope::Composite) => None,
+        None => threshold_call_single_channel_name(&element.rules),
+    }
+}
+
+fn threshold_call_single_channel_name(rules: &[ObjectPropertyThresholdRule]) -> Option<&str> {
+    let mut channel_name = None;
+    for rule in rules {
+        let Some(next) = rule.channel_name.as_deref() else {
+            return None;
+        };
+        match channel_name {
+            None => channel_name = Some(next),
+            Some(current) if current == next => {}
+            Some(_) => return None,
+        }
+    }
+    channel_name
+}
+
+fn threshold_call_type_label(element: &ThresholdSetElement) -> &'static str {
+    match threshold_call_scope(element) {
+        ThresholdCallScope::Marker { .. } => "Marker call",
+        ThresholdCallScope::Composite => "Composite call",
+    }
+}
+
+fn threshold_call_scope_text(element: &ThresholdSetElement) -> String {
+    match threshold_call_scope(element) {
+        ThresholdCallScope::Marker { channel_name } => format!("Marker: {channel_name}"),
+        ThresholdCallScope::Composite => threshold_call_composite_scope_text(&element.rules),
+    }
+}
+
+fn threshold_call_composite_scope_text(rules: &[ObjectPropertyThresholdRule]) -> String {
+    if rules.is_empty() {
+        return "Composite".to_string();
+    }
+    let mut marker_names = BTreeSet::new();
+    let mut has_global_rules = false;
+    for rule in rules {
+        match rule.channel_name.as_deref() {
+            Some(name) => {
+                marker_names.insert(name.to_string());
+            }
+            None => {
+                has_global_rules = true;
+            }
+        }
+    }
+    if marker_names.is_empty() {
+        return "Composite".to_string();
+    }
+    let marker_summary = threshold_call_marker_summary(&marker_names);
+    if has_global_rules {
+        format!("Composite: global + {marker_summary}")
+    } else {
+        format!("Composite: {marker_summary}")
+    }
+}
+
+fn threshold_call_marker_summary(marker_names: &BTreeSet<String>) -> String {
+    let labels = marker_names.iter().take(3).cloned().collect::<Vec<_>>();
+    let extra = marker_names.len().saturating_sub(labels.len());
+    if extra == 0 {
+        labels.join(", ")
+    } else {
+        format!("{} +{extra}", labels.join(", "))
+    }
+}
+
+fn threshold_call_export_column_name(element: &ThresholdSetElement) -> String {
+    let label_token = sanitize_export_key(&threshold_call_display_name(&element.name));
+    if let Some(channel_name) = threshold_call_bound_channel_name(element) {
+        let channel_token = sanitize_export_key(channel_name);
+        if label_token == "unnamed" {
+            return format!("_odon_call_{channel_token}");
+        }
+        if label_token == channel_token || label_token.starts_with(&format!("{channel_token}_")) {
+            return format!("_odon_call_{label_token}");
+        }
+        return format!("_odon_call_{channel_token}_{label_token}");
+    }
+    format!("_odon_call_{label_token}")
+}
+
+fn live_threshold_call_export_column_name(
+    rules: &[ObjectPropertyThresholdRule],
+    live_channel_name: Option<&str>,
+) -> String {
+    let channel_name = live_channel_name.or_else(|| threshold_call_single_channel_name(rules));
+    match channel_name {
+        Some(channel_name) => format!("_odon_live_call_{}", sanitize_export_key(channel_name)),
+        None => "_odon_live_call".to_string(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
