@@ -9,6 +9,59 @@ use super::*;
 // that set changes.
 
 impl ObjectsLayer {
+    pub(crate) fn project_analysis_state(&self) -> ObjectProjectAnalysisState {
+        ObjectProjectAnalysisState {
+            threshold_set_name: self.analysis_threshold_set_name.clone(),
+            threshold_elements: self.analysis_threshold_elements.clone(),
+            threshold_selected_element: self.analysis_threshold_selected_element,
+            follow_active_channel: self.analysis_follow_active_channel,
+            live_threshold_channel_name: self.analysis_live_threshold_channel_name.clone(),
+            channel_mapping_overrides: self.analysis_channel_mapping_overrides.clone(),
+            selection_elements: self.selection_elements.clone(),
+            selection_element_selected: self.selection_element_selected,
+        }
+    }
+
+    pub(crate) fn apply_project_analysis_state(
+        &mut self,
+        state: &ObjectProjectAnalysisState,
+        active_channel_name: Option<&str>,
+    ) {
+        self.analysis_threshold_set_name = if state.threshold_set_name.is_empty() {
+            "Threshold Set".to_string()
+        } else {
+            state.threshold_set_name.clone()
+        };
+        self.analysis_threshold_elements = state.threshold_elements.clone();
+        self.normalize_threshold_call_elements();
+        self.analysis_follow_active_channel = state.follow_active_channel;
+        self.analysis_channel_mapping_overrides = state.channel_mapping_overrides.clone();
+        self.selection_elements = state.selection_elements.clone();
+        self.selection_element_selected = state
+            .selection_element_selected
+            .filter(|idx| *idx < self.selection_elements.len());
+
+        self.analysis_threshold_selected_element = state
+            .threshold_selected_element
+            .filter(|idx| *idx < self.analysis_threshold_elements.len());
+
+        if let Some(idx) = self.analysis_threshold_selected_element {
+            self.analysis_live_threshold_channel_name = state.live_threshold_channel_name.clone();
+            self.load_threshold_element(idx, active_channel_name);
+        } else {
+            self.analysis_property_thresholds.clear();
+            self.analysis_live_threshold_channel_name = if self.analysis_follow_active_channel {
+                active_channel_name.map(ToOwned::to_owned)
+            } else {
+                state.live_threshold_channel_name.clone()
+            };
+            self.analysis_hist_drag_rule = None;
+            self.analysis_hist_focus_object_index = None;
+            self.analysis_hist_snapped_level = None;
+            self.mark_live_analysis_selection_dirty();
+        }
+    }
+
     pub fn open_analysis_channel_mapping_popup(&mut self) {
         if !self.has_data() {
             return;

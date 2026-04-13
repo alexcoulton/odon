@@ -16,6 +16,7 @@ use crate::data::project_config::{
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
+use crate::objects::ObjectProjectAnalysisState;
 use crate::ui::roi_browser::RoiBrowseState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +110,8 @@ pub struct ProjectRoiViewState {
     pub overlay_offsets_world: BTreeMap<String, [f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segmentation: Option<ProjectSegmentationViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<ObjectProjectAnalysisState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<ProjectCameraState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -645,6 +648,37 @@ impl ProjectSpace {
             .and_then(|p| p.parent().map(Path::to_path_buf))
     }
 
+    pub fn current_project_path(&self) -> Option<PathBuf> {
+        self.project_file_path.clone().or_else(|| {
+            (!self.save_path.trim().is_empty()).then(|| PathBuf::from(self.save_path.trim()))
+        })
+    }
+
+    fn save_as_project(&mut self) {
+        let default_name = self
+            .current_project_path()
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("project.json")
+            .to_string();
+        let mut dialog = FileDialog::new()
+            .add_filter("Project JSON", &["json"])
+            .set_file_name(&default_name)
+            .set_title("Save Project");
+        if let Some(parent) = self
+            .current_project_path()
+            .as_ref()
+            .and_then(|path| path.parent())
+        {
+            dialog = dialog.set_directory(parent);
+        }
+        if let Some(path) = dialog.save_file() {
+            self.save_path = path.to_string_lossy().to_string();
+            self.save_to_path();
+        }
+    }
+
     fn exportable_local_roi_count(&self) -> usize {
         self.config
             .rois
@@ -654,9 +688,7 @@ impl ProjectSpace {
     }
 
     fn default_samplesheet_export_path(&self) -> PathBuf {
-        let project_path = self.project_file_path.clone().or_else(|| {
-            (!self.save_path.trim().is_empty()).then(|| PathBuf::from(self.save_path.trim()))
-        });
+        let project_path = self.current_project_path();
 
         let stem = project_path
             .as_ref()
@@ -1400,21 +1432,18 @@ impl ProjectSpace {
                         self.config_generation = self.config_generation.wrapping_add(1);
                         self.status = "New project.".to_string();
                     }
-                    if ui.button("Save Project...").clicked() {
-                        let default_name = PathBuf::from(self.save_path.trim())
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("project.json")
-                            .to_string();
-                        if let Some(path) = FileDialog::new()
-                            .add_filter("Project JSON", &["json"])
-                            .set_file_name(&default_name)
-                            .set_title("Save Project")
-                            .save_file()
-                        {
-                            self.save_path = path.to_string_lossy().to_string();
+                    if ui.button("Save").clicked() {
+                        if self.current_project_path().is_some() {
+                            if let Some(path) = self.current_project_path() {
+                                self.save_path = path.to_string_lossy().to_string();
+                            }
                             self.save_to_path();
+                        } else {
+                            self.save_as_project();
                         }
+                    }
+                    if ui.button("Save As...").clicked() {
+                        self.save_as_project();
                     }
                     if ui.button("Load Project...").clicked() {
                         if let Some(path) = FileDialog::new()
@@ -1810,6 +1839,8 @@ impl ProjectSpace {
             }
         };
         self.project_file_path = Some(path.clone());
+        self.save_path = path.to_string_lossy().to_string();
+        self.load_path = path.to_string_lossy().to_string();
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut cleaned: Vec<ProjectRoi> = Vec::new();

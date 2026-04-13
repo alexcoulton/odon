@@ -1897,6 +1897,7 @@ impl OmeZarrViewerApp {
                     outlines_opacity: Some(self.cells_outlines_opacity),
                     outlines_width_px: Some(self.cells_outlines_width_px),
                 }),
+                analysis: Some(self.seg_objects.project_analysis_state()),
                 camera: Some(self.project_camera_state()),
                 ui: Some(self.project_ui_state()),
                 annotation_layers: self
@@ -1995,6 +1996,14 @@ impl OmeZarrViewerApp {
             if let Some(active_channel) = view.active_channel {
                 self.selected_channel = active_channel.min(self.channels.len().saturating_sub(1));
             }
+            if let Some(analysis) = view.analysis.as_ref() {
+                let active_channel_name = self
+                    .channels
+                    .get(self.selected_channel)
+                    .map(|channel| channel.name.as_str());
+                self.seg_objects
+                    .apply_project_analysis_state(analysis, active_channel_name);
+            }
             if let Some(camera) = view.camera.as_ref() {
                 self.apply_project_camera_state(camera);
             }
@@ -2034,6 +2043,10 @@ impl OmeZarrViewerApp {
     pub fn take_project_space(&mut self) -> ProjectSpace {
         self.sync_current_view_state_into_project_space();
         std::mem::take(&mut self.project_space)
+    }
+
+    pub fn project_space(&self) -> &ProjectSpace {
+        &self.project_space
     }
 
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
@@ -2592,7 +2605,21 @@ impl eframe::App for OmeZarrViewerApp {
         self.drain_histogram();
         self.drain_channel_maxes();
         self.seg_geojson.tick();
+        let seg_objects_was_loading = self.seg_objects.is_loading();
         self.seg_objects.tick();
+        if seg_objects_was_loading
+            && !self.seg_objects.is_loading()
+            && self.seg_objects.object_count() > 0
+            && let Some(view) = self.project_space.roi_view_state(&self.dataset.source)
+            && let Some(analysis) = view.analysis.as_ref()
+        {
+            let active_channel_name = self
+                .channels
+                .get(self.selected_channel)
+                .map(|channel| channel.name.as_str());
+            self.seg_objects
+                .apply_project_analysis_state(analysis, active_channel_name);
+        }
         self.spatial_image_layers.tick();
         self.spatial_layers.tick();
         self.xenium_layers.tick();
@@ -2725,8 +2752,9 @@ impl eframe::App for OmeZarrViewerApp {
                 |ui, tab| match tab {
                     LeftTab::Layers => self.ui_layers(ui, ctx),
                     LeftTab::Project => {
-                        let cur = self.dataset.source.local_path();
-                        if let Some(action) = self.project_space.ui(ui, cur) {
+                        let cur = self.dataset.source.local_path().map(Path::to_path_buf);
+                        self.sync_current_view_state_into_project_space();
+                        if let Some(action) = self.project_space.ui(ui, cur.as_deref()) {
                             match action {
                                 ProjectSpaceAction::Open(roi) => {
                                     self.project_space

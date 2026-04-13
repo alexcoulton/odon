@@ -520,8 +520,8 @@ enum HistogramValueTransform {
     Arcsinh,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ObjectPropertyThresholdRule {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ObjectPropertyThresholdRule {
     column_key: String,
     #[serde(default)]
     channel_name: Option<String>,
@@ -537,8 +537,8 @@ enum ThresholdCallScope {
     Composite,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ThresholdSetElement {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ThresholdSetElement {
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<ThresholdCallScope>,
@@ -547,10 +547,30 @@ struct ThresholdSetElement {
     rules: Vec<ObjectPropertyThresholdRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SelectionElement {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct SelectionElement {
     name: String,
     object_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub(crate) struct ObjectProjectAnalysisState {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub threshold_set_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threshold_elements: Vec<ThresholdSetElement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold_selected_element: Option<usize>,
+    #[serde(default = "default_true")]
+    pub follow_active_channel: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_threshold_channel_name: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub channel_mapping_overrides: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_elements: Vec<SelectionElement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_element_selected: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -561,6 +581,10 @@ struct ThresholdSetFile {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn sanitize_export_key(name: &str) -> String {

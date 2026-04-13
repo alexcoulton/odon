@@ -698,6 +698,10 @@ impl MosaicViewerApp {
         &mut self.project_space
     }
 
+    pub fn project_space(&self) -> &ProjectSpace {
+        &self.project_space
+    }
+
     pub fn set_project_space(&mut self, mut project_space: ProjectSpace) {
         self.layer_groups = project_space.layer_groups().clone();
         if let Some(view) = project_space.mosaic_view_state() {

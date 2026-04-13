@@ -1466,12 +1466,26 @@ impl eframe::App for RootApp {
                             }
                         }
                         NativeMenuAction::SaveProject => {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("Project JSON", &["json"])
-                                .set_file_name("odon.project.json")
-                                .set_title("Save Project")
-                                .save_file()
-                            {
+                            let save_target = match &self.mode {
+                                Mode::Project { project_space } => {
+                                    project_space.current_project_path()
+                                }
+                                Mode::Single(app) => app.project_space().current_project_path(),
+                                Mode::Mosaic { mosaic, .. } => {
+                                    mosaic.project_space().current_project_path()
+                                }
+                                Mode::Transition => None,
+                            };
+                            let path = if let Some(path) = save_target {
+                                Some(path)
+                            } else {
+                                FileDialog::new()
+                                    .add_filter("Project JSON", &["json"])
+                                    .set_file_name("odon.project.json")
+                                    .set_title("Save Project")
+                                    .save_file()
+                            };
+                            if let Some(path) = path {
                                 match &mut self.mode {
                                     Mode::Project { project_space } => {
                                         if let Err(err) = project_space.save_to_file(&path) {
