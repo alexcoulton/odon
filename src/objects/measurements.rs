@@ -199,17 +199,35 @@ impl ObjectsLayer {
         ui.separator();
         ui.label("Persist results");
         ui.horizontal(|ui| {
-            if ui.button("Export Enriched GeoParquet...").clicked()
+            if ui
+                .add_enabled(
+                    !self.is_exporting(),
+                    egui::Button::new("Export Enriched GeoParquet..."),
+                )
+                .clicked()
                 && let Err(err) = self.export_objects_geoparquet_with_dialog()
             {
                 self.status = format!("Export GeoParquet failed: {err}");
             }
-            if ui.button("Export Enriched CSV...").clicked()
+            if ui
+                .add_enabled(
+                    !self.is_exporting(),
+                    egui::Button::new("Export Enriched CSV..."),
+                )
+                .clicked()
                 && let Err(err) = self.export_objects_csv_with_dialog()
             {
                 self.status = format!("Export CSV failed: {err}");
             }
         });
+        if self.is_exporting() {
+            ui.ctx().request_repaint();
+            ui.add(
+                egui::ProgressBar::new(0.0)
+                    .animate(true)
+                    .text("Export in progress..."),
+            );
+        }
         ui.small(
             "Results are attached back onto objects as numeric properties using the chosen prefix, so they become available in Analysis immediately.",
         );

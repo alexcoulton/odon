@@ -234,8 +234,9 @@ fn tile_loader_thread(
                 }
             };
 
-            let data = squeeze_to_yx(data, y_dim, x_dim)
-                .context("unexpected array dimensionality for tile (expected y/x plus singleton dims)")?;
+            let data = squeeze_to_yx(data, y_dim, x_dim).context(
+                "unexpected array dimensionality for tile (expected y/x plus singleton dims)",
+            )?;
 
             for (idx, val) in data.iter().enumerate() {
                 let t = ((*val as f32 - w0) / denom).clamp(0.0, 1.0);

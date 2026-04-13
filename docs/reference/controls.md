@@ -32,3 +32,4 @@ When the transform tool is active for a supported channel layer:
 - Left panel: layers and project actions
 - Right panel: properties, threshold controls, and ROI-related tools
 - Top bar: quick actions and compact contrast controls when panels are hidden
+- `Ctrl+M`: open the Analysis mapping settings dialog for segmentation objects or the active object-backed SpatialData shape layer

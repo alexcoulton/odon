@@ -2182,6 +2182,64 @@ impl OmeZarrViewerApp {
         self.roi_selector.set_status(status);
     }
 
+    pub fn open_mapping_settings(&mut self) {
+        let opened = if self.seg_objects.has_data() {
+            self.seg_objects.open_analysis_channel_mapping_popup();
+            true
+        } else if let LayerId::SpatialShape(id) = self.active_layer {
+            if let Some(layer) = self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|shape| shape.id == id)
+                && let Some(objects) = layer.object_layer_mut()
+                && objects.has_data()
+            {
+                objects.open_analysis_channel_mapping_popup();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if opened {
+            self.show_right_panel = true;
+            self.right_tab = RightTab::Analysis;
+        } else {
+            self.set_status(
+                "Mapping settings are available for segmentation objects and object-backed SpatialData shape layers.",
+            );
+        }
+    }
+
+    fn ui_mapping_settings_dialogs(&mut self, ctx: &egui::Context) {
+        self.seg_objects.ui_analysis_channel_mapping_popup(
+            ctx,
+            &self.channels,
+            self.selected_channel,
+        );
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut() {
+                objects.ui_analysis_channel_mapping_popup(
+                    ctx,
+                    &self.channels,
+                    self.selected_channel,
+                );
+            }
+        }
+    }
+
+    fn ui_object_export_dialogs(&mut self, ctx: &egui::Context) {
+        self.seg_objects.ui_export_dialog(ctx);
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut() {
+                objects.ui_export_dialog(ctx);
+            }
+        }
+    }
+
     pub fn open_screenshot_settings(&mut self) {
         self.screenshot_settings_open = true;
     }
@@ -2520,6 +2578,12 @@ impl eframe::App for OmeZarrViewerApp {
         if top_bar::handle_cmd_w_close(ctx, &mut self.close_dialog_open) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        // Use literal Ctrl+M here because Cmd+M is reserved for window minimize on macOS.
+        if !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::M))
+        {
+            self.open_mapping_settings();
+        }
 
         self.drain_tiles(ctx);
         self.drain_raw_tiles();
@@ -2846,6 +2910,8 @@ impl eframe::App for OmeZarrViewerApp {
 
         self.ui_group_layers_dialog(ctx);
         self.ui_memory_load_dialog(ctx);
+        self.ui_object_export_dialogs(ctx);
+        self.ui_mapping_settings_dialogs(ctx);
         self.ui_screenshot_settings_dialog(ctx);
 
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {

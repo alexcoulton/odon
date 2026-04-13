@@ -9,6 +9,13 @@ use super::*;
 // that set changes.
 
 impl ObjectsLayer {
+    pub fn open_analysis_channel_mapping_popup(&mut self) {
+        if !self.has_data() {
+            return;
+        }
+        self.analysis_channel_mapping_popup_open = true;
+    }
+
     pub fn sync_analysis_follow_active_channel(
         &mut self,
         channels: &[ChannelInfo],
@@ -73,6 +80,7 @@ impl ObjectsLayer {
             scope: Some(ThresholdCallScope::Marker {
                 channel_name: channel_name.to_string(),
             }),
+            mark_failed: false,
             rules: Vec::new(),
         });
         let idx = self.analysis_threshold_elements.len() - 1;
@@ -98,6 +106,7 @@ impl ObjectsLayer {
             scope: Some(ThresholdCallScope::Marker {
                 channel_name: channel_name.to_string(),
             }),
+            mark_failed: false,
             rules: Vec::new(),
         });
         self.analysis_threshold_elements.len() - 1
@@ -137,6 +146,7 @@ impl ObjectsLayer {
             return;
         };
         element.scope = Some(ThresholdCallScope::Composite);
+        element.mark_failed = false;
     }
 
     fn normalize_threshold_call_elements(&mut self) {
@@ -283,7 +293,13 @@ impl ObjectsLayer {
                     hist.median,
                     self.active_channel_name(channels, selected_channel),
                 );
-                self.ui_object_property_threshold_rules(ui, &numeric_columns, column_name);
+                self.ui_object_property_threshold_rules(
+                    ui,
+                    channels,
+                    selected_channel,
+                    &numeric_columns,
+                    column_name,
+                );
                 self.ui_object_property_histogram_levels(ui, column_name);
                 let _drag_finished = self.ui_object_property_histogram(ui, column_name, &hist);
                 let selected_ids = self.object_property_threshold_selected_indices();
@@ -954,7 +970,7 @@ impl ObjectsLayer {
                     "Bind edits to active marker",
                 );
                 if ui.button("Mapping settings...").clicked() {
-                    self.analysis_channel_mapping_popup_open = true;
+                    self.open_analysis_channel_mapping_popup();
                 }
             });
             if self.analysis_follow_active_channel != prev_follow_active_channel {
@@ -979,7 +995,6 @@ impl ObjectsLayer {
             {
                 ui.label(format!("Current marker: {name}"));
             }
-            self.ui_channel_mapping_popup(ui, channels, selected_channel);
             let active_marker_name = self.active_channel_name(channels, selected_channel);
             ui.horizontal(|ui| {
                 let selected_idx = self
@@ -999,6 +1014,7 @@ impl ObjectsLayer {
                         self.analysis_threshold_elements.push(ThresholdSetElement {
                             name: self.new_threshold_call_name(channels, selected_channel),
                             scope: Some(ThresholdCallScope::Composite),
+                            mark_failed: false,
                             rules: Vec::new(),
                         });
                         self.load_threshold_element(
@@ -1011,6 +1027,7 @@ impl ObjectsLayer {
                     self.analysis_threshold_elements.push(ThresholdSetElement {
                         name: self.unique_threshold_call_name("Composite call"),
                         scope: Some(ThresholdCallScope::Composite),
+                        mark_failed: false,
                         rules: Vec::new(),
                     });
                     self.load_threshold_element(
@@ -1042,39 +1059,50 @@ impl ObjectsLayer {
                 let mut clicked_idx = None;
                 egui::ScrollArea::vertical()
                     .id_salt("seg_objects_threshold_elements")
+                    .auto_shrink([false, false])
                     .max_height(180.0)
                     .show(ui, |ui| {
                         for (idx, element) in
                             self.analysis_threshold_elements.iter_mut().enumerate()
                         {
-                            ui.horizontal(|ui| {
-                                let selected =
-                                    self.analysis_threshold_selected_element == Some(idx);
-                                ui.vertical(|ui| {
-                                    if ui
-                                        .selectable_label(
-                                            selected,
-                                            threshold_call_display_name(&element.name),
-                                        )
-                                        .clicked()
-                                    {
-                                        clicked_idx = Some(idx);
-                                    }
-                                    ui.small(format!(
-                        "{} • {} rule{}",
-                        threshold_call_scope_text(element),
-                        element.rules.len(),
-                        if element.rules.len() == 1 { "" } else { "s" }
-                    ));
-                                });
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut element.name)
-                                        .desired_width(140.0),
-                                );
-                            });
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 0.0),
+                                egui::Layout::left_to_right(egui::Align::Min),
+                                |ui| {
+                                    let selected =
+                                        self.analysis_threshold_selected_element == Some(idx);
+                                    ui.vertical(|ui| {
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                threshold_call_display_name(&element.name),
+                                            )
+                                            .clicked()
+                                        {
+                                            clicked_idx = Some(idx);
+                                        }
+                                        ui.small(format!(
+                            "{} • {} rule{}",
+                            threshold_call_scope_text(element),
+                            element.rules.len(),
+                            if element.rules.len() == 1 { "" } else { "s" }
+                        ));
+                                    });
+                                    ui.add_sized(
+                                        [140.0, ui.spacing().interact_size.y],
+                                        egui::TextEdit::singleline(&mut element.name),
+                                    );
+                                },
+                            );
                         }
                     });
                 if let Some(idx) = clicked_idx {
+                    if self.analysis_follow_active_channel
+                        && self.analysis_threshold_selected_element != Some(idx)
+                    {
+                        self.save_live_threshold_rules();
+                        self.analysis_follow_active_channel = false;
+                    }
                     self.load_threshold_element(
                         idx,
                         self.active_channel_name(channels, selected_channel),
@@ -1083,17 +1111,42 @@ impl ObjectsLayer {
                 if let Some(idx) = self
                     .analysis_threshold_selected_element
                     .filter(|idx| *idx < self.analysis_threshold_elements.len())
-                    && let Some(element) = self.analysis_threshold_elements.get(idx)
                 {
-                    ui.small(format!("Type: {}", threshold_call_type_label(element)));
-                    ui.small(format!(
-                        "Scope: {}",
-                        threshold_call_scope_text(element)
-                    ));
-                    ui.small(format!(
-                        "Export column: {}",
-                        threshold_call_export_column_name(element)
-                    ));
+                    let Some((
+                        is_marker_call,
+                        type_label,
+                        scope_text,
+                        export_column,
+                        mut mark_failed,
+                    )) = self.analysis_threshold_elements.get(idx).map(|element| {
+                        (
+                            matches!(threshold_call_scope(element), ThresholdCallScope::Marker { .. }),
+                            threshold_call_type_label(element),
+                            threshold_call_scope_text(element),
+                            threshold_call_export_column_name(element),
+                            element.mark_failed,
+                        )
+                    }) else {
+                        return;
+                    };
+                    ui.small(format!("Type: {type_label}"));
+                    ui.small(format!("Scope: {scope_text}"));
+                    ui.small(format!("Export column: {export_column}"));
+                    if ui
+                        .add_enabled(
+                            is_marker_call,
+                            egui::Checkbox::new(&mut mark_failed, "Mark failed"),
+                        )
+                        .changed()
+                        && let Some(element) = self.analysis_threshold_elements.get_mut(idx)
+                    {
+                        element.mark_failed = mark_failed;
+                    }
+                    if is_marker_call && mark_failed {
+                        ui.small("This call exports `FAIL` for every row.");
+                    } else if !is_marker_call {
+                        ui.small("`Mark failed` is only available for marker calls.");
+                    }
                     if let Some((active_marker_name, bound_marker)) =
                         self.selected_call_marker_mismatch(active_marker_name)
                     {
@@ -1108,10 +1161,7 @@ impl ObjectsLayer {
                                 self.convert_selected_threshold_call_to_composite();
                             }
                         });
-                    } else if matches!(
-                        threshold_call_scope(element),
-                        ThresholdCallScope::Marker { .. }
-                    ) && ui.button("Convert to composite").clicked()
+                    } else if is_marker_call && ui.button("Convert to composite").clicked()
                     {
                         self.convert_selected_threshold_call_to_composite();
                     }
@@ -1163,9 +1213,9 @@ impl ObjectsLayer {
         }
     }
 
-    fn ui_channel_mapping_popup(
+    pub fn ui_analysis_channel_mapping_popup(
         &mut self,
-        ui: &mut egui::Ui,
+        ctx: &egui::Context,
         channels: &[ChannelInfo],
         selected_channel: usize,
     ) {
@@ -1190,13 +1240,18 @@ impl ObjectsLayer {
                 .collect::<Vec<_>>()
         };
         let mut open = self.analysis_channel_mapping_popup_open;
+        let dialog_id = egui::Id::new((
+            "analysis_channel_mapping_popup",
+            self as *const ObjectsLayer as usize,
+        ));
         egui::Window::new("Mapping settings")
+            .id(dialog_id)
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
             .default_width(760.0)
             .default_height(520.0)
-            .show(ui.ctx(), |ui| {
+            .show(ctx, |ui| {
                 ui.label(
                     "Choose which numeric object-property column each image channel should drive in Analysis.",
                 );
@@ -1250,6 +1305,12 @@ impl ObjectsLayer {
                                 .get(&channel.name)
                                 .map(|v| v.as_slice())
                                 .unwrap_or(&[]);
+                            let mut ordered_columns = Vec::with_capacity(numeric_columns.len());
+                            for column in suggestions.iter().chain(numeric_columns.iter()) {
+                                if !ordered_columns.iter().any(|candidate| candidate == column) {
+                                    ordered_columns.push(column.clone());
+                                }
+                            }
                             let auto = suggestions.first().cloned();
                             let current = if let Some(column) =
                                 self.analysis_channel_mapping_overrides.get(&channel.name)
@@ -1267,8 +1328,8 @@ impl ObjectsLayer {
                                 Self::analysis_optional_value_name_picker(
                                     ui,
                                     "",
-                                    ("seg_objects_channel_mapping", &channel.name),
-                                    &numeric_columns,
+                                    ("seg_objects_channel_mapping", idx),
+                                    &ordered_columns,
                                     &mut selected,
                                     "Choose column...",
                                 );
@@ -1509,6 +1570,38 @@ impl ObjectsLayer {
         }
     }
 
+    fn ordered_threshold_picker_columns(
+        &self,
+        numeric_columns: &[String],
+        channel_name: Option<&str>,
+        current_column: &str,
+    ) -> Vec<String> {
+        let mut ordered = Vec::with_capacity(numeric_columns.len());
+        let mut push_column = |column: &str| {
+            if !ordered.iter().any(|candidate| candidate == column) {
+                ordered.push(column.to_string());
+            }
+        };
+
+        if let Some(channel_name) = channel_name
+            && let Some(suggestions) = self
+                .analysis_channel_mapping_suggestions_cache
+                .get(channel_name)
+        {
+            for column in suggestions {
+                push_column(column);
+            }
+        }
+
+        push_column(current_column);
+
+        for column in numeric_columns {
+            push_column(column);
+        }
+
+        ordered
+    }
+
     fn saved_threshold_rules(&self) -> Vec<ObjectPropertyThresholdRule> {
         self.analysis_threshold_selected_element
             .filter(|idx| *idx < self.analysis_threshold_elements.len())
@@ -1640,6 +1733,7 @@ impl ObjectsLayer {
             self.analysis_threshold_elements.push(ThresholdSetElement {
                 name: self.unique_threshold_call_name("Call"),
                 scope: Some(scope.clone()),
+                mark_failed: false,
                 rules: self.analysis_property_thresholds.clone(),
             });
             if let Some(element) = self.analysis_threshold_elements.last_mut()
@@ -1799,20 +1893,28 @@ impl ObjectsLayer {
                     }
                     ui.separator();
 
-                    let mut matches = names
-                        .iter()
-                        .filter_map(|name| {
-                            fuzzy_name_score(&search, name).map(|score| (score, name))
-                        })
-                        .collect::<Vec<_>>();
-                    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                    let matches = if search.trim().is_empty() {
+                        names.iter().collect::<Vec<_>>()
+                    } else {
+                        let mut matches = names
+                            .iter()
+                            .filter_map(|name| {
+                                fuzzy_name_score(&search, name).map(|score| (score, name))
+                            })
+                            .collect::<Vec<_>>();
+                        matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                        matches
+                            .into_iter()
+                            .map(|(_, name)| name)
+                            .collect::<Vec<_>>()
+                    };
 
                     egui::ScrollArea::vertical()
                         .id_salt((&id_salt, "scroll"))
                         .auto_shrink([false, false])
                         .max_height(320.0)
                         .show(ui, |ui| {
-                            for (_, name) in matches.into_iter().take(100) {
+                            for name in matches.into_iter().take(100) {
                                 if ui.selectable_label(*selected == *name, name).clicked() {
                                     *selected = name.clone();
                                     request_close = true;
@@ -1891,30 +1993,42 @@ impl ObjectsLayer {
                     }
                     ui.separator();
 
-                    let mut matches = names
-                        .iter()
-                        .filter_map(|name| {
-                            fuzzy_name_score(&search, name).map(|score| (score, name))
-                        })
-                        .collect::<Vec<_>>();
-                    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                    let matches = if search.trim().is_empty() {
+                        names.iter().enumerate().collect::<Vec<_>>()
+                    } else {
+                        let mut matches = names
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, name)| {
+                                fuzzy_name_score(&search, name).map(|score| (score, idx, name))
+                            })
+                            .collect::<Vec<_>>();
+                        matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                        matches
+                            .into_iter()
+                            .map(|(_, idx, name)| (idx, name))
+                            .collect::<Vec<_>>()
+                    };
 
                     egui::ScrollArea::vertical()
                         .id_salt((&id_salt, "scroll"))
                         .auto_shrink([false, false])
                         .max_height(320.0)
                         .show(ui, |ui| {
-                            for (_, name) in matches.into_iter().take(100) {
-                                if ui
-                                    .selectable_label(
-                                        selected.as_deref() == Some(name.as_str()),
-                                        name,
-                                    )
-                                    .clicked()
-                                {
-                                    *selected = Some(name.clone());
-                                    request_close = true;
-                                }
+                            for (match_idx, (_, name)) in matches.into_iter().take(100).enumerate()
+                            {
+                                ui.push_id((&id_salt, "option", match_idx), |ui| {
+                                    if ui
+                                        .selectable_label(
+                                            selected.as_deref() == Some(name.as_str()),
+                                            name,
+                                        )
+                                        .clicked()
+                                    {
+                                        *selected = Some(name.clone());
+                                        request_close = true;
+                                    }
+                                });
                             }
                         });
                     if request_close {
@@ -2235,11 +2349,29 @@ impl ObjectsLayer {
     fn ui_object_property_threshold_rules(
         &mut self,
         ui: &mut egui::Ui,
+        channels: &[ChannelInfo],
+        selected_channel: usize,
         numeric_columns: &[String],
         default_column: &str,
     ) {
         ui.separator();
         ui.label("Thresholds");
+        self.ensure_channel_mapping_suggestions_cache(channels, numeric_columns);
+        let active_channel_name = self.active_channel_name(channels, selected_channel);
+        let effective_channel_name = self.effective_threshold_channel_name(active_channel_name);
+        let ordered_columns_per_rule = self
+            .analysis_property_thresholds
+            .iter()
+            .map(|rule| {
+                self.ordered_threshold_picker_columns(
+                    numeric_columns,
+                    rule.channel_name
+                        .as_deref()
+                        .or(effective_channel_name.as_deref()),
+                    &rule.column_key,
+                )
+            })
+            .collect::<Vec<_>>();
         let mut remove_idx = None;
         let mut changed = false;
         for (idx, rule) in self.analysis_property_thresholds.iter_mut().enumerate() {
@@ -2249,7 +2381,10 @@ impl ObjectsLayer {
                     ui,
                     "Column",
                     ("seg_objects_threshold_column", idx),
-                    numeric_columns,
+                    ordered_columns_per_rule
+                        .get(idx)
+                        .map(Vec::as_slice)
+                        .unwrap_or(numeric_columns),
                     &mut rule.column_key,
                 );
                 if rule.column_key != prev_column {
@@ -3050,7 +3185,8 @@ fn analysis_picker_popup_width(
         target_width = target_width.max(galley.size().x + 72.0);
     }
 
-    target_width.clamp(button_width.max(320.0), max_width)
+    let min_width = button_width.max(320.0).min(max_width);
+    target_width.clamp(min_width, max_width)
 }
 
 fn order_pair(a: f32, b: f32) -> (f32, f32) {

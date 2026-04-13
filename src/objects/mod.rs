@@ -106,6 +106,7 @@ pub struct ObjectsLayer {
     point_positions_world: Option<Arc<Vec<egui::Pos2>>>,
     point_values: Option<Arc<Vec<f32>>>,
     point_lods: Option<Arc<Vec<FeaturePointLod>>>,
+    object_property_keys: Vec<String>,
     scalar_property_keys: Vec<String>,
     color_property_keys: Vec<String>,
     lazy_parquet_source: Option<LazyParquetSource>,
@@ -212,6 +213,9 @@ pub struct ObjectsLayer {
     gl_points: PointsGlRenderer,
     gl_proxy_group_points: Vec<PointsGlRenderer>,
     object_load_dialog: Option<ObjectTableLoadDialog>,
+    object_export_dialog: Option<ObjectExportDialog>,
+    object_export_rx: Option<Receiver<ObjectExportEvent>>,
+    object_export_request_id: u64,
     pending_zoom_object_index: Option<usize>,
 
     load_rx: Option<Receiver<LoadResult>>,
@@ -236,6 +240,7 @@ struct LoadResult {
     point_positions_world: Arc<Vec<egui::Pos2>>,
     point_values: Arc<Vec<f32>>,
     point_lods: Arc<Vec<FeaturePointLod>>,
+    object_property_keys: Vec<String>,
     scalar_property_keys: Vec<String>,
     color_property_keys: Vec<String>,
     lazy_parquet_source: Option<LazyParquetSource>,
@@ -326,6 +331,45 @@ struct ObjectCsvLoadOptions {
 enum ObjectLoadOptions {
     Parquet(ObjectParquetLoadOptions),
     Csv(ObjectCsvLoadOptions),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectExportFormat {
+    GeoParquet,
+    Csv,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectExportColumnSelection {
+    name: String,
+    selected: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectExportDialog {
+    format: ObjectExportFormat,
+    columns: Vec<ObjectExportColumnSelection>,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectExportSnapshot {
+    objects: Arc<Vec<ObjectFeature>>,
+    property_keys: Vec<String>,
+    selected_object_indices: HashSet<usize>,
+    analysis_property_thresholds: Vec<ObjectPropertyThresholdRule>,
+    analysis_live_threshold_channel_name: Option<String>,
+    analysis_threshold_elements: Vec<ThresholdSetElement>,
+    selection_elements: Vec<SelectionElement>,
+}
+
+#[derive(Debug)]
+enum ObjectExportEvent {
+    Finished {
+        request_id: u64,
+        path: PathBuf,
+        object_count: usize,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,6 +542,8 @@ struct ThresholdSetElement {
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<ThresholdCallScope>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    mark_failed: bool,
     rules: Vec<ObjectPropertyThresholdRule>,
 }
 
@@ -511,6 +557,10 @@ struct SelectionElement {
 struct ThresholdSetFile {
     name: String,
     elements: Vec<ThresholdSetElement>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn sanitize_export_key(name: &str) -> String {
@@ -651,6 +701,14 @@ fn threshold_call_export_column_name(element: &ThresholdSetElement) -> String {
     format!("_odon_call_{label_token}")
 }
 
+fn threshold_call_marks_failed(element: &ThresholdSetElement) -> bool {
+    element.mark_failed
+        && matches!(
+            threshold_call_scope(element),
+            ThresholdCallScope::Marker { .. }
+        )
+}
+
 fn live_threshold_call_export_column_name(
     rules: &[ObjectPropertyThresholdRule],
     live_channel_name: Option<&str>,
@@ -693,6 +751,7 @@ impl Default for ObjectsLayer {
             point_positions_world: None,
             point_values: None,
             point_lods: None,
+            object_property_keys: Vec::new(),
             scalar_property_keys: Vec::new(),
             color_property_keys: Vec::new(),
             lazy_parquet_source: None,
@@ -799,6 +858,9 @@ impl Default for ObjectsLayer {
             gl_points: PointsGlRenderer::default(),
             gl_proxy_group_points: Vec::new(),
             object_load_dialog: None,
+            object_export_dialog: None,
+            object_export_rx: None,
+            object_export_request_id: 0,
             pending_zoom_object_index: None,
             load_rx: None,
             property_load_rx: None,

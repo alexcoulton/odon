@@ -149,8 +149,9 @@ fn histogram_loader_thread(
             }
         };
 
-        let plane: ndarray::Array2<u16> = squeeze_to_yx(data, y_dim, x_dim)
-            .context("unexpected array dimensionality for histogram (expected y/x plus singleton dims)")?;
+        let plane: ndarray::Array2<u16> = squeeze_to_yx(data, y_dim, x_dim).context(
+            "unexpected array dimensionality for histogram (expected y/x plus singleton dims)",
+        )?;
 
         let mut values: Vec<u16> = plane.iter().copied().collect();
         values.retain(|v| (*v as f32).is_finite());

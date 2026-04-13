@@ -4,8 +4,8 @@ use super::analysis::{
 };
 use super::render::{
     build_color_groups_for_property, build_object_fill_mesh, build_object_selection_render_lods,
-    build_render_lods, discover_categorical_color_keys, discover_scalar_property_keys,
-    hashed_color_rgb, property_scalar_value, summarize_geometry,
+    build_render_lods, discover_categorical_color_keys, discover_property_keys,
+    discover_scalar_property_keys, hashed_color_rgb, property_scalar_value, summarize_geometry,
 };
 use super::*;
 use arrow_array::RecordBatch;
@@ -51,6 +51,7 @@ impl ObjectsLayer {
                         self.point_values = Some(msg.point_values);
                         self.point_lods = Some(msg.point_lods);
                         self.gl_proxy_group_points.clear();
+                        self.object_property_keys = msg.object_property_keys;
                         self.scalar_property_keys = msg.scalar_property_keys;
                         self.color_property_keys = msg.color_property_keys;
                         self.lazy_parquet_source = msg.lazy_parquet_source;
@@ -270,6 +271,39 @@ impl ObjectsLayer {
                 }
             }
         }
+
+        loop {
+            let Some(rx) = self.object_export_rx.as_ref() else {
+                break;
+            };
+            match rx.try_recv() {
+                Ok(ObjectExportEvent::Finished {
+                    request_id,
+                    path,
+                    object_count,
+                    error,
+                }) => {
+                    if request_id == self.object_export_request_id {
+                        self.object_export_rx = None;
+                        if let Some(err) = error {
+                            self.status = format!("Export failed: {err}");
+                        } else {
+                            self.status = format!(
+                                "Exported {} object(s) to {}",
+                                object_count,
+                                path.to_string_lossy()
+                            );
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.object_export_rx = None;
+                    break;
+                }
+            }
+        }
     }
 
     pub fn clear(&mut self) {
@@ -282,6 +316,7 @@ impl ObjectsLayer {
         self.point_values = None;
         self.point_lods = None;
         self.gl_proxy_group_points.clear();
+        self.object_property_keys.clear();
         self.scalar_property_keys.clear();
         self.color_property_keys.clear();
         self.lazy_parquet_source = None;
@@ -323,6 +358,8 @@ impl ObjectsLayer {
         self.visible = false;
         self.display_transform = SpatialDataTransform2::default();
         self.display_mode = ObjectDisplayMode::Polygons;
+        self.object_export_dialog = None;
+        self.object_export_rx = None;
         self.load_rx = None;
         self.property_load_rx = None;
         self.property_load_key = None;
@@ -367,6 +404,12 @@ impl ObjectsLayer {
             }
         }
         self.objects = Some(Arc::new(objects));
+        self.extend_object_property_keys(
+            result
+                .column_values
+                .iter()
+                .map(|(column_key, _)| column_key.as_str()),
+        );
         if let Some(objects) = self.objects.as_ref() {
             self.scalar_property_keys = discover_scalar_property_keys(objects);
             self.color_property_keys = discover_categorical_color_keys(objects);
@@ -1579,27 +1622,32 @@ impl ObjectsLayer {
         property_key: &str,
         property_values: &HashMap<usize, serde_json::Value>,
     ) {
-        let Some(objects_arc) = self.objects.as_mut() else {
-            return;
-        };
-        let objects = Arc::make_mut(objects_arc);
-        for obj in objects.iter_mut() {
-            let Some(row_index) = obj.source_row_index else {
-                continue;
+        {
+            let Some(objects_arc) = self.objects.as_mut() else {
+                return;
             };
-            if let Some(value) = property_values.get(&row_index) {
-                obj.properties
-                    .insert(property_key.to_string(), value.clone());
-            } else {
-                obj.properties.remove(property_key);
+            let objects = Arc::make_mut(objects_arc);
+            for obj in objects.iter_mut() {
+                let Some(row_index) = obj.source_row_index else {
+                    continue;
+                };
+                if let Some(value) = property_values.get(&row_index) {
+                    obj.properties
+                        .insert(property_key.to_string(), value.clone());
+                } else {
+                    obj.properties.remove(property_key);
+                }
             }
-        }
-
+        };
         if let Some(source) = self.lazy_parquet_source.as_mut() {
             source
                 .loaded_property_columns
                 .insert(property_key.to_string());
         }
+        self.extend_object_property_keys(std::iter::once(property_key));
+        let Some(objects) = self.objects.as_ref() else {
+            return;
+        };
         self.scalar_property_keys = discover_scalar_property_keys(objects);
         self.color_property_keys = discover_categorical_color_keys(objects);
         self.color_legend_cache = None;
@@ -2165,29 +2213,7 @@ impl ObjectsLayer {
     }
 
     pub fn export_objects_geoparquet_with_dialog(&mut self) -> anyhow::Result<()> {
-        let Some(objects) = self.objects.as_ref() else {
-            anyhow::bail!("no objects loaded");
-        };
-        if objects.is_empty() {
-            anyhow::bail!("no objects loaded");
-        }
-        let default_name = format!("{}.enriched.geoparquet", self.default_object_export_stem());
-        let Some(path) = FileDialog::new()
-            .add_filter("GeoParquet", &["geoparquet", "parquet"])
-            .set_title("Export Objects GeoParquet")
-            .set_directory(self.default_object_export_dir())
-            .set_file_name(&default_name)
-            .save_file()
-        else {
-            return Ok(());
-        };
-        self.export_objects_geoparquet(path.as_path())?;
-        self.status = format!(
-            "Exported {} object(s) to {}",
-            objects.len(),
-            path.to_string_lossy()
-        );
-        Ok(())
+        self.open_object_export_dialog(ObjectExportFormat::GeoParquet)
     }
 
     pub fn export_objects_csv_with_dialog(&mut self) -> anyhow::Result<()> {
@@ -2197,23 +2223,7 @@ impl ObjectsLayer {
         if objects.is_empty() {
             anyhow::bail!("no objects loaded");
         }
-        let default_name = format!("{}.enriched.csv", self.default_object_export_stem());
-        let Some(path) = FileDialog::new()
-            .add_filter("CSV", &["csv"])
-            .set_title("Export Objects CSV")
-            .set_directory(self.default_object_export_dir())
-            .set_file_name(&default_name)
-            .save_file()
-        else {
-            return Ok(());
-        };
-        self.export_objects_csv(path.as_path())?;
-        self.status = format!(
-            "Exported {} object(s) to {}",
-            objects.len(),
-            path.to_string_lossy()
-        );
-        Ok(())
+        self.open_object_export_dialog(ObjectExportFormat::Csv)
     }
 
     fn default_object_export_dir(&self) -> &Path {
@@ -2246,10 +2256,15 @@ impl ObjectsLayer {
         }
     }
 
-    fn export_objects_csv(&self, path: &Path) -> anyhow::Result<()> {
+    fn export_objects_csv(
+        snapshot: &ObjectExportSnapshot,
+        path: &Path,
+        selected_columns: &HashSet<String>,
+    ) -> anyhow::Result<()> {
         // CSV export writes the normalized export table directly: one logical object row and one
         // scalar column per exported property. Geometry is omitted here in favor of tabular tools.
-        let table = self.build_object_export_table()?;
+        let table =
+            Self::build_object_export_table_from_snapshot(snapshot, selected_columns, false)?;
         let mut writer = csv::Writer::from_path(path)
             .with_context(|| format!("failed to create CSV: {}", path.to_string_lossy()))?;
         let headers = table
@@ -2274,10 +2289,15 @@ impl ObjectsLayer {
         Ok(())
     }
 
-    fn export_objects_geoparquet(&self, path: &Path) -> anyhow::Result<()> {
+    fn export_objects_geoparquet(
+        snapshot: &ObjectExportSnapshot,
+        path: &Path,
+        selected_columns: &HashSet<String>,
+    ) -> anyhow::Result<()> {
         // GeoParquet export shares the same normalized property table as CSV, but prefixes it with
         // a WKB geometry column so downstream spatial tools can preserve shape information.
-        let table = self.build_object_export_table()?;
+        let table =
+            Self::build_object_export_table_from_snapshot(snapshot, selected_columns, true)?;
         let mut fields = Vec::with_capacity(table.columns.len() + 1);
         let mut arrays = Vec::with_capacity(table.columns.len() + 1);
 
@@ -2327,179 +2347,492 @@ impl ObjectsLayer {
         Ok(())
     }
 
-    fn build_object_export_table(&self) -> anyhow::Result<ObjectExportTable> {
+    fn build_object_export_table_from_snapshot(
+        snapshot: &ObjectExportSnapshot,
+        selected_columns: &HashSet<String>,
+        include_geometry: bool,
+    ) -> anyhow::Result<ObjectExportTable> {
+        let objects = snapshot.objects.as_ref();
+        if objects.is_empty() {
+            anyhow::bail!("no objects loaded");
+        }
+
+        let property_keys = snapshot.property_keys.clone();
+        let mut used_names = property_keys.iter().cloned().collect::<HashSet<_>>();
+
+        let mut columns = Vec::new();
+        for key in &property_keys {
+            if selected_columns.contains(key) {
+                columns.push(ExportColumn {
+                    name: key.clone(),
+                    values: objects
+                        .iter()
+                        .map(|obj| obj.properties.get(key).map(export_scalar_from_json))
+                        .collect(),
+                });
+            }
+        }
+
+        let mut geometry_types_cache: Option<Vec<String>> = None;
+
+        let geometry_type_column_name = unique_export_name("_odon_geometry_type", &mut used_names);
+        if selected_columns.contains(&geometry_type_column_name) {
+            if geometry_types_cache.is_none() {
+                geometry_types_cache = Some(
+                    objects
+                        .iter()
+                        .map(|obj| export_geometry_type_label(obj).to_string())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            let geometry_types = geometry_types_cache
+                .as_ref()
+                .expect("geometry types cached");
+            columns.push(ExportColumn {
+                name: geometry_type_column_name,
+                values: geometry_types
+                    .iter()
+                    .map(|name| Some(ExportScalar::String(name.clone())))
+                    .collect(),
+            });
+        }
+
+        let centroid_x_name = unique_export_name("_odon_centroid_x", &mut used_names);
+        if selected_columns.contains(&centroid_x_name) {
+            columns.push(ExportColumn {
+                name: centroid_x_name,
+                values: objects
+                    .iter()
+                    .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.x as f64)))
+                    .collect(),
+            });
+        }
+
+        let centroid_y_name = unique_export_name("_odon_centroid_y", &mut used_names);
+        if selected_columns.contains(&centroid_y_name) {
+            columns.push(ExportColumn {
+                name: centroid_y_name,
+                values: objects
+                    .iter()
+                    .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.y as f64)))
+                    .collect(),
+            });
+        }
+
+        if objects.iter().any(|obj| obj.point_position_world.is_some()) {
+            let point_x_name = unique_export_name("_odon_point_x", &mut used_names);
+            if selected_columns.contains(&point_x_name) {
+                columns.push(ExportColumn {
+                    name: point_x_name,
+                    values: objects
+                        .iter()
+                        .map(|obj| {
+                            obj.point_position_world
+                                .map(|pos| ExportScalar::Float64(pos.x as f64))
+                        })
+                        .collect(),
+                });
+            }
+            let point_y_name = unique_export_name("_odon_point_y", &mut used_names);
+            if selected_columns.contains(&point_y_name) {
+                columns.push(ExportColumn {
+                    name: point_y_name,
+                    values: objects
+                        .iter()
+                        .map(|obj| {
+                            obj.point_position_world
+                                .map(|pos| ExportScalar::Float64(pos.y as f64))
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        let area_name = unique_export_name("_odon_area_px", &mut used_names);
+        if selected_columns.contains(&area_name) {
+            columns.push(ExportColumn {
+                name: area_name,
+                values: objects
+                    .iter()
+                    .map(|obj| Some(ExportScalar::Float64(obj.area_px as f64)))
+                    .collect(),
+            });
+        }
+
+        let perimeter_name = unique_export_name("_odon_perimeter_px", &mut used_names);
+        if selected_columns.contains(&perimeter_name) {
+            columns.push(ExportColumn {
+                name: perimeter_name,
+                values: objects
+                    .iter()
+                    .map(|obj| Some(ExportScalar::Float64(obj.perimeter_px as f64)))
+                    .collect(),
+            });
+        }
+
+        let selected_name = unique_export_name("_odon_selected", &mut used_names);
+        if selected_columns.contains(&selected_name) {
+            columns.push(ExportColumn {
+                name: selected_name,
+                values: objects
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _)| {
+                        Some(ExportScalar::Bool(
+                            snapshot.selected_object_indices.contains(&idx),
+                        ))
+                    })
+                    .collect(),
+            });
+        }
+
+        if !snapshot.analysis_property_thresholds.is_empty() {
+            let live_name = unique_export_name(
+                &live_threshold_call_export_column_name(
+                    &snapshot.analysis_property_thresholds,
+                    snapshot.analysis_live_threshold_channel_name.as_deref(),
+                ),
+                &mut used_names,
+            );
+            if selected_columns.contains(&live_name) {
+                columns.push(ExportColumn {
+                    name: live_name,
+                    values: objects
+                        .iter()
+                        .map(|obj| {
+                            Some(ExportScalar::Bool(object_passes_threshold_rules(
+                                obj,
+                                &snapshot.analysis_property_thresholds,
+                            )))
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        for element in &snapshot.analysis_threshold_elements {
+            let column_name =
+                unique_export_name(&threshold_call_export_column_name(element), &mut used_names);
+            if selected_columns.contains(&column_name) {
+                columns.push(ExportColumn {
+                    name: column_name,
+                    values: objects
+                        .iter()
+                        .map(|obj| {
+                            if threshold_call_marks_failed(element) {
+                                Some(ExportScalar::String("FAIL".to_string()))
+                            } else {
+                                Some(ExportScalar::Bool(object_passes_threshold_rules(
+                                    obj,
+                                    &element.rules,
+                                )))
+                            }
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        for element in &snapshot.selection_elements {
+            let column_name = unique_export_name(
+                &format!("_odon_selection_{}", sanitize_export_key(&element.name)),
+                &mut used_names,
+            );
+            if selected_columns.contains(&column_name) {
+                let selected_ids = element.object_ids.iter().cloned().collect::<HashSet<_>>();
+                columns.push(ExportColumn {
+                    name: column_name,
+                    values: objects
+                        .iter()
+                        .map(|obj| Some(ExportScalar::Bool(selected_ids.contains(&obj.id))))
+                        .collect(),
+                });
+            }
+        }
+
+        let geometry_wkb = if include_geometry {
+            objects.iter().map(encode_object_wkb).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let geometry_types = if include_geometry {
+            if geometry_types_cache.is_none() {
+                geometry_types_cache = Some(
+                    objects
+                        .iter()
+                        .map(|obj| export_geometry_type_label(obj).to_string())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            geometry_types_cache
+                .as_ref()
+                .expect("geometry types cached")
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(ObjectExportTable {
+            row_count: objects.len(),
+            columns,
+            geometry_wkb,
+            geometry_types,
+        })
+    }
+
+    fn build_object_export_column_names(&self) -> anyhow::Result<Vec<String>> {
+        let snapshot = self.object_export_snapshot()?;
+        let objects = snapshot.objects.as_ref();
+        let property_keys = snapshot.property_keys.clone();
+        let mut used_names = property_keys.iter().cloned().collect::<HashSet<_>>();
+        let mut columns = property_keys.clone();
+        let mut push_name = |base_name: &str| {
+            let name = unique_export_name(base_name, &mut used_names);
+            columns.push(name);
+        };
+
+        push_name("_odon_geometry_type");
+        push_name("_odon_centroid_x");
+        push_name("_odon_centroid_y");
+        if objects.iter().any(|obj| obj.point_position_world.is_some()) {
+            push_name("_odon_point_x");
+            push_name("_odon_point_y");
+        }
+        push_name("_odon_area_px");
+        push_name("_odon_perimeter_px");
+        push_name("_odon_selected");
+
+        if !snapshot.analysis_property_thresholds.is_empty() {
+            push_name(&live_threshold_call_export_column_name(
+                &snapshot.analysis_property_thresholds,
+                snapshot.analysis_live_threshold_channel_name.as_deref(),
+            ));
+        }
+
+        for element in &snapshot.analysis_threshold_elements {
+            push_name(&threshold_call_export_column_name(element));
+        }
+        for element in &snapshot.selection_elements {
+            push_name(&format!(
+                "_odon_selection_{}",
+                sanitize_export_key(&element.name)
+            ));
+        }
+
+        Ok(columns)
+    }
+
+    fn open_object_export_dialog(&mut self, format: ObjectExportFormat) -> anyhow::Result<()> {
+        if self.is_exporting() {
+            anyhow::bail!("an export is already in progress");
+        }
+        let columns = self
+            .build_object_export_column_names()?
+            .into_iter()
+            .map(|name| ObjectExportColumnSelection {
+                name,
+                selected: true,
+            })
+            .collect();
+        self.object_export_dialog = Some(ObjectExportDialog { format, columns });
+        Ok(())
+    }
+
+    pub fn ui_export_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.object_export_dialog.clone() else {
+            return;
+        };
+
+        let mut keep_open = true;
+        let mut close_requested = false;
+        let mut export_requested = false;
+        let title = match dialog.format {
+            ObjectExportFormat::GeoParquet => "Export Enriched GeoParquet",
+            ObjectExportFormat::Csv => "Export Enriched CSV",
+        };
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(560.0)
+            .default_height(520.0)
+            .open(&mut keep_open)
+            .show(ctx, |ui| {
+                ui.label("Choose which enriched columns to include in the export.");
+                ui.small(
+                    "GeoParquet always includes geometry. CSV exports only the selected tabular columns.",
+                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Select all").clicked() {
+                        for column in &mut dialog.columns {
+                            column.selected = true;
+                        }
+                    }
+                    if ui.button("Select none").clicked() {
+                        for column in &mut dialog.columns {
+                            column.selected = false;
+                        }
+                    }
+                });
+                let selected_count = dialog.columns.iter().filter(|column| column.selected).count();
+                ui.small(format!(
+                    "{selected_count} of {} columns selected",
+                    dialog.columns.len()
+                ));
+                ui.separator();
+                let list_height = ui.available_height().clamp(200.0, 480.0);
+                ui.set_min_height(list_height);
+                egui::ScrollArea::vertical()
+                    .id_salt(("object_export_columns", title))
+                    .auto_shrink([false, false])
+                    .max_height(list_height)
+                    .show(ui, |ui| {
+                        for column in &mut dialog.columns {
+                            ui.checkbox(&mut column.selected, &column.name);
+                        }
+                    });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close_requested = true;
+                    }
+                    let export_label = match dialog.format {
+                        ObjectExportFormat::GeoParquet => "Choose file and export",
+                        ObjectExportFormat::Csv => "Choose file and export",
+                    };
+                    if ui
+                        .add_enabled(selected_count > 0, egui::Button::new(export_label))
+                        .clicked()
+                    {
+                        export_requested = true;
+                    }
+                });
+            });
+
+        if export_requested {
+            let selected_columns = dialog
+                .columns
+                .iter()
+                .filter(|column| column.selected)
+                .map(|column| column.name.clone())
+                .collect::<HashSet<_>>();
+            let default_name = match dialog.format {
+                ObjectExportFormat::GeoParquet => {
+                    format!("{}.enriched.geoparquet", self.default_object_export_stem())
+                }
+                ObjectExportFormat::Csv => {
+                    format!("{}.enriched.csv", self.default_object_export_stem())
+                }
+            };
+            let mut file_dialog = FileDialog::new().set_directory(self.default_object_export_dir());
+            file_dialog = match dialog.format {
+                ObjectExportFormat::GeoParquet => file_dialog
+                    .add_filter("GeoParquet", &["geoparquet", "parquet"])
+                    .set_title("Export Objects GeoParquet"),
+                ObjectExportFormat::Csv => file_dialog
+                    .add_filter("CSV", &["csv"])
+                    .set_title("Export Objects CSV"),
+            };
+            let path = file_dialog.set_file_name(&default_name).save_file();
+            if let Some(path) = path {
+                match self.start_object_export(dialog.format, path.clone(), selected_columns) {
+                    Ok(()) => {
+                        close_requested = true;
+                    }
+                    Err(err) => {
+                        self.status = format!("Export failed: {err}");
+                    }
+                }
+            }
+        }
+
+        if !keep_open || close_requested {
+            self.object_export_dialog = None;
+        } else {
+            self.object_export_dialog = Some(dialog);
+        }
+    }
+
+    fn start_object_export(
+        &mut self,
+        format: ObjectExportFormat,
+        path: PathBuf,
+        selected_columns: HashSet<String>,
+    ) -> anyhow::Result<()> {
+        if self.is_exporting() {
+            anyhow::bail!("an export is already in progress");
+        }
+        if selected_columns.is_empty() {
+            anyhow::bail!("no export columns selected");
+        }
+        let snapshot = self.object_export_snapshot()?;
+        let object_count = snapshot.objects.len();
+        let request_id = self.object_export_request_id.wrapping_add(1).max(1);
+        self.object_export_request_id = request_id;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.object_export_rx = Some(rx);
+        self.status = format!("Exporting {} object(s)...", object_count);
+        std::thread::spawn(move || {
+            let error = match format {
+                ObjectExportFormat::GeoParquet => {
+                    Self::export_objects_geoparquet(&snapshot, path.as_path(), &selected_columns)
+                }
+                ObjectExportFormat::Csv => {
+                    Self::export_objects_csv(&snapshot, path.as_path(), &selected_columns)
+                }
+            }
+            .err()
+            .map(|err| err.to_string());
+            let _ = tx.send(ObjectExportEvent::Finished {
+                request_id,
+                path,
+                object_count,
+                error,
+            });
+        });
+        Ok(())
+    }
+
+    fn object_export_snapshot(&self) -> anyhow::Result<ObjectExportSnapshot> {
         let Some(objects) = self.objects.as_ref() else {
             anyhow::bail!("no objects loaded");
         };
         if objects.is_empty() {
             anyhow::bail!("no objects loaded");
         }
-
-        let property_keys = self
-            .collect_export_property_keys(objects)
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut used_names = property_keys.iter().cloned().collect::<HashSet<_>>();
-
-        let mut columns = property_keys
-            .iter()
-            .map(|key| ExportColumn {
-                name: key.clone(),
-                values: objects
-                    .iter()
-                    .map(|obj| obj.properties.get(key).map(export_scalar_from_json))
-                    .collect(),
-            })
-            .collect::<Vec<_>>();
-
-        let geometry_types = objects
-            .iter()
-            .map(|obj| export_geometry_type_label(obj))
-            .collect::<Vec<_>>();
-        let geometry_wkb = objects.iter().map(encode_object_wkb).collect::<Vec<_>>();
-
-        let mut push_column = |base_name: &str, values: Vec<Option<ExportScalar>>| {
-            let name = unique_export_name(base_name, &mut used_names);
-            columns.push(ExportColumn { name, values });
-        };
-
-        push_column(
-            "_odon_geometry_type",
-            geometry_types
-                .iter()
-                .map(|name| Some(ExportScalar::String((*name).to_string())))
-                .collect(),
-        );
-        push_column(
-            "_odon_centroid_x",
-            objects
-                .iter()
-                .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.x as f64)))
-                .collect(),
-        );
-        push_column(
-            "_odon_centroid_y",
-            objects
-                .iter()
-                .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.y as f64)))
-                .collect(),
-        );
-        if objects.iter().any(|obj| obj.point_position_world.is_some()) {
-            push_column(
-                "_odon_point_x",
-                objects
-                    .iter()
-                    .map(|obj| {
-                        obj.point_position_world
-                            .map(|pos| ExportScalar::Float64(pos.x as f64))
-                    })
-                    .collect(),
-            );
-            push_column(
-                "_odon_point_y",
-                objects
-                    .iter()
-                    .map(|obj| {
-                        obj.point_position_world
-                            .map(|pos| ExportScalar::Float64(pos.y as f64))
-                    })
-                    .collect(),
-            );
-        }
-        push_column(
-            "_odon_area_px",
-            objects
-                .iter()
-                .map(|obj| Some(ExportScalar::Float64(obj.area_px as f64)))
-                .collect(),
-        );
-        push_column(
-            "_odon_perimeter_px",
-            objects
-                .iter()
-                .map(|obj| Some(ExportScalar::Float64(obj.perimeter_px as f64)))
-                .collect(),
-        );
-        push_column(
-            "_odon_selected",
-            objects
-                .iter()
-                .enumerate()
-                .map(|(idx, _)| {
-                    Some(ExportScalar::Bool(
-                        self.selected_object_indices.contains(&idx),
-                    ))
-                })
-                .collect(),
-        );
-
-        if !self.analysis_property_thresholds.is_empty() {
-            push_column(
-                &live_threshold_call_export_column_name(
-                    &self.analysis_property_thresholds,
-                    self.analysis_live_threshold_channel_name.as_deref(),
-                ),
-                objects
-                    .iter()
-                    .map(|obj| {
-                        Some(ExportScalar::Bool(object_passes_threshold_rules(
-                            obj,
-                            &self.analysis_property_thresholds,
-                        )))
-                    })
-                    .collect(),
-            );
-        }
-
-        for element in &self.analysis_threshold_elements {
-            let column_name = threshold_call_export_column_name(element);
-            push_column(
-                &column_name,
-                objects
-                    .iter()
-                    .map(|obj| {
-                        Some(ExportScalar::Bool(object_passes_threshold_rules(
-                            obj,
-                            &element.rules,
-                        )))
-                    })
-                    .collect(),
-            );
-        }
-
-        for element in &self.selection_elements {
-            let selected_ids = element.object_ids.iter().cloned().collect::<HashSet<_>>();
-            let column_name = format!("_odon_selection_{}", sanitize_export_key(&element.name));
-            push_column(
-                &column_name,
-                objects
-                    .iter()
-                    .map(|obj| Some(ExportScalar::Bool(selected_ids.contains(&obj.id))))
-                    .collect(),
-            );
-        }
-
-        Ok(ObjectExportTable {
-            row_count: objects.len(),
-            columns,
-            geometry_wkb,
-            geometry_types: geometry_types
-                .into_iter()
-                .map(str::to_string)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
+        Ok(ObjectExportSnapshot {
+            objects: Arc::clone(objects),
+            property_keys: self.object_property_keys.clone(),
+            selected_object_indices: self.selected_object_indices.clone(),
+            analysis_property_thresholds: self.analysis_property_thresholds.clone(),
+            analysis_live_threshold_channel_name: self.analysis_live_threshold_channel_name.clone(),
+            analysis_threshold_elements: self.analysis_threshold_elements.clone(),
+            selection_elements: self.selection_elements.clone(),
         })
     }
 
-    fn collect_export_property_keys(&self, objects: &[ObjectFeature]) -> BTreeSet<String> {
-        let mut out = BTreeSet::new();
-        for obj in objects {
-            for key in obj.properties.keys() {
-                out.insert(key.clone());
+    pub fn is_exporting(&self) -> bool {
+        self.object_export_rx.is_some()
+    }
+
+    fn extend_object_property_keys<'a, I>(&mut self, keys: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        for key in keys {
+            match self
+                .object_property_keys
+                .binary_search_by(|existing| existing.as_str().cmp(key))
+            {
+                Ok(_) => {}
+                Err(idx) => self.object_property_keys.insert(idx, key.to_string()),
             }
         }
-        out
     }
 
     pub(super) fn invalidate_table_cache(&mut self) {
@@ -2705,6 +3038,7 @@ fn load_result_from_objects(
     };
     let (point_positions_world, point_values, point_lods) =
         build_object_point_payload(&objects, display_transform);
+    let object_property_keys = discover_property_keys(&objects);
     let scalar_property_keys = discover_scalar_property_keys(&objects);
     let color_property_keys = discover_categorical_color_keys(&objects);
     Ok(LoadResult {
@@ -2720,6 +3054,7 @@ fn load_result_from_objects(
         point_positions_world,
         point_values,
         point_lods,
+        object_property_keys,
         scalar_property_keys,
         color_property_keys,
         lazy_parquet_source,

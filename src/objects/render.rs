@@ -1896,6 +1896,16 @@ pub(super) fn discover_categorical_color_keys(objects: &[GeoJsonObjectFeature]) 
     keys
 }
 
+pub(super) fn discover_property_keys(objects: &[GeoJsonObjectFeature]) -> Vec<String> {
+    let mut keys = HashSet::new();
+    for obj in objects {
+        keys.extend(obj.properties.keys().cloned());
+    }
+    let mut out = keys.into_iter().collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
 pub(super) fn discover_scalar_property_keys(objects: &[GeoJsonObjectFeature]) -> Vec<String> {
     let mut keys = HashSet::new();
     for obj in objects {
