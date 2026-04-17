@@ -19,6 +19,7 @@ impl ObjectsLayer {
             channel_mapping_overrides: self.analysis_channel_mapping_overrides.clone(),
             selection_elements: self.selection_elements.clone(),
             selection_element_selected: self.selection_element_selected,
+            show_selection_overlay: self.show_selection_overlay,
         }
     }
 
@@ -37,6 +38,7 @@ impl ObjectsLayer {
         self.analysis_follow_active_channel = state.follow_active_channel;
         self.analysis_channel_mapping_overrides = state.channel_mapping_overrides.clone();
         self.selection_elements = state.selection_elements.clone();
+        self.show_selection_overlay = state.show_selection_overlay;
         self.selection_element_selected = state
             .selection_element_selected
             .filter(|idx| *idx < self.selection_elements.len());
@@ -299,6 +301,7 @@ impl ObjectsLayer {
                 "Scatter",
             );
         });
+        ui.checkbox(&mut self.show_selection_overlay, "Show selection overlay");
 
         match self.analysis_plot_mode {
             AnalysisPlotMode::Histogram => {

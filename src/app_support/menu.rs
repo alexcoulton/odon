@@ -8,6 +8,7 @@ pub enum NativeMenuAction {
     SaveScreenshot,
     QuickScreenshot,
     ScreenshotSettings,
+    RoiInfo,
     AddAnnotations,
     LoadSegGeoJson,
     LoadSegObjects,
@@ -26,6 +27,7 @@ pub struct NativeMenu {
     id_save_screenshot: muda::MenuId,
     id_quick_screenshot: muda::MenuId,
     id_screenshot_settings: muda::MenuId,
+    id_roi_info: muda::MenuId,
     id_add_annotations: muda::MenuId,
     id_load_seg_geojson: muda::MenuId,
     id_load_seg_objects: muda::MenuId,
@@ -89,6 +91,11 @@ impl NativeMenu {
             )),
         );
         let screenshot_settings = MenuItem::new("Screenshot Settings...", true, None);
+        let roi_info = MenuItem::new(
+            "ROI Info",
+            true,
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyI)),
+        );
         let add_annotations = MenuItem::new("Annotations", true, None);
         let load_seg_geojson = MenuItem::new("Load Seg GeoJSON...", true, None);
         let load_seg_objects = MenuItem::new("Load Seg Objects...", true, None);
@@ -130,8 +137,12 @@ impl NativeMenu {
         .context("failed to build add menu")?;
 
         let view_scale_bar = CheckMenuItem::new("Scale Bar", true, show_scale_bar, None);
-        let view_menu = Submenu::with_items("View", true, &[&view_scale_bar])
-            .context("failed to build view menu")?;
+        let view_menu = Submenu::with_items(
+            "View",
+            true,
+            &[&roi_info, &PredefinedMenuItem::separator(), &view_scale_bar],
+        )
+        .context("failed to build view menu")?;
 
         menu.append(&app_menu)
             .context("failed to append app menu")?;
@@ -152,6 +163,7 @@ impl NativeMenu {
             id_save_screenshot: save_screenshot.id().clone(),
             id_quick_screenshot: quick_screenshot.id().clone(),
             id_screenshot_settings: screenshot_settings.id().clone(),
+            id_roi_info: roi_info.id().clone(),
             id_add_annotations: add_annotations.id().clone(),
             id_load_seg_geojson: load_seg_geojson.id().clone(),
             id_load_seg_objects: load_seg_objects.id().clone(),
@@ -185,6 +197,8 @@ impl NativeMenu {
                 out.push(NativeMenuAction::QuickScreenshot);
             } else if id == &self.id_screenshot_settings {
                 out.push(NativeMenuAction::ScreenshotSettings);
+            } else if id == &self.id_roi_info {
+                out.push(NativeMenuAction::RoiInfo);
             } else if id == &self.id_add_annotations {
                 out.push(NativeMenuAction::AddAnnotations);
             } else if id == &self.id_load_seg_geojson {

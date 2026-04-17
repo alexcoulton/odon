@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use arrow_array::Array;
@@ -255,6 +256,7 @@ pub fn load_shapes_circle_polylines(
 pub fn load_shapes_objects(
     shapes_parquet_file: &Path,
     options: &ShapesLoadOptions,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<Vec<LoadedShapeObject>> {
     let file = std::fs::File::open(shapes_parquet_file)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -288,6 +290,9 @@ pub fn load_shapes_objects(
     let mut fallback_index = 0usize;
 
     while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("object load cancelled");
+        }
         let batch = batch?;
         if batch.num_rows() == 0 {
             continue;
@@ -317,6 +322,9 @@ pub fn load_shapes_objects(
         };
 
         for row in 0..rows {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("object load cancelled");
+            }
             let Some(bytes) = geometry_bytes_at(geom, row) else {
                 fallback_index += 1;
                 continue;
@@ -361,6 +369,7 @@ pub fn load_shapes_xy_point_objects(
     x_column: &str,
     y_column: &str,
     property_columns: Option<&[String]>,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<Vec<LoadedShapeObject>> {
     let file = std::fs::File::open(shapes_parquet_file)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -390,6 +399,9 @@ pub fn load_shapes_xy_point_objects(
     let mut out = Vec::new();
     let mut fallback_index = 0usize;
     while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("object load cancelled");
+        }
         let batch = batch?;
         if batch.num_rows() == 0 {
             continue;
@@ -412,6 +424,9 @@ pub fn load_shapes_xy_point_objects(
             .collect::<Vec<_>>();
         let rows = batch.num_rows();
         for row in 0..rows {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("object load cancelled");
+            }
             let Some(x) = array_value_to_f64(x_arr, row).map(|v| v as f32) else {
                 fallback_index += 1;
                 continue;

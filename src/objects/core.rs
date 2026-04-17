@@ -28,6 +28,13 @@ use std::collections::{BTreeSet, HashMap};
 // rebuilt.
 
 impl ObjectsLayer {
+    fn cancel_current_load(&mut self) {
+        if let Some(cancel) = self.object_load_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.load_rx = None;
+    }
+
     pub fn tick(&mut self) {
         use crossbeam_channel::TryRecvError;
 
@@ -35,6 +42,11 @@ impl ObjectsLayer {
             loop {
                 match rx.try_recv() {
                     Ok(msg) => {
+                        if msg.request_id != self.object_load_request_id {
+                            continue;
+                        }
+                        self.load_rx = None;
+                        self.object_load_cancel = None;
                         // A successful object reload replaces nearly every derived cache. Keep the
                         // raw loaded payload, then aggressively clear filter/selection/analysis
                         // state so no view survives that still points at the previous object set.
@@ -137,6 +149,7 @@ impl ObjectsLayer {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         self.load_rx = None;
+                        self.object_load_cancel = None;
                         break;
                     }
                 }
@@ -360,7 +373,7 @@ impl ObjectsLayer {
         self.display_mode = ObjectDisplayMode::Polygons;
         self.object_export_dialog = None;
         self.object_export_rx = None;
-        self.load_rx = None;
+        self.cancel_current_load();
         self.property_load_rx = None;
         self.property_load_key = None;
         self.analysis_warm_rx = None;
@@ -1052,7 +1065,13 @@ impl ObjectsLayer {
         downsample_factor: f32,
         display_transform: SpatialDataTransform2,
     ) {
+        self.cancel_current_load();
+        self.object_load_request_id = self.object_load_request_id.wrapping_add(1).max(1);
+        let request_id = self.object_load_request_id;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
         let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
         self.property_load_key = None;
@@ -1068,7 +1087,14 @@ impl ObjectsLayer {
                 } else {
                     None
                 };
-                let msg = load_in_thread(path, downsample_factor, load_options).map(|mut msg| {
+                let msg = load_in_thread(
+                    path,
+                    downsample_factor,
+                    load_options,
+                    request_id,
+                    &cancel_worker,
+                )
+                .map(|mut msg| {
                     msg.display_transform = display_transform;
                     msg
                 });
@@ -1085,7 +1111,13 @@ impl ObjectsLayer {
         transform: SpatialDataTransform2,
         element_name: &str,
     ) {
+        self.cancel_current_load();
+        self.object_load_request_id = self.object_load_request_id.wrapping_add(1).max(1);
+        let request_id = self.object_load_request_id;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
         let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
         self.property_load_key = None;
@@ -1094,7 +1126,9 @@ impl ObjectsLayer {
         std::thread::Builder::new()
             .name("seg-objects-spatialdata-loader".to_string())
             .spawn(move || {
-                if let Ok(msg) = load_spatialdata_in_thread(path, transform) {
+                if let Ok(msg) =
+                    load_spatialdata_in_thread(path, transform, request_id, &cancel_worker)
+                {
                     let _ = tx.send(msg);
                 }
             })
@@ -1277,6 +1311,7 @@ impl ObjectsLayer {
 
         ui.separator();
         ui.label("Selection");
+        ui.checkbox(&mut self.show_selection_overlay, "Show selection overlay");
         ui.label(format!("Selected: {}", self.selection_count()));
         if self.selection_count() > 0 {
             let (_count, total_area, mean_area) = self.selection_summary();
@@ -1933,7 +1968,13 @@ impl ObjectsLayer {
         // The worker thread produces a single fully prepared `LoadResult` that already contains
         // the expensive derived structures (bins, LODs, point payloads). `tick` then installs it
         // atomically on the UI thread.
+        self.cancel_current_load();
+        self.object_load_request_id = self.object_load_request_id.wrapping_add(1).max(1);
+        let request_id = self.object_load_request_id;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
         let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
         self.property_load_key = None;
@@ -1942,7 +1983,13 @@ impl ObjectsLayer {
         std::thread::Builder::new()
             .name("seg-objects-loader".to_string())
             .spawn(move || {
-                if let Ok(msg) = load_in_thread(path, downsample_factor, load_options) {
+                if let Ok(msg) = load_in_thread(
+                    path,
+                    downsample_factor,
+                    load_options,
+                    request_id,
+                    &cancel_worker,
+                ) {
                     let _ = tx.send(msg);
                 }
             })
@@ -2937,13 +2984,23 @@ impl ObjectIndexBins {
     }
 }
 
+fn check_cancel(cancel: &AtomicBool) -> anyhow::Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        anyhow::bail!("object load cancelled");
+    }
+    Ok(())
+}
+
 fn load_in_thread(
     path: PathBuf,
     downsample_factor: f32,
     load_options: Option<ObjectLoadOptions>,
+    request_id: u64,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<LoadResult> {
     // Format dispatch is based on the path. Regardless of source, each branch is normalized into
     // `GeoJsonObjectFeature` records plus enough metadata to rebuild display/analysis state.
+    check_cancel(cancel)?;
     let (display_mode, objects, lazy_parquet_source) = if is_parquet_objects_path(&path) {
         let parquet_options = match load_options.as_ref() {
             Some(ObjectLoadOptions::Parquet(options)) => Some(options),
@@ -2953,10 +3010,11 @@ fn load_in_thread(
             .map(|opts| opts.display_mode)
             .unwrap_or(ObjectDisplayMode::Polygons);
         let schema = inspect_shapes_object_schema(&path)?;
+        check_cancel(cancel)?;
         let loaded_property_columns = parquet_loaded_property_columns(parquet_options, &schema);
         (
             display_mode,
-            parse_geoparquet_objects(&path, parquet_options)?,
+            parse_geoparquet_objects(&path, parquet_options, cancel)?,
             Some(LazyParquetSource {
                 geometry_column: parquet_options
                     .and_then(|opts| match &opts.source {
@@ -2977,10 +3035,11 @@ fn load_in_thread(
         };
         (
             ObjectDisplayMode::Points,
-            parse_csv_objects(&path, csv_options)?,
+            parse_csv_objects(&path, csv_options, cancel)?,
             None,
         )
     } else {
+        check_cancel(cancel)?;
         (
             ObjectDisplayMode::Polygons,
             parse_geojson_objects(&path, downsample_factor)?,
@@ -2988,60 +3047,76 @@ fn load_in_thread(
         )
     };
     load_result_from_objects(
+        request_id,
         path,
         downsample_factor,
         SpatialDataTransform2::default(),
         display_mode,
         objects,
         lazy_parquet_source,
+        cancel,
     )
 }
 
 fn load_spatialdata_in_thread(
     path: PathBuf,
     transform: SpatialDataTransform2,
+    request_id: u64,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<LoadResult> {
-    let objects = parse_spatialdata_objects(&path)?;
+    let objects = parse_spatialdata_objects(&path, cancel)?;
     load_result_from_objects(
+        request_id,
         path,
         1.0,
         transform,
         ObjectDisplayMode::Polygons,
         objects,
         None,
+        cancel,
     )
 }
 
 fn load_result_from_objects(
+    request_id: u64,
     path: PathBuf,
     downsample_factor: f32,
     display_transform: SpatialDataTransform2,
     display_mode: ObjectDisplayMode,
     objects: Vec<GeoJsonObjectFeature>,
     lazy_parquet_source: Option<LazyParquetSource>,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<LoadResult> {
+    check_cancel(cancel)?;
     let bounds = objects.iter().map(|o| o.bbox_world).collect::<Vec<_>>();
     let bounds_local =
         union_rects(&bounds).ok_or_else(|| anyhow!("no valid object bounds after parsing"))?;
+    check_cancel(cancel)?;
     let bins = ObjectIndexBins::build(&bounds, 512.0)
         .ok_or_else(|| anyhow!("no valid object bounds after parsing"))?;
+    check_cancel(cancel)?;
     let render_lods = build_render_lods(&objects)?;
+    check_cancel(cancel)?;
     let object_fill_mesh = if display_mode == ObjectDisplayMode::Polygons {
         build_object_fill_mesh(&objects).ok()
     } else {
         None
     };
+    check_cancel(cancel)?;
     let object_selection_lods = if display_mode == ObjectDisplayMode::Polygons {
         build_object_selection_render_lods(&objects).ok()
     } else {
         None
     };
+    check_cancel(cancel)?;
     let (point_positions_world, point_values, point_lods) =
         build_object_point_payload(&objects, display_transform);
+    check_cancel(cancel)?;
     let object_property_keys = discover_property_keys(&objects);
     let scalar_property_keys = discover_scalar_property_keys(&objects);
     let color_property_keys = discover_categorical_color_keys(&objects);
     Ok(LoadResult {
+        request_id,
         path,
         downsample_factor,
         display_transform,
@@ -3141,6 +3216,7 @@ fn load_parquet_property_values_for_loaded_objects(
     geometry_column: &str,
     property_key: &str,
 ) -> anyhow::Result<HashMap<usize, serde_json::Value>> {
+    let cancel = AtomicBool::new(false);
     let loaded = load_shapes_objects(
         path,
         &ShapesLoadOptions {
@@ -3148,6 +3224,7 @@ fn load_parquet_property_values_for_loaded_objects(
             geometry_column: geometry_column.to_string(),
             property_columns: Some(vec![property_key.to_string()]),
         },
+        &cancel,
     )?;
 
     let mut out = HashMap::with_capacity(loaded.len());
@@ -3221,16 +3298,20 @@ fn parse_geojson_objects(
     Ok(out)
 }
 
-fn parse_spatialdata_objects(path: &Path) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
+fn parse_spatialdata_objects(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
     if !path.exists() {
         anyhow::bail!(
             "missing SpatialData shapes parquet: {}",
             path.to_string_lossy()
         );
     }
-    let loaded = load_shapes_objects(path, &ShapesLoadOptions::default())?;
+    let loaded = load_shapes_objects(path, &ShapesLoadOptions::default(), cancel)?;
     let mut out = Vec::with_capacity(loaded.len());
     for obj in loaded {
+        check_cancel(cancel)?;
         let Some((bbox_world, area_px, perimeter_px, centroid_world)) =
             summarize_geometry(&obj.polygons_world)
         else {
@@ -3257,6 +3338,7 @@ fn parse_spatialdata_objects(path: &Path) -> anyhow::Result<Vec<GeoJsonObjectFea
 fn parse_geoparquet_objects(
     path: &Path,
     options: Option<&ObjectParquetLoadOptions>,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
     // GeoParquet can contribute either polygon geometries or point-like objects built from XY
     // columns. Both paths are normalized into the same object feature struct so the rest of the
@@ -3269,15 +3351,24 @@ fn parse_geoparquet_objects(
         source: ObjectParquetSource::Geometry(ShapesLoadOptions::default()),
     };
     let loaded = match &options.unwrap_or(&default_options).source {
-        ObjectParquetSource::Geometry(shape_options) => load_shapes_objects(path, shape_options)?,
+        ObjectParquetSource::Geometry(shape_options) => {
+            load_shapes_objects(path, shape_options, cancel)?
+        }
         ObjectParquetSource::XYColumns {
             x_column,
             y_column,
             property_columns,
-        } => load_shapes_xy_point_objects(path, x_column, y_column, property_columns.as_deref())?,
+        } => load_shapes_xy_point_objects(
+            path,
+            x_column,
+            y_column,
+            property_columns.as_deref(),
+            cancel,
+        )?,
     };
     let mut out = Vec::with_capacity(loaded.len());
     for obj in loaded {
+        check_cancel(cancel)?;
         let Some((bbox_world, area_px, perimeter_px, centroid_world)) =
             summarize_geometry(&obj.polygons_world)
         else {
@@ -3362,6 +3453,7 @@ fn inspect_csv_object_schema(path: &Path) -> anyhow::Result<CsvObjectSchema> {
 fn parse_csv_objects(
     path: &Path,
     options: Option<&ObjectCsvLoadOptions>,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
     // CSV import is point-oriented: infer X/Y columns, then lift each row into an object feature
     // whose geometry is represented primarily by a point position rather than polygon rings.
@@ -3429,6 +3521,7 @@ fn parse_csv_objects(
         .collect::<HashSet<_>>();
     let mut out = Vec::new();
     for (row_index, record) in reader.records().enumerate() {
+        check_cancel(cancel)?;
         let record = record.with_context(|| {
             format!(
                 "failed reading CSV row {}: {}",

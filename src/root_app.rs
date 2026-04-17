@@ -1525,6 +1525,15 @@ impl eframe::App for RootApp {
                             Mode::Mosaic { mosaic, .. } => mosaic.open_screenshot_settings(),
                             Mode::Transition => {}
                         },
+                        NativeMenuAction::RoiInfo => match &mut self.mode {
+                            Mode::Single(app) => app.open_roi_info_window(),
+                            Mode::Project { project_space } => project_space
+                                .set_status("ROI Info: open a dataset first.".to_string()),
+                            Mode::Mosaic { mosaic, .. } => mosaic
+                                .project_space_mut()
+                                .set_status("ROI Info: open a single ROI first.".to_string()),
+                            Mode::Transition => {}
+                        },
                         NativeMenuAction::AddAnnotations => match &mut self.mode {
                             Mode::Single(app) => app.add_annotation_layer_from_menu(),
                             Mode::Project { project_space } => project_space

@@ -505,6 +505,7 @@ pub struct OmeZarrViewerApp {
     pending_request: Option<ViewerRequest>,
     group_layers_dialog: Option<GroupLayersDialog>,
     hover_tooltip_state: Option<HoverTooltipState>,
+    roi_info_open: bool,
 
     smooth_pixels: bool,
     show_tile_debug: bool,
@@ -1179,6 +1180,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
             show_scale_bar: true,
@@ -1452,6 +1454,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
             show_scale_bar: true,
@@ -1769,6 +1772,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
             show_scale_bar: true,
@@ -2176,6 +2180,153 @@ impl OmeZarrViewerApp {
         self.dataset.source.local_path().map(|p| p.to_path_buf())
     }
 
+    fn current_project_roi(&self) -> Option<&ProjectRoi> {
+        let source_key = self.dataset.source.source_key();
+        self.project_space
+            .rois()
+            .iter()
+            .find(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
+    }
+
+    fn current_dataset_source_display(&self) -> String {
+        match &self.dataset.source {
+            crate::data::dataset_source::DatasetSource::Local(path) => {
+                path.to_string_lossy().to_string()
+            }
+            crate::data::dataset_source::DatasetSource::Http { base_url } => base_url.clone(),
+            crate::data::dataset_source::DatasetSource::S3 { bucket, prefix, .. } => {
+                if prefix.trim().is_empty() {
+                    format!("s3://{bucket}")
+                } else {
+                    format!("s3://{bucket}/{}", prefix.trim_matches('/'))
+                }
+            }
+        }
+    }
+
+    fn current_project_path_display(&self) -> String {
+        self.project_space
+            .current_project_path()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unsaved project>".to_string())
+    }
+
+    fn current_roi_compact_label(&self) -> String {
+        self.current_project_roi()
+            .and_then(|roi| {
+                roi.display_name
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
+                    .or_else(|| (!roi.id.trim().is_empty()).then(|| roi.id.clone()))
+            })
+            .unwrap_or_else(|| self.dataset.source.display_name())
+    }
+
+    fn resolved_project_roi_segpath(&self, roi: &ProjectRoi) -> Option<PathBuf> {
+        let segpath = roi.segpath.as_ref()?.clone();
+        if segpath.is_absolute() {
+            return Some(segpath);
+        }
+        self.project_space
+            .project_dir()
+            .map(|dir| dir.join(&segpath))
+            .or(Some(segpath))
+    }
+
+    fn current_roi_hover_text(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!("ROI: {}", self.current_roi_compact_label()));
+        if let Some(roi) = self.current_project_roi() {
+            if !roi.id.trim().is_empty() {
+                lines.push(format!("ID: {}", roi.id));
+            }
+            if let Some(dataset) = roi
+                .dataset
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                lines.push(format!("Dataset: {dataset}"));
+            }
+            lines.push(format!("Image: {}", roi.source_display()));
+            lines.push(format!(
+                "Segmentation: {}",
+                self.resolved_project_roi_segpath(roi)
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ));
+        } else {
+            lines.push(format!("Image: {}", self.current_dataset_source_display()));
+            lines.push(
+                "Current dataset is not matched to an ROI entry in the Project panel.".to_string(),
+            );
+        }
+        lines.push(format!("Project: {}", self.current_project_path_display()));
+        lines.join("\n")
+    }
+
+    fn ui_current_roi_field(ui: &mut egui::Ui, label: &str, value: &str) {
+        ui.label(label);
+        ui.add(egui::Label::new(egui::RichText::new(value).monospace()).wrap());
+        ui.end_row();
+    }
+
+    fn ui_current_roi_summary(&self, ui: &mut egui::Ui) {
+        ui.label("Current ROI");
+        egui::Grid::new("current-roi-summary-grid")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                Self::ui_current_roi_field(ui, "Label", &self.current_roi_compact_label());
+                if let Some(roi) = self.current_project_roi() {
+                    if !roi.id.trim().is_empty() {
+                        Self::ui_current_roi_field(ui, "ID", &roi.id);
+                    }
+                    if let Some(dataset) = roi
+                        .dataset
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                    {
+                        Self::ui_current_roi_field(ui, "Dataset", dataset);
+                    }
+                    Self::ui_current_roi_field(ui, "Image", &roi.source_display());
+                    Self::ui_current_roi_field(
+                        ui,
+                        "Segmentation",
+                        &self
+                            .resolved_project_roi_segpath(roi)
+                            .map(|path| path.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "<none>".to_string()),
+                    );
+                } else {
+                    Self::ui_current_roi_field(ui, "Image", &self.current_dataset_source_display());
+                    Self::ui_current_roi_field(ui, "Project ROI", "<not matched>");
+                }
+                Self::ui_current_roi_field(ui, "Project", &self.current_project_path_display());
+            });
+
+        if let Some(roi) = self.current_project_roi() {
+            if roi.meta.is_empty() {
+                ui.label("Metadata: none");
+            } else {
+                let title = format!("Metadata ({})", roi.meta.len());
+                ui.collapsing(title, |ui| {
+                    let mut meta_keys = roi.meta.keys().cloned().collect::<Vec<_>>();
+                    meta_keys.sort();
+                    egui::Grid::new("current-roi-meta-grid")
+                        .num_columns(2)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            for key in meta_keys {
+                                let value = roi.meta.get(&key).cloned().unwrap_or_default();
+                                Self::ui_current_roi_field(ui, &key, &value);
+                            }
+                        });
+                });
+            }
+        }
+    }
+
     fn spatial_label_transform_for_name(&self, label_name: &str) -> SpatialDataTransform2 {
         let Some(root) = self.spatial_root.as_ref() else {
             return self.spatial_label_transform;
@@ -2255,6 +2406,10 @@ impl OmeZarrViewerApp {
 
     pub fn open_screenshot_settings(&mut self) {
         self.screenshot_settings_open = true;
+    }
+
+    pub fn open_roi_info_window(&mut self) {
+        self.roi_info_open = true;
     }
 
     pub fn screenshot_output_dir(&self) -> Option<&Path> {
@@ -2642,10 +2797,8 @@ impl eframe::App for OmeZarrViewerApp {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                top_bar::ui_title(
-                    ui,
-                    format!("OME-Zarr: {}", self.dataset.source.display_name()),
-                );
+                let title = format!("OME-Zarr: {}", self.current_roi_compact_label());
+                top_bar::ui_title(ui, title).on_hover_text(self.current_roi_hover_text());
                 ui.separator();
                 if top_bar::ui_fit(ui, "Fit (F)") {
                     self.fit_to_last_canvas();
@@ -2792,7 +2945,7 @@ impl eframe::App for OmeZarrViewerApp {
                     right_panel::TabSpec {
                         tab: RightTab::Properties,
                         label: "Properties",
-                        scroll: false,
+                        scroll: true,
                     },
                     right_panel::TabSpec {
                         tab: RightTab::Analysis,
@@ -2940,6 +3093,7 @@ impl eframe::App for OmeZarrViewerApp {
         self.ui_memory_load_dialog(ctx);
         self.ui_object_export_dialogs(ctx);
         self.ui_mapping_settings_dialogs(ctx);
+        self.ui_roi_info_window(ctx);
         self.ui_screenshot_settings_dialog(ctx);
 
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
@@ -3188,6 +3342,25 @@ impl OmeZarrViewerApp {
                 });
             });
         self.screenshot_settings_open = open;
+    }
+
+    fn ui_roi_info_window(&mut self, ctx: &egui::Context) {
+        if !self.roi_info_open {
+            return;
+        }
+        let mut open = self.roi_info_open;
+        egui::Window::new("ROI Info")
+            .default_width(560.0)
+            .default_height(420.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.ui_current_roi_summary(ui);
+                    });
+            });
+        self.roi_info_open = open;
     }
 
     fn ui_tiff_plane_controls(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
@@ -6296,6 +6469,8 @@ impl OmeZarrViewerApp {
 
     fn ui_layer_properties(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading(self.layer_display_name(self.active_layer));
+        ui.separator();
+        self.ui_current_roi_summary(ui);
         ui.separator();
 
         let mut changed = false;

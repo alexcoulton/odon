@@ -2,8 +2,8 @@ use eframe::egui;
 
 pub const SMOOTH_TOOLTIP: &str = "When enabled, pixels are linearly filtered while zooming.\nDisable for crisp (nearest-neighbor) pixels.";
 
-pub fn ui_title(ui: &mut egui::Ui, title: impl Into<egui::WidgetText>) {
-    ui.label(title);
+pub fn ui_title(ui: &mut egui::Ui, title: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.label(title)
 }
 
 pub fn ui_back(ui: &mut egui::Ui, enabled: bool) -> bool {

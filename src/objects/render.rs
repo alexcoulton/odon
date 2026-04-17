@@ -88,7 +88,8 @@ impl ObjectsLayer {
             return;
         }
 
-        if !gpu_available && !self.selected_object_indices.is_empty() {
+        if !gpu_available && self.show_selection_overlay && !self.selected_object_indices.is_empty()
+        {
             self.ensure_cpu_selection_fill_mesh();
         }
 
@@ -377,7 +378,8 @@ impl ObjectsLayer {
                     callback: Arc::new(cb),
                 });
 
-                if !self.selected_object_indices.is_empty()
+                if self.show_selection_overlay
+                    && !self.selected_object_indices.is_empty()
                     && let Some(selection_lods) = self.object_selection_lods.as_ref()
                     && let Some(selection_lod) =
                         selection_lods.get(choose_object_selection_lod_index(
@@ -487,7 +489,8 @@ impl ObjectsLayer {
             }
         }
 
-        if gpu_available
+        if self.show_selection_overlay
+            && gpu_available
             && self.selected_fill_opacity > 0.0
             && !self.selected_object_indices.is_empty()
             && let Some(fill_mesh) = self.object_fill_mesh.as_ref()
@@ -521,7 +524,8 @@ impl ObjectsLayer {
                 rect: viewport,
                 callback: Arc::new(cb),
             });
-        } else if self.selected_fill_opacity > 0.0
+        } else if self.show_selection_overlay
+            && self.selected_fill_opacity > 0.0
             && let Some(fill_mesh) = self.selected_fill_mesh.as_ref()
             && fill_mesh.bounds_local.intersects(visible_local)
         {
@@ -573,7 +577,8 @@ impl ObjectsLayer {
             }
         }
 
-        if !gpu_available && !self.selected_object_indices.is_empty() {
+        if !gpu_available && self.show_selection_overlay && !self.selected_object_indices.is_empty()
+        {
             let secondary_stroke = egui::Stroke::new(
                 (self.width_screen_px + 1.0).max(1.25),
                 egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
@@ -1367,10 +1372,12 @@ impl ObjectsLayer {
                 callback: Arc::new(cb),
             });
 
-            if let (Some(sel_positions), Some(sel_values)) = (
-                self.selected_point_positions_world.as_ref(),
-                self.selected_point_values.as_ref(),
-            ) {
+            if self.show_selection_overlay
+                && let (Some(sel_positions), Some(sel_values)) = (
+                    self.selected_point_positions_world.as_ref(),
+                    self.selected_point_values.as_ref(),
+                )
+            {
                 let data = crate::render::points_gl::PointsGlDrawData {
                     generation: self.selection_generation,
                     positions_world: Arc::clone(sel_positions),
@@ -1395,10 +1402,12 @@ impl ObjectsLayer {
                 });
             }
 
-            if let (Some(primary_positions), Some(primary_values)) = (
-                self.primary_selected_point_positions_world.as_ref(),
-                self.primary_selected_point_values.as_ref(),
-            ) {
+            if self.show_selection_overlay
+                && let (Some(primary_positions), Some(primary_values)) = (
+                    self.primary_selected_point_positions_world.as_ref(),
+                    self.primary_selected_point_values.as_ref(),
+                )
+            {
                 let data = crate::render::points_gl::PointsGlDrawData {
                     generation: self.selection_generation.wrapping_mul(1021),
                     positions_world: Arc::clone(primary_positions),

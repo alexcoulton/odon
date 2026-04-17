@@ -92,6 +92,7 @@ pub struct ObjectsLayer {
     pub fill_cells: bool,
     pub fill_opacity: f32,
     pub selected_fill_opacity: f32,
+    pub show_selection_overlay: bool,
 
     pub loaded_geojson: Option<PathBuf>,
     pub downsample_factor: f32,
@@ -218,6 +219,8 @@ pub struct ObjectsLayer {
     object_export_request_id: u64,
     pending_zoom_object_index: Option<usize>,
 
+    object_load_request_id: u64,
+    object_load_cancel: Option<Arc<AtomicBool>>,
     load_rx: Option<Receiver<LoadResult>>,
     property_load_rx: Option<Receiver<PropertyLoadResult>>,
     property_load_key: Option<String>,
@@ -228,6 +231,7 @@ pub type GeoJsonObjectFeature = ObjectFeature;
 
 #[derive(Debug)]
 struct LoadResult {
+    request_id: u64,
     path: PathBuf,
     downsample_factor: f32,
     display_transform: SpatialDataTransform2,
@@ -571,6 +575,8 @@ pub(crate) struct ObjectProjectAnalysisState {
     pub selection_elements: Vec<SelectionElement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_element_selected: Option<usize>,
+    #[serde(default = "default_true")]
+    pub show_selection_overlay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -763,6 +769,7 @@ impl Default for ObjectsLayer {
             fill_cells: false,
             fill_opacity: 0.30,
             selected_fill_opacity: 0.70,
+            show_selection_overlay: true,
             loaded_geojson: None,
             downsample_factor: 1.0,
             display_transform: SpatialDataTransform2::default(),
@@ -886,6 +893,8 @@ impl Default for ObjectsLayer {
             object_export_rx: None,
             object_export_request_id: 0,
             pending_zoom_object_index: None,
+            object_load_request_id: 0,
+            object_load_cancel: None,
             load_rx: None,
             property_load_rx: None,
             property_load_key: None,
