@@ -100,12 +100,14 @@ impl LabelZarrDataset {
 
 fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
     let mut c = None;
+    let mut z = None;
     let mut y = None;
     let mut x = None;
 
     for (i, axis) in axes.iter().enumerate() {
         match axis.name.as_str() {
             "c" => c = Some(i),
+            "z" => z = Some(i),
             "y" => y = Some(i),
             "x" => x = Some(i),
             _ => {}
@@ -117,6 +119,7 @@ fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
 
     Ok(Dims {
         c,
+        z,
         y,
         x,
         ndim: axes.len(),
@@ -158,6 +161,7 @@ fn load_levels(
         }
 
         let scale = dataset_scale(multiscale, index, dims)?;
+        let translation = dataset_translation(multiscale, index, dims)?;
         let downsample_y = scale[dims.y] / base_y;
         let downsample_x = scale[dims.x] / base_x;
         let downsample = downsample_y.max(downsample_x);
@@ -169,6 +173,8 @@ fn load_levels(
             chunks: chunk_shape,
             downsample,
             dtype: format!("{}", array.data_type()),
+            scale,
+            translation,
         });
     }
 
@@ -197,4 +203,30 @@ fn dataset_scale(multiscale: &Multiscale, level: usize, dims: &Dims) -> anyhow::
     Err(anyhow!(
         "label level {level} missing coordinateTransformations scale"
     ))
+}
+
+fn dataset_translation(
+    multiscale: &Multiscale,
+    level: usize,
+    dims: &Dims,
+) -> anyhow::Result<Vec<f32>> {
+    let ds = multiscale
+        .datasets
+        .get(level)
+        .ok_or_else(|| anyhow!("missing dataset entry for level {level}"))?;
+
+    for ct in &ds.coordinate_transformations {
+        if let CoordTransform::Translation { translation } = ct {
+            if translation.len() != dims.ndim {
+                return Err(anyhow!(
+                    "label level {level} translation has wrong length: got {}, expected {}",
+                    translation.len(),
+                    dims.ndim
+                ));
+            }
+            return Ok(translation.clone());
+        }
+    }
+
+    Ok(vec![0.0; dims.ndim])
 }

@@ -1,27 +1,27 @@
-pub(crate) fn squeeze_to_yx<T>(
+pub(crate) fn squeeze_to_2d<T>(
     data: ndarray::ArrayD<T>,
-    y_dim_orig: usize,
-    x_dim_orig: usize,
+    vertical_dim_orig: usize,
+    horizontal_dim_orig: usize,
 ) -> Option<ndarray::Array2<T>> {
     use ndarray::Axis;
 
     let mut arr = data;
-    let mut y_dim = y_dim_orig;
-    let mut x_dim = x_dim_orig;
+    let mut vertical_dim = vertical_dim_orig;
+    let mut horizontal_dim = horizontal_dim_orig;
 
     for dim in (0..arr.ndim()).rev() {
-        if dim == y_dim || dim == x_dim {
+        if dim == vertical_dim || dim == horizontal_dim {
             continue;
         }
         if arr.shape().get(dim).copied().unwrap_or(0) != 1 {
             return None;
         }
         arr = arr.index_axis_move(Axis(dim), 0);
-        if dim < y_dim {
-            y_dim = y_dim.saturating_sub(1);
+        if dim < vertical_dim {
+            vertical_dim = vertical_dim.saturating_sub(1);
         }
-        if dim < x_dim {
-            x_dim = x_dim.saturating_sub(1);
+        if dim < horizontal_dim {
+            horizontal_dim = horizontal_dim.saturating_sub(1);
         }
     }
 
@@ -30,7 +30,7 @@ pub(crate) fn squeeze_to_yx<T>(
     }
 
     let mut a2 = arr.into_dimensionality::<ndarray::Ix2>().ok()?;
-    match (y_dim, x_dim) {
+    match (vertical_dim, horizontal_dim) {
         (0, 1) => {}
         (1, 0) => a2.swap_axes(0, 1),
         _ => return None,
@@ -39,9 +39,17 @@ pub(crate) fn squeeze_to_yx<T>(
     Some(a2)
 }
 
+pub(crate) fn squeeze_to_yx<T>(
+    data: ndarray::ArrayD<T>,
+    y_dim_orig: usize,
+    x_dim_orig: usize,
+) -> Option<ndarray::Array2<T>> {
+    squeeze_to_2d(data, y_dim_orig, x_dim_orig)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::squeeze_to_yx;
+    use super::{squeeze_to_2d, squeeze_to_yx};
     use ndarray::{Array, IxDyn};
 
     #[test]
@@ -53,6 +61,17 @@ mod tests {
         assert_eq!(yx.shape(), &[3, 4]);
         assert_eq!(yx[(0, 0)], 0);
         assert_eq!(yx[(2, 3)], 11);
+    }
+
+    #[test]
+    fn squeezes_singleton_czyx_to_zx() {
+        let data = Array::from_iter(0u16..12)
+            .into_shape_with_order(IxDyn(&[1, 3, 1, 4]))
+            .expect("shape");
+        let zx = squeeze_to_2d(data, 1, 3).expect("squeezed");
+        assert_eq!(zx.shape(), &[3, 4]);
+        assert_eq!(zx[(0, 0)], 0);
+        assert_eq!(zx[(2, 3)], 11);
     }
 
     #[test]

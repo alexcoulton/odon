@@ -6,11 +6,14 @@ use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 
+use crate::data::ome::{Dims, LevelInfo};
+use crate::imaging::plane_selection::{image_subset_ranges, plane_selection_for_z};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct LabelTileKey {
+    pub z_level0: u64,
     pub level: usize,
     pub tile_y: u64,
     pub tile_x: u64,
@@ -85,11 +88,8 @@ impl<T> LabelTileCache<T> {
 
 pub fn spawn_label_tile_loader(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_yx: (usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
 ) -> anyhow::Result<LabelTileLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<LabelTileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<LabelTileResponse>();
@@ -97,16 +97,7 @@ pub fn spawn_label_tile_loader(
     std::thread::Builder::new()
         .name("label-tile-loader".to_string())
         .spawn(move || {
-            if let Err(err) = label_tile_loader_thread(
-                store,
-                level_paths,
-                level_shapes,
-                level_chunks,
-                level_dtypes,
-                dims_yx,
-                rx_req,
-                tx_rsp,
-            ) {
+            if let Err(err) = label_tile_loader_thread(store, levels, dims, rx_req, tx_rsp) {
                 eprintln!("label tile loader thread exited: {err:?}");
             }
         })
@@ -120,21 +111,22 @@ pub fn spawn_label_tile_loader(
 
 fn label_tile_loader_thread(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_yx: (usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
     rx_req: Receiver<LabelTileRequest>,
     tx_rsp: Sender<LabelTileResponse>,
 ) -> anyhow::Result<()> {
-    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(level_paths.len());
-    for path in &level_paths {
+    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
+    for info in &levels {
+        let path = &info.path;
         let zarr_path = format!("/{}", path.trim_start_matches('/'));
         arrays.push(Array::open(store.clone(), &zarr_path)?);
     }
-
-    let (y_dim, x_dim) = dims_yx;
+    let Some(level0) = levels.first() else {
+        return Ok(());
+    };
+    let y_dim = dims.y;
+    let x_dim = dims.x;
 
     for req in rx_req.iter() {
         let level = req.key.level;
@@ -142,10 +134,10 @@ fn label_tile_loader_thread(
             continue;
         }
         let array = &arrays[level];
-
-        let shape = &level_shapes[level];
-        let chunks = &level_chunks[level];
-        let dtype = &level_dtypes[level];
+        let level_info = &levels[level];
+        let shape = &level_info.shape;
+        let chunks = &level_info.chunks;
+        let dtype = &level_info.dtype;
         if y_dim >= shape.len() || x_dim >= shape.len() {
             continue;
         }
@@ -177,16 +169,16 @@ fn label_tile_loader_thread(
             continue;
         }
 
-        let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(shape.len());
-        for dim in 0..shape.len() {
-            if dim == y_dim {
-                ranges.push(read_y0..read_y1);
-            } else if dim == x_dim {
-                ranges.push(read_x0..read_x1);
-            } else {
-                ranges.push(0..1);
-            }
-        }
+        let plane = plane_selection_for_z(&dims, level0, req.key.z_level0);
+        let ranges = image_subset_ranges(
+            &dims,
+            level0,
+            level_info,
+            None,
+            read_y0..read_y1,
+            read_x0..read_x1,
+            plane,
+        );
 
         let subset = ArraySubset::new_with_ranges(&ranges);
         let data = retrieve_label_subset_u32(array, &subset, dtype)?;

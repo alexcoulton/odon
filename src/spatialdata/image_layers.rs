@@ -6,6 +6,7 @@ use eframe::egui;
 use crate::camera::Camera;
 use crate::data::ome::{ChannelInfo, OmeZarrDataset};
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
+use crate::imaging::view_plane::{ViewPlaneMode, ViewPlaneSelection};
 use crate::render::tiles::{RenderChannel, recommended_tile_loader_threads};
 use crate::render::tiles_gl::{ChannelDraw, TileDraw, TilesGl};
 use crate::render::tiles_raw::{
@@ -69,6 +70,7 @@ pub struct SpatialImageLayer {
     pub visible: bool,
     pub opacity: f32,
     pub offset_world: egui::Vec2,
+    pub current_z_level0: u64,
 
     pub dataset: OmeZarrDataset,
     pub channels: Vec<ChannelInfo>,
@@ -89,34 +91,10 @@ impl SpatialImageLayer {
         let (dataset, store) = OmeZarrDataset::open_local(&path)?;
         let mut status = String::new();
         let (raw_loader, tiles_gl) = if gpu_available {
-            let level_paths = dataset
-                .levels
-                .iter()
-                .map(|l| l.path.clone())
-                .collect::<Vec<_>>();
-            let level_shapes = dataset
-                .levels
-                .iter()
-                .map(|l| l.shape.clone())
-                .collect::<Vec<_>>();
-            let level_chunks = dataset
-                .levels
-                .iter()
-                .map(|l| l.chunks.clone())
-                .collect::<Vec<_>>();
-            let level_dtypes = dataset
-                .levels
-                .iter()
-                .map(|l| l.dtype.clone())
-                .collect::<Vec<_>>();
-            let dims_cyx = (dataset.dims.c, dataset.dims.y, dataset.dims.x);
             let raw_loader = spawn_raw_tile_loader(
                 store,
-                level_paths,
-                level_shapes,
-                level_chunks,
-                level_dtypes,
-                dims_cyx,
+                dataset.levels.clone(),
+                dataset.dims.clone(),
                 recommended_tile_loader_threads(),
             )?;
             let tiles_gl = TilesGl::new(4096);
@@ -133,6 +111,7 @@ impl SpatialImageLayer {
             visible: true,
             opacity: 1.0,
             offset_world: egui::Vec2::ZERO,
+            current_z_level0: 0,
             channels: dataset.channels.clone(),
             dataset,
             path,
@@ -172,6 +151,32 @@ impl SpatialImageLayer {
         self.tiles_gl.as_ref().is_some_and(|gl| gl.is_busy())
     }
 
+    fn z_extent_level0(&self) -> Option<u64> {
+        self.dataset.levels.first().and_then(|level0| {
+            crate::imaging::plane_selection::level0_z_extent(&self.dataset.dims, level0)
+        })
+    }
+
+    fn active_z_level0(&self) -> u64 {
+        self.z_extent_level0()
+            .map(|extent| self.current_z_level0.min(extent.saturating_sub(1)))
+            .unwrap_or(0)
+    }
+
+    fn set_active_z_level0(&mut self, z_level0: u64) {
+        let next = self
+            .z_extent_level0()
+            .map(|extent| z_level0.min(extent.saturating_sub(1)))
+            .unwrap_or(0);
+        if next == self.current_z_level0 {
+            return;
+        }
+        self.current_z_level0 = next;
+        if let Some(tiles_gl) = self.tiles_gl.as_ref() {
+            tiles_gl.reset();
+        }
+    }
+
     pub fn ui_properties(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         ui.checkbox(&mut self.visible, "Visible");
@@ -186,6 +191,20 @@ impl SpatialImageLayer {
         ui.label(self.path.to_string_lossy());
         if !self.status.is_empty() {
             ui.label(self.status.clone());
+        }
+        if let Some(z_extent) = self.z_extent_level0().filter(|extent| *extent > 1) {
+            let mut z_level0 = self.active_z_level0();
+            if ui
+                .add(
+                    egui::Slider::new(&mut z_level0, 0..=z_extent.saturating_sub(1))
+                        .text("Z")
+                        .clamping(egui::SliderClamping::Always),
+                )
+                .changed()
+            {
+                self.set_active_z_level0(z_level0);
+                changed = true;
+            }
         }
         ui.separator();
         ui.label("Channels");
@@ -229,9 +248,15 @@ impl SpatialImageLayer {
         let level_info = self.dataset.levels[target_level].clone();
         let coords: Vec<TileCoord> =
             tiles_needed_lvl0_rect(visible_world, &level_info, &self.dataset.dims, 1);
+        let active_z_level0 = self.active_z_level0();
+        let view = ViewPlaneSelection {
+            mode: ViewPlaneMode::Xy,
+            slice_level0: active_z_level0,
+        };
         let mut needed: Vec<RawTileKey> = coords
             .into_iter()
             .map(|c| RawTileKey {
+                view,
                 level: target_level,
                 tile_y: c.tile_y,
                 tile_x: c.tile_x,
@@ -246,6 +271,7 @@ impl SpatialImageLayer {
         for key in &needed {
             for ch in &render_channels {
                 let raw_key = RawTileKey {
+                    view,
                     level: key.level,
                     tile_y: key.tile_y,
                     tile_x: key.tile_x,
@@ -268,6 +294,8 @@ impl SpatialImageLayer {
         let draws = needed
             .into_iter()
             .map(|key| TileDraw {
+                view: key.view,
+                fallback_view: None,
                 level: key.level,
                 tile_y: key.tile_y,
                 tile_x: key.tile_x,

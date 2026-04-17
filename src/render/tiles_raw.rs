@@ -8,13 +8,18 @@ use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 
 use crate::data::ome::retrieve_image_subset_u16;
-use crate::render::array_dims::squeeze_to_yx;
+use crate::data::ome::{Dims, LevelInfo};
+use crate::imaging::view_plane::{
+    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
+};
+use crate::render::array_dims::squeeze_to_2d;
 use crate::{log_debug, log_warn};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct RawTileKey {
+    pub view: ViewPlaneSelection,
     pub level: usize,
     pub tile_y: u64,
     pub tile_x: u64,
@@ -121,42 +126,25 @@ impl<T> RawTileCache<T> {
 
 pub fn spawn_raw_tile_loader(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
     worker_threads: usize,
 ) -> anyhow::Result<RawTileLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<RawTileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<RawTileWorkerResponse>();
     let threads = worker_threads.max(1);
-    let level_paths = Arc::new(level_paths);
-    let level_shapes = Arc::new(level_shapes);
-    let level_chunks = Arc::new(level_chunks);
-    let level_dtypes = Arc::new(level_dtypes);
+    let levels = Arc::new(levels);
 
     for worker_idx in 0..threads {
         let rx_req = rx_req.clone();
         let tx_rsp = tx_rsp.clone();
         let store = store.clone();
-        let level_paths = Arc::clone(&level_paths);
-        let level_shapes = Arc::clone(&level_shapes);
-        let level_chunks = Arc::clone(&level_chunks);
-        let level_dtypes = Arc::clone(&level_dtypes);
+        let levels = Arc::clone(&levels);
+        let dims = dims.clone();
         std::thread::Builder::new()
             .name(format!("raw-tile-loader-{worker_idx}"))
             .spawn(move || {
-                if let Err(err) = raw_tile_loader_thread(
-                    store,
-                    level_paths,
-                    level_shapes,
-                    level_chunks,
-                    level_dtypes,
-                    dims_cyx,
-                    rx_req,
-                    tx_rsp,
-                ) {
+                if let Err(err) = raw_tile_loader_thread(store, levels, dims, rx_req, tx_rsp) {
                     eprintln!("raw tile loader worker exited: {err:?}");
                 }
             })
@@ -171,19 +159,20 @@ pub fn spawn_raw_tile_loader(
 
 fn raw_tile_loader_thread(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Arc<Vec<String>>,
-    level_shapes: Arc<Vec<Vec<u64>>>,
-    level_chunks: Arc<Vec<Vec<u64>>>,
-    level_dtypes: Arc<Vec<String>>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Arc<Vec<LevelInfo>>,
+    dims: Dims,
     rx_req: Receiver<RawTileRequest>,
     tx_rsp: Sender<RawTileWorkerResponse>,
 ) -> anyhow::Result<()> {
-    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(level_paths.len());
-    for path in level_paths.iter() {
+    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
+    for info in levels.iter() {
+        let path = &info.path;
         let zarr_path = format!("/{}", path.trim_start_matches('/'));
         arrays.push(Array::open(store.clone(), &zarr_path)?);
     }
+    let Some(level0) = levels.first() else {
+        return Ok(());
+    };
 
     for req in rx_req.iter() {
         let debug_io = crate::debug_log::debug_io_enabled();
@@ -194,7 +183,8 @@ fn raw_tile_loader_thread(
             .to_string();
         if debug_io {
             log_debug!(
-                "{worker_name}: start lvl={} tile=({}, {}) ch={}",
+                "{worker_name}: start {:?} lvl={} tile=({}, {}) ch={}",
+                req.key.view,
                 req.key.level,
                 req.key.tile_y,
                 req.key.tile_x,
@@ -222,12 +212,21 @@ fn raw_tile_loader_thread(
             continue;
         }
         let array = &arrays[level];
+        let level_info = &levels[level];
+        let shape = &level_info.shape;
+        let chunks = &level_info.chunks;
+        let dtype = &level_info.dtype;
 
-        let shape = &level_shapes[level];
-        let chunks = &level_chunks[level];
-        let dtype = &level_dtypes[level];
-
-        let (c_dim, y_dim, x_dim) = dims_cyx;
+        let Some(display_axes) = display_axes(&dims, req.key.view.mode) else {
+            let error = "unsupported view plane for this dataset".to_string();
+            let _ = tx_rsp.send(RawTileWorkerResponse::Failed {
+                key: req.key,
+                error,
+            });
+            continue;
+        };
+        let y_dim = display_axes.vertical;
+        let x_dim = display_axes.horizontal;
         let y_chunk = chunks[y_dim];
         let x_chunk = chunks[x_dim];
 
@@ -239,18 +238,22 @@ fn raw_tile_loader_thread(
         let height = (y1 - y0) as usize;
         let width = (x1 - x0) as usize;
 
-        let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(shape.len());
-        for dim in 0..shape.len() {
-            if Some(dim) == c_dim {
-                ranges.push(req.key.channel..(req.key.channel + 1));
-            } else if dim == y_dim {
-                ranges.push(y0..y1);
-            } else if dim == x_dim {
-                ranges.push(x0..x1);
-            } else {
-                ranges.push(0..1);
-            }
-        }
+        let Some(ranges) = image_subset_ranges_for_view(
+            &dims,
+            level0,
+            level_info,
+            Some(req.key.channel),
+            y0..y1,
+            x0..x1,
+            req.key.view,
+        ) else {
+            let error = "unsupported view plane for this dataset".to_string();
+            let _ = tx_rsp.send(RawTileWorkerResponse::Failed {
+                key: req.key,
+                error,
+            });
+            continue;
+        };
 
         let subset = ArraySubset::new_with_ranges(&ranges);
         let data = match retrieve_image_subset_u16(array, &subset, dtype) {
@@ -258,7 +261,8 @@ fn raw_tile_loader_thread(
             Err(err) => {
                 if debug_io {
                     log_warn!(
-                        "{worker_name}: fail lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                        "{worker_name}: fail {:?} lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                        req.key.view,
                         req.key.level,
                         req.key.tile_y,
                         req.key.tile_x,
@@ -275,15 +279,15 @@ fn raw_tile_loader_thread(
             }
         };
 
-        let data = match squeeze_to_yx(data, y_dim, x_dim) {
+        let data = match squeeze_to_2d(data, y_dim, x_dim) {
             Some(data) => data,
             None => {
                 let error =
-                    "unexpected array dimensionality for raw tile (expected y/x plus singleton dims)"
-                        .to_string();
+                    "unexpected array dimensionality for raw tile (expected displayed axes plus singleton dims)".to_string();
                 if debug_io {
                     log_warn!(
-                        "{worker_name}: fail lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                        "{worker_name}: fail {:?} lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                        req.key.view,
                         req.key.level,
                         req.key.tile_y,
                         req.key.tile_x,
@@ -308,12 +312,13 @@ fn raw_tile_loader_thread(
                 width,
                 height
             );
-            if debug_io {
-                log_warn!(
-                    "{worker_name}: fail lvl={} tile=({}, {}) ch={} after {:?}: {}",
-                    req.key.level,
-                    req.key.tile_y,
-                    req.key.tile_x,
+                if debug_io {
+                    log_warn!(
+                        "{worker_name}: fail {:?} lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                        req.key.view,
+                        req.key.level,
+                        req.key.tile_y,
+                        req.key.tile_x,
                     req.key.channel,
                     start.elapsed(),
                     error
@@ -328,7 +333,8 @@ fn raw_tile_loader_thread(
 
         if debug_io {
             log_debug!(
-                "{worker_name}: done lvl={} tile=({}, {}) ch={} {}x{} after {:?}",
+                "{worker_name}: done {:?} lvl={} tile=({}, {}) ch={} {}x{} after {:?}",
+                req.key.view,
                 req.key.level,
                 req.key.tile_y,
                 req.key.tile_x,

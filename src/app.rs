@@ -42,8 +42,14 @@ use crate::imaging::channel_max::{
 };
 use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
 use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
+use crate::imaging::plane_selection::{image_subset_ranges, plane_selection_for_z};
+use crate::imaging::view_plane::{
+    ViewPlaneMode, ViewPlaneSelection, clamp_selection as clamp_view_selection,
+    display_axes as display_axes_for_mode, display_downsample, local_to_world_scale,
+    slice_extent_level0, supported_modes,
+};
 use crate::imaging::tiling::{
-    TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect,
+    TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
 };
 use crate::masks::MaskLayer;
 use crate::masks::resolve_masks_geojson_path_and_downsample;
@@ -430,6 +436,9 @@ pub struct OmeZarrViewerApp {
     camera: Camera,
     active_render_id: u64,
     previous_render_id: Option<u64>,
+    previous_view_selection: Option<ViewPlaneSelection>,
+    previous_displayed_view_selection: Option<ViewPlaneSelection>,
+    last_render_view_selection: ViewPlaneSelection,
     last_canvas_rect: Option<egui::Rect>,
     last_target_level: Option<usize>,
     fallback_ceiling_level: Option<usize>,
@@ -441,6 +450,11 @@ pub struct OmeZarrViewerApp {
     auto_level: bool,
     manual_level: usize,
     selected_channel: usize,
+    view_plane_mode: ViewPlaneMode,
+    draft_view_slice_level0: Option<u64>,
+    current_x_level0: u64,
+    current_y_level0: u64,
+    current_z_level0: u64,
     channels: Vec<ChannelInfo>,
     channel_window_overrides: HashMap<String, (f32, f32)>,
     channel_list_search: String,
@@ -815,52 +829,17 @@ impl OmeZarrViewerApp {
         if !self.supports_runtime_tile_loader_tuning() {
             anyhow::bail!("runtime tile loading settings are not available for this dataset");
         }
-        let dims_cyx = (
-            self.dataset.dims.c,
-            self.dataset.dims.y,
-            self.dataset.dims.x,
-        );
         self.loader = spawn_tile_loader(
             self.store.clone(),
-            self.dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            self.dataset
-                .levels
-                .iter()
-                .map(|l| l.shape.clone())
-                .collect(),
-            self.dataset
-                .levels
-                .iter()
-                .map(|l| l.chunks.clone())
-                .collect(),
-            self.dataset
-                .levels
-                .iter()
-                .map(|l| l.dtype.clone())
-                .collect(),
-            dims_cyx,
+            self.dataset.levels.clone(),
+            self.dataset.dims.clone(),
             self.tile_loader_threads,
         )?;
         self.raw_loader = if self.tiles_gl.is_some() {
             Some(spawn_raw_tile_loader(
                 self.store.clone(),
-                self.dataset.levels.iter().map(|l| l.path.clone()).collect(),
-                self.dataset
-                    .levels
-                    .iter()
-                    .map(|l| l.shape.clone())
-                    .collect(),
-                self.dataset
-                    .levels
-                    .iter()
-                    .map(|l| l.chunks.clone())
-                    .collect(),
-                self.dataset
-                    .levels
-                    .iter()
-                    .map(|l| l.dtype.clone())
-                    .collect(),
-                dims_cyx,
+                self.dataset.levels.clone(),
+                self.dataset.dims.clone(),
                 self.tile_loader_threads,
             )?)
         } else {
@@ -968,6 +947,177 @@ impl OmeZarrViewerApp {
         Some((sx + sy) * 0.5)
     }
 
+    fn z_extent_level0(&self) -> Option<u64> {
+        self.dataset.levels.first().and_then(|level0| {
+            crate::imaging::plane_selection::level0_z_extent(&self.dataset.dims, level0)
+        })
+    }
+
+    fn view_plane_modes(&self) -> Vec<ViewPlaneMode> {
+        supported_modes(&self.dataset.dims)
+    }
+
+    fn view_plane_is_xy(&self) -> bool {
+        self.view_plane_mode == ViewPlaneMode::Xy
+    }
+
+    fn display_axes(&self) -> Option<crate::imaging::view_plane::DisplayAxes> {
+        display_axes_for_mode(&self.dataset.dims, self.view_plane_mode)
+    }
+
+    fn active_view_slice_level0_unclamped(&self) -> u64 {
+        match self.view_plane_mode {
+            ViewPlaneMode::Xy => self.current_z_level0,
+            ViewPlaneMode::Xz => self.current_y_level0,
+            ViewPlaneMode::Yz => self.current_x_level0,
+        }
+    }
+
+    fn view_slice_extent_level0(&self) -> Option<u64> {
+        let level0 = self.dataset.levels.first()?;
+        slice_extent_level0(&self.dataset.dims, level0, self.view_plane_mode)
+    }
+
+    fn committed_view_selection(&self) -> ViewPlaneSelection {
+        let level0 = self
+            .dataset
+            .levels
+            .first()
+            .expect("dataset should always have at least one level");
+        clamp_view_selection(
+            &self.dataset.dims,
+            level0,
+            self.view_plane_mode,
+            self.active_view_slice_level0_unclamped(),
+        )
+    }
+
+    fn displayed_view_selection(&self) -> ViewPlaneSelection {
+        let level0 = self
+            .dataset
+            .levels
+            .first()
+            .expect("dataset should always have at least one level");
+        clamp_view_selection(
+            &self.dataset.dims,
+            level0,
+            self.view_plane_mode,
+            self.draft_view_slice_level0
+                .unwrap_or(self.active_view_slice_level0_unclamped()),
+        )
+    }
+
+    fn fallback_view_selection(&self) -> Option<ViewPlaneSelection> {
+        let displayed = self.displayed_view_selection();
+        let committed = self.committed_view_selection();
+        if displayed != committed {
+            self.previous_displayed_view_selection
+                .filter(|view| *view != displayed)
+                .or(Some(committed))
+        } else {
+            self.previous_view_selection.filter(|view| *view != displayed)
+        }
+    }
+
+    fn active_view_selection(&self) -> ViewPlaneSelection {
+        self.committed_view_selection()
+    }
+
+    fn reset_image_view_state(&mut self, message: &str) {
+        self.hist = None;
+        self.hist_request_id = self.hist_request_id.wrapping_add(1);
+        self.hist_request_pending = false;
+        self.hist_dirty = true;
+        self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
+        for pending in &mut self.chanmax_pending {
+            *pending = false;
+        }
+        self.threshold_region_preview = None;
+        self.threshold_region_status.clear();
+        self.pinned_levels = PinnedLevels::new();
+        self.memory_status = message.to_string();
+        self.bump_render_id();
+    }
+
+    fn active_z_level0(&self) -> u64 {
+        self.z_extent_level0()
+            .map(|extent| self.current_z_level0.min(extent.saturating_sub(1)))
+            .unwrap_or(0)
+    }
+
+    fn set_view_plane_mode(&mut self, mode: ViewPlaneMode) {
+        let Some(level0) = self.dataset.levels.first() else {
+            return;
+        };
+        let supported = self.view_plane_modes();
+        let next = if supported.contains(&mode) {
+            mode
+        } else {
+            ViewPlaneMode::Xy
+        };
+        if next == self.view_plane_mode {
+            return;
+        }
+        let previous_selection = self.committed_view_selection();
+        self.view_plane_mode = next;
+        let clamped = clamp_view_selection(
+            &self.dataset.dims,
+            level0,
+            next,
+            self.active_view_slice_level0_unclamped(),
+        );
+        self.draft_view_slice_level0 = None;
+        self.previous_displayed_view_selection = None;
+        self.set_active_view_slice_level0_with_previous(
+            clamped.slice_level0,
+            previous_selection,
+            "Cleared image caches after changing the active view plane.",
+        );
+        self.clear_spatial_selection_drag();
+        if !self.view_plane_is_xy() && self.tool_mode != ToolMode::Pan {
+            self.tool_mode = ToolMode::Pan;
+        }
+        if !self.view_plane_is_xy() && !matches!(self.active_layer, LayerId::Channel(_)) {
+            self.active_layer = LayerId::Channel(self.selected_channel.min(self.channels.len().saturating_sub(1)));
+        }
+    }
+
+    fn set_active_view_slice_level0(&mut self, slice_level0: u64) {
+        let previous_selection = self.committed_view_selection();
+        self.set_active_view_slice_level0_with_previous(
+            slice_level0,
+            previous_selection,
+            "Cleared image caches after changing the active slice plane.",
+        );
+    }
+
+    fn set_active_view_slice_level0_with_previous(
+        &mut self,
+        slice_level0: u64,
+        previous_selection: ViewPlaneSelection,
+        message: &str,
+    ) {
+        let Some(level0) = self.dataset.levels.first() else {
+            return;
+        };
+        let selection = clamp_view_selection(
+            &self.dataset.dims,
+            level0,
+            self.view_plane_mode,
+            slice_level0,
+        );
+        let changed = selection != previous_selection;
+        match self.view_plane_mode {
+            ViewPlaneMode::Xy => self.current_z_level0 = selection.slice_level0,
+            ViewPlaneMode::Xz => self.current_y_level0 = selection.slice_level0,
+            ViewPlaneMode::Yz => self.current_x_level0 = selection.slice_level0,
+        }
+        if changed {
+            self.previous_view_selection = Some(previous_selection);
+            self.reset_image_view_state(message);
+        }
+    }
+
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         dataset: OmeZarrDataset,
@@ -975,20 +1125,12 @@ impl OmeZarrViewerApp {
     ) -> Self {
         apply_napari_like_dark(&cc.egui_ctx);
 
-        let level_paths: Vec<String> = dataset.levels.iter().map(|l| l.path.clone()).collect();
-        let level_shapes: Vec<Vec<u64>> = dataset.levels.iter().map(|l| l.shape.clone()).collect();
-        let level_chunks: Vec<Vec<u64>> = dataset.levels.iter().map(|l| l.chunks.clone()).collect();
-        let level_dtypes: Vec<String> = dataset.levels.iter().map(|l| l.dtype.clone()).collect();
-        let dims_cyx = (dataset.dims.c, dataset.dims.y, dataset.dims.x);
         let tile_loader_threads = Self::default_tile_loader_threads();
 
         let loader = spawn_tile_loader(
             store.clone(),
-            level_paths,
-            level_shapes,
-            level_chunks,
-            level_dtypes.clone(),
-            dims_cyx,
+            dataset.levels.clone(),
+            dataset.dims.clone(),
             tile_loader_threads,
         )
         .expect("failed to spawn tile loader");
@@ -996,11 +1138,8 @@ impl OmeZarrViewerApp {
         let (raw_loader, tiles_gl) = if cc.gl.is_some() {
             let raw = spawn_raw_tile_loader(
                 store.clone(),
-                dataset.levels.iter().map(|l| l.path.clone()).collect(),
-                dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-                dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-                dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-                dims_cyx,
+                dataset.levels.clone(),
+                dataset.dims.clone(),
                 tile_loader_threads,
             )
             .ok();
@@ -1032,25 +1171,14 @@ impl OmeZarrViewerApp {
             (None, None, None, None)
         };
 
-        let hist_loader = spawn_histogram_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )
-        .expect("failed to spawn histogram loader");
+        let hist_loader =
+            spawn_histogram_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
+                .expect("failed to spawn histogram loader");
 
         let chanmax_level = choose_default_max_level(&dataset);
-        let chanmax_loader = spawn_channel_max_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )
-        .expect("failed to spawn channel max loader");
+        let chanmax_loader =
+            spawn_channel_max_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
+                .expect("failed to spawn channel max loader");
 
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
@@ -1090,6 +1218,12 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            previous_view_selection: None,
+            previous_displayed_view_selection: None,
+            last_render_view_selection: ViewPlaneSelection {
+                mode: ViewPlaneMode::Xy,
+                slice_level0: 0,
+            },
             last_canvas_rect: None,
             last_target_level: None,
             fallback_ceiling_level: None,
@@ -1100,6 +1234,11 @@ impl OmeZarrViewerApp {
             auto_level: true,
             manual_level: 0,
             selected_channel: 0,
+            view_plane_mode: ViewPlaneMode::Xy,
+            draft_view_slice_level0: None,
+            current_x_level0: 0,
+            current_y_level0: 0,
+            current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             channel_list_search: String::new(),
@@ -1233,10 +1372,7 @@ impl OmeZarrViewerApp {
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
-        let shape0 = &app.dataset.levels[0].shape;
-        let y = shape0[app.dataset.dims.y] as f32;
-        let x = shape0[app.dataset.dims.x] as f32;
-        let world = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(x, y));
+        let world = app.image_world_rect_lvl0();
         if let Some(viewport) = cc.egui_ctx.input(|i| i.viewport().inner_rect) {
             app.camera.fit_to_world_rect(viewport, world);
         }
@@ -1252,20 +1388,12 @@ impl OmeZarrViewerApp {
     ) -> Self {
         apply_napari_like_dark(ctx);
 
-        let level_paths: Vec<String> = dataset.levels.iter().map(|l| l.path.clone()).collect();
-        let level_shapes: Vec<Vec<u64>> = dataset.levels.iter().map(|l| l.shape.clone()).collect();
-        let level_chunks: Vec<Vec<u64>> = dataset.levels.iter().map(|l| l.chunks.clone()).collect();
-        let level_dtypes: Vec<String> = dataset.levels.iter().map(|l| l.dtype.clone()).collect();
-        let dims_cyx = (dataset.dims.c, dataset.dims.y, dataset.dims.x);
         let tile_loader_threads = Self::default_tile_loader_threads();
 
         let loader = spawn_tile_loader(
             store.clone(),
-            level_paths,
-            level_shapes,
-            level_chunks,
-            level_dtypes.clone(),
-            dims_cyx,
+            dataset.levels.clone(),
+            dataset.dims.clone(),
             tile_loader_threads,
         )
         .expect("failed to spawn tile loader");
@@ -1273,11 +1401,8 @@ impl OmeZarrViewerApp {
         let (raw_loader, tiles_gl) = if gpu_available {
             let raw = spawn_raw_tile_loader(
                 store.clone(),
-                dataset.levels.iter().map(|l| l.path.clone()).collect(),
-                dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-                dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-                dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-                dims_cyx,
+                dataset.levels.clone(),
+                dataset.dims.clone(),
                 tile_loader_threads,
             )
             .ok();
@@ -1309,25 +1434,14 @@ impl OmeZarrViewerApp {
             (None, None, None, None)
         };
 
-        let hist_loader = spawn_histogram_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )
-        .expect("failed to spawn histogram loader");
+        let hist_loader =
+            spawn_histogram_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
+                .expect("failed to spawn histogram loader");
 
         let chanmax_level = choose_default_max_level(&dataset);
-        let chanmax_loader = spawn_channel_max_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )
-        .expect("failed to spawn channel max loader");
+        let chanmax_loader =
+            spawn_channel_max_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
+                .expect("failed to spawn channel max loader");
 
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
@@ -1367,6 +1481,12 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            previous_view_selection: None,
+            previous_displayed_view_selection: None,
+            last_render_view_selection: ViewPlaneSelection {
+                mode: ViewPlaneMode::Xy,
+                slice_level0: 0,
+            },
             last_canvas_rect: None,
             last_target_level: None,
             fallback_ceiling_level: None,
@@ -1377,6 +1497,11 @@ impl OmeZarrViewerApp {
             auto_level: true,
             manual_level: 0,
             selected_channel: 0,
+            view_plane_mode: ViewPlaneMode::Xy,
+            draft_view_slice_level0: None,
+            current_x_level0: 0,
+            current_y_level0: 0,
+            current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             channel_list_search: String::new(),
@@ -1507,10 +1632,7 @@ impl OmeZarrViewerApp {
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
-        let shape0 = &app.dataset.levels[0].shape;
-        let y = shape0[app.dataset.dims.y] as f32;
-        let x = shape0[app.dataset.dims.x] as f32;
-        let world = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(x, y));
+        let world = app.image_world_rect_lvl0();
         if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
             app.camera.fit_to_world_rect(viewport, world);
         }
@@ -1688,6 +1810,12 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            previous_view_selection: None,
+            previous_displayed_view_selection: None,
+            last_render_view_selection: ViewPlaneSelection {
+                mode: ViewPlaneMode::Xy,
+                slice_level0: 0,
+            },
             last_canvas_rect: None,
             last_target_level: None,
             fallback_ceiling_level: None,
@@ -1698,6 +1826,11 @@ impl OmeZarrViewerApp {
             auto_level: true,
             manual_level: 0,
             selected_channel: 0,
+            view_plane_mode: ViewPlaneMode::Xy,
+            draft_view_slice_level0: None,
+            current_x_level0: 0,
+            current_y_level0: 0,
+            current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             channel_list_search: String::new(),
@@ -1821,13 +1954,9 @@ impl OmeZarrViewerApp {
         app.active_render_id = app.compute_render_id();
 
         // Initial fit.
-        if let Some(shape0) = app.dataset.levels.get(0).map(|l| l.shape.clone()) {
-            let y = shape0[app.dataset.dims.y] as f32;
-            let x = shape0[app.dataset.dims.x] as f32;
-            let world = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(x, y));
-            if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
-                app.camera.fit_to_world_rect(viewport, world);
-            }
+        let world = app.image_world_rect_lvl0();
+        if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
+            app.camera.fit_to_world_rect(viewport, world);
         }
 
         app
@@ -2616,14 +2745,8 @@ impl OmeZarrViewerApp {
             .reset();
 
         let lbl = LabelZarrDataset::from_root_dataset(&self.dataset);
-        let label_loader = spawn_label_tile_loader(
-            self.store.clone(),
-            lbl.levels.iter().map(|l| l.path.clone()).collect(),
-            lbl.levels.iter().map(|l| l.shape.clone()).collect(),
-            lbl.levels.iter().map(|l| l.chunks.clone()).collect(),
-            lbl.levels.iter().map(|l| l.dtype.clone()).collect(),
-            (lbl.dims.y, lbl.dims.x),
-        )?;
+        let label_loader =
+            spawn_label_tile_loader(self.store.clone(), lbl.levels.clone(), lbl.dims.clone())?;
 
         self.label_loader = Some(label_loader);
         self.spatial_label_transform = SpatialDataTransform2::default();
@@ -2657,6 +2780,7 @@ impl OmeZarrViewerApp {
             }
             let _ = self.chanmax_loader.tx.send(ChannelMaxRequest {
                 request_id,
+                view: self.active_view_selection(),
                 level,
                 channel: ch.index as u64,
             });
@@ -2810,6 +2934,43 @@ impl eframe::App for OmeZarrViewerApp {
                     &mut self.manual_level,
                     self.dataset.levels.len().saturating_sub(1),
                 );
+                let supported_view_planes = self.view_plane_modes();
+                if supported_view_planes.len() > 1 {
+                    ui.separator();
+                    let mut mode = self.view_plane_mode;
+                    if top_bar::ui_view_plane_mode(ui, &mut mode, &supported_view_planes) {
+                        self.set_view_plane_mode(mode);
+                    }
+                }
+                if let Some(slice_extent) =
+                    self.view_slice_extent_level0().filter(|extent| *extent > 1)
+                {
+                    ui.separator();
+                    let mut slice_level0 = self
+                        .displayed_view_selection()
+                        .slice_level0
+                        .min(slice_extent.saturating_sub(1));
+                    let slider = top_bar::ui_view_plane_slice(
+                        ui,
+                        self.view_plane_mode.slice_axis_label(),
+                        &mut slice_level0,
+                        slice_extent.saturating_sub(1),
+                    );
+                    if slider.changed && slider.dragging {
+                        self.previous_displayed_view_selection = Some(self.displayed_view_selection());
+                        self.draft_view_slice_level0 = Some(slice_level0);
+                        ctx.request_repaint();
+                    } else if slider.changed {
+                        self.previous_displayed_view_selection = None;
+                        self.draft_view_slice_level0 = None;
+                        self.set_active_view_slice_level0(slice_level0);
+                    } else if slider.released
+                        && let Some(draft) = self.draft_view_slice_level0.take()
+                    {
+                        self.previous_displayed_view_selection = None;
+                        self.set_active_view_slice_level0(draft);
+                    }
+                }
                 ui.separator();
                 let have_channels = !self.channels.is_empty();
                 if let Some(step) = top_bar::ui_prev_next_channel(ui, have_channels) {
@@ -3254,7 +3415,10 @@ impl OmeZarrViewerApp {
         self.cache = TileCache::new(256);
         self.pending.clear();
         self.previous_render_id = None;
+        self.previous_view_selection = None;
+        self.previous_displayed_view_selection = None;
         self.active_render_id = self.compute_render_id();
+        self.last_render_view_selection = self.committed_view_selection();
         self.hist = None;
         self.hist_request_id = 0;
         self.hist_request_pending = false;
@@ -3887,15 +4051,10 @@ impl OmeZarrViewerApp {
         }
         dataset.channels = new_channels.clone();
 
-        let dims_cyx = (dataset.dims.c, dataset.dims.y, dataset.dims.x);
-
         let loader = spawn_tile_loader(
             store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
+            dataset.levels.clone(),
+            dataset.dims.clone(),
             self.tile_loader_threads,
         )?;
 
@@ -3903,11 +4062,8 @@ impl OmeZarrViewerApp {
             Some(
                 spawn_raw_tile_loader(
                     store.clone(),
-                    dataset.levels.iter().map(|l| l.path.clone()).collect(),
-                    dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-                    dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-                    dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-                    dims_cyx,
+                    dataset.levels.clone(),
+                    dataset.dims.clone(),
                     self.tile_loader_threads,
                 )
                 .ok(),
@@ -3917,23 +4073,12 @@ impl OmeZarrViewerApp {
             None
         };
 
-        let hist_loader = spawn_histogram_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )?;
+        let hist_loader =
+            spawn_histogram_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())?;
 
         let chanmax_level = choose_default_max_level(&dataset);
-        let chanmax_loader = spawn_channel_max_loader(
-            store.clone(),
-            dataset.levels.iter().map(|l| l.path.clone()).collect(),
-            dataset.levels.iter().map(|l| l.shape.clone()).collect(),
-            dataset.levels.iter().map(|l| l.chunks.clone()).collect(),
-            dataset.levels.iter().map(|l| l.dtype.clone()).collect(),
-            dims_cyx,
-        )?;
+        let chanmax_loader =
+            spawn_channel_max_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())?;
 
         let label_cells: Option<LabelZarrDataset> = None;
         let label_loader: Option<LabelTileLoaderHandle> = None;
@@ -4069,7 +4214,10 @@ impl OmeZarrViewerApp {
         self.cache = TileCache::new(256);
         self.pending.clear();
         self.previous_render_id = None;
+        self.previous_view_selection = None;
+        self.previous_displayed_view_selection = None;
         self.active_render_id = self.compute_render_id();
+        self.last_render_view_selection = self.committed_view_selection();
         self.restore_mask_layers_from_project_space();
 
         self.hist = None;
@@ -4257,15 +4405,8 @@ impl OmeZarrViewerApp {
         match LabelZarrDataset::try_open(label_store.clone(), label_name)? {
             Some(lbl) => {
                 self.spatial_label_transform = self.spatial_label_transform_for_name(label_name);
-                self.label_loader = spawn_label_tile_loader(
-                    label_store,
-                    lbl.levels.iter().map(|l| l.path.clone()).collect(),
-                    lbl.levels.iter().map(|l| l.shape.clone()).collect(),
-                    lbl.levels.iter().map(|l| l.chunks.clone()).collect(),
-                    lbl.levels.iter().map(|l| l.dtype.clone()).collect(),
-                    (lbl.dims.y, lbl.dims.x),
-                )
-                .ok();
+                self.label_loader =
+                    spawn_label_tile_loader(label_store, lbl.levels.clone(), lbl.dims.clone()).ok();
                 self.label_cells_xform = Some(compute_label_to_world_xforms(
                     &self.dataset,
                     &lbl,
@@ -4896,6 +5037,9 @@ impl OmeZarrViewerApp {
     }
 
     fn active_layer_supports_spatial_selection(&self) -> bool {
+        if !self.view_plane_is_xy() {
+            return false;
+        }
         match self.active_layer {
             LayerId::SegmentationObjects => self.seg_objects.object_count() > 0,
             LayerId::SpatialShape(id) => self
@@ -5120,7 +5264,6 @@ impl OmeZarrViewerApp {
         let downsample = level_info.downsample.max(1e-6);
         let y_dim = self.dataset.dims.y;
         let x_dim = self.dataset.dims.x;
-        let c_dim = self.dataset.dims.c;
         let x0 = (visible_rect_lvl0.left() / downsample).floor().max(0.0) as u64;
         let y0 = (visible_rect_lvl0.top() / downsample).floor().max(0.0) as u64;
         let x1 = (visible_rect_lvl0.right() / downsample)
@@ -5133,23 +5276,26 @@ impl OmeZarrViewerApp {
             anyhow::bail!("visible region is empty at this level");
         }
 
-        let mut ranges = Vec::with_capacity(level_info.shape.len());
-        for dim in 0..level_info.shape.len() {
-            if Some(dim) == c_dim {
-                let channel_index = self
-                    .channels
-                    .get(ch_idx)
-                    .map(|ch| ch.index as u64)
-                    .unwrap_or(0);
-                ranges.push(channel_index..(channel_index + 1));
-            } else if dim == y_dim {
-                ranges.push(y0..y1);
-            } else if dim == x_dim {
-                ranges.push(x0..x1);
-            } else {
-                ranges.push(0..1);
-            }
-        }
+        let level0 = self
+            .dataset
+            .levels
+            .first()
+            .context("dataset has no image levels")?;
+        let channel_index = self
+            .channels
+            .get(ch_idx)
+            .map(|ch| ch.index as u64)
+            .unwrap_or(0);
+        let plane = plane_selection_for_z(&self.dataset.dims, level0, self.active_z_level0());
+        let ranges = image_subset_ranges(
+            &self.dataset.dims,
+            level0,
+            level_info,
+            Some(channel_index),
+            y0..y1,
+            x0..x1,
+            plane,
+        );
 
         let zarr_path = format!("/{}", level_info.path.trim_start_matches('/'));
         let array = Array::open(self.store.clone(), &zarr_path).with_context(|| {
@@ -5158,14 +5304,8 @@ impl OmeZarrViewerApp {
         let subset = ArraySubset::new_with_ranges(&ranges);
         let data = retrieve_image_subset_u16(&array, &subset, &level_info.dtype)
             .context("failed to read active-channel viewport subset")?;
-        let plane = if c_dim.is_some() {
-            data.into_dimensionality::<ndarray::Ix3>()
-                .ok()
-                .map(|a| a.index_axis(ndarray::Axis(0), 0).to_owned())
-        } else {
-            data.into_dimensionality::<ndarray::Ix2>().ok()
-        }
-        .context("unexpected dimensionality for threshold region subset")?;
+        let plane = crate::render::array_dims::squeeze_to_yx(data, y_dim, x_dim)
+            .context("unexpected dimensionality for threshold region subset")?;
 
         let threshold = self
             .channels
@@ -5519,6 +5659,11 @@ impl OmeZarrViewerApp {
         // the current tool, fall back to pan and clear any partial selection gesture so we don't
         // leave stale drag state behind.
         let can_object_select = self.active_layer_supports_spatial_selection();
+        let xy_tools_enabled = self.view_plane_is_xy();
+        if !xy_tools_enabled && matches!(self.tool_mode, ToolMode::TransformLayer | ToolMode::DrawMaskPolygon) {
+            self.clear_spatial_selection_drag();
+            self.tool_mode = ToolMode::Pan;
+        }
         if !can_object_select
             && matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect)
         {
@@ -5550,7 +5695,7 @@ impl OmeZarrViewerApp {
                 self.clear_spatial_selection_drag();
                 self.tool_mode = ToolMode::MoveLayer;
             }
-            let can_transform = matches!(self.active_layer, LayerId::Channel(_));
+            let can_transform = xy_tools_enabled && matches!(self.active_layer, LayerId::Channel(_));
             let mut transform_clicked = false;
             ui.add_enabled_ui(can_transform, |ui| {
                 if icon_button(
@@ -5569,21 +5714,23 @@ impl OmeZarrViewerApp {
                 self.clear_spatial_selection_drag();
                 self.tool_mode = ToolMode::TransformLayer;
             }
-            if icon_button(
-                ui,
-                Icon::Polygon,
-                self.tool_mode == ToolMode::DrawMaskPolygon,
-                egui::Sense::click(),
-            )
-            .on_hover_text("Draw mask polygon")
-            .clicked()
-            {
-                self.clear_spatial_selection_drag();
-                self.tool_mode = ToolMode::DrawMaskPolygon;
-                let id = self.ensure_editable_mask_layer();
-                self.active_layer = LayerId::Mask(id);
-                self.drawing_mask_layer = Some(id);
-            }
+            ui.add_enabled_ui(xy_tools_enabled, |ui| {
+                if icon_button(
+                    ui,
+                    Icon::Polygon,
+                    self.tool_mode == ToolMode::DrawMaskPolygon,
+                    egui::Sense::click(),
+                )
+                .on_hover_text("Draw mask polygon")
+                .clicked()
+                {
+                    self.clear_spatial_selection_drag();
+                    self.tool_mode = ToolMode::DrawMaskPolygon;
+                    let id = self.ensure_editable_mask_layer();
+                    self.active_layer = LayerId::Mask(id);
+                    self.drawing_mask_layer = Some(id);
+                }
+            });
             ui.add_enabled_ui(can_object_select, |ui| {
                 if icon_button(
                     ui,
@@ -5611,6 +5758,9 @@ impl OmeZarrViewerApp {
                 }
             });
         });
+        if !xy_tools_enabled {
+            ui.small("Non-XY view is image-only. Overlays and editing tools stay disabled.");
+        }
 
         ui.separator();
         ui.heading("Layers");
@@ -6192,6 +6342,11 @@ impl OmeZarrViewerApp {
             self.memory_status = "No eligible channels selected for RAM pinning.".to_string();
             return;
         }
+        if self.z_extent_level0().is_some_and(|extent| extent > 1) {
+            self.memory_status =
+                "RAM pinning is currently unavailable for OME-Zarr z-stacks.".to_string();
+            return;
+        }
         for request in requests {
             self.pinned_levels.request_load(
                 self.store.clone(),
@@ -6213,6 +6368,7 @@ impl OmeZarrViewerApp {
     }
 
     fn ui_memory(&mut self, ui: &mut egui::Ui) {
+        let z_stacks_unsupported = self.z_extent_level0().is_some_and(|extent| extent > 1);
         ui_memory_overview(
             ui,
             "Manually pin selected OME-Zarr channels and levels in CPU RAM for the current image. Pinned levels feed the existing tile renderer instead of replacing it.",
@@ -6349,6 +6505,12 @@ impl OmeZarrViewerApp {
         if !self.memory_status.is_empty() {
             ui.label(self.memory_status.clone());
         }
+        if z_stacks_unsupported {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "RAM pinning is disabled for OME-Zarr z-stacks in this viewer build.",
+            );
+        }
         ui.separator();
 
         let selected_channels = self.selected_memory_channel_indices();
@@ -6434,7 +6596,10 @@ impl OmeZarrViewerApp {
                             None => "Load",
                         };
                         if ui
-                            .add_enabled(estimate > 0, egui::Button::new(load_label))
+                            .add_enabled(
+                                estimate > 0 && !z_stacks_unsupported,
+                                egui::Button::new(load_label),
+                            )
                             .clicked()
                         {
                             self.start_memory_load(
@@ -8241,6 +8406,10 @@ impl OmeZarrViewerApp {
 
         ui.separator();
         ui.collapsing("Threshold Regions", |ui| {
+            if !self.view_plane_is_xy() {
+                ui.label("Threshold-region preview is only available in XY view.");
+                return;
+            }
             ui.label(
                 "Capture the visible pixels from the active channel, preview the thresholded raster on the canvas, then apply it as a mask layer.",
             );
@@ -8687,6 +8856,7 @@ impl OmeZarrViewerApp {
         // Use pointer-down instead of drag-start so the grab registers immediately (no drag threshold).
         let can_transform_primary = self.tool_mode == ToolMode::TransformLayer
             && !space_down
+            && self.view_plane_is_xy()
             && matches!(self.active_layer, LayerId::Channel(_));
 
         if can_transform_primary
@@ -8811,9 +8981,9 @@ impl OmeZarrViewerApp {
         }
 
         let visible_world = self.visible_world_rect(rect);
-        let visible_world_tiles_world = if self.any_visible_channel_affine() {
+        let visible_world_tiles_world = if self.view_plane_is_xy() && self.any_visible_channel_affine() {
             self.union_visible_world_for_visible_channels_xform(visible_world)
-        } else if self.any_visible_channel_offset() {
+        } else if self.view_plane_is_xy() && self.any_visible_channel_offset() {
             self.union_visible_world_for_visible_channels(visible_world)
         } else {
             visible_world
@@ -8875,16 +9045,30 @@ impl OmeZarrViewerApp {
         levels_to_draw.sort_unstable_by(|a, b| b.cmp(a)); // coarse -> fine
         levels_to_draw.dedup();
 
+        let Some(level0) = self.dataset.levels.first() else {
+            return;
+        };
+        let Some(display_axes) = self.display_axes() else {
+            return;
+        };
         let mut needed_per_level: Vec<(usize, crate::data::ome::LevelInfo, Vec<TileKey>)> =
             Vec::with_capacity(levels_to_draw.len());
+        let active_view = self.displayed_view_selection();
+        let fallback_view = self.fallback_view_selection();
         for &level in &levels_to_draw {
             let level_info = self.dataset.levels[level].clone();
-            let coords: Vec<TileCoord> =
-                tiles_needed_lvl0_rect(visible_world_tiles, &level_info, &self.dataset.dims, 1);
+            let coords: Vec<TileCoord> = tiles_needed_lvl0_rect_for_axes(
+                visible_world_tiles,
+                level0,
+                &level_info,
+                display_axes,
+                1,
+            );
             let mut needed: Vec<TileKey> = coords
                 .into_iter()
                 .map(|c| TileKey {
                     render_id: self.active_render_id,
+                    view: active_view,
                     level,
                     tile_y: c.tile_y,
                     tile_x: c.tile_x,
@@ -8932,15 +9116,17 @@ impl OmeZarrViewerApp {
             if self.tile_prefetch_mode == TilePrefetchMode::TargetAndFinerHalo && target_level > 0 {
                 let finer_level = target_level - 1;
                 if let Some(level_info) = self.dataset.levels.get(finer_level) {
-                    let finer_visible: Vec<TileKey> = tiles_needed_lvl0_rect(
+                    let finer_visible: Vec<TileKey> = tiles_needed_lvl0_rect_for_axes(
                         visible_world_tiles,
+                        level0,
                         level_info,
-                        &self.dataset.dims,
+                        display_axes,
                         1,
                     )
                     .into_iter()
                     .map(|c| TileKey {
                         render_id: self.active_render_id,
+                        view: active_view,
                         level: finer_level,
                         tile_y: c.tile_y,
                         tile_x: c.tile_x,
@@ -8980,10 +9166,11 @@ impl OmeZarrViewerApp {
                         .zoom_out_floor_visible_world_tiles
                         .unwrap_or(prev_visible_world_tiles);
                     if let Some(level_info_tgt) = self.dataset.levels.get(target_level) {
-                        let coords_tgt = tiles_needed_lvl0_rect(
+                        let coords_tgt = tiles_needed_lvl0_rect_for_axes(
                             floor_rect,
+                            level0,
                             level_info_tgt,
-                            &self.dataset.dims,
+                            display_axes,
                             0,
                         );
                         let sample_max = 16usize;
@@ -8995,6 +9182,7 @@ impl OmeZarrViewerApp {
                                 for ch in &render_channels {
                                     total += 1;
                                     let k = RawTileKey {
+                                        view: active_view,
                                         level: target_level,
                                         tile_y: c.tile_y,
                                         tile_x: c.tile_x,
@@ -9037,8 +9225,13 @@ impl OmeZarrViewerApp {
                         return None;
                     }
                     let level_info = self.dataset.levels[floor_level].clone();
-                    let coords: Vec<TileCoord> =
-                        tiles_needed_lvl0_rect(floor_rect, &level_info, &self.dataset.dims, 1);
+                    let coords: Vec<TileCoord> = tiles_needed_lvl0_rect_for_axes(
+                        floor_rect,
+                        level0,
+                        &level_info,
+                        display_axes,
+                        1,
+                    );
                     if coords.is_empty() {
                         return None;
                     }
@@ -9048,6 +9241,7 @@ impl OmeZarrViewerApp {
                         .take(1024)
                         .map(|c| TileKey {
                             render_id: self.active_render_id,
+                            view: active_view,
                             level: floor_level,
                             tile_y: c.tile_y,
                             tile_x: c.tile_x,
@@ -9170,6 +9364,7 @@ impl OmeZarrViewerApp {
                     for key in needed {
                         for ch in &render_channels {
                             keep.insert(RawTileKey {
+                                view: active_view,
                                 level: *level,
                                 tile_y: key.tile_y,
                                 tile_x: key.tile_x,
@@ -9185,6 +9380,7 @@ impl OmeZarrViewerApp {
                     for key in needed {
                         for ch in &render_channels {
                             keep.insert(RawTileKey {
+                                view: active_view,
                                 level: *level,
                                 tile_y: key.tile_y,
                                 tile_x: key.tile_x,
@@ -9197,6 +9393,7 @@ impl OmeZarrViewerApp {
                     for key in needed {
                         for ch in &render_channels {
                             keep.insert(RawTileKey {
+                                view: active_view,
                                 level: *level,
                                 tile_y: key.tile_y,
                                 tile_x: key.tile_x,
@@ -9211,9 +9408,9 @@ impl OmeZarrViewerApp {
             // Build draw list coarse -> fine.
             let mut draws: Vec<TileDraw> = Vec::new();
             draws.reserve(512);
-            let any_affine_visible = self.any_visible_channel_affine();
+            let any_affine_visible = self.view_plane_is_xy() && self.any_visible_channel_affine();
             let mut max_abs_off_screen = egui::Vec2::ZERO;
-            if !any_affine_visible && self.any_visible_channel_offset() {
+            if self.view_plane_is_xy() && !any_affine_visible && self.any_visible_channel_offset() {
                 let z = self.camera.zoom_screen_per_lvl0_px;
                 for (i, ch) in self.channels.iter().enumerate() {
                     if !ch.visible {
@@ -9240,6 +9437,8 @@ impl OmeZarrViewerApp {
                         self.tile_rects(&key, rect, &level_info);
                     if any_affine_visible || tile_screen_rect.intersects(draw_rect) {
                         draws.push(TileDraw {
+                            view: key.view,
+                            fallback_view,
                             level,
                             tile_y: key.tile_y,
                             tile_x: key.tile_x,
@@ -9255,6 +9454,8 @@ impl OmeZarrViewerApp {
                         self.tile_rects(&key, rect, &level_info);
                     if any_affine_visible || tile_screen_rect.intersects(draw_rect) {
                         draws.push(TileDraw {
+                            view: key.view,
+                            fallback_view,
                             level,
                             tile_y: key.tile_y,
                             tile_x: key.tile_x,
@@ -9280,17 +9481,21 @@ impl OmeZarrViewerApp {
                     .iter()
                     .position(|c| c.index as u64 == ch.index)
                     .unwrap_or(0);
-                let off_world = self
-                    .channel_offsets_world
-                    .get(idx)
-                    .copied()
-                    .unwrap_or_default();
-                let scale = self
-                    .channel_scales
-                    .get(idx)
-                    .copied()
-                    .unwrap_or(egui::Vec2::splat(1.0));
-                let rot = self.channel_rotations_rad.get(idx).copied().unwrap_or(0.0);
+                let (off_world, scale, rot) = if self.view_plane_is_xy() {
+                    (
+                        self.channel_offsets_world
+                            .get(idx)
+                            .copied()
+                            .unwrap_or_default(),
+                        self.channel_scales
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(egui::Vec2::splat(1.0)),
+                        self.channel_rotations_rad.get(idx).copied().unwrap_or(0.0),
+                    )
+                } else {
+                    (egui::Vec2::ZERO, egui::Vec2::splat(1.0), 0.0)
+                };
                 any_offset |= off_world.x.abs() > 1e-6 || off_world.y.abs() > 1e-6;
                 any_affine |= (scale.x - 1.0).abs() > 1e-6
                     || (scale.y - 1.0).abs() > 1e-6
@@ -9410,7 +9615,7 @@ impl OmeZarrViewerApp {
 
         // If segmentation is hidden, clear any in-flight label tile requests so we don't keep
         // repainting while the background loader drains work we won't display.
-        if !self.cells_outlines_visible {
+        if !self.view_plane_is_xy() || !self.cells_outlines_visible {
             if let Some(labels_gl) = self.labels_gl.as_ref() {
                 let keep: HashSet<LabelTileKey> = HashSet::new();
                 labels_gl.prune_in_flight(&keep);
@@ -9418,9 +9623,10 @@ impl OmeZarrViewerApp {
         }
 
         // Overlays in the user-controlled layer order (bottom -> top).
-        self.rebuild_layer_orders();
-        let overlay_order = self.overlay_layer_order.clone();
-        for layer in overlay_order.into_iter().rev() {
+        if self.view_plane_is_xy() {
+            self.rebuild_layer_orders();
+            let overlay_order = self.overlay_layer_order.clone();
+            for layer in overlay_order.into_iter().rev() {
             match layer {
                 LayerId::Channel(_) => {}
                 LayerId::SpatialImage(id) => {
@@ -9552,8 +9758,11 @@ impl OmeZarrViewerApp {
                 }
             }
         }
+        }
 
-        self.draw_threshold_region_preview(ui, rect);
+        if self.view_plane_is_xy() {
+            self.draw_threshold_region_preview(ui, rect);
+        }
 
         // In-progress polygon preview (Draw mask tool).
         if self.tool_mode == ToolMode::DrawMaskPolygon && !self.drawing_mask_polygon.is_empty() {
@@ -9706,7 +9915,7 @@ impl OmeZarrViewerApp {
             .as_ref()
             .map(|s| s.settings.include_scale_bar)
             .unwrap_or(self.show_scale_bar);
-        if draw_scale_bar {
+        if draw_scale_bar && self.view_plane_is_xy() {
             canvas_overlays::paint_scale_bar(
                 ui,
                 rect,
@@ -9762,7 +9971,7 @@ impl OmeZarrViewerApp {
         }
 
         // Transform gizmo overlay (for channels only).
-        if self.tool_mode == ToolMode::TransformLayer {
+        if self.view_plane_is_xy() && self.tool_mode == ToolMode::TransformLayer {
             if let LayerId::Channel(ch_idx) = self.active_layer {
                 self.draw_channel_transform_gizmo(ui, rect, ch_idx);
             }
@@ -10129,6 +10338,7 @@ impl OmeZarrViewerApp {
                 let screen_rect = screen_rect.translate(off_screen);
                 if screen_rect.intersects(rect) {
                     draws.push(LabelDraw {
+                        z_level0: key.z_level0,
                         level,
                         tile_y: key.tile_y,
                         tile_x: key.tile_x,
@@ -10256,6 +10466,7 @@ impl OmeZarrViewerApp {
         for ty in y0..y1 {
             for tx in x0..x1 {
                 keys.push(LabelTileKey {
+                    z_level0: self.active_z_level0(),
                     level,
                     tile_y: ty as u64,
                     tile_x: tx as u64,
@@ -10331,25 +10542,44 @@ impl OmeZarrViewerApp {
 
     fn image_local_rect_lvl0(&self) -> egui::Rect {
         let shape0 = &self.dataset.levels[0].shape;
-        let y = shape0[self.dataset.dims.y] as f32;
-        let x = shape0[self.dataset.dims.x] as f32;
+        let axes = self.display_axes().unwrap_or(crate::imaging::view_plane::DisplayAxes {
+            vertical: self.dataset.dims.y,
+            horizontal: self.dataset.dims.x,
+        });
+        let y = shape0[axes.vertical] as f32;
+        let x = shape0[axes.horizontal] as f32;
         egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(x, y))
     }
 
     fn primary_image_local_to_world(&self, p: egui::Pos2) -> egui::Pos2 {
-        p
+        let Some(level0) = self.dataset.levels.first() else {
+            return p;
+        };
+        let (sx, sy) = local_to_world_scale(&self.dataset.dims, level0, self.view_plane_mode);
+        egui::pos2(p.x * sx, p.y * sy)
     }
 
     fn primary_image_world_to_local(&self, p: egui::Pos2) -> egui::Pos2 {
-        p
+        let Some(level0) = self.dataset.levels.first() else {
+            return p;
+        };
+        let (sx, sy) = local_to_world_scale(&self.dataset.dims, level0, self.view_plane_mode);
+        egui::pos2(p.x / sx.max(1e-6), p.y / sy.max(1e-6))
     }
 
     fn primary_image_world_rect_to_local(&self, rect: egui::Rect) -> egui::Rect {
-        rect
+        egui::Rect::from_min_max(
+            self.primary_image_world_to_local(rect.min),
+            self.primary_image_world_to_local(rect.max),
+        )
     }
 
     fn image_world_rect_lvl0(&self) -> egui::Rect {
-        self.image_local_rect_lvl0()
+        let local = self.image_local_rect_lvl0();
+        egui::Rect::from_min_max(
+            self.primary_image_local_to_world(local.min),
+            self.primary_image_local_to_world(local.max),
+        )
     }
 
     fn channel_transform_gizmo_screen(
@@ -10583,6 +10813,28 @@ impl OmeZarrViewerApp {
                 .manual_level
                 .min(self.dataset.levels.len().saturating_sub(1));
         }
+        let Some(level0) = self.dataset.levels.first() else {
+            return 0;
+        };
+        if !self.view_plane_is_xy() {
+            let mut best = 0usize;
+            let mut best_err = f32::INFINITY;
+            for level in &self.dataset.levels {
+                let Some((downsample_v, downsample_u)) =
+                    display_downsample(&self.dataset.dims, level0, level, self.view_plane_mode)
+                else {
+                    continue;
+                };
+                let screen_per_level_px =
+                    self.camera.zoom_screen_per_lvl0_px * (downsample_u * downsample_v).sqrt();
+                let err = screen_per_level_px.ln().abs();
+                if err < best_err {
+                    best_err = err;
+                    best = level.index;
+                }
+            }
+            return best;
+        }
         choose_level_auto(
             &self.dataset.levels,
             self.camera.zoom_screen_per_lvl0_px,
@@ -10597,15 +10849,25 @@ impl OmeZarrViewerApp {
     ) {
         // Request the tiles nearest the current viewport center first so zoom-in refines where the
         // user is looking before spending bandwidth on peripheral tiles.
-        let y_dim = self.dataset.dims.y;
-        let x_dim = self.dataset.dims.x;
+        let Some(level0) = self.dataset.levels.first() else {
+            return;
+        };
+        let Some(axes) = self.display_axes() else {
+            return;
+        };
+        let y_dim = axes.vertical;
+        let x_dim = axes.horizontal;
         let center_world = self.camera.center_world_lvl0;
         let center_local = self.primary_image_world_to_local(center_world);
-        let downsample = level_info.downsample;
-        let center_lvl = egui::pos2(center_local.x / downsample, center_local.y / downsample);
+        let (downsample_y, downsample_x) =
+            display_downsample(&self.dataset.dims, level0, level_info, self.view_plane_mode)
+                .unwrap_or((level_info.downsample.max(1e-6), level_info.downsample.max(1e-6)));
+        let center_lvl = egui::pos2(
+            center_local.x / downsample_x.max(1e-6),
+            center_local.y / downsample_y.max(1e-6),
+        );
         let chunk_y = level_info.chunks[y_dim] as f32;
         let chunk_x = level_info.chunks[x_dim] as f32;
-        let _ = x_dim;
 
         keys.sort_by(|a, b| {
             let ay = (a.tile_y as f32 + 0.5) * chunk_y;
@@ -10661,7 +10923,7 @@ impl OmeZarrViewerApp {
             if !self.cache.mark_in_flight(*key) {
                 continue;
             }
-            if let Some(level_info) = self.dataset.levels.get(level) {
+            if self.view_plane_is_xy() && let Some(level_info) = self.dataset.levels.get(level) {
                 if let Some(tile) = self.pinned_levels.try_get_composited_tile(
                     *key,
                     &channels,
@@ -10713,6 +10975,7 @@ impl OmeZarrViewerApp {
                     break;
                 }
                 let raw_key = RawTileKey {
+                    view: key.view,
                     level,
                     tile_y: key.tile_y,
                     tile_x: key.tile_x,
@@ -10721,7 +10984,8 @@ impl OmeZarrViewerApp {
                 if !tiles_gl.mark_in_flight(raw_key) {
                     continue;
                 }
-                if let Some(level_info) = self.dataset.levels.get(level) {
+                if self.view_plane_is_xy() && let Some(level_info) = self.dataset.levels.get(level)
+                {
                     if let Some(resp) =
                         self.pinned_levels
                             .try_get_raw_tile(raw_key, &self.dataset.dims, level_info)
@@ -10782,16 +11046,24 @@ impl OmeZarrViewerApp {
             .iter()
             .map(|key| (key.tile_y, key.tile_x))
             .collect();
-        let mut prefetch: Vec<TileKey> = tiles_needed_lvl0_rect(
+        let Some(level0) = self.dataset.levels.first() else {
+            return Vec::new();
+        };
+        let Some(axes) = self.display_axes() else {
+            return Vec::new();
+        };
+        let mut prefetch: Vec<TileKey> = tiles_needed_lvl0_rect_for_axes(
             visible_world_tiles,
+            level0,
             level_info,
-            &self.dataset.dims,
+            axes,
             pad_tiles,
         )
         .into_iter()
         .filter_map(|coord| {
             (!visible_set.contains(&(coord.tile_y, coord.tile_x))).then_some(TileKey {
                 render_id: self.active_render_id,
+                view: self.displayed_view_selection(),
                 level,
                 tile_y: coord.tile_y,
                 tile_x: coord.tile_x,
@@ -10840,8 +11112,15 @@ impl OmeZarrViewerApp {
         viewport: egui::Rect,
         level_info: &crate::data::ome::LevelInfo,
     ) -> (egui::Rect, egui::Rect) {
-        let y_dim = self.dataset.dims.y;
-        let x_dim = self.dataset.dims.x;
+        let level0 = self
+            .dataset
+            .levels
+            .first()
+            .expect("dataset should have a level 0");
+        let axes = display_axes_for_mode(&self.dataset.dims, key.view.mode)
+            .expect("view mode should be supported");
+        let y_dim = axes.vertical;
+        let x_dim = axes.horizontal;
         let chunk_y = level_info.chunks[y_dim] as f32;
         let chunk_x = level_info.chunks[x_dim] as f32;
 
@@ -10850,11 +11129,13 @@ impl OmeZarrViewerApp {
         let y1 = (y0 + chunk_y).min(level_info.shape[y_dim] as f32);
         let x1 = (x0 + chunk_x).min(level_info.shape[x_dim] as f32);
 
-        let downsample = level_info.downsample;
-        let world_min =
-            self.primary_image_local_to_world(egui::pos2(x0 * downsample, y0 * downsample));
-        let world_max =
-            self.primary_image_local_to_world(egui::pos2(x1 * downsample, y1 * downsample));
+        let (downsample_y, downsample_x) =
+            display_downsample(&self.dataset.dims, level0, level_info, key.view.mode)
+                .unwrap_or((level_info.downsample.max(1e-6), level_info.downsample.max(1e-6)));
+        let world_min = self
+            .primary_image_local_to_world(egui::pos2(x0 * downsample_x, y0 * downsample_y));
+        let world_max = self
+            .primary_image_local_to_world(egui::pos2(x1 * downsample_x, y1 * downsample_y));
         let world_rect = egui::Rect::from_min_max(world_min, world_max);
 
         let screen_min = self.camera.world_to_screen(world_min, viewport);
@@ -10869,15 +11150,41 @@ impl OmeZarrViewerApp {
             return Some(tex);
         }
 
+        if let Some(view) = self.fallback_view_selection().filter(|view| *view != key.view) {
+            let fallback_key = TileKey {
+                render_id: self.active_render_id,
+                view,
+                level: key.level,
+                tile_y: key.tile_y,
+                tile_x: key.tile_x,
+            };
+            if let Some(tex) = self.cache.get(&fallback_key).cloned() {
+                return Some(tex);
+            }
+        }
+
         if let Some(prev) = self.previous_render_id {
             let prev_key = TileKey {
                 render_id: prev,
+                view: key.view,
                 level: key.level,
                 tile_y: key.tile_y,
                 tile_x: key.tile_x,
             };
             if let Some(tex) = self.cache.get(&prev_key).cloned() {
                 return Some(tex);
+            }
+            if let Some(view) = self.previous_view_selection.filter(|view| *view != key.view) {
+                let prev_key = TileKey {
+                    render_id: prev,
+                    view,
+                    level: key.level,
+                    tile_y: key.tile_y,
+                    tile_x: key.tile_x,
+                };
+                if let Some(tex) = self.cache.get(&prev_key).cloned() {
+                    return Some(tex);
+                }
             }
         }
 
@@ -10888,7 +11195,9 @@ impl OmeZarrViewerApp {
         let new_id = self.compute_render_id();
         if new_id != self.active_render_id {
             self.previous_render_id = Some(self.active_render_id);
+            self.previous_view_selection = Some(self.last_render_view_selection);
             self.active_render_id = new_id;
+            self.last_render_view_selection = self.committed_view_selection();
         }
     }
 
@@ -10897,6 +11206,7 @@ impl OmeZarrViewerApp {
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.dataset.source.hash(&mut hasher);
+        self.active_view_selection().hash(&mut hasher);
         self.channel_layer_order.hash(&mut hasher);
         let groups = self.current_layer_groups();
         for &idx in &self.channel_layer_order {
@@ -10950,16 +11260,24 @@ impl OmeZarrViewerApp {
 
         let level = self.dataset.levels.len().saturating_sub(1);
         let level_info = &self.dataset.levels[level];
-        let downsample = level_info.downsample.max(1.0);
+        let Some(level0) = self.dataset.levels.first() else {
+            return;
+        };
+        let (downsample_y, downsample_x) =
+            display_downsample(&self.dataset.dims, level0, level_info, self.view_plane_mode)
+                .unwrap_or((level_info.downsample.max(1.0), level_info.downsample.max(1.0)));
 
-        let visible_world = self.visible_world_rect(viewport);
-        let mut y0 = (visible_world.min.y / downsample).floor().max(0.0) as u64;
-        let mut y1 = (visible_world.max.y / downsample).ceil().max(0.0) as u64;
-        let mut x0 = (visible_world.min.x / downsample).floor().max(0.0) as u64;
-        let mut x1 = (visible_world.max.x / downsample).ceil().max(0.0) as u64;
+        let visible_local = self.primary_image_world_rect_to_local(self.visible_world_rect(viewport));
+        let mut y0 = (visible_local.min.y / downsample_y.max(1e-6)).floor().max(0.0) as u64;
+        let mut y1 = (visible_local.max.y / downsample_y.max(1e-6)).ceil().max(0.0) as u64;
+        let mut x0 = (visible_local.min.x / downsample_x.max(1e-6)).floor().max(0.0) as u64;
+        let mut x1 = (visible_local.max.x / downsample_x.max(1e-6)).ceil().max(0.0) as u64;
 
-        let y_dim = self.dataset.dims.y;
-        let x_dim = self.dataset.dims.x;
+        let Some(axes) = self.display_axes() else {
+            return;
+        };
+        let y_dim = axes.vertical;
+        let x_dim = axes.horizontal;
         let shape_y = *level_info.shape.get(y_dim).unwrap_or(&0);
         let shape_x = *level_info.shape.get(x_dim).unwrap_or(&0);
         y0 = y0.min(shape_y);
@@ -10983,6 +11301,7 @@ impl OmeZarrViewerApp {
         self.hist_request_id = self.hist_request_id.wrapping_add(1);
         let req = crate::imaging::histogram::HistogramRequest {
             request_id: self.hist_request_id,
+            view: self.active_view_selection(),
             level,
             channel: self.selected_channel as u64,
             y0,
@@ -11042,8 +11361,13 @@ impl OmeZarrViewerApp {
             };
             let tex = ctx.load_texture(
                 format!(
-                    "tile-{}-{}-{}-{}",
-                    key.render_id, key.level, key.tile_y, key.tile_x
+                    "tile-{}-{:?}-{}-{}-{}-{}",
+                    key.render_id,
+                    key.view.mode,
+                    key.view.slice_level0,
+                    key.level,
+                    key.tile_y,
+                    key.tile_x
                 ),
                 image,
                 options,

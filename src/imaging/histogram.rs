@@ -3,14 +3,18 @@ use std::sync::Arc;
 use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::data::ome::retrieve_image_subset_u16;
-use crate::render::array_dims::squeeze_to_yx;
+use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
+use crate::imaging::view_plane::{
+    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
+};
+use crate::render::array_dims::squeeze_to_2d;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 #[derive(Debug, Clone)]
 pub struct HistogramRequest {
     pub request_id: u64,
+    pub view: ViewPlaneSelection,
     pub level: usize,
     pub channel: u64,
     pub y0: u64,
@@ -46,10 +50,8 @@ pub struct HistogramLoaderHandle {
 
 pub fn spawn_histogram_loader(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
 ) -> anyhow::Result<HistogramLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<HistogramRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<HistogramResponse>();
@@ -57,15 +59,7 @@ pub fn spawn_histogram_loader(
     std::thread::Builder::new()
         .name("hist-loader".to_string())
         .spawn(move || {
-            if let Err(err) = histogram_loader_thread(
-                store,
-                level_paths,
-                level_shapes,
-                level_dtypes,
-                dims_cyx,
-                rx_req,
-                tx_rsp,
-            ) {
+            if let Err(err) = histogram_loader_thread(store, levels, dims, rx_req, tx_rsp) {
                 eprintln!("hist loader thread exited: {err:?}");
             }
         })
@@ -79,29 +73,30 @@ pub fn spawn_histogram_loader(
 
 fn histogram_loader_thread(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
     rx_req: Receiver<HistogramRequest>,
     tx_rsp: Sender<HistogramResponse>,
 ) -> anyhow::Result<()> {
-    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(level_paths.len());
-    for path in &level_paths {
+    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
+    for info in &levels {
+        let path = &info.path;
         let zarr_path = format!("/{}", path.trim_start_matches('/'));
         arrays.push(Array::open(store.clone(), &zarr_path)?);
     }
+    let Some(level0) = levels.first() else {
+        return Ok(());
+    };
 
     for req in rx_req.iter() {
         let Some(array) = arrays.get(req.level) else {
             continue;
         };
-        let Some(shape) = level_shapes.get(req.level) else {
+        let Some(level_info) = levels.get(req.level) else {
             continue;
         };
-        let Some(dtype) = level_dtypes.get(req.level) else {
-            continue;
-        };
+        let shape = &level_info.shape;
+        let dtype = &level_info.dtype;
 
         let bins = req.bins.clamp(8, 4096);
         let abs_max = if req.abs_max.is_finite() && req.abs_max > 0.0 {
@@ -110,7 +105,11 @@ fn histogram_loader_thread(
             1.0
         };
 
-        let (c_dim, y_dim, x_dim) = dims_cyx;
+        let Some(display_axes) = display_axes(&dims, req.view.mode) else {
+            continue;
+        };
+        let y_dim = display_axes.vertical;
+        let x_dim = display_axes.horizontal;
         if y_dim >= shape.len() || x_dim >= shape.len() {
             continue;
         }
@@ -128,18 +127,17 @@ fn histogram_loader_thread(
             continue;
         }
 
-        let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(shape.len());
-        for dim in 0..shape.len() {
-            if Some(dim) == c_dim {
-                ranges.push(req.channel..(req.channel + 1));
-            } else if dim == y_dim {
-                ranges.push(y0..y1);
-            } else if dim == x_dim {
-                ranges.push(x0..x1);
-            } else {
-                ranges.push(0..1);
-            }
-        }
+        let Some(ranges) = image_subset_ranges_for_view(
+            &dims,
+            level0,
+            level_info,
+            Some(req.channel),
+            y0..y1,
+            x0..x1,
+            req.view,
+        ) else {
+            continue;
+        };
         let subset = ArraySubset::new_with_ranges(&ranges);
 
         let data = match retrieve_image_subset_u16(array, &subset, dtype) {
@@ -149,8 +147,8 @@ fn histogram_loader_thread(
             }
         };
 
-        let plane: ndarray::Array2<u16> = squeeze_to_yx(data, y_dim, x_dim).context(
-            "unexpected array dimensionality for histogram (expected y/x plus singleton dims)",
+        let plane: ndarray::Array2<u16> = squeeze_to_2d(data, y_dim, x_dim).context(
+            "unexpected array dimensionality for histogram (expected displayed axes plus singleton dims)",
         )?;
 
         let mut values: Vec<u16> = plane.iter().copied().collect();

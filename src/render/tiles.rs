@@ -7,13 +7,18 @@ use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 
 use crate::data::ome::retrieve_image_subset_u16;
-use crate::render::array_dims::squeeze_to_yx;
+use crate::data::ome::{Dims, LevelInfo};
+use crate::imaging::view_plane::{
+    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
+};
+use crate::render::array_dims::squeeze_to_2d;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TileKey {
     pub render_id: u64,
+    pub view: ViewPlaneSelection,
     pub level: usize,
     pub tile_y: u64,
     pub tile_x: u64,
@@ -116,42 +121,25 @@ pub fn recommended_tile_loader_threads() -> usize {
 
 pub fn spawn_tile_loader(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
     worker_threads: usize,
 ) -> anyhow::Result<TileLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<TileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<TileWorkerResponse>();
     let threads = worker_threads.max(1);
-    let level_paths = Arc::new(level_paths);
-    let level_shapes = Arc::new(level_shapes);
-    let level_chunks = Arc::new(level_chunks);
-    let level_dtypes = Arc::new(level_dtypes);
+    let levels = Arc::new(levels);
 
     for worker_idx in 0..threads {
         let rx_req = rx_req.clone();
         let tx_rsp = tx_rsp.clone();
         let store = store.clone();
-        let level_paths = Arc::clone(&level_paths);
-        let level_shapes = Arc::clone(&level_shapes);
-        let level_chunks = Arc::clone(&level_chunks);
-        let level_dtypes = Arc::clone(&level_dtypes);
+        let levels = Arc::clone(&levels);
+        let dims = dims.clone();
         std::thread::Builder::new()
             .name(format!("tile-loader-{worker_idx}"))
             .spawn(move || {
-                if let Err(err) = tile_loader_thread(
-                    store,
-                    level_paths,
-                    level_shapes,
-                    level_chunks,
-                    level_dtypes,
-                    dims_cyx,
-                    rx_req,
-                    tx_rsp,
-                ) {
+                if let Err(err) = tile_loader_thread(store, levels, dims, rx_req, tx_rsp) {
                     eprintln!("tile loader worker exited: {err:?}");
                 }
             })
@@ -166,19 +154,20 @@ pub fn spawn_tile_loader(
 
 fn tile_loader_thread(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Arc<Vec<String>>,
-    level_shapes: Arc<Vec<Vec<u64>>>,
-    level_chunks: Arc<Vec<Vec<u64>>>,
-    level_dtypes: Arc<Vec<String>>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Arc<Vec<LevelInfo>>,
+    dims: Dims,
     rx_req: Receiver<TileRequest>,
     tx_rsp: Sender<TileWorkerResponse>,
 ) -> anyhow::Result<()> {
-    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(level_paths.len());
-    for path in level_paths.iter() {
+    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
+    for info in levels.iter() {
+        let path = &info.path;
         let zarr_path = format!("/{}", path.trim_start_matches('/'));
         arrays.push(Array::open(store.clone(), &zarr_path)?);
     }
+    let Some(level0) = levels.first() else {
+        return Ok(());
+    };
 
     for req in rx_req.iter() {
         let level = req.key.level;
@@ -186,12 +175,20 @@ fn tile_loader_thread(
             continue;
         }
         let array = &arrays[level];
+        let level_info = &levels[level];
+        let shape = &level_info.shape;
+        let chunks = &level_info.chunks;
+        let dtype = &level_info.dtype;
 
-        let shape = &level_shapes[level];
-        let chunks = &level_chunks[level];
-        let dtype = &level_dtypes[level];
-
-        let (c_dim, y_dim, x_dim) = dims_cyx;
+        let Some(display_axes) = display_axes(&dims, req.key.view.mode) else {
+            let _ = tx_rsp.send(TileWorkerResponse::Failed {
+                key: req.key,
+                error: "unsupported view plane for this dataset".to_string(),
+            });
+            continue;
+        };
+        let y_dim = display_axes.vertical;
+        let x_dim = display_axes.horizontal;
         let y_chunk = chunks[y_dim];
         let x_chunk = chunks[x_dim];
 
@@ -208,19 +205,21 @@ fn tile_loader_thread(
         for ch in &req.channels {
             let (w0, w1) = ch.window;
             let denom = (w1 - w0).max(1.0);
-
-            let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(shape.len());
-            for dim in 0..shape.len() {
-                if Some(dim) == c_dim {
-                    ranges.push(ch.index..(ch.index + 1));
-                } else if dim == y_dim {
-                    ranges.push(y0..y1);
-                } else if dim == x_dim {
-                    ranges.push(x0..x1);
-                } else {
-                    ranges.push(0..1);
-                }
-            }
+            let Some(ranges) = image_subset_ranges_for_view(
+                &dims,
+                level0,
+                level_info,
+                Some(ch.index),
+                y0..y1,
+                x0..x1,
+                req.key.view,
+            ) else {
+                let _ = tx_rsp.send(TileWorkerResponse::Failed {
+                    key: req.key,
+                    error: "unsupported view plane for this dataset".to_string(),
+                });
+                continue;
+            };
 
             let subset = ArraySubset::new_with_ranges(&ranges);
             let data = match retrieve_image_subset_u16(array, &subset, dtype) {
@@ -234,8 +233,8 @@ fn tile_loader_thread(
                 }
             };
 
-            let data = squeeze_to_yx(data, y_dim, x_dim).context(
-                "unexpected array dimensionality for tile (expected y/x plus singleton dims)",
+            let data = squeeze_to_2d(data, y_dim, x_dim).context(
+                "unexpected array dimensionality for tile (expected displayed axes plus singleton dims)",
             )?;
 
             for (idx, val) in data.iter().enumerate() {

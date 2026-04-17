@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::data::ome::{Dims, LevelInfo};
+use crate::imaging::view_plane::{DisplayAxes, display_downsample};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileCoord {
@@ -59,16 +60,44 @@ pub fn tiles_needed_lvl0_rect(
     dims: &Dims,
     pad_tiles: i64,
 ) -> Vec<TileCoord> {
-    let y_dim = dims.y;
-    let x_dim = dims.x;
+    let level0 = level;
+    let axes = DisplayAxes {
+        vertical: dims.y,
+        horizontal: dims.x,
+    };
+    tiles_needed_lvl0_rect_for_axes(visible_lvl0, level0, level, axes, pad_tiles)
+}
+
+pub fn tiles_needed_lvl0_rect_for_axes(
+    visible_lvl0: egui::Rect,
+    level0: &LevelInfo,
+    level: &LevelInfo,
+    axes: DisplayAxes,
+    pad_tiles: i64,
+) -> Vec<TileCoord> {
+    let y_dim = axes.vertical;
+    let x_dim = axes.horizontal;
+    let (downsample_y, downsample_x) = display_downsample(
+        &Dims {
+            c: None,
+            z: None,
+            y: y_dim,
+            x: x_dim,
+            ndim: level.shape.len(),
+        },
+        level0,
+        level,
+        crate::imaging::view_plane::ViewPlaneMode::Xy,
+    )
+    .unwrap_or((level.downsample.max(1e-6), level.downsample.max(1e-6)));
 
     let shape_y = level.shape[y_dim] as f32;
     let shape_x = level.shape[x_dim] as f32;
     let bounds_lvl0 = egui::Rect::from_min_size(
         egui::pos2(0.0, 0.0),
         egui::vec2(
-            shape_x * level.downsample.max(1e-6),
-            shape_y * level.downsample.max(1e-6),
+            shape_x * downsample_x.max(1e-6),
+            shape_y * downsample_y.max(1e-6),
         ),
     );
     let visible = visible_lvl0.intersect(bounds_lvl0);
@@ -76,10 +105,15 @@ pub fn tiles_needed_lvl0_rect(
         return Vec::new();
     }
 
-    let inv = 1.0 / level.downsample.max(1e-6);
     let visible_lvl = egui::Rect::from_min_max(
-        egui::pos2(visible.min.x * inv, visible.min.y * inv),
-        egui::pos2(visible.max.x * inv, visible.max.y * inv),
+        egui::pos2(
+            visible.min.x / downsample_x.max(1e-6),
+            visible.min.y / downsample_y.max(1e-6),
+        ),
+        egui::pos2(
+            visible.max.x / downsample_x.max(1e-6),
+            visible.max.y / downsample_y.max(1e-6),
+        ),
     );
 
     let chunk_y = level.chunks[y_dim] as f32;

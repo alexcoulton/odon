@@ -614,9 +614,12 @@ mod tests {
                 chunks: vec![1, 32, 32],
                 downsample: 4.0,
                 dtype: "<u2".to_string(),
+                scale: vec![1.0, 4.0, 4.0],
+                translation: vec![0.0, 0.0, 0.0],
             }],
             dims: Dims {
                 c: Some(0),
+                z: None,
                 y: 1,
                 x: 2,
                 ndim: 3,

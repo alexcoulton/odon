@@ -286,6 +286,24 @@ impl ObjectsLayer {
                 "Image measurements are unavailable for label-mask root datasets.".to_string();
             return;
         }
+        if dataset
+            .dims
+            .z
+            .and_then(|z_dim| {
+                dataset
+                    .levels
+                    .first()
+                    .and_then(|level| level.shape.get(z_dim))
+            })
+            .copied()
+            .unwrap_or(1)
+            > 1
+        {
+            self.bulk_measurement_status =
+                "Bulk image measurements are currently unavailable for OME-Zarr z-stacks."
+                    .to_string();
+            return;
+        }
 
         self.bulk_measurement_request_id = self.bulk_measurement_request_id.wrapping_add(1).max(1);
         let request_id = self.bulk_measurement_request_id;

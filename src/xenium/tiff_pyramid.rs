@@ -233,6 +233,12 @@ impl TiffPyramid {
                     chunks,
                     downsample,
                     dtype: self.pixel_dtype.clone(),
+                    scale: if self.channel_count > 1 {
+                        vec![1.0, downsample, downsample]
+                    } else {
+                        vec![downsample, downsample]
+                    },
+                    translation: vec![0.0; if self.channel_count > 1 { 3 } else { 2 }],
                 }
             })
             .collect()
@@ -242,6 +248,7 @@ impl TiffPyramid {
         if self.channel_count > 1 {
             Dims {
                 c: Some(0),
+                z: None,
                 y: 1,
                 x: 2,
                 ndim: 3,
@@ -254,6 +261,7 @@ impl TiffPyramid {
     pub fn default_dims() -> Dims {
         Dims {
             c: None,
+            z: None,
             y: 0,
             x: 1,
             ndim: 2,

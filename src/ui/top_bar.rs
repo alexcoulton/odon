@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use crate::imaging::view_plane::ViewPlaneMode;
+
 pub const SMOOTH_TOOLTIP: &str = "When enabled, pixels are linearly filtered while zooming.\nDisable for crisp (nearest-neighbor) pixels.";
 
 pub fn ui_title(ui: &mut egui::Ui, title: impl Into<egui::WidgetText>) -> egui::Response {
@@ -31,6 +33,74 @@ pub fn ui_auto_level(
             .changed();
     }
     changed
+}
+
+pub fn ui_view_plane_mode(
+    ui: &mut egui::Ui,
+    mode: &mut ViewPlaneMode,
+    supported: &[ViewPlaneMode],
+) -> bool {
+    let before = *mode;
+    egui::ComboBox::from_id_salt("view-plane-mode")
+        .selected_text(mode.label())
+        .show_ui(ui, |ui| {
+            for candidate in supported {
+                ui.selectable_value(mode, *candidate, candidate.label());
+            }
+    });
+    *mode != before
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SliceSliderResponse {
+    pub changed: bool,
+    pub dragging: bool,
+    pub released: bool,
+}
+
+pub fn ui_view_plane_slice(
+    ui: &mut egui::Ui,
+    label: &str,
+    slice_level0: &mut u64,
+    max_slice_level0: u64,
+) -> SliceSliderResponse {
+    let mut changed = false;
+    let mut dragging = false;
+    let mut released = false;
+
+    ui.horizontal(|ui| {
+        let response = ui.add_sized(
+            [180.0, 18.0],
+            egui::Slider::new(slice_level0, 0..=max_slice_level0)
+                .text(label)
+                .clamping(egui::SliderClamping::Always),
+        );
+        changed |= response.changed();
+        dragging |= response.dragged();
+        released |= response.drag_stopped();
+
+        let prev = ui
+            .add_enabled(*slice_level0 > 0, egui::Button::new("◀").small())
+            .on_hover_text(format!("Previous {label} slice"));
+        if prev.clicked() {
+            *slice_level0 = slice_level0.saturating_sub(1);
+            changed = true;
+        }
+
+        let next = ui
+            .add_enabled(*slice_level0 < max_slice_level0, egui::Button::new("▶").small())
+            .on_hover_text(format!("Next {label} slice"));
+        if next.clicked() {
+            *slice_level0 = (*slice_level0 + 1).min(max_slice_level0);
+            changed = true;
+        }
+    });
+
+    SliceSliderResponse {
+        changed,
+        dragging,
+        released,
+    }
 }
 
 pub fn ui_prev_next_core(ui: &mut egui::Ui, have_items: bool) -> Option<i32> {

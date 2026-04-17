@@ -3,13 +3,17 @@ use std::sync::Arc;
 use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::data::ome::retrieve_image_subset_u16;
+use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
+use crate::imaging::view_plane::{
+    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
+};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 #[derive(Debug, Clone)]
 pub struct ChannelMaxRequest {
     pub request_id: u64,
+    pub view: ViewPlaneSelection,
     pub level: usize,
     pub channel: u64,
 }
@@ -29,11 +33,8 @@ pub struct ChannelMaxLoaderHandle {
 
 pub fn spawn_channel_max_loader(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
 ) -> anyhow::Result<ChannelMaxLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<ChannelMaxRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<ChannelMaxResponse>();
@@ -41,16 +42,7 @@ pub fn spawn_channel_max_loader(
     std::thread::Builder::new()
         .name("chan-max-loader".to_string())
         .spawn(move || {
-            if let Err(err) = channel_max_loader_thread(
-                store,
-                level_paths,
-                level_shapes,
-                level_chunks,
-                level_dtypes,
-                dims_cyx,
-                rx_req,
-                tx_rsp,
-            ) {
+            if let Err(err) = channel_max_loader_thread(store, levels, dims, rx_req, tx_rsp) {
                 eprintln!("channel max loader thread exited: {err:?}");
             }
         })
@@ -64,35 +56,37 @@ pub fn spawn_channel_max_loader(
 
 fn channel_max_loader_thread(
     store: Arc<dyn ReadableStorageTraits>,
-    level_paths: Vec<String>,
-    level_shapes: Vec<Vec<u64>>,
-    level_chunks: Vec<Vec<u64>>,
-    level_dtypes: Vec<String>,
-    dims_cyx: (Option<usize>, usize, usize),
+    levels: Vec<LevelInfo>,
+    dims: Dims,
     rx_req: Receiver<ChannelMaxRequest>,
     tx_rsp: Sender<ChannelMaxResponse>,
 ) -> anyhow::Result<()> {
-    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(level_paths.len());
-    for path in &level_paths {
+    let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
+    for info in &levels {
+        let path = &info.path;
         let zarr_path = format!("/{}", path.trim_start_matches('/'));
         arrays.push(Array::open(store.clone(), &zarr_path)?);
     }
+    let Some(level0) = levels.first() else {
+        return Ok(());
+    };
 
     for req in rx_req.iter() {
         let Some(array) = arrays.get(req.level) else {
             continue;
         };
-        let Some(shape) = level_shapes.get(req.level) else {
+        let Some(level_info) = levels.get(req.level) else {
             continue;
         };
-        let Some(chunks) = level_chunks.get(req.level) else {
-            continue;
-        };
-        let Some(dtype) = level_dtypes.get(req.level) else {
-            continue;
-        };
+        let shape = &level_info.shape;
+        let chunks = &level_info.chunks;
+        let dtype = &level_info.dtype;
 
-        let (c_dim, y_dim, x_dim) = dims_cyx;
+        let Some(display_axes) = display_axes(&dims, req.view.mode) else {
+            continue;
+        };
+        let y_dim = display_axes.vertical;
+        let x_dim = display_axes.horizontal;
         if y_dim >= shape.len()
             || x_dim >= shape.len()
             || y_dim >= chunks.len()
@@ -119,18 +113,17 @@ fn channel_max_loader_thread(
                 let y1 = (y0 + y_chunk).min(shape_y);
                 let x1 = (x0 + x_chunk).min(shape_x);
 
-                let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(shape.len());
-                for dim in 0..shape.len() {
-                    if Some(dim) == c_dim {
-                        ranges.push(req.channel..(req.channel + 1));
-                    } else if dim == y_dim {
-                        ranges.push(y0..y1);
-                    } else if dim == x_dim {
-                        ranges.push(x0..x1);
-                    } else {
-                        ranges.push(0..1);
-                    }
-                }
+                let Some(ranges) = image_subset_ranges_for_view(
+                    &dims,
+                    level0,
+                    level_info,
+                    Some(req.channel),
+                    y0..y1,
+                    x0..x1,
+                    req.view,
+                ) else {
+                    continue;
+                };
                 let subset = ArraySubset::new_with_ranges(&ranges);
                 let data = match retrieve_image_subset_u16(array, &subset, dtype) {
                     Ok(v) => v,

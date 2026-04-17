@@ -44,6 +44,7 @@ pub enum DatasetRenderKind {
 #[derive(Debug, Clone)]
 pub struct Dims {
     pub c: Option<usize>,
+    pub z: Option<usize>,
     pub y: usize,
     pub x: usize,
     pub ndim: usize,
@@ -57,6 +58,8 @@ pub struct LevelInfo {
     pub chunks: Vec<u64>,
     pub downsample: f32,
     pub dtype: String,
+    pub scale: Vec<f32>,
+    pub translation: Vec<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +104,8 @@ pub struct MultiscaleDataset {
 pub enum CoordTransform {
     #[serde(rename = "scale")]
     Scale { scale: Vec<f32> },
+    #[serde(rename = "translation")]
+    Translation { translation: Vec<f32> },
     #[serde(other)]
     Other,
 }
@@ -183,12 +188,14 @@ impl OmeZarrDataset {
 
 fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
     let mut c = None;
+    let mut z = None;
     let mut y = None;
     let mut x = None;
 
     for (i, axis) in axes.iter().enumerate() {
         match axis.name.as_str() {
             "c" => c = Some(i),
+            "z" => z = Some(i),
             "y" => y = Some(i),
             "x" => x = Some(i),
             _ => {}
@@ -200,6 +207,7 @@ fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
 
     Ok(Dims {
         c,
+        z,
         y,
         x,
         ndim: axes.len(),
@@ -239,6 +247,7 @@ fn load_levels(
         }
 
         let scale = dataset_scale(multiscale, index, dims)?;
+        let translation = dataset_translation(multiscale, index, dims)?;
         let downsample_y = scale[dims.y] / base_y;
         let downsample_x = scale[dims.x] / base_x;
         let downsample = downsample_y.max(downsample_x);
@@ -250,6 +259,8 @@ fn load_levels(
             chunks: chunk_shape,
             downsample,
             dtype: format!("{}", array.data_type()),
+            scale,
+            translation,
         });
     }
 
@@ -278,6 +289,32 @@ fn dataset_scale(multiscale: &Multiscale, level: usize, dims: &Dims) -> anyhow::
     Err(anyhow!(
         "level {level} missing coordinateTransformations scale"
     ))
+}
+
+fn dataset_translation(
+    multiscale: &Multiscale,
+    level: usize,
+    dims: &Dims,
+) -> anyhow::Result<Vec<f32>> {
+    let ds = multiscale
+        .datasets
+        .get(level)
+        .ok_or_else(|| anyhow!("missing dataset entry for level {level}"))?;
+
+    for ct in &ds.coordinate_transformations {
+        if let CoordTransform::Translation { translation } = ct {
+            if translation.len() != dims.ndim {
+                return Err(anyhow!(
+                    "level {level} translation has wrong length: got {}, expected {}",
+                    translation.len(),
+                    dims.ndim
+                ));
+            }
+            return Ok(translation.clone());
+        }
+    }
+
+    Ok(vec![0.0; dims.ndim])
 }
 
 fn build_channels(
@@ -638,10 +675,13 @@ mod tests {
         assert_eq!(dataset.levels[0].shape, vec![5, 512, 512]);
         assert_eq!(dataset.levels[1].shape, vec![5, 256, 256]);
         assert_eq!(dataset.dims.c, Some(0));
+        assert_eq!(dataset.dims.z, None);
         assert_eq!(dataset.dims.y, 1);
         assert_eq!(dataset.dims.x, 2);
         assert!(dataset.channels[0].visible);
         assert!(is_supported_image_dtype(&dataset.levels[0].dtype));
+        assert_eq!(dataset.levels[0].scale, vec![1.0, 1.0, 1.0]);
+        assert_eq!(dataset.levels[0].translation, vec![0.0, 0.0, 0.0]);
 
         let array: Array<dyn zarrs::storage::ReadableStorageTraits> =
             Array::open(store, "/0").expect("open level 0");

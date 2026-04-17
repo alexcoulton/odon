@@ -9,6 +9,7 @@ use crate::render::labels_raw::{LabelTileCache, LabelTileKey, LabelTileResponse}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LabelDraw {
+    pub z_level0: u64,
     pub level: usize,
     pub tile_y: u64,
     pub tile_x: u64,
@@ -119,6 +120,7 @@ impl LabelsGl {
                 }
 
                 let key = LabelTileKey {
+                    z_level0: td.z_level0,
                     level: td.level,
                     tile_y: td.tile_y,
                     tile_x: td.tile_x,

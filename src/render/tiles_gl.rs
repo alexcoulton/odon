@@ -5,6 +5,7 @@ use eframe::egui;
 use glow::HasContext;
 use parking_lot::Mutex;
 
+use crate::imaging::view_plane::ViewPlaneSelection;
 use crate::render::tiles::RenderChannel;
 use crate::render::tiles_raw::{RawTileCache, RawTileKey, RawTileResponse};
 
@@ -25,6 +26,8 @@ impl TextureFilter {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TileDraw {
+    pub view: ViewPlaneSelection,
+    pub fallback_view: Option<ViewPlaneSelection>,
     pub level: usize,
     pub tile_y: u64,
     pub tile_x: u64,
@@ -212,12 +215,26 @@ impl TilesGl {
                 let mut texs: Vec<(usize, glow::Texture)> = Vec::with_capacity(channels.len());
                 for (ci, ch) in channels.iter().enumerate() {
                     let key = RawTileKey {
+                        view: td.view,
                         level: td.level,
                         tile_y: td.tile_y,
                         tile_x: td.tile_x,
                         channel: ch.index,
                     };
-                    if let Some(tex) = inner.ensure_uploaded(gl, &key) {
+                    if let Some(tex) = inner.ensure_uploaded(gl, &key).or_else(|| {
+                        td.fallback_view.and_then(|view| {
+                            inner.ensure_uploaded(
+                                gl,
+                                &RawTileKey {
+                                    view,
+                                    level: td.level,
+                                    tile_y: td.tile_y,
+                                    tile_x: td.tile_x,
+                                    channel: ch.index,
+                                },
+                            )
+                        })
+                    }) {
                         texs.push((ci, tex));
                     }
                 }
@@ -380,12 +397,26 @@ impl TilesGl {
                 let mut texs: Vec<(usize, glow::Texture)> = Vec::with_capacity(channels.len());
                 for (ci, ch) in channels.iter().enumerate() {
                     let key = RawTileKey {
+                        view: td.view,
                         level: td.level,
                         tile_y: td.tile_y,
                         tile_x: td.tile_x,
                         channel: ch.index,
                     };
-                    if let Some(tex) = inner.ensure_uploaded(gl, &key) {
+                    if let Some(tex) = inner.ensure_uploaded(gl, &key).or_else(|| {
+                        td.fallback_view.and_then(|view| {
+                            inner.ensure_uploaded(
+                                gl,
+                                &RawTileKey {
+                                    view,
+                                    level: td.level,
+                                    tile_y: td.tile_y,
+                                    tile_x: td.tile_x,
+                                    channel: ch.index,
+                                },
+                            )
+                        })
+                    }) {
                         texs.push((ci, tex));
                     }
                 }
@@ -550,12 +581,26 @@ impl TilesGl {
                 let mut texs: Vec<(usize, glow::Texture)> = Vec::with_capacity(channels.len());
                 for (ci, ch) in channels.iter().enumerate() {
                     let key = RawTileKey {
+                        view: td.view,
                         level: td.level,
                         tile_y: td.tile_y,
                         tile_x: td.tile_x,
                         channel: ch.index,
                     };
-                    if let Some(tex) = inner.ensure_uploaded(gl, &key) {
+                    if let Some(tex) = inner.ensure_uploaded(gl, &key).or_else(|| {
+                        td.fallback_view.and_then(|view| {
+                            inner.ensure_uploaded(
+                                gl,
+                                &RawTileKey {
+                                    view,
+                                    level: td.level,
+                                    tile_y: td.tile_y,
+                                    tile_x: td.tile_x,
+                                    channel: ch.index,
+                                },
+                            )
+                        })
+                    }) {
                         texs.push((ci, tex));
                     }
                 }
