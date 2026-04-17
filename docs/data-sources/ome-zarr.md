@@ -12,13 +12,14 @@ OME-Zarr is the main image format for `odon`.
 
 ## Viewer Assumptions
 
-The current viewer is focused on 2D XY inspection.
+The current viewer is focused on XY inspection, with support for scrubbing through OME-Zarr `z` planes when present.
 
 In practice, that means:
 
 - the first `multiscales[]` entry is used as the main image
 - XY viewing is the primary path
-- other axes such as `z` or `t` are currently treated more narrowly than in a full multidimensional viewer
+- `z` can be inspected plane-by-plane with a slider, rather than as a full volumetric renderer
+- other axes such as `t` are still treated more narrowly than in a full multidimensional viewer
 
 ## Opening Local OME-Zarr
 

@@ -4,7 +4,7 @@ This page lists the main constraints a user should know before treating `odon` a
 
 ## Viewer Model
 
-- the main viewing path is 2D XY rather than a fully general multidimensional viewer
+- the main viewing path is still XY, although OME-Zarr datasets with a `z` axis can now be scrubbed one plane at a time
 - channels are currently composited additively
 - image channels are drawn below non-image overlays
 

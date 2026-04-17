@@ -173,6 +173,35 @@ Example:
 python3 scripts/tif_to_omezarr.py input.tif output.ome.zarr
 ```
 
+## OME-Zarr Rechunking
+
+[`scripts/rechunk_omezarr.py`](scripts/rechunk_omezarr.py) creates a viewer-optimized derivative OME-Zarr by rewriting arrays with plane-friendly chunks.
+
+This is useful for datasets that are chunked for volumetric access rather than XY plane scrubbing. A good starting point for odon's current access pattern is:
+
+- `--c-chunk 1`
+- `--z-chunk 1`
+- `--yx-chunk 512`
+
+Example:
+
+```bash
+python3 scripts/rechunk_omezarr.py \
+  input.ome.zarr \
+  input.viewer.ome.zarr \
+  --c-chunk 1 \
+  --z-chunk 1 \
+  --yx-chunk 512
+```
+
+The script requires `numpy` and `zarr`. If they are not installed in your environment, one option is:
+
+```bash
+uv venv .venv
+source .venv/bin/activate
+uv pip install numpy zarr numcodecs
+```
+
 ## Repository layout
 
 - `src/`: Rust application source
