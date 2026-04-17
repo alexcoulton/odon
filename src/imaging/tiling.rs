@@ -60,12 +60,56 @@ pub fn tiles_needed_lvl0_rect(
     dims: &Dims,
     pad_tiles: i64,
 ) -> Vec<TileCoord> {
-    let level0 = level;
-    let axes = DisplayAxes {
-        vertical: dims.y,
-        horizontal: dims.x,
-    };
-    tiles_needed_lvl0_rect_for_axes(visible_lvl0, level0, level, axes, pad_tiles)
+    let y_dim = dims.y;
+    let x_dim = dims.x;
+
+    let shape_y = level.shape[y_dim] as f32;
+    let shape_x = level.shape[x_dim] as f32;
+    let bounds_lvl0 = egui::Rect::from_min_size(
+        egui::pos2(0.0, 0.0),
+        egui::vec2(
+            shape_x * level.downsample.max(1e-6),
+            shape_y * level.downsample.max(1e-6),
+        ),
+    );
+    let visible = visible_lvl0.intersect(bounds_lvl0);
+    if visible.width() <= 0.0 || visible.height() <= 0.0 {
+        return Vec::new();
+    }
+
+    let inv = 1.0 / level.downsample.max(1e-6);
+    let visible_lvl = egui::Rect::from_min_max(
+        egui::pos2(visible.min.x * inv, visible.min.y * inv),
+        egui::pos2(visible.max.x * inv, visible.max.y * inv),
+    );
+
+    let chunk_y = level.chunks[y_dim] as f32;
+    let chunk_x = level.chunks[x_dim] as f32;
+
+    let max_tiles_y = ((level.shape[y_dim] + level.chunks[y_dim] - 1) / level.chunks[y_dim]) as i64;
+    let max_tiles_x = ((level.shape[x_dim] + level.chunks[x_dim] - 1) / level.chunks[x_dim]) as i64;
+
+    let pad = pad_tiles.max(0);
+    let tile_y0 = (visible_lvl.min.y / chunk_y).floor().max(0.0) as i64 - pad;
+    let tile_x0 = (visible_lvl.min.x / chunk_x).floor().max(0.0) as i64 - pad;
+    let tile_y1 = (visible_lvl.max.y / chunk_y).ceil().max(0.0) as i64 + pad;
+    let tile_x1 = (visible_lvl.max.x / chunk_x).ceil().max(0.0) as i64 + pad;
+
+    let y0 = tile_y0.clamp(0, max_tiles_y);
+    let y1 = tile_y1.clamp(0, max_tiles_y);
+    let x0 = tile_x0.clamp(0, max_tiles_x);
+    let x1 = tile_x1.clamp(0, max_tiles_x);
+
+    let mut keys = Vec::new();
+    for ty in y0..y1 {
+        for tx in x0..x1 {
+            keys.push(TileCoord {
+                tile_y: ty as u64,
+                tile_x: tx as u64,
+            });
+        }
+    }
+    keys
 }
 
 pub fn tiles_needed_lvl0_rect_for_axes(
