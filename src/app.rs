@@ -2601,8 +2601,39 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn default_mask_layer_export_filename(&self, layer_id: u64) -> String {
+        let stem = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .map(|layer| layer.name.as_str())
+            .unwrap_or("mask-layer");
+        let sanitized = stem
+            .chars()
+            .map(|ch| match ch {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                _ => ch,
+            })
+            .collect::<String>();
+        let sanitized = sanitized.trim().trim_matches('.').trim_matches('_');
+        if sanitized.is_empty() {
+            "mask-layer.geojson".to_string()
+        } else {
+            format!("{sanitized}.geojson")
+        }
+    }
+
     pub fn export_masks_geojson(&self, path: &Path) -> anyhow::Result<()> {
         save_mask_layers_geojson(path, &self.mask_layers)
+    }
+
+    pub fn export_mask_layer_geojson(&self, layer_id: u64, path: &Path) -> anyhow::Result<()> {
+        let layer = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == layer_id)
+            .ok_or_else(|| anyhow::anyhow!("mask layer not found"))?;
+        save_mask_layers_geojson(path, std::slice::from_ref(layer))
     }
 
     fn sync_mask_layers_into_project_space(&mut self) {
@@ -6045,6 +6076,30 @@ impl OmeZarrViewerApp {
 
                         // Context menu: group layers.
                         resp.row_response.context_menu(|ui| {
+                            if let LayerId::Mask(mask_id) = id {
+                                if ui.button("Export layer as GeoJSON...").clicked() {
+                                    let default_name =
+                                        self.default_mask_layer_export_filename(mask_id);
+                                    if let Some(path) = FileDialog::new()
+                                        .add_filter("GeoJSON", &["geojson", "json"])
+                                        .set_file_name(&default_name)
+                                        .set_title("Export Mask Layer GeoJSON")
+                                        .save_file()
+                                    {
+                                        match self.export_mask_layer_geojson(mask_id, &path) {
+                                            Ok(()) => self.set_status(format!(
+                                                "Exported mask layer -> {}",
+                                                path.to_string_lossy()
+                                            )),
+                                            Err(err) => self.set_status(format!(
+                                                "Export mask layer failed: {err}"
+                                            )),
+                                        }
+                                    }
+                                    ui.close();
+                                }
+                                ui.separator();
+                            }
                             let selected_annotations: Vec<u64> = self
                                 .selected_overlay_layers
                                 .iter()
