@@ -8,9 +8,7 @@ use lru::LruCache;
 
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{Dims, LevelInfo};
-use crate::imaging::view_plane::{
-    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
-};
+use crate::imaging::view_plane::{ViewPlaneSelection, display_axes, image_subset_ranges_for_view};
 use crate::render::array_dims::squeeze_to_2d;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;

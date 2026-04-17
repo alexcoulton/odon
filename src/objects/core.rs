@@ -81,6 +81,8 @@ impl ObjectsLayer {
                         if !has_active_color_key {
                             self.color_property_key.clear();
                             self.color_mode = ObjectColorMode::Single;
+                            self.color_level_overrides_property_key.clear();
+                            self.color_level_overrides.clear();
                         }
                         if self.filter_property_key != "id"
                             && !self
@@ -139,6 +141,11 @@ impl ObjectsLayer {
                         self.bounds_local = Some(msg.bounds_local);
                         self.loaded_geojson = Some(msg.path);
                         self.downsample_factor = msg.downsample_factor.max(1e-6);
+                        if self.color_mode == ObjectColorMode::ByProperty
+                            && !self.color_property_key.is_empty()
+                        {
+                            self.set_color_by_property(Some(self.color_property_key.clone()));
+                        }
                         self.analysis_hist_focus_object_index = None;
                         self.pending_zoom_object_index = None;
                         self.visible = true;
@@ -1575,6 +1582,51 @@ impl ObjectsLayer {
             self.ensure_property_loaded(key.as_str());
             self.reconcile_active_color_property();
         }
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.color_legend_cache = None;
+    }
+
+    pub(crate) fn project_display_state(&self) -> ObjectProjectDisplayState {
+        let color_property_key = (self.color_mode == ObjectColorMode::ByProperty)
+            .then(|| self.color_property_key.clone())
+            .filter(|key| !key.is_empty());
+        let color_level_overrides = if color_property_key.as_deref()
+            == Some(self.color_level_overrides_property_key.as_str())
+        {
+            self.color_level_overrides.clone()
+        } else {
+            BTreeMap::new()
+        };
+        ObjectProjectDisplayState {
+            color_property_key,
+            color_level_overrides,
+            fill_cells: self.fill_cells,
+            fill_opacity: self.fill_opacity,
+            selected_fill_opacity: self.selected_fill_opacity,
+        }
+    }
+
+    pub(crate) fn apply_project_display_state(&mut self, state: &ObjectProjectDisplayState) {
+        self.set_color_by_property(state.color_property_key.clone());
+        self.color_level_overrides_property_key =
+            state.color_property_key.clone().unwrap_or_default();
+        self.color_level_overrides = state.color_level_overrides.clone();
+        self.fill_cells = state.fill_cells;
+        self.fill_opacity = state.fill_opacity.clamp(0.0, 1.0);
+        self.selected_fill_opacity = state.selected_fill_opacity.clamp(0.0, 1.0);
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.color_legend_cache = None;
+    }
+
+    pub(crate) fn clear_project_display_state(&mut self) {
+        self.set_color_by_property(None);
+        self.color_level_overrides_property_key.clear();
+        self.color_level_overrides.clear();
+        self.fill_cells = false;
+        self.fill_opacity = 0.30;
+        self.selected_fill_opacity = 0.70;
         self.color_groups = None;
         self.filtered_color_groups = None;
         self.color_legend_cache = None;

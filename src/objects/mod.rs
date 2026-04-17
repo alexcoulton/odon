@@ -68,7 +68,7 @@ pub struct ObjectColorLegendEntry {
     pub color_rgb: [u8; 3],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ObjectColorLevelOverride {
     pub visible: bool,
     pub color_rgb: Option<[u8; 3]>,
@@ -579,6 +579,20 @@ pub(crate) struct ObjectProjectAnalysisState {
     pub show_selection_overlay: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub(crate) struct ObjectProjectDisplayState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_property_key: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill_cells: bool,
+    #[serde(default = "default_fill_opacity")]
+    pub fill_opacity: f32,
+    #[serde(default = "default_selected_fill_opacity")]
+    pub selected_fill_opacity: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ThresholdSetFile {
     name: String,
@@ -587,6 +601,14 @@ struct ThresholdSetFile {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn default_fill_opacity() -> f32 {
+    0.30
+}
+
+fn default_selected_fill_opacity() -> f32 {
+    0.70
 }
 
 fn default_true() -> bool {

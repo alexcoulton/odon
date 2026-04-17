@@ -16,7 +16,7 @@ use crate::data::project_config::{
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
-use crate::objects::ObjectProjectAnalysisState;
+use crate::objects::{ObjectProjectAnalysisState, ObjectProjectDisplayState};
 use crate::ui::roi_browser::RoiBrowseState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +152,8 @@ pub struct ProjectSegmentationViewState {
     pub outlines_opacity: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlines_width_px: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_display: Option<ObjectProjectDisplayState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

@@ -87,10 +87,7 @@ pub fn clamp_selection(
     let slice_level0 = slice_extent_level0(dims, level0, mode)
         .map(|extent| slice_level0.min(extent.saturating_sub(1)))
         .unwrap_or(0);
-    ViewPlaneSelection {
-        mode,
-        slice_level0,
-    }
+    ViewPlaneSelection { mode, slice_level0 }
 }
 
 fn axis_spacing(level: &LevelInfo, dim: usize) -> Option<f32> {
@@ -202,7 +199,9 @@ pub fn local_to_world_scale(dims: &Dims, level0: &LevelInfo, mode: ViewPlaneMode
     let Some(axes) = display_axes(dims, mode) else {
         return (1.0, 1.0);
     };
-    let horizontal = axis_spacing(level0, axes.horizontal).unwrap_or(1.0).max(1e-6);
+    let horizontal = axis_spacing(level0, axes.horizontal)
+        .unwrap_or(1.0)
+        .max(1e-6);
     let vertical = axis_spacing(level0, axes.vertical).unwrap_or(horizontal);
     (1.0, (vertical / horizontal).max(1e-6))
 }

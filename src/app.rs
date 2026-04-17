@@ -43,13 +43,13 @@ use crate::imaging::channel_max::{
 use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
 use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
 use crate::imaging::plane_selection::{image_subset_ranges, plane_selection_for_z};
+use crate::imaging::tiling::{
+    TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
+};
 use crate::imaging::view_plane::{
     ViewPlaneMode, ViewPlaneSelection, clamp_selection as clamp_view_selection,
     display_axes as display_axes_for_mode, display_downsample, local_to_world_scale,
     slice_extent_level0, supported_modes,
-};
-use crate::imaging::tiling::{
-    TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
 };
 use crate::masks::MaskLayer;
 use crate::masks::resolve_masks_geojson_path_and_downsample;
@@ -1015,7 +1015,8 @@ impl OmeZarrViewerApp {
                 .filter(|view| *view != displayed)
                 .or(Some(committed))
         } else {
-            self.previous_view_selection.filter(|view| *view != displayed)
+            self.previous_view_selection
+                .filter(|view| *view != displayed)
         }
     }
 
@@ -1078,7 +1079,10 @@ impl OmeZarrViewerApp {
             self.tool_mode = ToolMode::Pan;
         }
         if !self.view_plane_is_xy() && !matches!(self.active_layer, LayerId::Channel(_)) {
-            self.active_layer = LayerId::Channel(self.selected_channel.min(self.channels.len().saturating_sub(1)));
+            self.active_layer = LayerId::Channel(
+                self.selected_channel
+                    .min(self.channels.len().saturating_sub(1)),
+            );
         }
     }
 
@@ -2029,6 +2033,7 @@ impl OmeZarrViewerApp {
                     outlines_color_rgb: Some(self.cells_outlines_color_rgb),
                     outlines_opacity: Some(self.cells_outlines_opacity),
                     outlines_width_px: Some(self.cells_outlines_width_px),
+                    object_display: Some(self.seg_objects.project_display_state()),
                 }),
                 analysis: Some(self.seg_objects.project_analysis_state()),
                 camera: Some(self.project_camera_state()),
@@ -2118,6 +2123,13 @@ impl OmeZarrViewerApp {
                 if let Some(outlines_width_px) = segmentation.outlines_width_px {
                     self.cells_outlines_width_px = outlines_width_px;
                 }
+                if let Some(object_display) = segmentation.object_display.as_ref() {
+                    self.seg_objects.apply_project_display_state(object_display);
+                } else {
+                    self.seg_objects.clear_project_display_state();
+                }
+            } else {
+                self.seg_objects.clear_project_display_state();
             }
             if !view.overlay_order.is_empty() {
                 self.overlay_layer_order = view
@@ -2889,15 +2901,26 @@ impl eframe::App for OmeZarrViewerApp {
         if seg_objects_was_loading
             && !self.seg_objects.is_loading()
             && self.seg_objects.object_count() > 0
-            && let Some(view) = self.project_space.roi_view_state(&self.dataset.source)
-            && let Some(analysis) = view.analysis.as_ref()
         {
-            let active_channel_name = self
-                .channels
-                .get(self.selected_channel)
-                .map(|channel| channel.name.as_str());
-            self.seg_objects
-                .apply_project_analysis_state(analysis, active_channel_name);
+            if let Some(view) = self.project_space.roi_view_state(&self.dataset.source) {
+                if let Some(object_display) = view
+                    .segmentation
+                    .as_ref()
+                    .and_then(|segmentation| segmentation.object_display.as_ref())
+                {
+                    self.seg_objects.apply_project_display_state(object_display);
+                } else {
+                    self.seg_objects.clear_project_display_state();
+                }
+                if let Some(analysis) = view.analysis.as_ref() {
+                    let active_channel_name = self
+                        .channels
+                        .get(self.selected_channel)
+                        .map(|channel| channel.name.as_str());
+                    self.seg_objects
+                        .apply_project_analysis_state(analysis, active_channel_name);
+                }
+            }
         }
         self.spatial_image_layers.tick();
         self.spatial_layers.tick();
@@ -2957,7 +2980,8 @@ impl eframe::App for OmeZarrViewerApp {
                         slice_extent.saturating_sub(1),
                     );
                     if slider.changed && slider.dragging {
-                        self.previous_displayed_view_selection = Some(self.displayed_view_selection());
+                        self.previous_displayed_view_selection =
+                            Some(self.displayed_view_selection());
                         self.draft_view_slice_level0 = Some(slice_level0);
                         ctx.request_repaint();
                     } else if slider.changed {
@@ -5660,7 +5684,12 @@ impl OmeZarrViewerApp {
         // leave stale drag state behind.
         let can_object_select = self.active_layer_supports_spatial_selection();
         let xy_tools_enabled = self.view_plane_is_xy();
-        if !xy_tools_enabled && matches!(self.tool_mode, ToolMode::TransformLayer | ToolMode::DrawMaskPolygon) {
+        if !xy_tools_enabled
+            && matches!(
+                self.tool_mode,
+                ToolMode::TransformLayer | ToolMode::DrawMaskPolygon
+            )
+        {
             self.clear_spatial_selection_drag();
             self.tool_mode = ToolMode::Pan;
         }
@@ -5695,7 +5724,8 @@ impl OmeZarrViewerApp {
                 self.clear_spatial_selection_drag();
                 self.tool_mode = ToolMode::MoveLayer;
             }
-            let can_transform = xy_tools_enabled && matches!(self.active_layer, LayerId::Channel(_));
+            let can_transform =
+                xy_tools_enabled && matches!(self.active_layer, LayerId::Channel(_));
             let mut transform_clicked = false;
             ui.add_enabled_ui(can_transform, |ui| {
                 if icon_button(
@@ -8981,13 +9011,14 @@ impl OmeZarrViewerApp {
         }
 
         let visible_world = self.visible_world_rect(rect);
-        let visible_world_tiles_world = if self.view_plane_is_xy() && self.any_visible_channel_affine() {
-            self.union_visible_world_for_visible_channels_xform(visible_world)
-        } else if self.view_plane_is_xy() && self.any_visible_channel_offset() {
-            self.union_visible_world_for_visible_channels(visible_world)
-        } else {
-            visible_world
-        };
+        let visible_world_tiles_world =
+            if self.view_plane_is_xy() && self.any_visible_channel_affine() {
+                self.union_visible_world_for_visible_channels_xform(visible_world)
+            } else if self.view_plane_is_xy() && self.any_visible_channel_offset() {
+                self.union_visible_world_for_visible_channels(visible_world)
+            } else {
+                visible_world
+            };
         let visible_world_tiles = self.primary_image_world_rect_to_local(visible_world_tiles_world);
         let prev_visible_world_tiles = self.last_visible_world_tiles.unwrap_or(visible_world_tiles);
         let target_level = self.choose_level();
@@ -9627,137 +9658,139 @@ impl OmeZarrViewerApp {
             self.rebuild_layer_orders();
             let overlay_order = self.overlay_layer_order.clone();
             for layer in overlay_order.into_iter().rev() {
-            match layer {
-                LayerId::Channel(_) => {}
-                LayerId::SpatialImage(id) => {
-                    if let Some(layer) = self
-                        .spatial_image_layers
-                        .images
-                        .iter_mut()
-                        .find(|l| l.id == id)
-                    {
-                        layer.draw(ui, &self.camera, rect, visible_world);
+                match layer {
+                    LayerId::Channel(_) => {}
+                    LayerId::SpatialImage(id) => {
+                        if let Some(layer) = self
+                            .spatial_image_layers
+                            .images
+                            .iter_mut()
+                            .find(|l| l.id == id)
+                        {
+                            layer.draw(ui, &self.camera, rect, visible_world);
+                        }
                     }
-                }
-                LayerId::SegmentationLabels => {
-                    self.draw_cells_segmentation_overlay(ui, rect, visible_world, target_level);
-                }
-                LayerId::SegmentationGeoJson => {
-                    let off = self.layer_offset_world(LayerId::SegmentationGeoJson);
-                    let mut cam = self.camera.clone();
-                    cam.center_world_lvl0 -= off;
-                    self.seg_geojson.draw(
-                        ui,
-                        &cam,
-                        rect,
-                        visible_world.translate(-off),
-                        self.tiles_gl.is_some(),
-                    );
-                }
-                LayerId::SegmentationObjects => {
-                    let off = self.layer_offset_world(LayerId::SegmentationObjects);
-                    self.seg_objects.draw(
-                        ui,
-                        &self.camera,
-                        rect,
-                        visible_world,
-                        off,
-                        self.tiles_gl.is_some(),
-                    );
-                }
-                LayerId::Mask(id) => self.draw_mask_layer_overlay(ui, rect, id),
-                LayerId::Points => self.draw_points_overlay(ui, rect, visible_world),
-                LayerId::Annotation(id) => {
-                    let Some(local_root) = self.current_local_dataset_root() else {
-                        continue;
-                    };
-                    let roi_id = self
-                        .project_space
-                        .rois()
-                        .iter()
-                        .find(|r| r.local_path().is_some_and(|path| path == local_root))
-                        .map(|r| r.id.clone())
-                        .or_else(|| {
-                            local_root
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .map(|s| s.to_string())
-                        })
-                        .unwrap_or_else(|| "ROI".to_string());
-                    let off = self.layer_offset_world(LayerId::Annotation(id));
-                    let current_groups = self.current_layer_groups();
-                    if let Some(layer) = self.annotation_layers.iter_mut().find(|l| l.id == id) {
-                        let group_tint =
-                            layer_groups::effective_annotation_tint(&current_groups, id);
-                        layer.offset_world = off;
-                        layer.draw_single(
+                    LayerId::SegmentationLabels => {
+                        self.draw_cells_segmentation_overlay(ui, rect, visible_world, target_level);
+                    }
+                    LayerId::SegmentationGeoJson => {
+                        let off = self.layer_offset_world(LayerId::SegmentationGeoJson);
+                        let mut cam = self.camera.clone();
+                        cam.center_world_lvl0 -= off;
+                        self.seg_geojson.draw(
                             ui,
+                            &cam,
                             rect,
-                            self.camera.center_world_lvl0,
-                            self.camera.zoom_screen_per_lvl0_px,
-                            roi_id.as_str(),
-                            group_tint,
+                            visible_world.translate(-off),
                             self.tiles_gl.is_some(),
                         );
-                        if self.active_layer == LayerId::Annotation(id) {
-                            if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
-                                if rect.contains(pointer) {
-                                    let world = self.camera.screen_to_world(pointer, rect);
-                                    layer.maybe_hover_tooltip(
-                                        ui.ctx(),
-                                        rect,
-                                        world,
-                                        self.camera.zoom_screen_per_lvl0_px,
-                                        roi_id.as_str(),
-                                        egui::Vec2::ZERO,
-                                        1.0,
-                                    );
+                    }
+                    LayerId::SegmentationObjects => {
+                        let off = self.layer_offset_world(LayerId::SegmentationObjects);
+                        self.seg_objects.draw(
+                            ui,
+                            &self.camera,
+                            rect,
+                            visible_world,
+                            off,
+                            self.tiles_gl.is_some(),
+                        );
+                    }
+                    LayerId::Mask(id) => self.draw_mask_layer_overlay(ui, rect, id),
+                    LayerId::Points => self.draw_points_overlay(ui, rect, visible_world),
+                    LayerId::Annotation(id) => {
+                        let Some(local_root) = self.current_local_dataset_root() else {
+                            continue;
+                        };
+                        let roi_id = self
+                            .project_space
+                            .rois()
+                            .iter()
+                            .find(|r| r.local_path().is_some_and(|path| path == local_root))
+                            .map(|r| r.id.clone())
+                            .or_else(|| {
+                                local_root
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_else(|| "ROI".to_string());
+                        let off = self.layer_offset_world(LayerId::Annotation(id));
+                        let current_groups = self.current_layer_groups();
+                        if let Some(layer) = self.annotation_layers.iter_mut().find(|l| l.id == id)
+                        {
+                            let group_tint =
+                                layer_groups::effective_annotation_tint(&current_groups, id);
+                            layer.offset_world = off;
+                            layer.draw_single(
+                                ui,
+                                rect,
+                                self.camera.center_world_lvl0,
+                                self.camera.zoom_screen_per_lvl0_px,
+                                roi_id.as_str(),
+                                group_tint,
+                                self.tiles_gl.is_some(),
+                            );
+                            if self.active_layer == LayerId::Annotation(id) {
+                                if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+                                    if rect.contains(pointer) {
+                                        let world = self.camera.screen_to_world(pointer, rect);
+                                        layer.maybe_hover_tooltip(
+                                            ui.ctx(),
+                                            rect,
+                                            world,
+                                            self.camera.zoom_screen_per_lvl0_px,
+                                            roi_id.as_str(),
+                                            egui::Vec2::ZERO,
+                                            1.0,
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                LayerId::SpatialShape(id) => {
-                    let off = self.layer_offset_world(LayerId::SpatialShape(id));
-                    if let Some(layer) = self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
-                    {
-                        layer.draw(
-                            ui,
-                            &self.camera,
-                            rect,
-                            visible_world,
-                            self.tiles_gl.is_some(),
-                            off,
-                        );
+                    LayerId::SpatialShape(id) => {
+                        let off = self.layer_offset_world(LayerId::SpatialShape(id));
+                        if let Some(layer) =
+                            self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
+                        {
+                            layer.draw(
+                                ui,
+                                &self.camera,
+                                rect,
+                                visible_world,
+                                self.tiles_gl.is_some(),
+                                off,
+                            );
+                        }
                     }
-                }
-                LayerId::SpatialPoints => {
-                    let off = self.layer_offset_world(LayerId::SpatialPoints);
-                    if let Some(layer) = self.spatial_layers.points.as_ref() {
-                        layer.draw(ui, rect, &self.camera, off, self.tiles_gl.is_some());
+                    LayerId::SpatialPoints => {
+                        let off = self.layer_offset_world(LayerId::SpatialPoints);
+                        if let Some(layer) = self.spatial_layers.points.as_ref() {
+                            layer.draw(ui, rect, &self.camera, off, self.tiles_gl.is_some());
+                        }
                     }
-                }
-                LayerId::XeniumCells => {
-                    let off = self.layer_offset_world(LayerId::XeniumCells);
-                    if let Some(layer) = self.xenium_layers.cells.as_ref() {
-                        layer.draw(
-                            ui,
-                            &self.camera,
-                            rect,
-                            visible_world,
-                            self.tiles_gl.is_some(),
-                            off,
-                        );
+                    LayerId::XeniumCells => {
+                        let off = self.layer_offset_world(LayerId::XeniumCells);
+                        if let Some(layer) = self.xenium_layers.cells.as_ref() {
+                            layer.draw(
+                                ui,
+                                &self.camera,
+                                rect,
+                                visible_world,
+                                self.tiles_gl.is_some(),
+                                off,
+                            );
+                        }
                     }
-                }
-                LayerId::XeniumTranscripts => {
-                    let off = self.layer_offset_world(LayerId::XeniumTranscripts);
-                    if let Some(layer) = self.xenium_layers.transcripts.as_ref() {
-                        layer.draw(ui, rect, &self.camera, off, self.tiles_gl.is_some());
+                    LayerId::XeniumTranscripts => {
+                        let off = self.layer_offset_world(LayerId::XeniumTranscripts);
+                        if let Some(layer) = self.xenium_layers.transcripts.as_ref() {
+                            layer.draw(ui, rect, &self.camera, off, self.tiles_gl.is_some());
+                        }
                     }
                 }
             }
-        }
         }
 
         if self.view_plane_is_xy() {
@@ -10542,10 +10575,12 @@ impl OmeZarrViewerApp {
 
     fn image_local_rect_lvl0(&self) -> egui::Rect {
         let shape0 = &self.dataset.levels[0].shape;
-        let axes = self.display_axes().unwrap_or(crate::imaging::view_plane::DisplayAxes {
-            vertical: self.dataset.dims.y,
-            horizontal: self.dataset.dims.x,
-        });
+        let axes = self
+            .display_axes()
+            .unwrap_or(crate::imaging::view_plane::DisplayAxes {
+                vertical: self.dataset.dims.y,
+                horizontal: self.dataset.dims.x,
+            });
         let y = shape0[axes.vertical] as f32;
         let x = shape0[axes.horizontal] as f32;
         egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(x, y))
@@ -10861,7 +10896,10 @@ impl OmeZarrViewerApp {
         let center_local = self.primary_image_world_to_local(center_world);
         let (downsample_y, downsample_x) =
             display_downsample(&self.dataset.dims, level0, level_info, self.view_plane_mode)
-                .unwrap_or((level_info.downsample.max(1e-6), level_info.downsample.max(1e-6)));
+                .unwrap_or((
+                    level_info.downsample.max(1e-6),
+                    level_info.downsample.max(1e-6),
+                ));
         let center_lvl = egui::pos2(
             center_local.x / downsample_x.max(1e-6),
             center_local.y / downsample_y.max(1e-6),
@@ -10923,7 +10961,9 @@ impl OmeZarrViewerApp {
             if !self.cache.mark_in_flight(*key) {
                 continue;
             }
-            if self.view_plane_is_xy() && let Some(level_info) = self.dataset.levels.get(level) {
+            if self.view_plane_is_xy()
+                && let Some(level_info) = self.dataset.levels.get(level)
+            {
                 if let Some(tile) = self.pinned_levels.try_get_composited_tile(
                     *key,
                     &channels,
@@ -10984,7 +11024,8 @@ impl OmeZarrViewerApp {
                 if !tiles_gl.mark_in_flight(raw_key) {
                     continue;
                 }
-                if self.view_plane_is_xy() && let Some(level_info) = self.dataset.levels.get(level)
+                if self.view_plane_is_xy()
+                    && let Some(level_info) = self.dataset.levels.get(level)
                 {
                     if let Some(resp) =
                         self.pinned_levels
@@ -11130,12 +11171,14 @@ impl OmeZarrViewerApp {
         let x1 = (x0 + chunk_x).min(level_info.shape[x_dim] as f32);
 
         let (downsample_y, downsample_x) =
-            display_downsample(&self.dataset.dims, level0, level_info, key.view.mode)
-                .unwrap_or((level_info.downsample.max(1e-6), level_info.downsample.max(1e-6)));
-        let world_min = self
-            .primary_image_local_to_world(egui::pos2(x0 * downsample_x, y0 * downsample_y));
-        let world_max = self
-            .primary_image_local_to_world(egui::pos2(x1 * downsample_x, y1 * downsample_y));
+            display_downsample(&self.dataset.dims, level0, level_info, key.view.mode).unwrap_or((
+                level_info.downsample.max(1e-6),
+                level_info.downsample.max(1e-6),
+            ));
+        let world_min =
+            self.primary_image_local_to_world(egui::pos2(x0 * downsample_x, y0 * downsample_y));
+        let world_max =
+            self.primary_image_local_to_world(egui::pos2(x1 * downsample_x, y1 * downsample_y));
         let world_rect = egui::Rect::from_min_max(world_min, world_max);
 
         let screen_min = self.camera.world_to_screen(world_min, viewport);
@@ -11150,7 +11193,10 @@ impl OmeZarrViewerApp {
             return Some(tex);
         }
 
-        if let Some(view) = self.fallback_view_selection().filter(|view| *view != key.view) {
+        if let Some(view) = self
+            .fallback_view_selection()
+            .filter(|view| *view != key.view)
+        {
             let fallback_key = TileKey {
                 render_id: self.active_render_id,
                 view,
@@ -11174,7 +11220,10 @@ impl OmeZarrViewerApp {
             if let Some(tex) = self.cache.get(&prev_key).cloned() {
                 return Some(tex);
             }
-            if let Some(view) = self.previous_view_selection.filter(|view| *view != key.view) {
+            if let Some(view) = self
+                .previous_view_selection
+                .filter(|view| *view != key.view)
+            {
                 let prev_key = TileKey {
                     render_id: prev,
                     view,
@@ -11265,13 +11314,25 @@ impl OmeZarrViewerApp {
         };
         let (downsample_y, downsample_x) =
             display_downsample(&self.dataset.dims, level0, level_info, self.view_plane_mode)
-                .unwrap_or((level_info.downsample.max(1.0), level_info.downsample.max(1.0)));
+                .unwrap_or((
+                    level_info.downsample.max(1.0),
+                    level_info.downsample.max(1.0),
+                ));
 
-        let visible_local = self.primary_image_world_rect_to_local(self.visible_world_rect(viewport));
-        let mut y0 = (visible_local.min.y / downsample_y.max(1e-6)).floor().max(0.0) as u64;
-        let mut y1 = (visible_local.max.y / downsample_y.max(1e-6)).ceil().max(0.0) as u64;
-        let mut x0 = (visible_local.min.x / downsample_x.max(1e-6)).floor().max(0.0) as u64;
-        let mut x1 = (visible_local.max.x / downsample_x.max(1e-6)).ceil().max(0.0) as u64;
+        let visible_local =
+            self.primary_image_world_rect_to_local(self.visible_world_rect(viewport));
+        let mut y0 = (visible_local.min.y / downsample_y.max(1e-6))
+            .floor()
+            .max(0.0) as u64;
+        let mut y1 = (visible_local.max.y / downsample_y.max(1e-6))
+            .ceil()
+            .max(0.0) as u64;
+        let mut x0 = (visible_local.min.x / downsample_x.max(1e-6))
+            .floor()
+            .max(0.0) as u64;
+        let mut x1 = (visible_local.max.x / downsample_x.max(1e-6))
+            .ceil()
+            .max(0.0) as u64;
 
         let Some(axes) = self.display_axes() else {
             return;

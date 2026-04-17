@@ -4,9 +4,7 @@ use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
-use crate::imaging::view_plane::{
-    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
-};
+use crate::imaging::view_plane::{ViewPlaneSelection, display_axes, image_subset_ranges_for_view};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 

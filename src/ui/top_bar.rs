@@ -47,7 +47,7 @@ pub fn ui_view_plane_mode(
             for candidate in supported {
                 ui.selectable_value(mode, *candidate, candidate.label());
             }
-    });
+        });
     *mode != before
 }
 
@@ -88,7 +88,10 @@ pub fn ui_view_plane_slice(
         }
 
         let next = ui
-            .add_enabled(*slice_level0 < max_slice_level0, egui::Button::new("▶").small())
+            .add_enabled(
+                *slice_level0 < max_slice_level0,
+                egui::Button::new("▶").small(),
+            )
             .on_hover_text(format!("Next {label} slice"));
         if next.clicked() {
             *slice_level0 = (*slice_level0 + 1).min(max_slice_level0);

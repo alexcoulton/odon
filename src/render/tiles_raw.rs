@@ -9,9 +9,7 @@ use lru::LruCache;
 
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{Dims, LevelInfo};
-use crate::imaging::view_plane::{
-    ViewPlaneSelection, display_axes, image_subset_ranges_for_view,
-};
+use crate::imaging::view_plane::{ViewPlaneSelection, display_axes, image_subset_ranges_for_view};
 use crate::render::array_dims::squeeze_to_2d;
 use crate::{log_debug, log_warn};
 use zarrs::array::{Array, ArraySubset};
@@ -312,13 +310,13 @@ fn raw_tile_loader_thread(
                 width,
                 height
             );
-                if debug_io {
-                    log_warn!(
-                        "{worker_name}: fail {:?} lvl={} tile=({}, {}) ch={} after {:?}: {}",
-                        req.key.view,
-                        req.key.level,
-                        req.key.tile_y,
-                        req.key.tile_x,
+            if debug_io {
+                log_warn!(
+                    "{worker_name}: fail {:?} lvl={} tile=({}, {}) ch={} after {:?}: {}",
+                    req.key.view,
+                    req.key.level,
+                    req.key.tile_y,
+                    req.key.tile_x,
                     req.key.channel,
                     start.elapsed(),
                     error
