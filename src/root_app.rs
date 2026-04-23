@@ -8,6 +8,7 @@ use crate::app::{
     LabelPromptSessionPreference, OmeZarrViewerApp, S3DatasetSelection, ViewerRequest,
 };
 use crate::app_support::menu::{NativeMenu, NativeMenuAction};
+use crate::app_support::settings::{AppSettings, settings_file_path};
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
 };
@@ -99,11 +100,24 @@ pub struct RootApp {
     remote_status: String,
     remote_s3_browser: Option<RootRemoteS3BrowserState>,
     label_prompt_preference: LabelPromptSessionPreference,
+    app_settings: AppSettings,
+    settings_open: bool,
+    settings_status: String,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
 
 impl RootApp {
+    fn load_app_settings() -> (AppSettings, String) {
+        match AppSettings::load() {
+            Ok(settings) => (settings, String::new()),
+            Err(err) => (
+                AppSettings::default(),
+                format!("Settings load failed: {err}"),
+            ),
+        }
+    }
+
     fn remote_s3_signature(&self) -> String {
         format!(
             "{}\n{}\n{}\n{}\n{}",
@@ -117,6 +131,135 @@ impl RootApp {
 
     fn clear_remote_s3_browser(&mut self) {
         self.remote_s3_browser = None;
+    }
+
+    fn configure_single_app(&self, app: &mut OmeZarrViewerApp) {
+        app.set_show_scale_bar(self.view_show_scale_bar);
+        app.set_label_prompt_preference(self.label_prompt_preference);
+        app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+    }
+
+    fn apply_app_settings_to_mode(&mut self) {
+        if let Mode::Single(app) = &mut self.mode {
+            app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+        }
+    }
+
+    fn persist_app_settings(&mut self) {
+        match self.app_settings.save() {
+            Ok(path) => {
+                self.settings_status = format!("Saved settings to {}.", path.display());
+            }
+            Err(err) => {
+                self.settings_status = format!("Settings save failed: {err}");
+            }
+        }
+    }
+
+    fn ui_settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let before = self.app_settings.clone();
+        let mut open = self.settings_open;
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.heading("Auto Contrast");
+                ui.checkbox(
+                    &mut self.app_settings.auto_contrast.enabled_on_open,
+                    "Apply auto contrast when opening a dataset",
+                );
+
+                egui::ComboBox::from_label("Method")
+                    .selected_text(self.app_settings.auto_contrast.method.label())
+                    .show_ui(ui, |ui| {
+                        for method in crate::app_support::settings::AutoContrastMethod::ALL {
+                            ui.selectable_value(
+                                &mut self.app_settings.auto_contrast.method,
+                                method,
+                                method.label(),
+                            );
+                        }
+                    });
+                ui.label(self.app_settings.auto_contrast.method.description());
+
+                let settings = &mut self.app_settings.auto_contrast;
+                match settings.method {
+                    crate::app_support::settings::AutoContrastMethod::ZeroToP97 => {
+                        ui.horizontal(|ui| {
+                            ui.label("Upper percentile");
+                            ui.add(
+                                egui::DragValue::new(&mut settings.upper_percentile)
+                                    .range(1..=100)
+                                    .speed(0.2)
+                                    .suffix("%"),
+                            );
+                        });
+                    }
+                    crate::app_support::settings::AutoContrastMethod::P1ToP99 => {
+                        ui.horizontal(|ui| {
+                            ui.label("Lower percentile");
+                            ui.add(
+                                egui::DragValue::new(&mut settings.lower_percentile)
+                                    .range(0..=99)
+                                    .speed(0.2)
+                                    .suffix("%"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Upper percentile");
+                            ui.add(
+                                egui::DragValue::new(&mut settings.upper_percentile)
+                                    .range(1..=100)
+                                    .speed(0.2)
+                                    .suffix("%"),
+                            );
+                        });
+                    }
+                    crate::app_support::settings::AutoContrastMethod::ZeroToMax => {}
+                }
+                self.app_settings.auto_contrast = self.app_settings.auto_contrast.normalized();
+
+                ui.add_space(8.0);
+                let can_apply_now = matches!(self.mode, Mode::Single(_));
+                if ui
+                    .add_enabled(can_apply_now, egui::Button::new("Apply To Current Viewer"))
+                    .clicked()
+                {
+                    if let Mode::Single(app) = &mut self.mode {
+                        app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+                        app.apply_auto_contrast_now();
+                        self.settings_status = format!(
+                            "Applied {} to the current viewer.",
+                            self.app_settings.auto_contrast.method.label()
+                        );
+                    }
+                }
+                if !can_apply_now {
+                    ui.label("Open a single dataset viewer to apply these settings immediately.");
+                }
+
+                if let Ok(path) = settings_file_path() {
+                    ui.add_space(8.0);
+                    ui.label(format!("Settings file: {}", path.display()));
+                }
+
+                if !self.settings_status.trim().is_empty() {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.label(&self.settings_status);
+                }
+            });
+        self.settings_open = open;
+
+        if self.app_settings != before {
+            self.apply_app_settings_to_mode();
+            self.persist_app_settings();
+        }
     }
 
     fn save_screenshot_via_dialog(&mut self) {
@@ -683,6 +826,7 @@ impl RootApp {
         cc: &eframe::CreationContext<'_>,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
+        let (app_settings, settings_status) = Self::load_app_settings();
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -708,6 +852,9 @@ impl RootApp {
             remote_status: String::new(),
             remote_s3_browser: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            app_settings,
+            settings_open: false,
+            settings_status,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -719,7 +866,8 @@ impl RootApp {
         store: std::sync::Arc<dyn zarrs::storage::ReadableStorageTraits>,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let mut app = OmeZarrViewerApp::new(cc, dataset, store);
+        let (app_settings, settings_status) = Self::load_app_settings();
+        let mut app = OmeZarrViewerApp::new(cc, dataset, store, app_settings.auto_contrast);
         app.set_show_scale_bar(true);
         if let Some(path) = project_path.as_deref() {
             let mut ps = ProjectSpace::default();
@@ -747,6 +895,9 @@ impl RootApp {
             remote_status: String::new(),
             remote_s3_browser: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            app_settings,
+            settings_open: false,
+            settings_status,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -757,6 +908,7 @@ impl RootApp {
         mut mosaic: MosaicViewerApp,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
+        let (app_settings, settings_status) = Self::load_app_settings();
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -786,6 +938,9 @@ impl RootApp {
             remote_status: String::new(),
             remote_s3_browser: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            app_settings,
+            settings_open: false,
+            settings_status,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -815,11 +970,15 @@ impl RootApp {
             classify_local_dataset_path(&root),
             Some(LocalDatasetKind::Tiff)
         ) {
-            match OmeZarrViewerApp::new_tiff_runtime(ctx, self.gpu_available, root.clone()) {
+            match OmeZarrViewerApp::new_tiff_runtime(
+                ctx,
+                self.gpu_available,
+                root.clone(),
+                self.app_settings.auto_contrast,
+            ) {
                 Ok(mut app) => {
                     log_debug!("open_single: detected TIFF");
-                    app.set_show_scale_bar(self.view_show_scale_bar);
-                    app.set_label_prompt_preference(self.label_prompt_preference);
+                    self.configure_single_app(&mut app);
                     app.set_project_space(project_space);
                     self.mode = Mode::Single(app);
                 }
@@ -835,10 +994,14 @@ impl RootApp {
         match OmeZarrDataset::open_local(&root) {
             Ok((dataset, store)) => {
                 log_debug!("open_single: detected OME-Zarr");
-                let mut app =
-                    OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
-                app.set_show_scale_bar(self.view_show_scale_bar);
-                app.set_label_prompt_preference(self.label_prompt_preference);
+                let mut app = OmeZarrViewerApp::new_runtime(
+                    ctx,
+                    self.gpu_available,
+                    dataset,
+                    store,
+                    self.app_settings.auto_contrast,
+                );
+                self.configure_single_app(&mut app);
                 app.set_project_space(project_space);
                 self.mode = Mode::Single(app);
             }
@@ -890,11 +1053,9 @@ impl RootApp {
                                             self.gpu_available,
                                             dataset,
                                             store,
+                                            self.app_settings.auto_contrast,
                                         );
-                                        app.set_show_scale_bar(self.view_show_scale_bar);
-                                        app.set_label_prompt_preference(
-                                            self.label_prompt_preference,
-                                        );
+                                        self.configure_single_app(&mut app);
                                         app.attach_xenium_layers(
                                             x.root.clone(),
                                             x.cells_zarr_zip.clone(),
@@ -924,9 +1085,10 @@ impl RootApp {
                                         x.cells_zarr_zip.clone(),
                                         x.transcripts_zarr_zip.clone(),
                                         x.pixel_size_um,
+                                        self.app_settings.auto_contrast,
                                     ) {
                                         Ok(mut app) => {
-                                            app.set_show_scale_bar(self.view_show_scale_bar);
+                                            self.configure_single_app(&mut app);
                                             app.set_project_space(project_space);
                                             self.mode = Mode::Single(app);
                                             return;
@@ -980,10 +1142,14 @@ impl RootApp {
                     .map(|dataset| (dataset, store))
                 }) {
                     Ok((dataset, store)) => {
-                        let mut app =
-                            OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
-                        app.set_show_scale_bar(self.view_show_scale_bar);
-                        app.set_label_prompt_preference(self.label_prompt_preference);
+                        let mut app = OmeZarrViewerApp::new_runtime(
+                            ctx,
+                            self.gpu_available,
+                            dataset,
+                            store,
+                            self.app_settings.auto_contrast,
+                        );
+                        self.configure_single_app(&mut app);
                         app.set_project_space(project_space);
                         self.mode = Mode::Single(app);
                     }
@@ -1032,11 +1198,15 @@ impl RootApp {
                     .map(|dataset| (dataset, store, runtime))
                 }) {
                     Ok((dataset, store, runtime)) => {
-                        let mut app =
-                            OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
+                        let mut app = OmeZarrViewerApp::new_runtime(
+                            ctx,
+                            self.gpu_available,
+                            dataset,
+                            store,
+                            self.app_settings.auto_contrast,
+                        );
                         app.set_remote_runtime(Some(runtime));
-                        app.set_show_scale_bar(self.view_show_scale_bar);
-                        app.set_label_prompt_preference(self.label_prompt_preference);
+                        self.configure_single_app(&mut app);
                         app.set_project_space(project_space);
                         self.mode = Mode::Single(app);
                     }
@@ -1152,10 +1322,14 @@ impl RootApp {
 
         match OmeZarrDataset::open_local(&root) {
             Ok((dataset, store)) => {
-                let mut app =
-                    OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
-                app.set_show_scale_bar(self.view_show_scale_bar);
-                app.set_label_prompt_preference(self.label_prompt_preference);
+                let mut app = OmeZarrViewerApp::new_runtime(
+                    ctx,
+                    self.gpu_available,
+                    dataset,
+                    store,
+                    self.app_settings.auto_contrast,
+                );
+                self.configure_single_app(&mut app);
                 app.set_project_space(project_space);
                 self.mode = Mode::Single(app);
             }
@@ -1351,10 +1525,14 @@ impl RootApp {
         let img_root = root.join(&img.rel_group);
         match OmeZarrDataset::open_local(&img_root) {
             Ok((dataset, store)) => {
-                let mut app =
-                    OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
-                app.set_show_scale_bar(self.view_show_scale_bar);
-                app.set_label_prompt_preference(self.label_prompt_preference);
+                let mut app = OmeZarrViewerApp::new_runtime(
+                    ctx,
+                    self.gpu_available,
+                    dataset,
+                    store,
+                    self.app_settings.auto_contrast,
+                );
+                self.configure_single_app(&mut app);
                 app.set_project_space(project_space);
                 app.attach_spatialdata_layers(
                     root,
@@ -1407,6 +1585,9 @@ impl eframe::App for RootApp {
             if let Some(menu) = self.native_menu.as_ref() {
                 for action in menu.drain_actions() {
                     match action {
+                        NativeMenuAction::Settings => {
+                            self.settings_open = true;
+                        }
                         NativeMenuAction::OpenOmeZarr => {
                             if let Some(root) =
                                 FileDialog::new().set_title("Open OME-Zarr").pick_folder()
@@ -1468,24 +1649,15 @@ impl eframe::App for RootApp {
                         NativeMenuAction::SaveProject => {
                             let save_target = match &self.mode {
                                 Mode::Project { project_space } => {
-                                    project_space.current_project_path()
+                                    project_space.saved_project_path()
                                 }
-                                Mode::Single(app) => app.project_space().current_project_path(),
+                                Mode::Single(app) => app.project_space().saved_project_path(),
                                 Mode::Mosaic { mosaic, .. } => {
-                                    mosaic.project_space().current_project_path()
+                                    mosaic.project_space().saved_project_path()
                                 }
                                 Mode::Transition => None,
                             };
-                            let path = if let Some(path) = save_target {
-                                Some(path)
-                            } else {
-                                FileDialog::new()
-                                    .add_filter("Project JSON", &["json"])
-                                    .set_file_name("odon.project.json")
-                                    .set_title("Save Project")
-                                    .save_file()
-                            };
-                            if let Some(path) = path {
+                            if let Some(path) = save_target {
                                 match &mut self.mode {
                                     Mode::Project { project_space } => {
                                         if let Err(err) = project_space.save_to_file(&path) {
@@ -1509,8 +1681,39 @@ impl eframe::App for RootApp {
                                     }
                                     Mode::Transition => {}
                                 }
+                            } else {
+                                match &mut self.mode {
+                                    Mode::Project { project_space } => {
+                                        project_space.save_as_project()
+                                    }
+                                    Mode::Single(app) => {
+                                        let mut ps = app.take_project_space();
+                                        ps.save_as_project();
+                                        app.set_project_space(ps);
+                                    }
+                                    Mode::Mosaic { mosaic, .. } => {
+                                        let mut ps = mosaic.take_project_space();
+                                        ps.save_as_project();
+                                        mosaic.set_project_space(ps);
+                                    }
+                                    Mode::Transition => {}
+                                }
                             }
                         }
+                        NativeMenuAction::SaveNewProject => match &mut self.mode {
+                            Mode::Project { project_space } => project_space.save_new_project(),
+                            Mode::Single(app) => {
+                                let mut ps = app.take_project_space();
+                                ps.save_new_project();
+                                app.set_project_space(ps);
+                            }
+                            Mode::Mosaic { mosaic, .. } => {
+                                let mut ps = mosaic.take_project_space();
+                                ps.save_new_project();
+                                mosaic.set_project_space(ps);
+                            }
+                            Mode::Transition => {}
+                        },
                         NativeMenuAction::SaveScreenshot => {
                             self.save_screenshot_via_dialog();
                         }
@@ -1621,6 +1824,12 @@ impl eframe::App for RootApp {
                     }
                 }
             }
+        }
+
+        if !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma))
+        {
+            self.settings_open = true;
         }
 
         match &mut self.mode {
@@ -1750,6 +1959,8 @@ impl eframe::App for RootApp {
             self.ui_spatial_open_dialog(ctx);
         }
 
+        self.ui_settings_dialog(ctx);
+
         if let Some(action) = self.ui_remote_dialog(ctx) {
             let previous_mode = std::mem::replace(&mut self.mode, Mode::Transition);
             let (project_space, single_restore, mosaic_restore) = match previous_mode {
@@ -1799,10 +2010,15 @@ impl eframe::App for RootApp {
             self.open_project_roi(ctx, roi, ps);
         }
         if let Some((dataset, store, runtime, project_space)) = open_remote_single {
-            let mut app = OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
+            let mut app = OmeZarrViewerApp::new_runtime(
+                ctx,
+                self.gpu_available,
+                dataset,
+                store,
+                self.app_settings.auto_contrast,
+            );
             app.set_remote_runtime(runtime);
-            app.set_show_scale_bar(self.view_show_scale_bar);
-            app.set_label_prompt_preference(self.label_prompt_preference);
+            self.configure_single_app(&mut app);
             app.set_project_space(project_space);
             self.mode = Mode::Single(app);
         }

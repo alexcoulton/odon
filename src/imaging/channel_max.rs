@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::app_support::settings::AutoContrastMethod;
+use crate::app_support::settings::AutoContrastSettings;
 use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
 use crate::imaging::view_plane::{ViewPlaneSelection, display_axes, image_subset_ranges_for_view};
 use zarrs::array::{Array, ArraySubset};
@@ -14,13 +16,15 @@ pub struct ChannelMaxRequest {
     pub view: ViewPlaneSelection,
     pub level: usize,
     pub channel: u64,
+    pub settings: AutoContrastSettings,
 }
 
 #[derive(Debug, Clone)]
 pub struct ChannelMaxResponse {
     pub request_id: u64,
     pub channel: u64,
-    pub p97: u16,
+    pub lo: u16,
+    pub hi: u16,
 }
 
 #[derive(Debug)]
@@ -137,29 +141,51 @@ fn channel_max_loader_thread(
             }
         }
 
-        let p97 = if n == 0 {
-            0
-        } else {
-            // Nearest-rank percentile (ceil(p*n)).
-            let target = (n.saturating_mul(97).saturating_add(99)) / 100;
-            let mut acc: u64 = 0;
-            let mut out: u16 = 0;
-            for (i, c) in hist.iter().enumerate() {
-                acc = acc.saturating_add(*c);
-                if acc >= target {
-                    out = i as u16;
-                    break;
-                }
-            }
-            out
-        };
+        let (lo, hi) = auto_contrast_window_from_histogram(req.settings, &hist, n, max_v);
 
         let _ = tx_rsp.send(ChannelMaxResponse {
             request_id: req.request_id,
             channel: req.channel,
-            p97,
+            lo,
+            hi,
         });
     }
 
     Ok(())
+}
+
+pub fn auto_contrast_window_from_histogram(
+    settings: AutoContrastSettings,
+    hist: &[u64],
+    sample_count: u64,
+    max_v: u16,
+) -> (u16, u16) {
+    let settings = settings.normalized();
+    match settings.method {
+        AutoContrastMethod::ZeroToP97 => (
+            0,
+            percentile_from_histogram(hist, sample_count, settings.upper_percentile as u64),
+        ),
+        AutoContrastMethod::P1ToP99 => (
+            percentile_from_histogram(hist, sample_count, settings.lower_percentile as u64),
+            percentile_from_histogram(hist, sample_count, settings.upper_percentile as u64),
+        ),
+        AutoContrastMethod::ZeroToMax => (0, max_v),
+    }
+}
+
+fn percentile_from_histogram(hist: &[u64], sample_count: u64, percentile: u64) -> u16 {
+    if sample_count == 0 || hist.is_empty() {
+        return 0;
+    }
+
+    let target = (sample_count.saturating_mul(percentile).saturating_add(99)) / 100;
+    let mut acc: u64 = 0;
+    for (i, count) in hist.iter().enumerate() {
+        acc = acc.saturating_add(*count);
+        if acc >= target {
+            return i as u16;
+        }
+    }
+    hist.len().saturating_sub(1) as u16
 }

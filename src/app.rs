@@ -22,6 +22,7 @@ use crate::app_support::screenshot::{
     ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
     next_numbered_screenshot_path,
 };
+use crate::app_support::settings::AutoContrastSettings;
 use crate::camera::Camera;
 use crate::custom::cell_thresholds::CellThresholdsPanel;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
@@ -457,6 +458,7 @@ pub struct OmeZarrViewerApp {
     current_z_level0: u64,
     channels: Vec<ChannelInfo>,
     channel_window_overrides: HashMap<String, (f32, f32)>,
+    auto_contrast_settings: AutoContrastSettings,
     channel_list_search: String,
 
     active_layer: LayerId,
@@ -1126,6 +1128,7 @@ impl OmeZarrViewerApp {
         cc: &eframe::CreationContext<'_>,
         dataset: OmeZarrDataset,
         store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         apply_napari_like_dark(&cc.egui_ctx);
 
@@ -1245,6 +1248,7 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
+            auto_contrast_settings,
             channel_list_search: String::new(),
 
             active_layer: if dataset.channels.is_empty() {
@@ -1372,7 +1376,7 @@ impl OmeZarrViewerApp {
 
         app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
-        app.request_default_channel_maxes();
+        app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
@@ -1389,6 +1393,7 @@ impl OmeZarrViewerApp {
         gpu_available: bool,
         dataset: OmeZarrDataset,
         store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         apply_napari_like_dark(ctx);
 
@@ -1508,6 +1513,7 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
+            auto_contrast_settings,
             channel_list_search: String::new(),
 
             active_layer: if dataset.channels.is_empty() {
@@ -1632,7 +1638,7 @@ impl OmeZarrViewerApp {
 
         app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
-        app.request_default_channel_maxes();
+        app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
@@ -1652,6 +1658,7 @@ impl OmeZarrViewerApp {
         cells_zarr_zip: Option<PathBuf>,
         transcripts_zarr_zip: Option<PathBuf>,
         pixel_size_um: f32,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         apply_napari_like_dark(ctx);
 
@@ -1662,6 +1669,7 @@ impl OmeZarrViewerApp {
             morphology_mip_tiff,
             "xenium".to_string(),
             "morphology".to_string(),
+            auto_contrast_settings,
         )?;
         app.attach_xenium_layers(
             dataset_root,
@@ -1683,6 +1691,7 @@ impl OmeZarrViewerApp {
         ctx: &egui::Context,
         gpu_available: bool,
         image_path: PathBuf,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         apply_napari_like_dark(ctx);
 
@@ -1700,6 +1709,7 @@ impl OmeZarrViewerApp {
             image_path,
             dataset_name,
             "image".to_string(),
+            auto_contrast_settings,
         )
     }
 
@@ -1710,6 +1720,7 @@ impl OmeZarrViewerApp {
         image_path: PathBuf,
         dataset_name: String,
         channel_name: String,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         crate::log_info!(
             "open tiff: root={} image={}",
@@ -1737,6 +1748,7 @@ impl OmeZarrViewerApp {
             assets.hist_loader,
             assets.chanmax_loader,
             assets.chanmax_level,
+            auto_contrast_settings,
         );
         app.tiff_plane_state = assets.tiff_plane_state;
         Ok(app)
@@ -1753,6 +1765,7 @@ impl OmeZarrViewerApp {
         hist_loader: HistogramLoaderHandle,
         chanmax_loader: ChannelMaxLoaderHandle,
         chanmax_level: usize,
+        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
@@ -1837,6 +1850,7 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
+            auto_contrast_settings,
             channel_list_search: String::new(),
             active_layer: if dataset.channels.is_empty() {
                 LayerId::Points
@@ -2549,6 +2563,18 @@ impl OmeZarrViewerApp {
         self.screenshot_settings_open = true;
     }
 
+    pub fn set_auto_contrast_settings(&mut self, settings: AutoContrastSettings) {
+        self.auto_contrast_settings = settings.normalized();
+    }
+
+    pub fn apply_auto_contrast_now(&mut self) {
+        self.request_auto_contrast(true);
+        self.set_status(format!(
+            "Applying auto contrast ({}) to all channels...",
+            self.auto_contrast_settings.method.label()
+        ));
+    }
+
     pub fn open_roi_info_window(&mut self) {
         self.roi_info_open = true;
     }
@@ -2807,10 +2833,33 @@ impl OmeZarrViewerApp {
         Ok(())
     }
 
-    fn request_default_channel_maxes(&mut self) {
+    fn maybe_apply_auto_contrast_on_open(&mut self) {
+        if self.auto_contrast_settings.enabled_on_open {
+            self.request_auto_contrast(false);
+        }
+    }
+
+    fn request_auto_contrast(&mut self, overwrite_manual: bool) {
         if self.channels.is_empty() {
             return;
         }
+
+        self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
+        if overwrite_manual {
+            self.channel_window_overrides.clear();
+            self.chanmax_pending = vec![true; self.channels.len()];
+        } else {
+            self.chanmax_pending = self
+                .channels
+                .iter()
+                .map(|c| !self.channel_window_overrides.contains_key(&c.name))
+                .collect();
+        }
+
+        if !self.chanmax_pending.iter().any(|pending| *pending) {
+            return;
+        }
+
         // One epoch for all channels; ignore stale responses on ROI switches.
         let request_id = self.chanmax_request_id;
         let level = self
@@ -2826,6 +2875,7 @@ impl OmeZarrViewerApp {
                 view: self.active_view_selection(),
                 level,
                 channel: ch.index as u64,
+                settings: self.auto_contrast_settings,
             });
         }
     }
@@ -2854,11 +2904,18 @@ impl OmeZarrViewerApp {
                 continue;
             }
 
-            let mut hi = (msg.p97 as f32).clamp(0.0, abs_max);
-            if !hi.is_finite() || hi <= 0.0 {
-                hi = 1.0;
+            let mut lo = (msg.lo as f32).clamp(0.0, abs_max);
+            let mut hi = (msg.hi as f32).clamp(0.0, abs_max);
+            if !lo.is_finite() || lo < 0.0 {
+                lo = 0.0;
             }
-            self.channels[idx].window = Some((0.0, hi));
+            if lo >= abs_max {
+                lo = (abs_max - 1.0).max(0.0);
+            }
+            if !hi.is_finite() || hi <= lo {
+                hi = (lo + 1.0).min(abs_max);
+            }
+            self.channels[idx].window = Some((lo, hi));
             if let Some(p) = self.chanmax_pending.get_mut(idx) {
                 *p = false;
             }
@@ -3482,13 +3539,9 @@ impl OmeZarrViewerApp {
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
         self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
-        self.chanmax_pending = self
-            .channels
-            .iter()
-            .map(|c| !self.channel_window_overrides.contains_key(&c.name))
-            .collect();
+        self.chanmax_pending = vec![false; self.channels.len()];
         self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
-        self.request_default_channel_maxes();
+        self.maybe_apply_auto_contrast_on_open();
         ctx.request_repaint();
         Ok(())
     }
@@ -4208,11 +4261,7 @@ impl OmeZarrViewerApp {
         self.chanmax_loader = chanmax_loader;
         self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
         self.chanmax_level = chanmax_level;
-        self.chanmax_pending = self
-            .channels
-            .iter()
-            .map(|c| !self.channel_window_overrides.contains_key(&c.name))
-            .collect();
+        self.chanmax_pending = vec![false; self.channels.len()];
         self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
         self.label_cells = label_cells;
         self.label_loader = label_loader;
@@ -4259,11 +4308,8 @@ impl OmeZarrViewerApp {
         self.camera.center_world_lvl0 = egui::pos2(new_world_w * fx, new_world_h * fy);
         self.camera.zoom_screen_per_lvl0_px = old_zoom;
         self.apply_view_state_from_project_space();
-        self.chanmax_pending = self
-            .channels
-            .iter()
-            .map(|c| !self.channel_window_overrides.contains_key(&c.name))
-            .collect();
+        self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
+        self.chanmax_pending = vec![false; self.channels.len()];
         self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
 
         self.cache = TileCache::new(256);
@@ -4287,7 +4333,7 @@ impl OmeZarrViewerApp {
         self.memory_status.clear();
         self.memory_selected_channels = (0..self.channels.len()).collect();
 
-        self.request_default_channel_maxes();
+        self.maybe_apply_auto_contrast_on_open();
         self.roi_selector
             .sync_to_dataset_source(&self.dataset.source);
         if let Some(local_root) = self.dataset.source.local_path() {

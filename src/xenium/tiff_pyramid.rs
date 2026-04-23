@@ -11,6 +11,7 @@ use tiff::decoder::{ChunkType, Decoder, DecodingResult};
 use tiff::tags::{IfdPointer, Tag};
 
 use crate::data::ome::{ChannelInfo, Dims, LevelInfo};
+use crate::imaging::channel_max::auto_contrast_window_from_histogram;
 use crate::imaging::channel_max::{ChannelMaxLoaderHandle, ChannelMaxRequest, ChannelMaxResponse};
 use crate::imaging::histogram::{
     HistogramLoaderHandle, HistogramRequest, HistogramResponse, HistogramStats,
@@ -1755,26 +1756,13 @@ fn tiff_channel_max_loader_thread(
             }
         }
 
-        let p97 = if n == 0 {
-            0
-        } else {
-            let target = (n.saturating_mul(97).saturating_add(99)) / 100;
-            let mut acc: u64 = 0;
-            let mut out: u16 = 0;
-            for (i, c) in hist.iter().enumerate() {
-                acc = acc.saturating_add(*c);
-                if acc >= target {
-                    out = i as u16;
-                    break;
-                }
-            }
-            out
-        };
+        let (lo, hi) = auto_contrast_window_from_histogram(req.settings, &hist, n, max_v);
 
         let _ = tx_rsp.send(ChannelMaxResponse {
             request_id: req.request_id,
             channel: req.channel,
-            p97,
+            lo,
+            hi,
         });
     }
 

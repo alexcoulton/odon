@@ -650,13 +650,25 @@ impl ProjectSpace {
             .and_then(|p| p.parent().map(Path::to_path_buf))
     }
 
+    pub fn saved_project_path(&self) -> Option<PathBuf> {
+        self.project_file_path.clone()
+    }
+
     pub fn current_project_path(&self) -> Option<PathBuf> {
         self.project_file_path.clone().or_else(|| {
             (!self.save_path.trim().is_empty()).then(|| PathBuf::from(self.save_path.trim()))
         })
     }
 
-    fn save_as_project(&mut self) {
+    pub fn save_as_project(&mut self) {
+        self.save_project_via_dialog("Save Project");
+    }
+
+    pub fn save_new_project(&mut self) {
+        self.save_project_via_dialog("Save New Project");
+    }
+
+    fn save_project_via_dialog(&mut self, title: &str) {
         let default_name = self
             .current_project_path()
             .as_ref()
@@ -667,7 +679,7 @@ impl ProjectSpace {
         let mut dialog = FileDialog::new()
             .add_filter("Project JSON", &["json"])
             .set_file_name(&default_name)
-            .set_title("Save Project");
+            .set_title(title);
         if let Some(parent) = self
             .current_project_path()
             .as_ref()
@@ -1435,8 +1447,8 @@ impl ProjectSpace {
                         self.status = "New project.".to_string();
                     }
                     if ui.button("Save").clicked() {
-                        if self.current_project_path().is_some() {
-                            if let Some(path) = self.current_project_path() {
+                        if self.saved_project_path().is_some() {
+                            if let Some(path) = self.saved_project_path() {
                                 self.save_path = path.to_string_lossy().to_string();
                             }
                             self.save_to_path();

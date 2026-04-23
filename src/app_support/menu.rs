@@ -2,9 +2,11 @@ use anyhow::Context;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeMenuAction {
+    Settings,
     OpenOmeZarr,
     OpenProject,
     SaveProject,
+    SaveNewProject,
     SaveScreenshot,
     QuickScreenshot,
     ScreenshotSettings,
@@ -21,9 +23,11 @@ pub enum NativeMenuAction {
 #[cfg(target_os = "macos")]
 pub struct NativeMenu {
     _menu: muda::Menu,
+    id_settings: muda::MenuId,
     id_open_omezarr: muda::MenuId,
     id_open_project: muda::MenuId,
     id_save_project: muda::MenuId,
+    id_save_new_project: muda::MenuId,
     id_save_screenshot: muda::MenuId,
     id_quick_screenshot: muda::MenuId,
     id_screenshot_settings: muda::MenuId,
@@ -51,6 +55,11 @@ impl NativeMenu {
 
         // macOS expects an "app" menu first. We keep it minimal for now.
         let about = PredefinedMenuItem::about(Some(&format!("About {app_name}")), None);
+        let settings = MenuItem::new(
+            "Settings...",
+            true,
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Comma)),
+        );
         let quit = MenuItem::new(
             format!("Quit {app_name}"),
             true,
@@ -59,7 +68,13 @@ impl NativeMenu {
         let app_menu = Submenu::with_items(
             app_name,
             true,
-            &[&about, &PredefinedMenuItem::separator(), &quit],
+            &[
+                &about,
+                &PredefinedMenuItem::separator(),
+                &settings,
+                &PredefinedMenuItem::separator(),
+                &quit,
+            ],
         )
         .context("failed to build app menu")?;
 
@@ -81,6 +96,7 @@ impl NativeMenu {
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyS)),
         );
+        let save_new_project = MenuItem::new("Save New Project...", true, None);
         let save_screenshot = MenuItem::new("Save Screenshot...", true, None);
         let quick_screenshot = MenuItem::new(
             "Quick Screenshot",
@@ -113,6 +129,7 @@ impl NativeMenu {
                 &PredefinedMenuItem::separator(),
                 &open_project,
                 &save_project,
+                &save_new_project,
                 &PredefinedMenuItem::separator(),
                 &export_masks_geojson,
                 &PredefinedMenuItem::separator(),
@@ -157,9 +174,11 @@ impl NativeMenu {
 
         Ok(Self {
             _menu: menu,
+            id_settings: settings.id().clone(),
             id_open_omezarr: open_omezarr.id().clone(),
             id_open_project: open_project.id().clone(),
             id_save_project: save_project.id().clone(),
+            id_save_new_project: save_new_project.id().clone(),
             id_save_screenshot: save_screenshot.id().clone(),
             id_quick_screenshot: quick_screenshot.id().clone(),
             id_screenshot_settings: screenshot_settings.id().clone(),
@@ -185,12 +204,16 @@ impl NativeMenu {
         let mut out = Vec::new();
         while let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
             let id = ev.id();
-            if id == &self.id_open_omezarr {
+            if id == &self.id_settings {
+                out.push(NativeMenuAction::Settings);
+            } else if id == &self.id_open_omezarr {
                 out.push(NativeMenuAction::OpenOmeZarr);
             } else if id == &self.id_open_project {
                 out.push(NativeMenuAction::OpenProject);
             } else if id == &self.id_save_project {
                 out.push(NativeMenuAction::SaveProject);
+            } else if id == &self.id_save_new_project {
+                out.push(NativeMenuAction::SaveNewProject);
             } else if id == &self.id_save_screenshot {
                 out.push(NativeMenuAction::SaveScreenshot);
             } else if id == &self.id_quick_screenshot {
