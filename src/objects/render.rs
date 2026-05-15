@@ -669,9 +669,10 @@ impl ObjectsLayer {
 
         let mut keys = obj.properties.keys().cloned().collect::<Vec<_>>();
         keys.sort();
+        const MAX_TOOLTIP_PROPERTIES: usize = 11;
         let mut added = 0usize;
         for key in keys {
-            if added >= 6 {
+            if added >= MAX_TOOLTIP_PROPERTIES {
                 break;
             }
             let Some(value) = obj.properties.get(&key) else {
