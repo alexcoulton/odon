@@ -28,7 +28,9 @@ use crate::render::polygon_fill_gl::{
 };
 use crate::spatialdata::{
     ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,
-    inspect_shapes_object_schema, load_shapes_objects, load_shapes_xy_point_objects,
+    inspect_shapes_object_schema, load_shapes_centroid_point_objects, load_shapes_objects,
+    load_shapes_property_values_by_row, load_shapes_xy_point_features,
+    load_shapes_xy_point_objects,
 };
 
 mod analysis;
@@ -37,7 +39,54 @@ mod measurements;
 mod render;
 
 use self::analysis::SimpleHistogram;
+pub use self::core::preload_objects_from_path;
 pub(crate) use self::geojson::GeoJsonSegmentationLayer;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectPreloadMode {
+    FullGeometry,
+    CentroidPoints,
+}
+
+impl Default for ObjectPreloadMode {
+    fn default() -> Self {
+        Self::FullGeometry
+    }
+}
+
+impl ObjectPreloadMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FullGeometry => "Full geometry",
+            Self::CentroidPoints => "Centroid points",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjectPreloadSettings {
+    pub mode: ObjectPreloadMode,
+    pub lazy_properties: bool,
+}
+
+impl Default for ObjectPreloadSettings {
+    fn default() -> Self {
+        Self {
+            mode: ObjectPreloadMode::FullGeometry,
+            lazy_properties: true,
+        }
+    }
+}
+
+impl ObjectPreloadSettings {
+    pub fn property_label(self) -> &'static str {
+        if self.lazy_properties {
+            "lazy columns"
+        } else {
+            "all columns"
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ObjectFeature {
@@ -117,6 +166,7 @@ pub struct ObjectsLayer {
     color_property_key: String,
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
+    pending_color_value_visibility: Option<PendingColorValueVisibility>,
     filter_property_key: String,
     filter_query: String,
     filtered_indices: Option<HashSet<usize>>,
@@ -229,7 +279,7 @@ pub struct ObjectsLayer {
 
 pub type GeoJsonObjectFeature = ObjectFeature;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LoadResult {
     request_id: u64,
     path: PathBuf,
@@ -251,6 +301,11 @@ struct LoadResult {
     bounds_local: egui::Rect,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreloadedObjectLayer {
+    result: LoadResult,
+}
+
 #[derive(Debug)]
 struct PropertyLoadResult {
     property_key: String,
@@ -259,9 +314,15 @@ struct PropertyLoadResult {
 
 #[derive(Debug, Clone)]
 struct LazyParquetSource {
-    geometry_column: String,
     available_property_columns: Vec<String>,
     loaded_property_columns: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingColorValueVisibility {
+    property_key: String,
+    visible_values: Vec<String>,
+    hidden_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -814,6 +875,7 @@ impl Default for ObjectsLayer {
             color_property_key: String::new(),
             color_level_overrides_property_key: String::new(),
             color_level_overrides: BTreeMap::new(),
+            pending_color_value_visibility: None,
             filter_property_key: "id".to_string(),
             filter_query: String::new(),
             filtered_indices: None,

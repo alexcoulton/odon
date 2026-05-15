@@ -45,6 +45,17 @@ pub struct LoadedShapeObject {
     pub source_row_index: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LoadedPointObject {
+    pub id: String,
+    pub point_world: eframe::egui::Pos2,
+    pub bbox_world: eframe::egui::Rect,
+    pub area_px: f32,
+    pub perimeter_px: f32,
+    pub properties: serde_json::Map<String, serde_json::Value>,
+    pub source_row_index: Option<usize>,
+}
+
 impl Default for ShapesLoadOptions {
     fn default() -> Self {
         Self {
@@ -441,7 +452,7 @@ pub fn load_shapes_xy_point_objects(
             }
 
             let center = eframe::egui::pos2(x, y);
-            let polygons_world = vec![circle_polyline(center, 4.0, 24)];
+            let polygons_world = vec![circle_polyline(center, 4.0, 8)];
 
             let mut properties = serde_json::Map::new();
             properties.insert(x_column.to_string(), Value::from(x));
@@ -465,6 +476,273 @@ pub fn load_shapes_xy_point_objects(
         }
     }
 
+    Ok(out)
+}
+
+pub fn load_shapes_xy_point_features(
+    shapes_parquet_file: &Path,
+    x_column: &str,
+    y_column: &str,
+    property_columns: Option<&[String]>,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Vec<LoadedPointObject>> {
+    let file = std::fs::File::open(shapes_parquet_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let selected_property_columns =
+        property_columns.map(|cols| cols.iter().cloned().collect::<HashSet<_>>());
+    let mut projection_cols = vec![x_column, y_column];
+    for field in builder.schema().fields() {
+        if field.name() == x_column || field.name() == y_column {
+            continue;
+        }
+        if selected_property_columns
+            .as_ref()
+            .is_some_and(|cols| !cols.contains(field.name().as_str()))
+        {
+            continue;
+        }
+        if supports_object_property_type(field.data_type()) {
+            projection_cols.push(field.name().as_str());
+        }
+    }
+    let projection = ProjectionMask::columns(builder.parquet_schema(), projection_cols);
+    let mut reader = builder
+        .with_projection(projection)
+        .with_batch_size(16_384)
+        .build()?;
+
+    let mut out = Vec::new();
+    let mut fallback_index = 0usize;
+    while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("object load cancelled");
+        }
+        let batch = batch?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let schema = batch.schema();
+        let x_i = schema
+            .index_of(x_column)
+            .with_context(|| format!("missing x column '{x_column}'"))?;
+        let y_i = schema
+            .index_of(y_column)
+            .with_context(|| format!("missing y column '{y_column}'"))?;
+        let x_arr = batch.column(x_i).as_ref();
+        let y_arr = batch.column(y_i).as_ref();
+        let property_columns = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.name() != x_column && field.name() != y_column)
+            .map(|(idx, field)| (field.name().clone(), batch.column(idx).as_ref()))
+            .collect::<Vec<_>>();
+        let rows = batch.num_rows();
+        for row in 0..rows {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("object load cancelled");
+            }
+            let Some(x) = array_value_to_f64(x_arr, row).map(|v| v as f32) else {
+                fallback_index += 1;
+                continue;
+            };
+            let Some(y) = array_value_to_f64(y_arr, row).map(|v| v as f32) else {
+                fallback_index += 1;
+                continue;
+            };
+            if !x.is_finite() || !y.is_finite() {
+                fallback_index += 1;
+                continue;
+            }
+
+            let center = eframe::egui::pos2(x, y);
+            let mut properties = serde_json::Map::new();
+            properties.insert(x_column.to_string(), Value::from(x));
+            properties.insert(y_column.to_string(), Value::from(y));
+            for (name, col) in &property_columns {
+                if let Some(value) = array_value_to_json(*col, row) {
+                    properties.insert(name.clone(), value);
+                }
+            }
+            let radius_world = properties
+                .get("radius")
+                .and_then(|value| value.as_f64())
+                .map(|value| value as f32)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(1.0);
+            let area_px = std::f32::consts::PI * radius_world * radius_world;
+            let perimeter_px = std::f32::consts::TAU * radius_world;
+            let bbox_world = eframe::egui::Rect::from_center_size(
+                center,
+                eframe::egui::Vec2::splat(radius_world),
+            );
+            let id = object_id_from_properties(&properties)
+                .unwrap_or_else(|| (fallback_index + 1).to_string());
+            properties.insert("id".to_string(), Value::String(id.clone()));
+            out.push(LoadedPointObject {
+                id,
+                point_world: center,
+                bbox_world,
+                area_px,
+                perimeter_px,
+                properties,
+                source_row_index: Some(fallback_index),
+            });
+            fallback_index += 1;
+        }
+    }
+
+    Ok(out)
+}
+
+pub fn load_shapes_centroid_point_objects(
+    shapes_parquet_file: &Path,
+    options: &ShapesLoadOptions,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Vec<LoadedPointObject>> {
+    let file = std::fs::File::open(shapes_parquet_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let geometry_column = options.geometry_column.as_str();
+    let selected_property_columns = options
+        .property_columns
+        .as_ref()
+        .map(|cols| cols.iter().cloned().collect::<HashSet<_>>());
+    let mut projection_cols = vec![geometry_column];
+    for field in builder.schema().fields() {
+        if field.name() == geometry_column {
+            continue;
+        }
+        if selected_property_columns
+            .as_ref()
+            .is_some_and(|cols| !cols.contains(field.name().as_str()))
+        {
+            continue;
+        }
+        if supports_object_property_type(field.data_type()) {
+            projection_cols.push(field.name().as_str());
+        }
+    }
+    let projection = ProjectionMask::columns(builder.parquet_schema(), projection_cols);
+    let mut reader = builder
+        .with_projection(projection)
+        .with_batch_size(16_384)
+        .build()?;
+
+    let mut out = Vec::new();
+    let mut fallback_index = 0usize;
+
+    while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("object load cancelled");
+        }
+        let batch = batch?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let schema = batch.schema();
+        let geom_i = schema
+            .index_of(geometry_column)
+            .with_context(|| format!("missing required geometry column '{geometry_column}'"))?;
+        let geom = batch.column(geom_i).as_ref();
+        let property_columns = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.name() != geometry_column)
+            .map(|(idx, field)| (field.name().clone(), batch.column(idx).as_ref()))
+            .collect::<Vec<_>>();
+        let rows = geometry_array_len(geom)?;
+        for row in 0..rows {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("object load cancelled");
+            }
+            let Some(bytes) = geometry_bytes_at(geom, row) else {
+                fallback_index += 1;
+                continue;
+            };
+            let radius_world = property_columns
+                .iter()
+                .find_map(|(name, col)| (name == "radius").then(|| array_value_to_f64(*col, row)))
+                .flatten()
+                .map(|v| v as f32);
+            let Some(summary) = centroid_summary_from_wkb(bytes, &options.transform, radius_world)?
+            else {
+                fallback_index += 1;
+                continue;
+            };
+
+            let mut properties = serde_json::Map::new();
+            for (name, col) in &property_columns {
+                if let Some(value) = array_value_to_json(*col, row) {
+                    properties.insert(name.clone(), value);
+                }
+            }
+            let id = object_id_from_properties(&properties)
+                .unwrap_or_else(|| (fallback_index + 1).to_string());
+            properties.insert("id".to_string(), Value::String(id.clone()));
+            out.push(LoadedPointObject {
+                id,
+                point_world: summary.centroid_world,
+                bbox_world: summary.bbox_world,
+                area_px: summary.area_px,
+                perimeter_px: summary.perimeter_px,
+                properties,
+                source_row_index: Some(fallback_index),
+            });
+            fallback_index += 1;
+        }
+    }
+
+    Ok(out)
+}
+
+pub fn load_shapes_property_values_by_row(
+    shapes_parquet_file: &Path,
+    property_key: &str,
+    cancel: &AtomicBool,
+) -> anyhow::Result<std::collections::HashMap<usize, serde_json::Value>> {
+    let file = std::fs::File::open(shapes_parquet_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let schema = builder.schema();
+    let field = schema
+        .fields()
+        .iter()
+        .find(|field| field.name() == property_key)
+        .with_context(|| format!("missing property column '{property_key}'"))?;
+    if !supports_object_property_type(field.data_type()) {
+        anyhow::bail!("unsupported property column type for '{property_key}'");
+    }
+    let projection = ProjectionMask::columns(builder.parquet_schema(), [property_key]);
+    let mut reader = builder
+        .with_projection(projection)
+        .with_batch_size(16_384)
+        .build()?;
+
+    let mut out = std::collections::HashMap::new();
+    let mut row_index = 0usize;
+    while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("property load cancelled");
+        }
+        let batch = batch?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let schema = batch.schema();
+        let prop_i = schema
+            .index_of(property_key)
+            .with_context(|| format!("missing property column '{property_key}'"))?;
+        let prop = batch.column(prop_i).as_ref();
+        for row in 0..batch.num_rows() {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("property load cancelled");
+            }
+            if let Some(value) = array_value_to_json(prop, row) {
+                out.insert(row_index, value);
+            }
+            row_index += 1;
+        }
+    }
     Ok(out)
 }
 
@@ -535,6 +813,215 @@ fn parse_wkb_object_polygons(
     let mut out = Vec::new();
     flatten_geom_object_polygons(&geom, xform, radius_world, &mut out);
     Ok(out)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CentroidSummary {
+    centroid_world: eframe::egui::Pos2,
+    bbox_world: eframe::egui::Rect,
+    area_px: f32,
+    perimeter_px: f32,
+}
+
+fn centroid_summary_from_wkb(
+    bytes: &[u8],
+    xform: &SpatialDataTransform2,
+    radius_world: Option<f32>,
+) -> anyhow::Result<Option<CentroidSummary>> {
+    let mut cur = Cursor::new(bytes);
+    let geom = read_geom(&mut cur)?;
+    Ok(summarize_geom_centroid(&geom, xform, radius_world))
+}
+
+#[derive(Debug, Clone)]
+struct SummaryBuilder {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    area_sum: f32,
+    perimeter_sum: f32,
+    centroid_num: eframe::egui::Vec2,
+    point_sum: eframe::egui::Vec2,
+    point_count: usize,
+}
+
+impl SummaryBuilder {
+    fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+            area_sum: 0.0,
+            perimeter_sum: 0.0,
+            centroid_num: eframe::egui::Vec2::ZERO,
+            point_sum: eframe::egui::Vec2::ZERO,
+            point_count: 0,
+        }
+    }
+
+    fn add_point(&mut self, point: eframe::egui::Pos2) {
+        if !(point.x.is_finite() && point.y.is_finite()) {
+            return;
+        }
+        self.min_x = self.min_x.min(point.x);
+        self.min_y = self.min_y.min(point.y);
+        self.max_x = self.max_x.max(point.x);
+        self.max_y = self.max_y.max(point.y);
+        self.point_sum += point.to_vec2();
+        self.point_count += 1;
+    }
+
+    fn add_polyline(&mut self, points: &[eframe::egui::Pos2]) {
+        if points.is_empty() {
+            return;
+        }
+        for &point in points {
+            self.add_point(point);
+        }
+        for window in points.windows(2) {
+            self.perimeter_sum += (window[1] - window[0]).length();
+        }
+        if let Some((area, centroid)) = polygon_area_and_centroid(points) {
+            self.area_sum += area;
+            self.centroid_num += centroid.to_vec2() * area;
+        }
+    }
+
+    fn finish(self) -> Option<CentroidSummary> {
+        if self.point_count == 0 {
+            return None;
+        }
+        let bbox = eframe::egui::Rect::from_min_max(
+            eframe::egui::pos2(self.min_x, self.min_y),
+            eframe::egui::pos2(self.max_x, self.max_y),
+        );
+        let centroid = if self.area_sum > 1e-6 {
+            (self.centroid_num / self.area_sum).to_pos2()
+        } else {
+            (self.point_sum / self.point_count as f32).to_pos2()
+        };
+        let min_side = 2.0f32;
+        let bbox_world = if bbox.is_positive() {
+            bbox.expand(0.5)
+        } else {
+            eframe::egui::Rect::from_center_size(centroid, eframe::egui::Vec2::splat(min_side))
+        };
+        Some(CentroidSummary {
+            centroid_world: centroid,
+            bbox_world,
+            area_px: self.area_sum.max(0.0),
+            perimeter_px: self.perimeter_sum.max(0.0),
+        })
+    }
+}
+
+fn summarize_geom_centroid(
+    geom: &Geom,
+    xform: &SpatialDataTransform2,
+    radius_world: Option<f32>,
+) -> Option<CentroidSummary> {
+    let mut builder = SummaryBuilder::new();
+    add_geom_summary(geom, xform, radius_world, &mut builder);
+    builder.finish()
+}
+
+fn add_geom_summary(
+    geom: &Geom,
+    xform: &SpatialDataTransform2,
+    radius_world: Option<f32>,
+    out: &mut SummaryBuilder,
+) {
+    match geom {
+        Geom::Point { pt } => {
+            let q = xform.apply([pt[0] as f32, pt[1] as f32]);
+            let point = eframe::egui::pos2(q[0], q[1]);
+            out.add_point(point);
+            if let Some(radius) = radius_world.filter(|radius| radius.is_finite() && *radius > 0.0)
+            {
+                out.area_sum += std::f32::consts::PI * radius * radius;
+                out.perimeter_sum += std::f32::consts::TAU * radius;
+                out.min_x = out.min_x.min(point.x - radius);
+                out.min_y = out.min_y.min(point.y - radius);
+                out.max_x = out.max_x.max(point.x + radius);
+                out.max_y = out.max_y.max(point.y + radius);
+            }
+        }
+        Geom::MultiPoint { pts } => {
+            for pt in pts {
+                add_geom_summary(&Geom::Point { pt: *pt }, xform, radius_world, out);
+            }
+        }
+        Geom::Polygon { rings } => {
+            if let Some(ring) = rings.first() {
+                let points = ring
+                    .iter()
+                    .map(|p| {
+                        let q = xform.apply([p[0] as f32, p[1] as f32]);
+                        eframe::egui::pos2(q[0], q[1])
+                    })
+                    .collect::<Vec<_>>();
+                out.add_polyline(&points);
+            }
+        }
+        Geom::MultiPolygon { polys } => {
+            for poly in polys {
+                add_geom_summary(poly, xform, radius_world, out);
+            }
+        }
+        Geom::LineString { pts } => {
+            let points = pts
+                .iter()
+                .map(|p| {
+                    let q = xform.apply([p[0] as f32, p[1] as f32]);
+                    eframe::egui::pos2(q[0], q[1])
+                })
+                .collect::<Vec<_>>();
+            out.add_polyline(&points);
+        }
+        Geom::MultiLineString { lines } => {
+            for line in lines {
+                let points = line
+                    .iter()
+                    .map(|p| {
+                        let q = xform.apply([p[0] as f32, p[1] as f32]);
+                        eframe::egui::pos2(q[0], q[1])
+                    })
+                    .collect::<Vec<_>>();
+                out.add_polyline(&points);
+            }
+        }
+        Geom::Unsupported => {}
+    }
+}
+
+fn polygon_area_and_centroid(points: &[eframe::egui::Pos2]) -> Option<(f32, eframe::egui::Pos2)> {
+    if points.len() < 4 {
+        return None;
+    }
+    let mut cross_sum = 0.0f32;
+    let mut cx_sum = 0.0f32;
+    let mut cy_sum = 0.0f32;
+
+    for window in points.windows(2) {
+        let a = window[0];
+        let b = window[1];
+        let cross = a.x * b.y - b.x * a.y;
+        cross_sum += cross;
+        cx_sum += (a.x + b.x) * cross;
+        cy_sum += (a.y + b.y) * cross;
+    }
+    let area_signed = cross_sum * 0.5;
+    let area = area_signed.abs();
+    if area <= 1e-6 {
+        return None;
+    }
+    let denom = 3.0 * cross_sum;
+    if denom.abs() <= 1e-6 {
+        return None;
+    }
+    Some((area, eframe::egui::pos2(cx_sum / denom, cy_sum / denom)))
 }
 
 fn geometry_bytes_at<'a>(geom: &'a dyn Array, row: usize) -> Option<&'a [u8]> {
@@ -1031,4 +1518,45 @@ fn circle_polyline_transformed(
         pts.push(eframe::egui::pos2(q[0], q[1]));
     }
     pts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn le_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn le_f64(out: &mut Vec<u8>, value: f64) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn centroid_summary_reads_polygon_without_persisting_rings() {
+        let mut wkb = Vec::new();
+        wkb.push(1);
+        le_u32(&mut wkb, 3);
+        le_u32(&mut wkb, 1);
+        le_u32(&mut wkb, 5);
+        for (x, y) in [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 20.0),
+            (0.0, 20.0),
+            (0.0, 0.0),
+        ] {
+            le_f64(&mut wkb, x);
+            le_f64(&mut wkb, y);
+        }
+
+        let summary = centroid_summary_from_wkb(&wkb, &SpatialDataTransform2::default(), None)
+            .expect("valid WKB")
+            .expect("polygon summary");
+
+        assert!((summary.centroid_world.x - 5.0).abs() < 1e-4);
+        assert!((summary.centroid_world.y - 10.0).abs() < 1e-4);
+        assert!((summary.area_px - 200.0).abs() < 1e-4);
+        assert!((summary.perimeter_px - 60.0).abs() < 1e-4);
+    }
 }

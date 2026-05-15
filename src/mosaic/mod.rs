@@ -38,10 +38,12 @@ use crate::data::project_config::{ProjectLayerGroups, ProjectRoi};
 use crate::data::remote_store::{build_http_store, build_s3_store};
 use crate::data::samplesheet::load_samplesheet_csv;
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
+use crate::objects::ObjectPreloadSettings;
 use crate::project::groups as layer_groups;
 use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectMosaicViewState, ProjectSpace, ProjectUiState,
+    ProjectChannelViewState, ProjectMosaicViewState, ProjectObjectCacheUiState, ProjectSpace,
+    ProjectUiState,
 };
 use crate::ui::canvas_overlays;
 use crate::ui::channels_panel::{self, ChannelListHost};
@@ -408,6 +410,8 @@ pub enum MosaicRequest {
     OpenProjectRoi(ProjectRoi),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
+    PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
+    ClearObjectCache,
 }
 
 #[derive(Debug, Clone)]
@@ -700,6 +704,10 @@ impl MosaicViewerApp {
 
     pub fn project_space(&self) -> &ProjectSpace {
         &self.project_space
+    }
+
+    pub fn set_project_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
+        self.project_space.set_object_cache_ui_state(state);
     }
 
     pub fn set_project_space(&mut self, mut project_space: ProjectSpace) {
@@ -3329,6 +3337,15 @@ impl MosaicViewerApp {
                 }
                 crate::project::ProjectSpaceAction::OpenRemoteDialog => {
                     self.pending_request = Some(MosaicRequest::OpenRemoteDialog);
+                }
+                crate::project::ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                    self.pending_request = Some(MosaicRequest::PreloadObjectSegmentations(
+                        self.project_space.clone(),
+                        mode,
+                    ));
+                }
+                crate::project::ProjectSpaceAction::ClearObjectCache => {
+                    self.pending_request = Some(MosaicRequest::ClearObjectCache);
                 }
             }
         }

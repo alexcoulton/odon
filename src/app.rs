@@ -34,6 +34,7 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
+use crate::deep_link::DeepLinkRequest;
 use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::geometry::threshold_regions::{
     ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
@@ -56,12 +57,14 @@ use crate::masks::MaskLayer;
 use crate::masks::resolve_masks_geojson_path_and_downsample;
 use crate::masks::save_mask_layers_geojson;
 use crate::objects::GeoJsonSegmentationLayer;
+use crate::objects::ObjectPreloadSettings;
 use crate::objects::ObjectsLayer;
+use crate::objects::PreloadedObjectLayer;
 use crate::project::groups as layer_groups;
 use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectRoiViewState, ProjectSegmentationViewState, ProjectSpace,
-    ProjectSpaceAction, ProjectUiState,
+    ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
+    ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction, ProjectUiState,
 };
 use crate::render::labels::{LabelZarrDataset, discover_label_names_local};
 use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
@@ -605,6 +608,8 @@ pub enum ViewerRequest {
     OpenProjectRoi(ProjectRoi),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
+    PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
+    ClearObjectCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -661,6 +666,15 @@ fn dummy_local_store_for_path(
     Ok(Arc::new(zarrs::filesystem::FilesystemStore::new(
         &store_root,
     )?))
+}
+
+fn normalize_deep_link_name(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
 }
 
 fn build_tiff_dataset(
@@ -817,6 +831,233 @@ impl OmeZarrViewerApp {
 
     pub fn label_prompt_preference(&self) -> LabelPromptSessionPreference {
         self.seg_label_prompt_preference
+    }
+
+    pub fn apply_deep_link_request(&mut self, request: &DeepLinkRequest) {
+        let mut notes = Vec::new();
+        let segmentation_source = request
+            .segmentation_source
+            .as_deref()
+            .or_else(|| request.segmentation.as_deref())
+            .map(normalize_deep_link_name);
+        let object_segmentation_requested = segmentation_source.as_deref().is_some_and(|source| {
+            matches!(
+                source,
+                "objects"
+                    | "object"
+                    | "geoparquet"
+                    | "parquet"
+                    | "project"
+                    | "project_objects"
+                    | "cells_geoparquet"
+            )
+        });
+        let bundled_labels_requested = segmentation_source
+            .as_deref()
+            .is_none_or(|source| !object_segmentation_requested && source != "none");
+        let load_bundled_labels = request
+            .load_segmentation_labels
+            .unwrap_or(bundled_labels_requested);
+
+        let mut channel_visibility_changed = false;
+        if let Some(channel_name) = request.channel.as_deref() {
+            match self.find_channel_index_for_link(channel_name) {
+                Some(idx) => {
+                    self.selected_channel = idx;
+                    if let Some(channel) = self.channels.get_mut(idx) {
+                        channel_visibility_changed |= !channel.visible;
+                        channel.visible = true;
+                    }
+                    self.set_active_layer(LayerId::Channel(idx));
+                }
+                None => notes.push(format!("channel '{channel_name}' was not found")),
+            }
+        }
+
+        if !request.visible_channels.is_empty() {
+            for channel in &mut self.channels {
+                channel_visibility_changed |= channel.visible;
+                channel.visible = false;
+            }
+            for channel_name in &request.visible_channels {
+                match self.find_channel_index_for_link(channel_name) {
+                    Some(idx) => {
+                        if let Some(channel) = self.channels.get_mut(idx) {
+                            channel_visibility_changed |= !channel.visible;
+                            channel.visible = true;
+                        }
+                    }
+                    None => notes.push(format!("visible channel '{channel_name}' was not found")),
+                }
+            }
+        }
+
+        for channel_name in &request.hidden_channels {
+            match self.find_channel_index_for_link(channel_name) {
+                Some(idx) => {
+                    if let Some(channel) = self.channels.get_mut(idx) {
+                        channel_visibility_changed |= channel.visible;
+                        channel.visible = false;
+                    }
+                }
+                None => notes.push(format!("hidden channel '{channel_name}' was not found")),
+            }
+        }
+        if channel_visibility_changed {
+            self.bump_render_id();
+        }
+
+        if request.contrast_min.is_some() || request.contrast_max.is_some() {
+            let idx = self
+                .selected_channel
+                .min(self.channels.len().saturating_sub(1));
+            if self.channels.get(idx).is_some() {
+                let abs_max = self.dataset.abs_max.max(1.0);
+                let (existing_lo, existing_hi) =
+                    self.channels[idx].window.unwrap_or((0.0, abs_max));
+                let lo = request.contrast_min.unwrap_or(existing_lo);
+                let hi = request.contrast_max.unwrap_or(existing_hi);
+                if !self.set_channel_window_for_link(idx, lo, hi) {
+                    let channel_name = self.channels[idx].name.clone();
+                    notes.push(format!(
+                        "contrast limits for channel '{channel_name}' were invalid"
+                    ));
+                }
+            }
+        }
+
+        for contrast in &request.channel_contrasts {
+            match self.find_channel_index_for_link(&contrast.channel) {
+                Some(idx) => {
+                    if !self.set_channel_window_for_link(idx, contrast.min, contrast.max) {
+                        notes.push(format!(
+                            "contrast limits for channel '{}' were invalid",
+                            contrast.channel
+                        ));
+                    }
+                }
+                None => notes.push(format!(
+                    "contrast channel '{}' was not found",
+                    contrast.channel
+                )),
+            }
+        }
+
+        if let Some(label_name) = request.segmentation.as_deref()
+            && load_bundled_labels
+            && bundled_labels_requested
+        {
+            if self.seg_label_names.is_empty()
+                || self.seg_label_names.iter().any(|n| n == label_name)
+            {
+                self.seg_label_selected = label_name.to_string();
+                self.seg_label_input = self.seg_label_selected.clone();
+                if self.tiles_gl.is_some() {
+                    match self.load_segmentation_labels(label_name) {
+                        Ok(()) => {
+                            self.seg_label_prompt_open = false;
+                            self.bump_render_id();
+                        }
+                        Err(err) => notes.push(format!("labels/{label_name} failed: {err}")),
+                    }
+                }
+            } else {
+                notes.push(format!("labels/{label_name} was not found"));
+            }
+        } else if request.load_segmentation_labels == Some(false) {
+            self.cells_outlines_visible = false;
+        }
+
+        if object_segmentation_requested {
+            self.auto_load_project_roi_segmentation();
+            self.set_active_layer(LayerId::SegmentationObjects);
+        }
+
+        if let Some(color_by) = request.cell_color_by.as_deref() {
+            let mut display = self.seg_objects.project_display_state();
+            display.color_property_key = Some(color_by.to_string());
+            display.fill_cells = request.fill_cells.unwrap_or(true);
+            self.seg_objects.apply_project_display_state(&display);
+            self.set_active_layer(LayerId::SegmentationObjects);
+        } else if let Some(fill_cells) = request.fill_cells {
+            let mut display = self.seg_objects.project_display_state();
+            display.fill_cells = fill_cells;
+            self.seg_objects.apply_project_display_state(&display);
+        }
+
+        if let Some(show_selection_overlay) = request.show_selection_overlay {
+            let mut analysis = self.seg_objects.project_analysis_state();
+            analysis.show_selection_overlay = show_selection_overlay;
+            let active_channel_name = self
+                .channels
+                .get(self.selected_channel)
+                .map(|channel| channel.name.as_str());
+            self.seg_objects
+                .apply_project_analysis_state(&analysis, active_channel_name);
+        }
+
+        if !request.visible_cell_types.is_empty() || !request.hidden_cell_types.is_empty() {
+            self.seg_objects.set_color_value_visibility(
+                request.cell_color_by.as_deref(),
+                &request.visible_cell_types,
+                &request.hidden_cell_types,
+            );
+        }
+
+        if let Some(center) = request.center_world {
+            self.camera.center_world_lvl0 = egui::pos2(center[0], center[1]);
+        }
+        if let Some(zoom) = request.zoom {
+            self.camera.zoom_screen_per_lvl0_px = zoom;
+        }
+
+        if notes.is_empty() {
+            self.roi_selector.set_status("Opened Odon deep link.");
+        } else {
+            self.roi_selector
+                .set_status(format!("Opened Odon deep link; {}", notes.join("; ")));
+        }
+        self.sync_current_view_state_into_project_space();
+    }
+
+    pub fn install_preloaded_project_segmentation(&mut self, preloaded: &PreloadedObjectLayer) {
+        self.seg_objects.install_preloaded(preloaded);
+        self.set_active_layer(LayerId::SegmentationObjects);
+        self.roi_selector
+            .set_status("Loaded cached project segmentation.");
+        self.sync_current_view_state_into_project_space();
+    }
+
+    fn find_channel_index_for_link(&self, channel_name: &str) -> Option<usize> {
+        let needle = normalize_deep_link_name(channel_name);
+        self.channels
+            .iter()
+            .position(|channel| normalize_deep_link_name(&channel.name) == needle)
+            .or_else(|| {
+                self.channels
+                    .iter()
+                    .position(|channel| normalize_deep_link_name(&channel.name).contains(&needle))
+            })
+    }
+
+    fn set_channel_window_for_link(&mut self, idx: usize, lo: f32, hi: f32) -> bool {
+        if !lo.is_finite() || !hi.is_finite() {
+            return false;
+        }
+        let abs_max = self.dataset.abs_max.max(1.0);
+        let lo = lo.clamp(0.0, abs_max);
+        let hi = hi.clamp(0.0, abs_max);
+        if hi <= lo {
+            return false;
+        }
+        let Some(channel) = self.channels.get_mut(idx) else {
+            return false;
+        };
+        channel.window = Some((lo, hi));
+        self.channel_window_overrides
+            .insert(channel.name.clone(), (lo, hi));
+        self.bump_render_id();
+        true
     }
 
     fn default_tile_loader_threads() -> usize {
@@ -2208,6 +2449,23 @@ impl OmeZarrViewerApp {
         &self.project_space
     }
 
+    pub fn set_project_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
+        self.project_space.set_object_cache_ui_state(state);
+    }
+
+    pub fn is_viewing_project_roi(&self, roi: &ProjectRoi) -> bool {
+        let Some(source) = roi.dataset_source() else {
+            return false;
+        };
+        match (source, &self.dataset.source) {
+            (
+                crate::data::dataset_source::DatasetSource::Local(path),
+                crate::data::dataset_source::DatasetSource::Local(active),
+            ) => path == *active || path.to_string_lossy() == active.to_string_lossy(),
+            (source, active) => source == *active,
+        }
+    }
+
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
         self.apply_view_state_from_project_space();
@@ -2996,7 +3254,8 @@ impl eframe::App for OmeZarrViewerApp {
                     .as_ref()
                     .and_then(|segmentation| segmentation.object_display.as_ref())
                 {
-                    self.seg_objects.apply_project_display_state(object_display);
+                    self.seg_objects
+                        .apply_project_display_state_preserving_color_visibility(object_display);
                 } else {
                     self.seg_objects.clear_project_display_state();
                 }
@@ -3198,6 +3457,17 @@ impl eframe::App for OmeZarrViewerApp {
                                 ProjectSpaceAction::OpenRemoteDialog => {
                                     self.remote_dialog_open = true;
                                     self.remote_status.clear();
+                                }
+                                ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                                    self.sync_current_view_state_into_project_space();
+                                    self.pending_request =
+                                        Some(ViewerRequest::PreloadObjectSegmentations(
+                                            self.project_space.clone(),
+                                            mode,
+                                        ));
+                                }
+                                ProjectSpaceAction::ClearObjectCache => {
+                                    self.pending_request = Some(ViewerRequest::ClearObjectCache);
                                 }
                             }
                         }
@@ -3900,25 +4170,15 @@ impl OmeZarrViewerApp {
         }
     }
 
-    fn handle_roi_selector_action(&mut self, ctx: &egui::Context, action: RoiSelectorAction) {
+    fn handle_roi_selector_action(&mut self, _ctx: &egui::Context, action: RoiSelectorAction) {
         match action {
             RoiSelectorAction::OpenRoi(roi) => {
-                let Some(source) = roi.dataset_source() else {
+                if roi.dataset_source().is_none() {
                     self.roi_selector
                         .set_status("Open ROI failed: ROI has no dataset source.".to_string());
                     return;
-                };
-                match source {
-                    crate::data::dataset_source::DatasetSource::Local(path) => {
-                        if let Err(err) = self.switch_roi(ctx, path) {
-                            self.roi_selector
-                                .set_status(format!("Open ROI failed: {err}"));
-                        }
-                    }
-                    _ => {
-                        self.pending_request = Some(ViewerRequest::OpenProjectRoi(roi));
-                    }
                 }
+                self.pending_request = Some(ViewerRequest::OpenProjectRoi(roi));
             }
             RoiSelectorAction::LoadLabels => {
                 if let Err(err) = self.ensure_segmentation_labels_loaded() {
@@ -4082,23 +4342,6 @@ impl OmeZarrViewerApp {
                 }
             }
         }
-    }
-
-    fn switch_roi(&mut self, ctx: &egui::Context, new_root: PathBuf) -> anyhow::Result<()> {
-        if new_root.as_os_str().is_empty() {
-            anyhow::bail!("empty ROI path");
-        }
-        if self
-            .dataset
-            .source
-            .local_path()
-            .is_some_and(|p| p == new_root.as_path())
-        {
-            return Ok(());
-        }
-
-        let (dataset, store) = crate::data::ome::OmeZarrDataset::open_local(&new_root)?;
-        self.switch_dataset_with_store(ctx, dataset, store, None)
     }
 
     fn switch_dataset_with_store(

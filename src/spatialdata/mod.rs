@@ -12,7 +12,8 @@ pub use layers::{PositiveCellSelectionTarget, SpatialDataLayers};
 pub use parquet_points::{PointsLoadOptions, PointsMeta, PointsPayload, load_points_sample};
 pub use parquet_shapes::{
     ShapesLoadOptions, ShapesObjectSchema, ShapesRenderKind, detect_shapes_render_kind,
-    inspect_shapes_object_schema, load_shapes_circle_polylines, load_shapes_objects,
-    load_shapes_points, load_shapes_polylines_exterior, load_shapes_xy_point_objects,
-    shapes_support_object_layer,
+    inspect_shapes_object_schema, load_shapes_centroid_point_objects, load_shapes_circle_polylines,
+    load_shapes_objects, load_shapes_points, load_shapes_polylines_exterior,
+    load_shapes_property_values_by_row, load_shapes_xy_point_features,
+    load_shapes_xy_point_objects, shapes_support_object_layer,
 };

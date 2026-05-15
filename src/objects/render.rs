@@ -199,13 +199,12 @@ impl ObjectsLayer {
                     } else {
                         let fill_color =
                             egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                        let mut visible_fill_state = vec![255u8; fill_mesh.object_count];
-                        if let Some(filtered_indices) = self.filtered_indices.as_ref() {
-                            visible_fill_state.fill(0);
-                            for idx in filtered_indices {
-                                if let Some(slot) = visible_fill_state.get_mut(*idx) {
-                                    *slot = 255;
-                                }
+                        let mut visible_fill_state = vec![0u8; fill_mesh.object_count];
+                        for idx in 0..fill_mesh.object_count {
+                            if self.is_index_visible(idx)
+                                && let Some(slot) = visible_fill_state.get_mut(idx)
+                            {
+                                *slot = 255;
                             }
                         }
                         items.push(ObjectFillGlDrawItem {
@@ -214,11 +213,7 @@ impl ObjectsLayer {
                                 generation: self.generation,
                                 vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                 object_count: fill_mesh.object_count,
-                                selection_generation: if self.filtered_indices.is_some() {
-                                    self.selection_generation
-                                } else {
-                                    1
-                                },
+                                selection_generation: self.generation,
                                 selection_state: Arc::new(visible_fill_state),
                             },
                             params: ObjectFillGlDrawParams {
@@ -1150,6 +1145,8 @@ impl ObjectsLayer {
         property_key: &str,
         group: &ObjectColorGroup,
     ) -> Option<[u8; 3]> {
+        self.color_value_visible_for_label(property_key, &group.value_label)
+            .then_some(())?;
         if self.color_level_overrides_property_key != property_key {
             return Some(group.color_rgb);
         }
@@ -1349,6 +1346,48 @@ impl ObjectsLayer {
             return;
         }
 
+        let color_groups_binding = self.active_color_groups().cloned();
+        let active_color_groups = match self.color_mode {
+            ObjectColorMode::Single => None,
+            ObjectColorMode::ByProperty => color_groups_binding
+                .as_ref()
+                .filter(|groups| groups.property_key == self.color_property_key),
+        };
+        if let Some(color_groups) = active_color_groups {
+            if self.gl_proxy_group_points.len() < color_groups.groups.len() {
+                self.gl_proxy_group_points
+                    .resize_with(color_groups.groups.len(), PointsGlRenderer::default);
+            }
+            for (group_idx, group) in color_groups.groups.iter().enumerate() {
+                let Some(color_rgb) =
+                    self.effective_color_group_rgb(&color_groups.property_key, group)
+                else {
+                    continue;
+                };
+                self.draw_proxy_point_batch(
+                    ui,
+                    camera,
+                    viewport,
+                    visible_world,
+                    local_to_world_offset,
+                    gpu_available,
+                    &group.point_positions_world,
+                    &group.point_values,
+                    self.point_style_for_rgb(color_rgb),
+                    group.fill_generation,
+                    Some(&self.gl_proxy_group_points[group_idx]),
+                );
+            }
+            self.draw_point_selection_overlay(
+                ui,
+                camera,
+                viewport,
+                local_to_world_offset,
+                gpu_available,
+            );
+            return;
+        }
+
         if gpu_available {
             let data = crate::render::points_gl::PointsGlDrawData {
                 generation: self.generation,
@@ -1372,13 +1411,46 @@ impl ObjectsLayer {
                 rect: viewport,
                 callback: Arc::new(cb),
             });
+        } else {
+            let world_margin =
+                (self.point_radius_screen_px() + 4.0) / camera.zoom_screen_per_lvl0_px.max(1e-6);
+            let visible_world = visible_world.expand(world_margin);
+            let radius = self.point_radius_screen_px();
+            for &p in base_positions.iter() {
+                let world = self.local_to_world_point(p, local_to_world_offset);
+                if !visible_world.contains(world) {
+                    continue;
+                }
+                let s = camera.world_to_screen(world, viewport);
+                ui.painter()
+                    .circle_filled(s, radius, self.base_point_style().fill_positive);
+            }
+        }
+        self.draw_point_selection_overlay(
+            ui,
+            camera,
+            viewport,
+            local_to_world_offset,
+            gpu_available,
+        );
+    }
 
-            if self.show_selection_overlay
-                && let (Some(sel_positions), Some(sel_values)) = (
-                    self.selected_point_positions_world.as_ref(),
-                    self.selected_point_values.as_ref(),
-                )
-            {
+    fn draw_point_selection_overlay(
+        &self,
+        ui: &mut egui::Ui,
+        camera: &crate::camera::Camera,
+        viewport: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        gpu_available: bool,
+    ) {
+        if !self.show_selection_overlay {
+            return;
+        }
+        if gpu_available {
+            if let (Some(sel_positions), Some(sel_values)) = (
+                self.selected_point_positions_world.as_ref(),
+                self.selected_point_values.as_ref(),
+            ) {
                 let data = crate::render::points_gl::PointsGlDrawData {
                     generation: self.selection_generation,
                     positions_world: Arc::clone(sel_positions),
@@ -1403,12 +1475,10 @@ impl ObjectsLayer {
                 });
             }
 
-            if self.show_selection_overlay
-                && let (Some(primary_positions), Some(primary_values)) = (
-                    self.primary_selected_point_positions_world.as_ref(),
-                    self.primary_selected_point_values.as_ref(),
-                )
-            {
+            if let (Some(primary_positions), Some(primary_values)) = (
+                self.primary_selected_point_positions_world.as_ref(),
+                self.primary_selected_point_values.as_ref(),
+            ) {
                 let data = crate::render::points_gl::PointsGlDrawData {
                     generation: self.selection_generation.wrapping_mul(1021),
                     positions_world: Arc::clone(primary_positions),
@@ -1432,30 +1502,28 @@ impl ObjectsLayer {
                     callback: Arc::new(cb),
                 });
             }
-        } else {
-            let world_margin =
-                (self.point_radius_screen_px() + 4.0) / camera.zoom_screen_per_lvl0_px.max(1e-6);
-            let visible_world = visible_world.expand(world_margin);
-            let radius = self.point_radius_screen_px();
-            for &p in base_positions.iter() {
-                let world = self.local_to_world_point(p, local_to_world_offset);
-                if !visible_world.contains(world) {
-                    continue;
-                }
-                let s = camera.world_to_screen(world, viewport);
-                ui.painter()
-                    .circle_filled(s, radius, self.base_point_style().fill_positive);
+        } else if let Some(positions) = self.selected_point_positions_world.as_ref() {
+            let radius = self.selected_point_style().radius_screen_px;
+            let color = self.selected_point_style().fill_positive;
+            for &point in positions.iter() {
+                let world = self.local_to_world_point(point, local_to_world_offset);
+                let screen = camera.world_to_screen(world, viewport);
+                ui.painter().circle_filled(screen, radius, color);
             }
         }
     }
 
     fn base_point_style(&self) -> PointsStyle {
+        self.point_style_for_rgb(self.color_rgb)
+    }
+
+    fn point_style_for_rgb(&self, color_rgb: [u8; 3]) -> PointsStyle {
         PointsStyle {
             radius_screen_px: self.point_radius_screen_px(),
             fill_positive: egui::Color32::from_rgba_unmultiplied(
-                self.color_rgb[0],
-                self.color_rgb[1],
-                self.color_rgb[2],
+                color_rgb[0],
+                color_rgb[1],
+                color_rgb[2],
                 (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
             ),
             fill_negative: egui::Color32::TRANSPARENT,
@@ -1970,13 +2038,18 @@ where
         grouped_indices.entry(value).or_default().push(object_index);
     }
 
-    if grouped.is_empty() {
+    if counts.is_empty() {
         anyhow::bail!("no scalar values found for property '{property_key}'");
     }
 
     let mut groups = Vec::new();
-    for (value_label, polylines) in grouped {
-        let lods = build_render_lods_from_polylines(&polylines)?;
+    for (value_label, _) in counts {
+        let polylines = grouped.remove(&value_label).unwrap_or_default();
+        let lods = if polylines.is_empty() {
+            Vec::new()
+        } else {
+            build_render_lods_from_polylines(&polylines)?
+        };
         let point_positions = grouped_points.remove(&value_label).unwrap_or_default();
         let mut object_indices = grouped_indices.remove(&value_label).unwrap_or_default();
         object_indices.sort_unstable();

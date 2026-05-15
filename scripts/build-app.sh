@@ -16,6 +16,7 @@ Options:
 Environment overrides:
   APP_NAME   Bundle name / executable name (default: odon)
   BUNDLE_ID  macOS bundle identifier (default: org.odon.odon)
+  URL_SCHEME URL scheme handled by the app bundle (default: odon)
 EOF
 }
 
@@ -49,6 +50,7 @@ done
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_name="${APP_NAME:-odon}"
 bundle_id="${BUNDLE_ID:-org.odon.odon}"
+url_scheme="${URL_SCHEME:-odon}"
 version="$(awk -F '"' '/^version = / { print $2; exit }' "$root_dir/Cargo.toml")"
 target_dir="$root_dir/target/$profile"
 binary_path="$target_dir/$app_name"
@@ -116,6 +118,17 @@ $icon_block
   <string>${app_name}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>${bundle_id}.url</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>${url_scheme}</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>${version}</string>
   <key>CFBundleVersion</key>

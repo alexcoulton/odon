@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
 use std::{collections::HashMap, collections::HashSet};
 
 use eframe::egui;
@@ -19,8 +21,10 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
+use crate::deep_link::DeepLinkRequest;
 use crate::mosaic::{MosaicRequest, MosaicViewerApp};
-use crate::project::{ProjectSpace, ProjectSpaceAction};
+use crate::objects::{ObjectPreloadSettings, PreloadedObjectLayer};
+use crate::project::{ProjectObjectCacheUiState, ProjectSpace, ProjectSpaceAction};
 use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::discover_xenium_explorer;
@@ -81,12 +85,88 @@ enum Mode {
     Transition,
 }
 
+struct ProjectObjectPreloadEvent {
+    path: PathBuf,
+    settings: ObjectPreloadSettings,
+    result: Result<PreloadedObjectLayer, String>,
+    finished: bool,
+}
+
+fn project_roi_segmentation_path(
+    project_space: &ProjectSpace,
+    roi: &ProjectRoi,
+) -> Option<PathBuf> {
+    let segpath = roi.segpath.as_ref()?;
+    if segpath.is_absolute() {
+        Some(segpath.clone())
+    } else {
+        project_space
+            .project_dir()
+            .map(|dir| dir.join(segpath))
+            .or_else(|| Some(segpath.clone()))
+    }
+}
+
+fn project_object_segmentation_paths(project_space: &ProjectSpace) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for roi in &project_space.config().rois {
+        let Some(path) = project_roi_segmentation_path(project_space, roi) else {
+            continue;
+        };
+        let supported = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "parquet" | "geoparquet"))
+            .unwrap_or(false);
+        if supported && path.exists() && seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn project_object_cache_ui_state(
+    project_space: &ProjectSpace,
+    cached: usize,
+    total: usize,
+    done: usize,
+    failed: usize,
+    loading: bool,
+    cached_settings: ObjectPreloadSettings,
+) -> ProjectObjectCacheUiState {
+    let paths = project_object_segmentation_paths(project_space);
+    let on_disk_bytes = paths
+        .iter()
+        .filter_map(|path| path.metadata().ok().map(|meta| meta.len()))
+        .sum::<u64>();
+    ProjectObjectCacheUiState {
+        available_count: paths.len(),
+        on_disk_bytes,
+        cached,
+        total,
+        done,
+        failed,
+        loading,
+        cached_settings,
+    }
+}
+
 pub struct RootApp {
     mode: Mode,
     gpu_available: bool,
     close_dialog_open: bool,
     spatial_open: Option<SpatialOpenDialog>,
     pending_open_root: Option<PathBuf>,
+    pending_deep_link: Option<DeepLinkRequest>,
+    deep_link_rx: Option<Receiver<DeepLinkRequest>>,
+    object_preload_project: Option<PathBuf>,
+    object_preload_rx: Option<Receiver<ProjectObjectPreloadEvent>>,
+    object_preload_cache: HashMap<(PathBuf, ObjectPreloadSettings), Arc<PreloadedObjectLayer>>,
+    object_preload_settings: ObjectPreloadSettings,
+    object_preload_total: usize,
+    object_preload_done: usize,
+    object_preload_failed: usize,
     view_show_scale_bar: bool,
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
@@ -839,6 +919,15 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_deep_link: None,
+            deep_link_rx: None,
+            object_preload_project: None,
+            object_preload_rx: None,
+            object_preload_cache: HashMap::new(),
+            object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_total: 0,
+            object_preload_done: 0,
+            object_preload_failed: 0,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -882,6 +971,15 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_deep_link: None,
+            deep_link_rx: None,
+            object_preload_project: None,
+            object_preload_rx: None,
+            object_preload_cache: HashMap::new(),
+            object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_total: 0,
+            object_preload_done: 0,
+            object_preload_failed: 0,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -925,6 +1023,15 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_deep_link: None,
+            deep_link_rx: None,
+            object_preload_project: None,
+            object_preload_rx: None,
+            object_preload_cache: HashMap::new(),
+            object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_total: 0,
+            object_preload_done: 0,
+            object_preload_failed: 0,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -948,6 +1055,141 @@ impl RootApp {
 
     pub fn queue_open_root(&mut self, root: PathBuf) {
         self.pending_open_root = Some(root);
+    }
+
+    pub fn queue_deep_link(&mut self, request: DeepLinkRequest) {
+        self.pending_deep_link = Some(request);
+    }
+
+    pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>) {
+        self.deep_link_rx = Some(rx);
+    }
+
+    fn poll_project_object_preload(&mut self) {
+        let Some(rx) = self.object_preload_rx.take() else {
+            return;
+        };
+        let mut keep_rx = true;
+        while let Ok(event) = rx.try_recv() {
+            self.object_preload_done = self.object_preload_done.saturating_add(1);
+            match event.result {
+                Ok(preloaded) => {
+                    log_warn!(
+                        "project preload: cached {} ({}) object segmentation {}",
+                        event.settings.mode.label(),
+                        event.settings.property_label(),
+                        event.path.display()
+                    );
+                    self.object_preload_cache
+                        .insert((event.path, event.settings), Arc::new(preloaded));
+                }
+                Err(err) => {
+                    self.object_preload_failed = self.object_preload_failed.saturating_add(1);
+                    log_warn!(
+                        "project preload: failed object segmentation {}: {err}",
+                        event.path.display()
+                    );
+                }
+            }
+            if event.finished {
+                keep_rx = false;
+                log_warn!(
+                    "project preload: finished ({} cached object segmentation(s))",
+                    self.object_preload_cache.len()
+                );
+            }
+        }
+        if keep_rx {
+            self.object_preload_rx = Some(rx);
+        }
+    }
+
+    fn sync_project_object_preload_scope(&mut self, project_path: Option<PathBuf>) {
+        if self.object_preload_project == project_path {
+            return;
+        }
+        self.object_preload_project = project_path;
+        self.object_preload_rx = None;
+        self.object_preload_cache.clear();
+        self.object_preload_settings = ObjectPreloadSettings::default();
+        self.object_preload_total = 0;
+        self.object_preload_done = 0;
+        self.object_preload_failed = 0;
+    }
+
+    fn start_project_object_preload(
+        &mut self,
+        project_space: &ProjectSpace,
+        settings: ObjectPreloadSettings,
+    ) {
+        let Some(project_path) = project_space.saved_project_path() else {
+            return;
+        };
+
+        let paths = project_object_segmentation_paths(project_space);
+        self.object_preload_project = Some(project_path);
+        self.object_preload_rx = None;
+        self.object_preload_cache.clear();
+        self.object_preload_settings = settings;
+        self.object_preload_total = paths.len();
+        self.object_preload_done = 0;
+        self.object_preload_failed = 0;
+        if paths.is_empty() {
+            return;
+        }
+
+        let total = paths.len();
+        let (tx, rx) = std::sync::mpsc::channel::<ProjectObjectPreloadEvent>();
+        self.object_preload_rx = Some(rx);
+        log_warn!(
+            "project preload: starting {total} {} ({}) object segmentation(s)",
+            settings.mode.label(),
+            settings.property_label()
+        );
+        if let Err(err) = std::thread::Builder::new()
+            .name("odon-project-object-preload".to_string())
+            .spawn(move || {
+                for (idx, path) in paths.into_iter().enumerate() {
+                    let result =
+                        crate::objects::preload_objects_from_path(path.clone(), 1.0, settings)
+                            .map_err(|err| err.to_string());
+                    if tx
+                        .send(ProjectObjectPreloadEvent {
+                            path,
+                            settings,
+                            result,
+                            finished: idx + 1 == total,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+        {
+            log_warn!("project preload: failed to start background thread: {err}");
+            self.object_preload_rx = None;
+            self.object_preload_total = 0;
+        }
+    }
+
+    fn clear_project_object_preload(&mut self) {
+        self.object_preload_rx = None;
+        self.object_preload_cache.clear();
+        self.object_preload_total = 0;
+        self.object_preload_done = 0;
+        self.object_preload_failed = 0;
+    }
+
+    fn cached_project_object_layer(
+        &self,
+        project_space: &ProjectSpace,
+        roi: &ProjectRoi,
+    ) -> Option<Arc<PreloadedObjectLayer>> {
+        let path = project_roi_segmentation_path(project_space, roi)?;
+        self.object_preload_cache
+            .get(&(path, self.object_preload_settings))
+            .cloned()
     }
 
     pub fn add_paths_to_project(&mut self, paths: Vec<PathBuf>) {
@@ -1232,7 +1474,15 @@ impl RootApp {
             self.mode = Mode::Project { project_space: ps };
             return;
         };
+        let cached_objects = self.cached_project_object_layer(&project_space, &roi);
         self.open_dataset_source(ctx, source, project_space);
+        if let (Some(preloaded), Mode::Single(app)) = (cached_objects.as_ref(), &mut self.mode) {
+            log_warn!(
+                "project preload: installing cached object segmentation for {}",
+                roi.source_display()
+            );
+            app.install_preloaded_project_segmentation(preloaded);
+        }
     }
 
     fn open_mosaic_from_project(
@@ -1561,6 +1811,33 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(rx) = self.deep_link_rx.as_ref() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            let mut received_deep_link = false;
+            while let Ok(request) = rx.try_recv() {
+                log_warn!("deep_link: received {:?}", request);
+                self.pending_deep_link = Some(request);
+                received_deep_link = true;
+            }
+            if received_deep_link {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                    egui::UserAttentionType::Informational,
+                ));
+            }
+        }
+        self.poll_project_object_preload();
+        if self.object_preload_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let current_project_path = match &self.mode {
+            Mode::Project { project_space } => project_space.saved_project_path(),
+            Mode::Single(app) => app.project_space().saved_project_path(),
+            Mode::Mosaic { mosaic, .. } => mosaic.project_space().saved_project_path(),
+            Mode::Transition => None,
+        };
+        self.sync_project_object_preload_scope(current_project_path);
+
         let open_mosaic: Option<Vec<PathBuf>> = None;
         let mut open_remote_single: Option<(
             OmeZarrDataset,
@@ -1572,8 +1849,100 @@ impl eframe::App for RootApp {
             None;
         let mut back_to_single = false;
         let mut open_single: Option<(PathBuf, ProjectSpace)> = None;
-        let mut open_project_roi: Option<(ProjectRoi, ProjectSpace)> = None;
+        let mut open_project_roi: Option<(ProjectRoi, ProjectSpace, Option<DeepLinkRequest>)> =
+            None;
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
+
+        if let Some(req) = self.pending_deep_link.take() {
+            log_warn!("deep_link: handling {:?}", req);
+            let previous_mode = std::mem::replace(&mut self.mode, Mode::Transition);
+            let (mut project_space, single_restore, mosaic_restore) = match previous_mode {
+                Mode::Project { project_space } => (project_space, None, None),
+                Mode::Single(mut app) => (app.take_project_space(), Some(app), None),
+                Mode::Mosaic { mut mosaic, ret } => {
+                    (mosaic.take_project_space(), None, Some((mosaic, ret)))
+                }
+                Mode::Transition => (ProjectSpace::default(), None, None),
+            };
+
+            let mut status = None;
+            if let Some(path) = req.project_path.as_deref() {
+                if project_space.saved_project_path().as_deref() == Some(path) {
+                    log_warn!(
+                        "deep_link: project already loaded: {} ({} ROIs)",
+                        path.display(),
+                        project_space.config().rois.len()
+                    );
+                } else {
+                    log_warn!("deep_link: loading project {}", path.display());
+                    match project_space.load_from_file(path) {
+                        Ok(()) => log_warn!(
+                            "deep_link: loaded project {} ({} ROIs)",
+                            path.display(),
+                            project_space.config().rois.len()
+                        ),
+                        Err(err) => {
+                            log_warn!("deep_link: project load failed: {err:?}");
+                            status = Some(format!("Deep link project load failed: {err}"));
+                        }
+                    }
+                }
+            }
+
+            if let Some(status) = status {
+                log_warn!("deep_link: aborting: {status}");
+                project_space.set_status(status);
+                if let Some(mut app) = single_restore {
+                    app.set_project_space(project_space);
+                    self.mode = Mode::Single(app);
+                } else if let Some((mut mosaic, ret)) = mosaic_restore {
+                    mosaic.set_project_space(project_space);
+                    self.mode = Mode::Mosaic { mosaic, ret };
+                } else {
+                    self.mode = Mode::Project { project_space };
+                }
+            } else {
+                match project_space.roi_for_link_target(req.roi.as_deref(), req.sample.as_deref()) {
+                    Ok(roi) => {
+                        log_warn!(
+                            "deep_link: resolved roi={:?} sample={:?} to {}",
+                            req.roi,
+                            req.sample,
+                            roi.source_display()
+                        );
+                        if let Some(mut app) = single_restore {
+                            if app.is_viewing_project_roi(&roi) {
+                                log_warn!(
+                                    "deep_link: reusing already open ROI {}",
+                                    roi.source_display()
+                                );
+                                app.set_project_space(project_space);
+                                log_warn!("deep_link: applying view request {:?}", req);
+                                app.apply_deep_link_request(&req);
+                                self.mode = Mode::Single(app);
+                            } else {
+                                open_project_roi = Some((roi, project_space, Some(req)));
+                            }
+                        } else {
+                            open_project_roi = Some((roi, project_space, Some(req)));
+                        }
+                    }
+                    Err(err) => {
+                        log_warn!("deep_link: ROI resolution failed: {err}");
+                        project_space.set_status(err);
+                        if let Some(mut app) = single_restore {
+                            app.set_project_space(project_space);
+                            self.mode = Mode::Single(app);
+                        } else if let Some((mut mosaic, ret)) = mosaic_restore {
+                            mosaic.set_project_space(project_space);
+                            self.mode = Mode::Mosaic { mosaic, ret };
+                        } else {
+                            self.mode = Mode::Project { project_space };
+                        }
+                    }
+                }
+            }
+        }
 
         #[cfg(target_os = "macos")]
         {
@@ -1832,6 +2201,15 @@ impl eframe::App for RootApp {
             self.settings_open = true;
         }
 
+        let object_preload_cached = self.object_preload_cache.len();
+        let object_preload_total = self.object_preload_total;
+        let object_preload_done = self.object_preload_done;
+        let object_preload_failed = self.object_preload_failed;
+        let object_preload_loading = self.object_preload_rx.is_some();
+        let object_preload_settings = self.object_preload_settings;
+        let mut object_preload_start = None;
+        let mut object_preload_clear = false;
+
         match &mut self.mode {
             Mode::Project { project_space } => {
                 let dropped = ctx.input(|i| i.raw.dropped_files.clone());
@@ -1865,12 +2243,21 @@ impl eframe::App for RootApp {
                     .default_width(420.0)
                     .resizable(true)
                     .show(ctx, |ui| {
+                        project_space.set_object_cache_ui_state(project_object_cache_ui_state(
+                            project_space,
+                            object_preload_cached,
+                            object_preload_total,
+                            object_preload_done,
+                            object_preload_failed,
+                            object_preload_loading,
+                            object_preload_settings,
+                        ));
                         let action = project_space.ui(ui, None);
                         if let Some(action) = action {
                             match action {
                                 ProjectSpaceAction::Open(roi) => {
                                     let ps = std::mem::take(project_space);
-                                    open_project_roi = Some((roi, ps));
+                                    open_project_roi = Some((roi, ps, None));
                                 }
                                 ProjectSpaceAction::OpenMosaic(rois) => {
                                     let ps = std::mem::take(project_space);
@@ -1879,6 +2266,12 @@ impl eframe::App for RootApp {
                                 ProjectSpaceAction::OpenRemoteDialog => {
                                     self.remote_dialog_open = true;
                                     self.remote_status.clear();
+                                }
+                                ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                                    object_preload_start = Some((project_space.clone(), mode));
+                                }
+                                ProjectSpaceAction::ClearObjectCache => {
+                                    object_preload_clear = true;
                                 }
                             }
                         }
@@ -1902,13 +2295,22 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Single(app) => {
+                app.set_project_object_cache_ui_state(project_object_cache_ui_state(
+                    app.project_space(),
+                    object_preload_cached,
+                    object_preload_total,
+                    object_preload_done,
+                    object_preload_failed,
+                    object_preload_loading,
+                    object_preload_settings,
+                ));
                 app.update(ctx, frame);
                 self.label_prompt_preference = app.label_prompt_preference();
                 if let Some(req) = app.take_request() {
                     match req {
                         ViewerRequest::OpenProjectRoi(roi) => {
                             let ps = app.take_project_space();
-                            open_project_roi = Some((roi, ps));
+                            open_project_roi = Some((roi, ps, None));
                         }
                         ViewerRequest::OpenProjectMosaic(rois) => {
                             let ps = app.take_project_space();
@@ -1918,10 +2320,25 @@ impl eframe::App for RootApp {
                             let ps = app.take_project_space();
                             open_remote_s3_mosaic = Some((datasets, ps));
                         }
+                        ViewerRequest::PreloadObjectSegmentations(project_space, mode) => {
+                            object_preload_start = Some((project_space, mode));
+                        }
+                        ViewerRequest::ClearObjectCache => {
+                            object_preload_clear = true;
+                        }
                     }
                 }
             }
             Mode::Mosaic { mosaic, .. } => {
+                mosaic.set_project_object_cache_ui_state(project_object_cache_ui_state(
+                    mosaic.project_space(),
+                    object_preload_cached,
+                    object_preload_total,
+                    object_preload_done,
+                    object_preload_failed,
+                    object_preload_loading,
+                    object_preload_settings,
+                ));
                 let dropped = ctx.input(|i| i.raw.dropped_files.clone());
                 if !dropped.is_empty() {
                     mosaic.project_space_mut().handle_dropped_paths(
@@ -1939,7 +2356,7 @@ impl eframe::App for RootApp {
                         }
                         MosaicRequest::OpenProjectRoi(roi) => {
                             let ps = mosaic.take_project_space();
-                            open_project_roi = Some((roi, ps));
+                            open_project_roi = Some((roi, ps, None));
                         }
                         MosaicRequest::OpenProjectMosaic(rois) => {
                             let ps = mosaic.take_project_space();
@@ -1949,6 +2366,12 @@ impl eframe::App for RootApp {
                             self.remote_dialog_open = true;
                             self.remote_status.clear();
                         }
+                        MosaicRequest::PreloadObjectSegmentations(project_space, mode) => {
+                            object_preload_start = Some((project_space, mode));
+                        }
+                        MosaicRequest::ClearObjectCache => {
+                            object_preload_clear = true;
+                        }
                     }
                 }
             }
@@ -1957,6 +2380,13 @@ impl eframe::App for RootApp {
 
         if matches!(self.mode, Mode::Project { .. }) {
             self.ui_spatial_open_dialog(ctx);
+        }
+
+        if let Some((project_space, mode)) = object_preload_start {
+            self.start_project_object_preload(&project_space, mode);
+        }
+        if object_preload_clear {
+            self.clear_project_object_preload();
         }
 
         self.ui_settings_dialog(ctx);
@@ -2006,8 +2436,15 @@ impl eframe::App for RootApp {
         if let Some((root, ps)) = open_single {
             self.open_single(ctx, &root, ps);
         }
-        if let Some((roi, ps)) = open_project_roi {
+        if let Some((roi, ps, deep_link)) = open_project_roi {
+            if deep_link.is_some() {
+                log_warn!("deep_link: opening ROI {}", roi.source_display());
+            }
             self.open_project_roi(ctx, roi, ps);
+            if let (Some(req), Mode::Single(app)) = (deep_link.as_ref(), &mut self.mode) {
+                log_warn!("deep_link: applying view request {:?}", req);
+                app.apply_deep_link_request(req);
+            }
         }
         if let Some((dataset, store, runtime, project_space)) = open_remote_single {
             let mut app = OmeZarrViewerApp::new_runtime(

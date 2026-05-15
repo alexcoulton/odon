@@ -5,6 +5,8 @@ mod camera;
 mod custom;
 mod data;
 mod debug_log;
+mod deep_link;
+mod deep_link_ipc;
 mod features;
 mod geometry;
 mod imaging;
@@ -23,6 +25,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::data::ome;
+use crate::deep_link::DeepLinkRequest;
 
 fn print_usage() {
     eprintln!(
@@ -31,6 +34,7 @@ fn print_usage() {
 Usage:
   odon "/path/to/dataset.ome.zarr"
   odon --project "/path/to/project.json"
+  odon 'odon://open?project=file:///path/to/project.json&roi=18S1746/ROI2&marker=CD68'
   odon --project "/path/to/project.json" --mosaic "TMA1v3,TMA2" [--mosaic-cols N]
   odon --mosaic-samplesheet "/path/to/samplesheet.csv" [--mosaic-cols N]
 
@@ -124,6 +128,22 @@ fn positional_args(args: &[String]) -> Vec<String> {
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut deep_link: Option<DeepLinkRequest> = None;
+    let mut deep_link_arg: Option<String> = None;
+    let mut retained_args = Vec::with_capacity(args.len());
+    for arg in args {
+        if let Some(req) = DeepLinkRequest::parse_arg(&arg)? {
+            if deep_link.is_some() {
+                anyhow::bail!("only one odon:// deep link can be opened at a time");
+            }
+            deep_link_arg = Some(arg.clone());
+            deep_link = Some(req);
+        } else {
+            retained_args.push(arg);
+        }
+    }
+    args = retained_args;
+
     if args.iter().any(|a| a == "-h" || a == "--help") {
         print_usage();
         return Ok(());
@@ -161,7 +181,9 @@ fn main() -> anyhow::Result<()> {
         Mosaic { args: mosaic::MosaicCliArgs },
     }
 
-    let project_path = flag_value(&args, "--project").map(PathBuf::from);
+    let project_path = flag_value(&args, "--project")
+        .map(PathBuf::from)
+        .or_else(|| deep_link.as_ref().and_then(|req| req.project_path.clone()));
 
     let has_mosaic = args
         .iter()
@@ -248,6 +270,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if let Some(raw_url) = deep_link_arg.as_deref()
+        && deep_link_ipc::send_to_running(raw_url)
+    {
+        return Ok(());
+    }
+
+    let mut deep_link_rx = deep_link_ipc::spawn_listener();
+
     let viewport = load_app_icon()
         .map(|icon| egui::ViewportBuilder::default().with_icon(icon))
         .unwrap_or_default();
@@ -261,34 +291,59 @@ fn main() -> anyhow::Result<()> {
         Box::new(move |cc| {
             Ok(match &launch {
                 Launch::Project { project_path } => {
-                    Box::new(root_app::RootApp::new_project(cc, project_path.clone())?)
+                    let mut app = root_app::RootApp::new_project(cc, project_path.clone())?;
+                    if let Some(rx) = deep_link_rx.take() {
+                        app.set_deep_link_receiver(rx);
+                    }
+                    if let Some(req) = deep_link.clone() {
+                        app.queue_deep_link(req);
+                    }
+                    Box::new(app)
                 }
                 Launch::Single { dataset_root } => {
                     match ome::OmeZarrDataset::open_local(dataset_root) {
-                        Ok((dataset, store)) => Box::new(root_app::RootApp::new_single(
-                            cc,
-                            dataset,
-                            store,
-                            project_path.clone(),
-                        )?),
+                        Ok((dataset, store)) => {
+                            let mut app = root_app::RootApp::new_single(
+                                cc,
+                                dataset,
+                                store,
+                                project_path.clone(),
+                            )?;
+                            if let Some(rx) = deep_link_rx.take() {
+                                app.set_deep_link_receiver(rx);
+                            }
+                            if let Some(req) = deep_link.clone() {
+                                app.queue_deep_link(req);
+                            }
+                            Box::new(app)
+                        }
                         Err(_err) => {
                             // Fall back to the project landing UI and queue an open. This allows
                             // opening SpatialData containers (and other non-image roots) via the
                             // chooser dialog, instead of failing at startup.
                             let mut app = root_app::RootApp::new_project(cc, project_path.clone())?;
+                            if let Some(rx) = deep_link_rx.take() {
+                                app.set_deep_link_receiver(rx);
+                            }
                             app.add_paths_to_project(vec![dataset_root.clone()]);
                             app.queue_open_root(dataset_root.clone());
+                            if let Some(req) = deep_link.clone() {
+                                app.queue_deep_link(req);
+                            }
                             Box::new(app)
                         }
                     }
                 }
                 Launch::Mosaic { args } => {
                     let mosaic = mosaic::MosaicViewerApp::from_args(cc, args.clone())?;
-                    Box::new(root_app::RootApp::new_mosaic(
-                        cc,
-                        mosaic,
-                        project_path.clone(),
-                    )?)
+                    let mut app = root_app::RootApp::new_mosaic(cc, mosaic, project_path.clone())?;
+                    if let Some(rx) = deep_link_rx.take() {
+                        app.set_deep_link_receiver(rx);
+                    }
+                    if let Some(req) = deep_link.clone() {
+                        app.queue_deep_link(req);
+                    }
+                    Box::new(app)
                 }
             })
         }),

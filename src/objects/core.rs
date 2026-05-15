@@ -47,111 +47,7 @@ impl ObjectsLayer {
                         }
                         self.load_rx = None;
                         self.object_load_cancel = None;
-                        // A successful object reload replaces nearly every derived cache. Keep the
-                        // raw loaded payload, then aggressively clear filter/selection/analysis
-                        // state so no view survives that still points at the previous object set.
-                        self.property_load_rx = None;
-                        self.property_load_key = None;
-                        self.display_transform = msg.display_transform;
-                        self.display_mode = msg.display_mode;
-                        self.objects = Some(msg.objects);
-                        self.bins = Some(msg.bins);
-                        self.render_lods = Some(msg.render_lods);
-                        self.object_fill_mesh = msg.object_fill_mesh;
-                        self.object_selection_lods = msg.object_selection_lods;
-                        self.point_positions_world = Some(msg.point_positions_world);
-                        self.point_values = Some(msg.point_values);
-                        self.point_lods = Some(msg.point_lods);
-                        self.gl_proxy_group_points.clear();
-                        self.object_property_keys = msg.object_property_keys;
-                        self.scalar_property_keys = msg.scalar_property_keys;
-                        self.color_property_keys = msg.color_property_keys;
-                        self.lazy_parquet_source = msg.lazy_parquet_source;
-                        self.color_legend_cache = None;
-                        let has_active_color_key = self
-                            .color_property_keys
-                            .iter()
-                            .any(|k| k == &self.color_property_key)
-                            || self.lazy_parquet_source.as_ref().is_some_and(|source| {
-                                source
-                                    .available_property_columns
-                                    .iter()
-                                    .any(|k| k == &self.color_property_key)
-                            });
-                        if !has_active_color_key {
-                            self.color_property_key.clear();
-                            self.color_mode = ObjectColorMode::Single;
-                            self.color_level_overrides_property_key.clear();
-                            self.color_level_overrides.clear();
-                        }
-                        if self.filter_property_key != "id"
-                            && !self
-                                .scalar_property_keys
-                                .iter()
-                                .any(|k| k == &self.filter_property_key)
-                            && !self.lazy_parquet_source.as_ref().is_some_and(|source| {
-                                source
-                                    .available_property_columns
-                                    .iter()
-                                    .any(|k| k == &self.filter_property_key)
-                            })
-                        {
-                            self.filter_property_key = "id".to_string();
-                        }
-                        self.color_groups = None;
-                        self.filtered_indices = None;
-                        self.filtered_render_lods = None;
-                        self.filtered_point_positions_world = None;
-                        self.filtered_point_values = None;
-                        self.filtered_point_lods = None;
-                        self.filtered_color_groups = None;
-                        self.selected_object_indices.clear();
-                        self.selected_object_index = None;
-                        self.selection_elements.clear();
-                        self.selection_element_selected = None;
-                        self.selection_element_name_draft = "Selection Element 1".to_string();
-                        self.selected_render_lods = None;
-                        self.primary_selected_render_lods = None;
-                        self.selected_fill_mesh = None;
-                        self.selection_fill_state = Arc::new(Vec::new());
-                        self.selection_cpu_overlay_dirty = false;
-                        self.selected_point_positions_world = None;
-                        self.selected_point_values = None;
-                        self.selected_point_lods = None;
-                        self.primary_selected_point_positions_world = None;
-                        self.primary_selected_point_values = None;
-                        self.selection_generation =
-                            self.selection_generation.wrapping_add(1).max(1);
-                        self.clear_measurements();
-                        self.clear_bulk_measurements();
-                        self.clear_analysis();
-                        self.analysis_threshold_set_name = "Threshold Set".to_string();
-                        self.analysis_threshold_elements.clear();
-                        self.analysis_threshold_selected_element = None;
-                        self.analysis_live_threshold_channel_name = None;
-                        self.analysis_channel_mapping_overrides.clear();
-                        self.analysis_channel_mapping_popup_open = false;
-                        self.analysis_channel_mapping_search.clear();
-                        self.analysis_channel_mapping_suggestions_cache_key = 0;
-                        self.analysis_channel_mapping_suggestions_cache_channels_len = 0;
-                        self.analysis_channel_mapping_suggestions_cache_numeric_len = 0;
-                        self.analysis_channel_mapping_suggestions_cache.clear();
-                        self.reset_object_property_analysis_cache();
-                        self.invalidate_table_cache();
-                        self.bounds_local = Some(msg.bounds_local);
-                        self.loaded_geojson = Some(msg.path);
-                        self.downsample_factor = msg.downsample_factor.max(1e-6);
-                        if self.color_mode == ObjectColorMode::ByProperty
-                            && !self.color_property_key.is_empty()
-                        {
-                            self.set_color_by_property(Some(self.color_property_key.clone()));
-                        }
-                        self.analysis_hist_focus_object_index = None;
-                        self.pending_zoom_object_index = None;
-                        self.visible = true;
-                        self.generation = self.generation.wrapping_add(1).max(1);
-                        let n = self.object_count();
-                        self.status = format!("Loaded {n} object(s).");
+                        self.install_load_result(msg);
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
@@ -326,6 +222,116 @@ impl ObjectsLayer {
         }
     }
 
+    fn install_load_result(&mut self, msg: LoadResult) {
+        // A successful object reload replaces nearly every derived cache. Keep the raw loaded
+        // payload, then aggressively clear filter/selection/analysis state so no view survives
+        // that still points at the previous object set.
+        self.property_load_rx = None;
+        self.property_load_key = None;
+        self.display_transform = msg.display_transform;
+        self.display_mode = msg.display_mode;
+        self.objects = Some(msg.objects);
+        self.bins = Some(msg.bins);
+        self.render_lods = Some(msg.render_lods);
+        self.object_fill_mesh = msg.object_fill_mesh;
+        self.object_selection_lods = msg.object_selection_lods;
+        self.point_positions_world = Some(msg.point_positions_world);
+        self.point_values = Some(msg.point_values);
+        self.point_lods = Some(msg.point_lods);
+        self.gl_proxy_group_points.clear();
+        self.object_property_keys = msg.object_property_keys;
+        self.scalar_property_keys = msg.scalar_property_keys;
+        self.color_property_keys = msg.color_property_keys;
+        self.lazy_parquet_source = msg.lazy_parquet_source;
+        self.color_legend_cache = None;
+        let has_active_color_key = self
+            .color_property_keys
+            .iter()
+            .any(|k| k == &self.color_property_key)
+            || self.lazy_parquet_source.as_ref().is_some_and(|source| {
+                source
+                    .available_property_columns
+                    .iter()
+                    .any(|k| k == &self.color_property_key)
+            });
+        if !has_active_color_key {
+            self.color_property_key.clear();
+            self.color_mode = ObjectColorMode::Single;
+            self.color_level_overrides_property_key.clear();
+            self.color_level_overrides.clear();
+        }
+        if self.filter_property_key != "id"
+            && !self
+                .scalar_property_keys
+                .iter()
+                .any(|k| k == &self.filter_property_key)
+            && !self.lazy_parquet_source.as_ref().is_some_and(|source| {
+                source
+                    .available_property_columns
+                    .iter()
+                    .any(|k| k == &self.filter_property_key)
+            })
+        {
+            self.filter_property_key = "id".to_string();
+        }
+        self.color_groups = None;
+        self.filtered_indices = None;
+        self.filtered_render_lods = None;
+        self.filtered_point_positions_world = None;
+        self.filtered_point_values = None;
+        self.filtered_point_lods = None;
+        self.filtered_color_groups = None;
+        self.selected_object_indices.clear();
+        self.selected_object_index = None;
+        self.selection_elements.clear();
+        self.selection_element_selected = None;
+        self.selection_element_name_draft = "Selection Element 1".to_string();
+        self.selected_render_lods = None;
+        self.primary_selected_render_lods = None;
+        self.selected_fill_mesh = None;
+        self.selection_fill_state = Arc::new(Vec::new());
+        self.selection_cpu_overlay_dirty = false;
+        self.selected_point_positions_world = None;
+        self.selected_point_values = None;
+        self.selected_point_lods = None;
+        self.primary_selected_point_positions_world = None;
+        self.primary_selected_point_values = None;
+        self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
+        self.clear_measurements();
+        self.clear_bulk_measurements();
+        self.clear_analysis();
+        self.analysis_threshold_set_name = "Threshold Set".to_string();
+        self.analysis_threshold_elements.clear();
+        self.analysis_threshold_selected_element = None;
+        self.analysis_live_threshold_channel_name = None;
+        self.analysis_channel_mapping_overrides.clear();
+        self.analysis_channel_mapping_popup_open = false;
+        self.analysis_channel_mapping_search.clear();
+        self.analysis_channel_mapping_suggestions_cache_key = 0;
+        self.analysis_channel_mapping_suggestions_cache_channels_len = 0;
+        self.analysis_channel_mapping_suggestions_cache_numeric_len = 0;
+        self.analysis_channel_mapping_suggestions_cache.clear();
+        self.reset_object_property_analysis_cache();
+        self.invalidate_table_cache();
+        self.bounds_local = Some(msg.bounds_local);
+        self.loaded_geojson = Some(msg.path);
+        self.downsample_factor = msg.downsample_factor.max(1e-6);
+        if self.color_mode == ObjectColorMode::ByProperty && !self.color_property_key.is_empty() {
+            crate::log_warn!(
+                "objects: applying deferred Color by '{}' after object load",
+                self.color_property_key
+            );
+            self.set_color_by_property(Some(self.color_property_key.clone()));
+        }
+        self.apply_pending_color_value_visibility();
+        self.analysis_hist_focus_object_index = None;
+        self.pending_zoom_object_index = None;
+        self.visible = true;
+        self.generation = self.generation.wrapping_add(1).max(1);
+        let n = self.object_count();
+        self.status = format!("Loaded {n} object(s).");
+    }
+
     pub fn clear(&mut self) {
         self.objects = None;
         self.bins = None;
@@ -345,6 +351,7 @@ impl ObjectsLayer {
         self.color_property_key.clear();
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
+        self.pending_color_value_visibility = None;
         self.color_mode = ObjectColorMode::Single;
         self.filter_property_key = "id".to_string();
         self.filter_query.clear();
@@ -1066,6 +1073,13 @@ impl ObjectsLayer {
         self.request_load(path, downsample_factor, None);
     }
 
+    pub fn install_preloaded(&mut self, preloaded: &PreloadedObjectLayer) {
+        self.cancel_current_load();
+        self.load_rx = None;
+        self.object_load_cancel = None;
+        self.install_load_result(preloaded.result.clone());
+    }
+
     pub fn load_objects_with_transform(
         &mut self,
         path: PathBuf,
@@ -1202,6 +1216,27 @@ impl ObjectsLayer {
                     ui.selectable_value(&mut next_color_property, String::new(), "Single color");
                     for key in &self.color_property_keys {
                         ui.selectable_value(&mut next_color_property, key.clone(), key);
+                    }
+                    if let Some(source) = self.lazy_parquet_source.as_ref() {
+                        let lazy_keys = source
+                            .available_property_columns
+                            .iter()
+                            .filter(|key| !source.loaded_property_columns.contains(*key))
+                            .filter(|key| {
+                                !self.color_property_keys.iter().any(|loaded| loaded == *key)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if !lazy_keys.is_empty() {
+                            ui.separator();
+                            for key in lazy_keys {
+                                ui.selectable_value(
+                                    &mut next_color_property,
+                                    key.clone(),
+                                    format!("{key} (load)"),
+                                );
+                            }
+                        }
                     }
                 });
             self.set_color_by_property(
@@ -1580,7 +1615,10 @@ impl ObjectsLayer {
         if self.color_mode == ObjectColorMode::ByProperty {
             let key = self.color_property_key.clone();
             self.ensure_property_loaded(key.as_str());
-            self.reconcile_active_color_property();
+            if !self.is_loading() {
+                self.reconcile_active_color_property();
+            }
+            self.apply_pending_color_value_visibility();
         }
         self.color_groups = None;
         self.filtered_color_groups = None;
@@ -1620,6 +1658,36 @@ impl ObjectsLayer {
         self.color_legend_cache = None;
     }
 
+    pub(crate) fn apply_project_display_state_preserving_color_visibility(
+        &mut self,
+        state: &ObjectProjectDisplayState,
+    ) {
+        let runtime_color_key = self.color_property_key.clone();
+        let runtime_overrides_key = self.color_level_overrides_property_key.clone();
+        let runtime_overrides = self.color_level_overrides.clone();
+        let preserve_runtime_visibility = !runtime_color_key.is_empty()
+            && runtime_overrides_key == runtime_color_key
+            && state.color_property_key.as_deref() == Some(runtime_color_key.as_str())
+            && state.color_level_overrides.is_empty()
+            && runtime_overrides.values().any(|style| !style.visible);
+
+        self.apply_project_display_state(state);
+
+        if preserve_runtime_visibility {
+            crate::log_warn!(
+                "objects: preserving runtime Color by visibility for '{}' after project display restore",
+                runtime_color_key
+            );
+            self.color_level_overrides_property_key = runtime_overrides_key;
+            self.color_level_overrides = runtime_overrides;
+            self.color_groups = None;
+            self.filtered_color_groups = None;
+            self.color_legend_cache = None;
+            self.ensure_color_groups();
+            self.generation = self.generation.wrapping_add(1).max(1);
+        }
+    }
+
     pub(crate) fn clear_project_display_state(&mut self) {
         self.set_color_by_property(None);
         self.color_level_overrides_property_key.clear();
@@ -1644,6 +1712,84 @@ impl ObjectsLayer {
             self.color_level_overrides
                 .extend(overrides.iter().map(|(key, value)| (key.clone(), *value)));
         }
+    }
+
+    pub(crate) fn set_color_value_visibility(
+        &mut self,
+        property_key: Option<&str>,
+        visible_values: &[String],
+        hidden_values: &[String],
+    ) {
+        let property_key = property_key
+            .filter(|key| !key.trim().is_empty())
+            .unwrap_or(self.color_property_key.as_str())
+            .trim();
+        if property_key.is_empty() || (visible_values.is_empty() && hidden_values.is_empty()) {
+            return;
+        }
+        self.pending_color_value_visibility = Some(PendingColorValueVisibility {
+            property_key: property_key.to_string(),
+            visible_values: visible_values.to_vec(),
+            hidden_values: hidden_values.to_vec(),
+        });
+        self.apply_pending_color_value_visibility();
+    }
+
+    fn apply_pending_color_value_visibility(&mut self) {
+        let Some(pending) = self.pending_color_value_visibility.clone() else {
+            return;
+        };
+        if self.color_mode != ObjectColorMode::ByProperty
+            || self.color_property_key != pending.property_key
+        {
+            return;
+        }
+
+        let Some(entries) = self.active_color_legend_entries() else {
+            return;
+        };
+
+        let visible_values = pending
+            .visible_values
+            .iter()
+            .map(|value| normalize_color_value_label(value))
+            .collect::<HashSet<_>>();
+        let hidden_values = pending
+            .hidden_values
+            .iter()
+            .map(|value| normalize_color_value_label(value))
+            .collect::<HashSet<_>>();
+
+        self.color_level_overrides_property_key = pending.property_key.clone();
+        let mut hidden_count = 0usize;
+        for entry in entries {
+            let normalized = normalize_color_value_label(&entry.value_label);
+            let mut visible = if visible_values.is_empty() {
+                true
+            } else {
+                visible_values.contains(&normalized)
+            };
+            if hidden_values.contains(&normalized) {
+                visible = false;
+            }
+            self.color_level_overrides
+                .entry(entry.value_label)
+                .or_default()
+                .visible = visible;
+            if !visible {
+                hidden_count += 1;
+            }
+        }
+        crate::log_warn!(
+            "objects: applied Color by visibility for '{}' ({} hidden legend value(s))",
+            pending.property_key,
+            hidden_count
+        );
+        self.pending_color_value_visibility = None;
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.ensure_color_groups();
+        self.generation = self.generation.wrapping_add(1).max(1);
     }
 
     fn property_column_available_but_unloaded(&self, property_key: &str) -> bool {
@@ -1679,7 +1825,6 @@ impl ObjectsLayer {
             return;
         };
 
-        let geometry_column = source.geometry_column.clone();
         let property_key_owned = property_key.to_string();
         let path = path.clone();
         let (tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
@@ -1692,7 +1837,6 @@ impl ObjectsLayer {
             .spawn(move || {
                 if let Ok(values_by_row) = load_parquet_property_values_for_loaded_objects(
                     &path,
-                    geometry_column.as_str(),
                     property_key_owned.as_str(),
                 ) {
                     let _ = tx.send(PropertyLoadResult {
@@ -1743,6 +1887,7 @@ impl ObjectsLayer {
         self.reset_object_property_analysis_cache();
         self.generation = self.generation.wrapping_add(1).max(1);
         self.reconcile_active_color_property();
+        self.apply_pending_color_value_visibility();
         let n = self.object_count();
         self.status = format!("Loaded {n} object(s).");
     }
@@ -2211,10 +2356,70 @@ impl ObjectsLayer {
             .contains(&needle.to_ascii_lowercase())
     }
 
+    pub(super) fn color_value_visible_for_label(
+        &self,
+        property_key: &str,
+        value_label: &str,
+    ) -> bool {
+        if let Some(pending) = self.pending_color_value_visibility.as_ref()
+            && pending.property_key == property_key
+        {
+            let value = normalize_color_value_label(value_label);
+            let visible_values = pending
+                .visible_values
+                .iter()
+                .map(|value| normalize_color_value_label(value))
+                .collect::<HashSet<_>>();
+            let hidden_values = pending
+                .hidden_values
+                .iter()
+                .map(|value| normalize_color_value_label(value))
+                .collect::<HashSet<_>>();
+            if !visible_values.is_empty() && !visible_values.contains(&value) {
+                return false;
+            }
+            if hidden_values.contains(&value) {
+                return false;
+            }
+        }
+        if self.color_level_overrides_property_key == property_key
+            && let Some(style) = self.color_level_overrides.get(value_label)
+            && !style.visible
+        {
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn object_color_value_visible(&self, obj: &GeoJsonObjectFeature) -> bool {
+        if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
+            return true;
+        }
+        let Some(value_label) = obj
+            .properties
+            .get(&self.color_property_key)
+            .and_then(property_scalar_value)
+        else {
+            return true;
+        };
+        self.color_value_visible_for_label(&self.color_property_key, &value_label)
+    }
+
     pub(super) fn is_index_visible(&self, idx: usize) -> bool {
-        self.filtered_indices
+        let filter_visible = self
+            .filtered_indices
             .as_ref()
             .map(|set| set.contains(&idx))
+            .unwrap_or(true);
+        if !filter_visible {
+            return false;
+        }
+        let Some(objects) = self.objects.as_ref() else {
+            return true;
+        };
+        objects
+            .get(idx)
+            .map(|obj| self.object_color_value_visible(obj))
             .unwrap_or(true)
     }
 
@@ -3064,18 +3269,32 @@ fn load_in_thread(
         let schema = inspect_shapes_object_schema(&path)?;
         check_cancel(cancel)?;
         let loaded_property_columns = parquet_loaded_property_columns(parquet_options, &schema);
+        let objects = match parquet_options {
+            Some(ObjectParquetLoadOptions {
+                display_mode: ObjectDisplayMode::Points,
+                source: ObjectParquetSource::Geometry(shape_options),
+            }) => parse_geoparquet_centroid_point_objects(&path, shape_options, cancel)?,
+            Some(ObjectParquetLoadOptions {
+                display_mode: ObjectDisplayMode::Points,
+                source:
+                    ObjectParquetSource::XYColumns {
+                        x_column,
+                        y_column,
+                        property_columns,
+                    },
+            }) => parse_geoparquet_xy_point_features(
+                &path,
+                x_column,
+                y_column,
+                property_columns.as_deref(),
+                cancel,
+            )?,
+            _ => parse_geoparquet_objects(&path, parquet_options, cancel)?,
+        };
         (
             display_mode,
-            parse_geoparquet_objects(&path, parquet_options, cancel)?,
+            objects,
             Some(LazyParquetSource {
-                geometry_column: parquet_options
-                    .and_then(|opts| match &opts.source {
-                        ObjectParquetSource::Geometry(shape_options) => {
-                            Some(shape_options.geometry_column.clone())
-                        }
-                        ObjectParquetSource::XYColumns { .. } => None,
-                    })
-                    .unwrap_or_else(|| preferred_geometry_column(&schema)),
                 available_property_columns: schema.property_columns,
                 loaded_property_columns,
             }),
@@ -3104,6 +3323,122 @@ fn load_in_thread(
         downsample_factor,
         SpatialDataTransform2::default(),
         display_mode,
+        objects,
+        lazy_parquet_source,
+        cancel,
+    )
+}
+
+pub fn preload_objects_from_path(
+    path: PathBuf,
+    downsample_factor: f32,
+    settings: ObjectPreloadSettings,
+) -> anyhow::Result<PreloadedObjectLayer> {
+    let cancel = AtomicBool::new(false);
+    let result = match settings.mode {
+        ObjectPreloadMode::FullGeometry => {
+            let load_options = if settings.lazy_properties && is_parquet_objects_path(&path) {
+                minimal_parquet_load_options(&path)
+                    .ok()
+                    .map(ObjectLoadOptions::Parquet)
+            } else {
+                None
+            };
+            load_in_thread(path, downsample_factor, load_options, 0, &cancel)
+        }
+        ObjectPreloadMode::CentroidPoints => load_centroid_points_in_thread(
+            path,
+            downsample_factor,
+            settings.lazy_properties,
+            0,
+            &cancel,
+        ),
+    }?;
+    Ok(PreloadedObjectLayer { result })
+}
+
+fn load_centroid_points_in_thread(
+    path: PathBuf,
+    downsample_factor: f32,
+    lazy_properties: bool,
+    request_id: u64,
+    cancel: &AtomicBool,
+) -> anyhow::Result<LoadResult> {
+    if !is_parquet_objects_path(&path) {
+        return load_in_thread(path, downsample_factor, None, request_id, cancel);
+    }
+
+    let schema = inspect_shapes_object_schema(&path)?;
+    let x_column = preferred_xy_column_exact(
+        &schema.numeric_property_columns,
+        &["x_centroid", "x", "x_centroid_image", "centroid_x"],
+    );
+    let y_column = preferred_xy_column_exact(
+        &schema.numeric_property_columns,
+        &["y_centroid", "y", "y_centroid_image", "centroid_y"],
+    );
+    let initial_property_columns = if lazy_properties {
+        Some(preferred_object_id_property_columns(
+            &schema.property_columns,
+        ))
+    } else {
+        None
+    };
+    let loaded_property_columns = initial_property_columns
+        .clone()
+        .unwrap_or_else(|| schema.property_columns.clone())
+        .into_iter()
+        .collect::<HashSet<_>>();
+    if let (Some(x_column), Some(y_column)) = (x_column, y_column) {
+        let objects = parse_geoparquet_xy_point_features(
+            &path,
+            x_column.as_str(),
+            y_column.as_str(),
+            initial_property_columns.as_deref(),
+            cancel,
+        )?;
+        let lazy_parquet_source = Some(LazyParquetSource {
+            available_property_columns: schema.property_columns.clone(),
+            loaded_property_columns,
+        });
+        return load_result_from_objects(
+            request_id,
+            path,
+            downsample_factor,
+            SpatialDataTransform2::default(),
+            ObjectDisplayMode::Points,
+            objects,
+            lazy_parquet_source,
+            cancel,
+        );
+    }
+
+    if schema.geometry_candidates.is_empty() {
+        anyhow::bail!("No centroid columns or supported geometry columns found in GeoParquet.");
+    }
+    let geometry_column = preferred_geometry_column(&schema);
+    let objects = parse_geoparquet_centroid_point_objects(
+        &path,
+        &ShapesLoadOptions {
+            transform: SpatialDataTransform2::default(),
+            geometry_column: geometry_column.clone(),
+            property_columns: initial_property_columns,
+        },
+        cancel,
+    )?;
+    if objects.is_empty() {
+        anyhow::bail!("no centroid point objects found in GeoParquet");
+    }
+    let lazy_parquet_source = Some(LazyParquetSource {
+        available_property_columns: schema.property_columns.clone(),
+        loaded_property_columns,
+    });
+    load_result_from_objects(
+        request_id,
+        path,
+        downsample_factor,
+        SpatialDataTransform2::default(),
+        ObjectDisplayMode::Points,
         objects,
         lazy_parquet_source,
         cancel,
@@ -3147,7 +3482,11 @@ fn load_result_from_objects(
     let bins = ObjectIndexBins::build(&bounds, 512.0)
         .ok_or_else(|| anyhow!("no valid object bounds after parsing"))?;
     check_cancel(cancel)?;
-    let render_lods = build_render_lods(&objects)?;
+    let render_lods = if display_mode == ObjectDisplayMode::Points {
+        Vec::new()
+    } else {
+        build_render_lods(&objects)?
+    };
     check_cancel(cancel)?;
     let object_fill_mesh = if display_mode == ObjectDisplayMode::Polygons {
         build_object_fill_mesh(&objects).ok()
@@ -3265,31 +3604,10 @@ fn parquet_loaded_property_columns(
 
 fn load_parquet_property_values_for_loaded_objects(
     path: &Path,
-    geometry_column: &str,
     property_key: &str,
 ) -> anyhow::Result<HashMap<usize, serde_json::Value>> {
     let cancel = AtomicBool::new(false);
-    let loaded = load_shapes_objects(
-        path,
-        &ShapesLoadOptions {
-            transform: SpatialDataTransform2::default(),
-            geometry_column: geometry_column.to_string(),
-            property_columns: Some(vec![property_key.to_string()]),
-        },
-        &cancel,
-    )?;
-
-    let mut out = HashMap::with_capacity(loaded.len());
-    for obj in loaded {
-        let Some(row_index) = obj.source_row_index else {
-            continue;
-        };
-        let Some(value) = obj.properties.get(property_key).cloned() else {
-            continue;
-        };
-        out.insert(row_index, value);
-    }
-    Ok(out)
+    load_shapes_property_values_by_row(path, property_key, &cancel)
 }
 
 fn parse_geojson_objects(
@@ -3440,6 +3758,68 @@ fn parse_geoparquet_objects(
     }
     if out.is_empty() {
         anyhow::bail!("no polygon objects found in GeoParquet");
+    }
+    Ok(out)
+}
+
+fn parse_geoparquet_xy_point_features(
+    path: &Path,
+    x_column: &str,
+    y_column: &str,
+    property_columns: Option<&[String]>,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
+    if !path.exists() {
+        anyhow::bail!("missing GeoParquet file: {}", path.to_string_lossy());
+    }
+    let loaded = load_shapes_xy_point_features(path, x_column, y_column, property_columns, cancel)?;
+    let mut out = Vec::with_capacity(loaded.len());
+    for obj in loaded {
+        check_cancel(cancel)?;
+        out.push(GeoJsonObjectFeature {
+            id: obj.id,
+            polygons_world: Vec::new(),
+            point_position_world: Some(obj.point_world),
+            bbox_world: obj.bbox_world,
+            area_px: obj.area_px,
+            perimeter_px: obj.perimeter_px,
+            centroid_world: obj.point_world,
+            properties: obj.properties,
+            source_row_index: obj.source_row_index,
+        });
+    }
+    if out.is_empty() {
+        anyhow::bail!("no point objects found in GeoParquet");
+    }
+    Ok(out)
+}
+
+fn parse_geoparquet_centroid_point_objects(
+    path: &Path,
+    options: &ShapesLoadOptions,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Vec<GeoJsonObjectFeature>> {
+    if !path.exists() {
+        anyhow::bail!("missing GeoParquet file: {}", path.to_string_lossy());
+    }
+    let loaded = load_shapes_centroid_point_objects(path, options, cancel)?;
+    let mut out = Vec::with_capacity(loaded.len());
+    for obj in loaded {
+        check_cancel(cancel)?;
+        out.push(GeoJsonObjectFeature {
+            id: obj.id,
+            polygons_world: Vec::new(),
+            point_position_world: Some(obj.point_world),
+            bbox_world: obj.bbox_world,
+            area_px: obj.area_px,
+            perimeter_px: obj.perimeter_px,
+            centroid_world: obj.point_world,
+            properties: obj.properties,
+            source_row_index: obj.source_row_index,
+        });
+    }
+    if out.is_empty() {
+        anyhow::bail!("no centroid point objects found in GeoParquet");
     }
     Ok(out)
 }
@@ -3614,7 +3994,7 @@ fn parse_csv_objects(
             .unwrap_or_else(|| (row_index + 1).to_string());
         properties.insert("id".to_string(), serde_json::Value::String(id.clone()));
         let center = egui::pos2(x, y);
-        let polygons_world = vec![circle_polyline_local(center, 4.0, 24)];
+        let polygons_world = vec![circle_polyline_local(center, 4.0, 8)];
         let Some((bbox_world, area_px, perimeter_px, centroid_world)) =
             summarize_geometry(&polygons_world)
         else {
@@ -3765,6 +4145,18 @@ fn preferred_xy_column(columns: &[String], preferred_names: &[&str]) -> Option<S
     columns.first().cloned()
 }
 
+fn preferred_xy_column_exact(columns: &[String], preferred_names: &[&str]) -> Option<String> {
+    for preferred in preferred_names {
+        if let Some(found) = columns
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(preferred))
+        {
+            return Some(found.clone());
+        }
+    }
+    None
+}
+
 pub(super) fn build_object_point_payload(
     objects: &[GeoJsonObjectFeature],
     _display_transform: SpatialDataTransform2,
@@ -3887,6 +4279,10 @@ fn value_to_display_text(value: &serde_json::Value) -> String {
         serde_json::Value::String(v) => v.clone(),
         _ => value.to_string(),
     }
+}
+
+pub(super) fn normalize_color_value_label(value: &str) -> String {
+    value.trim().trim_matches('"').to_ascii_lowercase()
 }
 
 fn save_geojson_objects(

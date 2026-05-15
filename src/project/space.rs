@@ -6,6 +6,7 @@ use eframe::egui;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 
+use crate::app_support::memory::format_bytes;
 use crate::data::dataset_kind::{
     LocalDatasetKind, can_open_in_mosaic, classify_local_dataset_path, normalize_local_dataset_path,
 };
@@ -16,7 +17,9 @@ use crate::data::project_config::{
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
-use crate::objects::{ObjectProjectAnalysisState, ObjectProjectDisplayState};
+use crate::objects::{
+    ObjectPreloadMode, ObjectPreloadSettings, ObjectProjectAnalysisState, ObjectProjectDisplayState,
+};
 use crate::ui::roi_browser::RoiBrowseState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +267,20 @@ pub enum ProjectSpaceAction {
     Open(ProjectRoi),
     OpenMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
+    PreloadObjectSegmentations(ObjectPreloadSettings),
+    ClearObjectCache,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProjectObjectCacheUiState {
+    pub available_count: usize,
+    pub on_disk_bytes: u64,
+    pub cached: usize,
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub loading: bool,
+    pub cached_settings: ObjectPreloadSettings,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -283,6 +300,8 @@ pub struct ProjectSpace {
     new_meta_key: String,
     new_meta_value: String,
     roi_browse: RoiBrowseState,
+    object_cache_ui: ProjectObjectCacheUiState,
+    object_cache_settings: ObjectPreloadSettings,
 }
 
 impl ProjectSpace {
@@ -326,6 +345,10 @@ impl ProjectSpace {
 
     pub fn config_generation(&self) -> u64 {
         self.config_generation
+    }
+
+    pub fn set_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
+        self.object_cache_ui = state;
     }
 
     pub fn load_from_file(&mut self, path: &Path) -> anyhow::Result<()> {
@@ -603,6 +626,71 @@ impl ProjectSpace {
             })
             .cloned()
             .collect()
+    }
+
+    pub fn roi_for_link_target(
+        &self,
+        roi_query: Option<&str>,
+        sample_query: Option<&str>,
+    ) -> Result<ProjectRoi, String> {
+        let Some(roi_query) = roi_query.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err("Deep link is missing a roi=... parameter.".to_string());
+        };
+
+        let roi_norm = normalize_link_match_text(roi_query);
+        let sample_norm = sample_query
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(normalize_link_match_text);
+
+        let mut matches = self
+            .config
+            .rois
+            .iter()
+            .filter(|roi| {
+                sample_norm.as_ref().is_none_or(|sample| {
+                    roi_link_match_texts(roi).iter().any(|s| s.contains(sample))
+                })
+            })
+            .filter(|roi| {
+                roi_link_match_texts(roi)
+                    .iter()
+                    .any(|candidate| candidate == &roi_norm || candidate.contains(&roi_norm))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if matches.is_empty() {
+            return Err(format!("No project ROI matches '{roi_query}'."));
+        }
+
+        let exact = matches
+            .iter()
+            .filter(|roi| {
+                roi_link_match_texts(roi)
+                    .iter()
+                    .any(|candidate| candidate == &roi_norm)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !exact.is_empty() {
+            matches = exact;
+        }
+
+        if matches.len() == 1 {
+            return Ok(matches.remove(0));
+        }
+
+        let examples = matches
+            .iter()
+            .take(4)
+            .map(|roi| roi.source_display())
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(format!(
+            "Deep link ROI '{roi_query}' matches {} project ROIs. Add sample=... or use a more specific roi path. Examples: {examples}",
+            matches.len()
+        ))
     }
 
     pub fn add_roi_source(&mut self, source: DatasetSource) {
@@ -941,6 +1029,8 @@ impl ProjectSpace {
                 self.config_json_status.clear();
             }
         });
+        ui.add_space(6.0);
+        self.ui_object_cache(ui, &mut action);
         ui.add_space(6.0);
         ui.label("Browse ROIs");
         let browse = crate::ui::roi_browser::ui(
@@ -1480,6 +1570,79 @@ impl ProjectSpace {
         action
     }
 
+    fn ui_object_cache(&mut self, ui: &mut egui::Ui, action: &mut Option<ProjectSpaceAction>) {
+        let cache = self.object_cache_ui;
+        ui.separator();
+        ui.heading("Object Cache");
+        ui.label(format!(
+            "{} GeoParquet/Parquet segmentation file(s), {} on disk.",
+            cache.available_count,
+            format_bytes(cache.on_disk_bytes)
+        ));
+        ui.horizontal(|ui| {
+            ui.label("Mode");
+            egui::ComboBox::from_id_salt("project_object_cache_mode")
+                .selected_text(self.object_cache_settings.mode.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.object_cache_settings.mode,
+                        ObjectPreloadMode::FullGeometry,
+                        ObjectPreloadMode::FullGeometry.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.object_cache_settings.mode,
+                        ObjectPreloadMode::CentroidPoints,
+                        ObjectPreloadMode::CentroidPoints.label(),
+                    );
+                });
+        });
+        ui.checkbox(
+            &mut self.object_cache_settings.lazy_properties,
+            "Load properties lazily",
+        );
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !cache.loading
+                        && cache.available_count > 0
+                        && self.saved_project_path().is_some(),
+                    egui::Button::new("Preload object segmentations"),
+                )
+                .clicked()
+            {
+                *action = Some(ProjectSpaceAction::PreloadObjectSegmentations(
+                    self.object_cache_settings,
+                ));
+            }
+            if ui
+                .add_enabled(
+                    cache.loading || cache.cached > 0,
+                    egui::Button::new("Clear object cache"),
+                )
+                .clicked()
+            {
+                *action = Some(ProjectSpaceAction::ClearObjectCache);
+            }
+        });
+        if cache.total > 0 {
+            let done = cache.done.min(cache.total);
+            let fraction = done as f32 / cache.total as f32;
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .show_percentage()
+                    .text(format!("{done} / {}", cache.total)),
+            );
+        }
+        ui.label(format!(
+            "{} cached ({}, {}), {} failed{}.",
+            cache.cached,
+            cache.cached_settings.mode.label(),
+            cache.cached_settings.property_label(),
+            cache.failed,
+            if cache.loading { ", loading" } else { "" }
+        ));
+    }
+
     fn import_rois_from_csv(&mut self, path: &Path) -> anyhow::Result<()> {
         let sheet = load_samplesheet_csv(path)?;
         let base_dir = path.parent();
@@ -1874,9 +2037,7 @@ impl ProjectSpace {
             match source {
                 DatasetSource::Local(path) => {
                     let p = path.canonicalize().unwrap_or(path);
-                    let Some(kind) = classify_local_dataset_path(&p) else {
-                        continue;
-                    };
+                    let kind = classify_local_dataset_path(&p);
                     if roi.display_name.is_none() {
                         roi.display_name = p
                             .file_name()
@@ -1894,7 +2055,7 @@ impl ProjectSpace {
                         .as_deref()
                         .map(|s| s.trim().is_empty())
                         .unwrap_or(true)
-                        && matches!(kind, LocalDatasetKind::OmeZarr)
+                        && matches!(kind, Some(LocalDatasetKind::OmeZarr))
                     {
                         roi.dataset = Some(default_dataset.clone());
                     }
@@ -2095,6 +2256,154 @@ fn roi_match_tokens(roi: &ProjectRoi) -> HashSet<String> {
         insert_match_tokens(&mut tokens, value);
     }
     tokens
+}
+
+fn roi_link_match_texts(roi: &ProjectRoi) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut push = |value: String| {
+        let normalized = normalize_link_match_text(&value);
+        if !normalized.is_empty() && !texts.iter().any(|existing| existing == &normalized) {
+            texts.push(normalized);
+        }
+    };
+
+    push(roi.id.clone());
+    if let Some(display_name) = roi.display_name.as_ref() {
+        push(display_name.clone());
+    }
+    if let Some(dataset) = roi.dataset.as_ref() {
+        push(dataset.clone());
+    }
+    if let Some(source_key) = roi.source_key() {
+        push(source_key);
+    }
+    push(roi.source_display());
+    if let Some(path) = roi.local_path() {
+        push(path.to_string_lossy().to_string());
+        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+            push(file_name.to_string());
+        }
+        let components = path
+            .components()
+            .filter_map(|component| component.as_os_str().to_str())
+            .collect::<Vec<_>>();
+        for pair in components.windows(2) {
+            push(pair.join("/"));
+        }
+        for triple in components.windows(3) {
+            push(triple.join("/"));
+        }
+    }
+    for (key, value) in &roi.meta {
+        push(key.clone());
+        push(value.clone());
+        push(format!("{key}:{value}"));
+    }
+    texts
+}
+
+fn normalize_link_match_text(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn local_roi(path: &str, id: &str) -> ProjectRoi {
+        let mut roi = ProjectRoi {
+            id: id.to_string(),
+            source: None,
+            path: None,
+            dataset: Some("default".to_string()),
+            display_name: Some(id.to_string()),
+            segpath: None,
+            mask_layers: Vec::new(),
+            channel_order: Vec::new(),
+            meta: Default::default(),
+        };
+        roi.set_dataset_source(DatasetSource::Local(PathBuf::from(path)));
+        roi
+    }
+
+    #[test]
+    fn roi_link_target_uses_sample_to_disambiguate_duplicate_roi_ids() {
+        let mut ps = ProjectSpace::default();
+        ps.config.rois = vec![
+            local_roi("/data/18S1746/ROI1/ROI1.ome.zarr", "ROI1.ome.zarr"),
+            local_roi("/data/18S1746/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+            local_roi("/data/19S4359/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+        ];
+
+        let roi = ps
+            .roi_for_link_target(Some("ROI2"), Some("18S1746"))
+            .unwrap();
+        assert!(roi.source_display().contains("18S1746/ROI2"));
+    }
+
+    #[test]
+    fn roi_link_target_accepts_specific_path_fragment() {
+        let mut ps = ProjectSpace::default();
+        ps.config.rois = vec![
+            local_roi("/data/18S1746/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+            local_roi("/data/19S4359/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+        ];
+
+        let roi = ps.roi_for_link_target(Some("19S4359/ROI2"), None).unwrap();
+        assert!(roi.source_display().contains("19S4359/ROI2"));
+    }
+
+    #[test]
+    fn load_preserves_saved_rois_when_local_paths_are_unavailable() {
+        let unique = format!(
+            "odon-project-load-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let project_path = std::env::temp_dir().join(format!("{unique}.json"));
+        let missing_roi_path = std::env::temp_dir()
+            .join(unique)
+            .join("18S1746/ROI2/ROI2.ome.zarr");
+
+        let file = ProjectFileV6 {
+            version: 6,
+            config: ProjectConfig {
+                rois: vec![local_roi(
+                    missing_roi_path.to_string_lossy().as_ref(),
+                    "ROI2.ome.zarr",
+                )],
+                ..Default::default()
+            },
+            state: ProjectState::default(),
+        };
+        fs::write(&project_path, serde_json::to_string(&file).unwrap()).unwrap();
+
+        let mut ps = ProjectSpace::default();
+        ps.load_from_file(&project_path).unwrap();
+        let roi = ps.roi_for_link_target(Some("18S1746/ROI2"), None).unwrap();
+
+        assert!(roi.source_display().contains("18S1746/ROI2"));
+        let _ = fs::remove_file(project_path);
+    }
+
+    #[test]
+    fn roi_link_target_reports_ambiguous_matches() {
+        let mut ps = ProjectSpace::default();
+        ps.config.rois = vec![
+            local_roi("/data/18S1746/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+            local_roi("/data/19S4359/ROI2/ROI2.ome.zarr", "ROI2.ome.zarr"),
+        ];
+
+        let err = ps.roi_for_link_target(Some("ROI2"), None).unwrap_err();
+        assert!(err.contains("matches 2 project ROIs"));
+    }
 }
 
 fn segmentation_match_tokens_for_path(path: &Path) -> HashSet<String> {
