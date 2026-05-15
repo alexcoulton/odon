@@ -3,9 +3,10 @@ use super::analysis::{
     numeric_json_value, quantile_threshold_levels,
 };
 use super::render::{
-    build_color_groups_for_property, build_object_fill_mesh, build_object_selection_render_lods,
-    build_render_lods, discover_categorical_color_keys, discover_property_keys,
-    discover_scalar_property_keys, hashed_color_rgb, property_scalar_value, summarize_geometry,
+    build_color_groups_for_property_labels, build_object_fill_mesh,
+    build_object_selection_render_lods, build_render_lods, discover_categorical_color_keys,
+    discover_property_keys, discover_scalar_property_keys, hashed_color_rgb, property_scalar_value,
+    summarize_geometry,
 };
 use super::*;
 use arrow_array::RecordBatch;
@@ -243,6 +244,7 @@ impl ObjectsLayer {
         self.scalar_property_keys = msg.scalar_property_keys;
         self.color_property_keys = msg.color_property_keys;
         self.lazy_parquet_source = msg.lazy_parquet_source;
+        self.property_store = msg.property_store;
         self.color_legend_cache = None;
         let has_active_color_key = self
             .color_property_keys
@@ -345,6 +347,7 @@ impl ObjectsLayer {
         self.object_property_keys.clear();
         self.scalar_property_keys.clear();
         self.color_property_keys.clear();
+        self.property_store = ObjectPropertyStore::default();
         self.lazy_parquet_source = None;
         self.color_legend_cache = None;
         self.color_groups = None;
@@ -407,47 +410,45 @@ impl ObjectsLayer {
     }
 
     fn apply_bulk_measurement_result(&mut self, result: BulkMeasurementResult) {
-        let Some(objects_arc) = self.objects.as_ref() else {
+        if self.objects.is_none() {
             self.bulk_measurement_status =
                 "Measurements finished, but no objects are loaded.".to_string();
             return;
-        };
+        }
         let metric_label = match result.metric {
             BulkMeasurementMetric::Mean => "mean-intensity",
             BulkMeasurementMetric::Median => "median-intensity",
         };
-        let mut objects = objects_arc.as_ref().clone();
         for (column_key, values) in &result.column_values {
-            for (idx, value) in values.iter().enumerate() {
-                let Some(obj) = objects.get_mut(idx) else {
-                    continue;
-                };
-                if let Some(value) = value
-                    && let Some(number) = serde_json::Number::from_f64(*value as f64)
-                {
-                    obj.properties
-                        .insert(column_key.clone(), serde_json::Value::Number(number));
-                }
-            }
+            self.property_store.insert_column(
+                column_key.clone(),
+                ObjectPropertyColumn::F64(Arc::new(
+                    values.iter().map(|value| value.map(f64::from)).collect(),
+                )),
+            );
         }
-        self.objects = Some(Arc::new(objects));
         self.extend_object_property_keys(
             result
                 .column_values
                 .iter()
                 .map(|(column_key, _)| column_key.as_str()),
         );
-        if let Some(objects) = self.objects.as_ref() {
-            self.scalar_property_keys = discover_scalar_property_keys(objects);
-            self.color_property_keys = discover_categorical_color_keys(objects);
-            if self.filter_property_key != "id"
-                && !self
-                    .scalar_property_keys
-                    .iter()
-                    .any(|key| key == &self.filter_property_key)
+        for (column_key, _) in &result.column_values {
+            match self
+                .scalar_property_keys
+                .binary_search_by(|existing| existing.as_str().cmp(column_key))
             {
-                self.filter_property_key = "id".to_string();
+                Ok(_) => {}
+                Err(idx) => self.scalar_property_keys.insert(idx, column_key.clone()),
             }
+        }
+        if self.filter_property_key != "id"
+            && !self
+                .filter_property_candidates()
+                .iter()
+                .any(|(key, _)| key == &self.filter_property_key)
+        {
+            self.filter_property_key = "id".to_string();
         }
         self.analysis_channel_mapping_suggestions_cache_key = 0;
         self.analysis_channel_mapping_suggestions_cache_channels_len = 0;
@@ -540,6 +541,7 @@ impl ObjectsLayer {
             push_priority(column);
         }
 
+        ordered_columns.retain(|column| !self.property_column_available_but_unloaded(column));
         self.start_object_property_analysis_warmup(ordered_columns);
     }
 
@@ -547,6 +549,7 @@ impl ObjectsLayer {
         let Some(objects) = self.objects.as_ref().cloned() else {
             return;
         };
+        let property_store = self.property_store.clone();
         self.analysis_warm_started = true;
         self.analysis_warm_request_id = self.analysis_warm_request_id.wrapping_add(1).max(1);
         let request_id = self.analysis_warm_request_id;
@@ -566,18 +569,25 @@ impl ObjectsLayer {
                 });
 
                 for (column_index, key) in numeric_columns.into_iter().enumerate() {
-                    let mut pairs = Vec::new();
-                    for (object_index, obj) in objects.iter().enumerate() {
-                        let Some(value) = obj.properties.get(&key).and_then(numeric_json_value)
-                        else {
-                            continue;
-                        };
-                        if value.is_finite() {
-                            pairs.push((object_index, value));
+                    let pairs_vec = if let Some(pairs) = property_store.numeric_pairs(&key) {
+                        pairs
+                    } else {
+                        let mut pairs = Vec::new();
+                        for (object_index, obj) in objects.iter().enumerate() {
+                            let Some(value) =
+                                obj.inline_properties.get(&key).and_then(numeric_json_value)
+                            else {
+                                continue;
+                            };
+                            if value.is_finite() {
+                                pairs.push((object_index, value));
+                            }
                         }
-                    }
-
-                    let pairs = Arc::new(pairs);
+                        pairs
+                    };
+                    let mut pairs_vec = pairs_vec;
+                    pairs_vec.retain(|(_, value)| value.is_finite());
+                    let pairs = Arc::new(pairs_vec);
                     let mut sorted_pairs = pairs.as_ref().clone();
                     sorted_pairs.sort_by(|a, b| {
                         a.1.partial_cmp(&b.1)
@@ -1222,6 +1232,7 @@ impl ObjectsLayer {
                             .available_property_columns
                             .iter()
                             .filter(|key| !source.loaded_property_columns.contains(*key))
+                            .filter(|key| !self.property_store.has_loaded(key))
                             .filter(|key| {
                                 !self.color_property_keys.iter().any(|loaded| loaded == *key)
                             })
@@ -1284,9 +1295,14 @@ impl ObjectsLayer {
                     filter_changed |= ui
                         .selectable_value(&mut self.filter_property_key, "id".to_string(), "id")
                         .changed();
-                    for key in &self.scalar_property_keys {
+                    for (key, needs_load) in self.filter_property_candidates() {
+                        let label = if needs_load {
+                            format!("{key} (load)")
+                        } else {
+                            key.clone()
+                        };
                         filter_changed |= ui
-                            .selectable_value(&mut self.filter_property_key, key.clone(), key)
+                            .selectable_value(&mut self.filter_property_key, key, label)
                             .changed();
                     }
                 });
@@ -1304,6 +1320,10 @@ impl ObjectsLayer {
             }
         });
         if filter_changed {
+            if self.filter_property_key != "id" {
+                let key = self.filter_property_key.clone();
+                self.ensure_property_loaded(&key);
+            }
             self.invalidate_filter_cache();
             self.ensure_filter_cache();
             self.ensure_color_groups();
@@ -1405,18 +1425,12 @@ impl ObjectsLayer {
                 .as_ref()
                 .and_then(|objects| objects.get(idx))
                 .map(|obj| {
-                    let mut props = obj
-                        .properties
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value_to_display_text(value)))
-                        .collect::<Vec<_>>();
-                    props.sort_by(|a, b| a.0.cmp(&b.0));
                     (
                         obj.id.clone(),
                         obj.area_px,
                         obj.perimeter_px,
                         obj.centroid_world,
-                        props,
+                        self.loaded_property_display_pairs(idx, obj),
                     )
                 });
 
@@ -1526,10 +1540,94 @@ impl ObjectsLayer {
     }
 
     pub fn available_property_columns(&self) -> &[String] {
-        self.lazy_parquet_source
-            .as_ref()
-            .map(|source| source.available_property_columns.as_slice())
-            .unwrap_or(self.color_property_keys.as_slice())
+        if !self.property_store.available_columns().is_empty() {
+            self.property_store.available_columns()
+        } else {
+            self.color_property_keys.as_slice()
+        }
+    }
+
+    pub(super) fn object_property_label(
+        &self,
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+        property_key: &str,
+    ) -> Option<String> {
+        self.property_store
+            .label_at(property_key, object_index)
+            .or_else(|| {
+                obj.inline_properties
+                    .get(property_key)
+                    .and_then(property_scalar_value)
+            })
+    }
+
+    pub(super) fn object_property_display(
+        &self,
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+        property_key: &str,
+    ) -> Option<String> {
+        self.property_store
+            .loaded_columns
+            .get(property_key)
+            .and_then(|column| column.display_at(object_index))
+            .or_else(|| {
+                obj.inline_properties
+                    .get(property_key)
+                    .map(value_to_display_text)
+                    .filter(|value| !value.trim().is_empty())
+            })
+    }
+
+    pub(super) fn loaded_property_display_pairs(
+        &self,
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+    ) -> Vec<(String, String)> {
+        let mut keys = obj
+            .inline_properties
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        keys.extend(self.property_store.loaded_keys());
+        let mut properties = keys
+            .into_iter()
+            .filter_map(|key| {
+                self.object_property_display(object_index, obj, &key)
+                    .map(|value| (key, value))
+            })
+            .collect::<Vec<_>>();
+        properties.sort_by(|a, b| a.0.cmp(&b.0));
+        properties
+    }
+
+    fn filter_property_candidates(&self) -> Vec<(String, bool)> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for key in &self.scalar_property_keys {
+            if seen.insert(key.clone()) {
+                out.push((key.clone(), false));
+            }
+        }
+        for key in self.property_store.loaded_keys() {
+            if seen.insert(key.clone()) {
+                out.push((key, false));
+            }
+        }
+        if let Some(source) = self.lazy_parquet_source.as_ref() {
+            for key in &source.available_property_columns {
+                if !seen.contains(key)
+                    && !source.loaded_property_columns.contains(key)
+                    && !self.property_store.has_loaded(key)
+                {
+                    out.push((key.clone(), true));
+                    seen.insert(key.clone());
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     pub fn active_color_legend_entries(&mut self) -> Option<Vec<ObjectColorLegendEntry>> {
@@ -1552,21 +1650,17 @@ impl ObjectsLayer {
                 let Some(obj) = objects.get(*idx) else {
                     continue;
                 };
-                let Some(value_label) = obj
-                    .properties
-                    .get(&self.color_property_key)
-                    .and_then(property_scalar_value)
+                let Some(value_label) =
+                    self.object_property_label(*idx, obj, &self.color_property_key)
                 else {
                     continue;
                 };
                 *counts.entry(value_label).or_default() += 1;
             }
         } else {
-            for obj in objects.iter() {
-                let Some(value_label) = obj
-                    .properties
-                    .get(&self.color_property_key)
-                    .and_then(property_scalar_value)
+            for (idx, obj) in objects.iter().enumerate() {
+                let Some(value_label) =
+                    self.object_property_label(idx, obj, &self.color_property_key)
                 else {
                     continue;
                 };
@@ -1592,6 +1686,23 @@ impl ObjectsLayer {
             entries: entries.clone(),
         });
         Some(entries)
+    }
+
+    pub(crate) fn active_color_value_visibility_snapshot(
+        &mut self,
+    ) -> Option<(String, Vec<String>, Vec<String>)> {
+        let property_key = self.color_property_key.clone();
+        let entries = self.active_color_legend_entries()?;
+        let mut visible_values = Vec::new();
+        let mut hidden_values = Vec::new();
+        for entry in entries {
+            if self.color_value_visible_for_label(&property_key, &entry.value_label) {
+                visible_values.push(entry.value_label);
+            } else {
+                hidden_values.push(entry.value_label);
+            }
+        }
+        Some((property_key, visible_values, hidden_values))
     }
 
     pub fn set_color_by_property(&mut self, property_key: Option<String>) {
@@ -1792,7 +1903,10 @@ impl ObjectsLayer {
         self.generation = self.generation.wrapping_add(1).max(1);
     }
 
-    fn property_column_available_but_unloaded(&self, property_key: &str) -> bool {
+    pub(super) fn property_column_available_but_unloaded(&self, property_key: &str) -> bool {
+        if self.property_store.has_loaded(property_key) {
+            return false;
+        }
         self.lazy_parquet_source.as_ref().is_some_and(|source| {
             source
                 .available_property_columns
@@ -1802,7 +1916,7 @@ impl ObjectsLayer {
         })
     }
 
-    fn ensure_property_loaded(&mut self, property_key: &str) {
+    pub(super) fn ensure_property_loaded(&mut self, property_key: &str) {
         let Some(source) = self.lazy_parquet_source.as_ref() else {
             return;
         };
@@ -1853,34 +1967,27 @@ impl ObjectsLayer {
         property_key: &str,
         property_values: &HashMap<usize, serde_json::Value>,
     ) {
-        {
-            let Some(objects_arc) = self.objects.as_mut() else {
-                return;
-            };
-            let objects = Arc::make_mut(objects_arc);
-            for obj in objects.iter_mut() {
-                let Some(row_index) = obj.source_row_index else {
-                    continue;
-                };
-                if let Some(value) = property_values.get(&row_index) {
-                    obj.properties
-                        .insert(property_key.to_string(), value.clone());
-                } else {
-                    obj.properties.remove(property_key);
-                }
-            }
+        let Some(objects) = self.objects.as_ref() else {
+            return;
         };
+        let column = ObjectPropertyColumn::from_values_by_row(objects, property_values);
+        let is_categorical = column.is_categorical(24);
+        self.property_store
+            .insert_column(property_key.to_string(), column);
         if let Some(source) = self.lazy_parquet_source.as_mut() {
             source
                 .loaded_property_columns
                 .insert(property_key.to_string());
         }
-        self.extend_object_property_keys(std::iter::once(property_key));
-        let Some(objects) = self.objects.as_ref() else {
-            return;
-        };
-        self.scalar_property_keys = discover_scalar_property_keys(objects);
-        self.color_property_keys = discover_categorical_color_keys(objects);
+        if is_categorical
+            && !self
+                .color_property_keys
+                .iter()
+                .any(|key| key == property_key)
+        {
+            self.color_property_keys.push(property_key.to_string());
+            self.color_property_keys.sort();
+        }
         self.color_legend_cache = None;
         self.color_groups = None;
         self.invalidate_filter_cache();
@@ -1900,6 +2007,9 @@ impl ObjectsLayer {
             .color_property_keys
             .iter()
             .any(|loaded| loaded == &self.color_property_key)
+            || self
+                .property_store
+                .loaded_column_is_categorical(self.color_property_key.as_str(), 24)
         {
             return;
         }
@@ -1922,12 +2032,7 @@ impl ObjectsLayer {
     ) -> Option<SelectedObjectDetails> {
         let idx = self.selected_object_index?;
         let obj = self.objects.as_ref()?.get(idx)?;
-        let mut properties = obj
-            .properties
-            .iter()
-            .map(|(key, value)| (key.clone(), value_to_display_text(value)))
-            .collect::<Vec<_>>();
-        properties.sort_by(|a, b| a.0.cmp(&b.0));
+        let properties = self.loaded_property_display_pairs(idx, obj);
         let scale = egui::vec2(
             self.display_transform.scale[0].max(1e-6),
             self.display_transform.scale[1].max(1e-6),
@@ -1959,7 +2064,7 @@ impl ObjectsLayer {
             let mut matched = ids.contains(&obj.id);
             if !matched {
                 for key in ["cell_id", "id", "object_id", "label", "name"] {
-                    if let Some(value) = obj.properties.get(key).and_then(value_to_short_string) {
+                    if let Some(value) = self.object_property_label(idx, obj, key) {
                         if ids.contains(&value) {
                             matched = true;
                             break;
@@ -2219,6 +2324,13 @@ impl ObjectsLayer {
         if self.filtered_indices.is_some() {
             return;
         }
+        if self.filter_property_key != "id"
+            && self.property_column_available_but_unloaded(&self.filter_property_key)
+        {
+            let key = self.filter_property_key.clone();
+            self.ensure_property_loaded(&key);
+            return;
+        }
         let Some(objects) = self.objects.as_ref() else {
             return;
         };
@@ -2229,7 +2341,7 @@ impl ObjectsLayer {
         let mut indices = HashSet::new();
         let mut subset = Vec::new();
         for (idx, obj) in objects.iter().enumerate() {
-            if !self.object_matches_filter(obj) {
+            if !self.object_matches_filter(idx, obj) {
                 continue;
             }
             indices.insert(idx);
@@ -2253,14 +2365,16 @@ impl ObjectsLayer {
             self.filtered_color_groups = if self.color_mode == ObjectColorMode::ByProperty
                 && !self.color_property_key.is_empty()
             {
-                build_color_groups_for_property(
-                    objects
-                        .iter()
-                        .enumerate()
-                        .filter(|(idx, _)| indices.contains(idx)),
-                    &self.color_property_key,
-                )
-                .ok()
+                let labels = objects
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| indices.contains(idx))
+                    .filter_map(|(idx, obj)| {
+                        self.object_property_label(idx, obj, &self.color_property_key)
+                            .map(|label| (idx, obj, label))
+                    })
+                    .collect::<Vec<_>>();
+                build_color_groups_for_property_labels(labels, &self.color_property_key).ok()
             } else {
                 None
             };
@@ -2297,14 +2411,17 @@ impl ObjectsLayer {
                 self.filtered_color_groups = None;
                 return;
             };
-            self.filtered_color_groups = build_color_groups_for_property(
-                objects
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| filtered_indices.contains(idx)),
-                &self.color_property_key,
-            )
-            .ok();
+            let labels = objects
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| filtered_indices.contains(idx))
+                .filter_map(|(idx, obj)| {
+                    self.object_property_label(idx, obj, &self.color_property_key)
+                        .map(|label| (idx, obj, label))
+                })
+                .collect::<Vec<_>>();
+            self.filtered_color_groups =
+                build_color_groups_for_property_labels(labels, &self.color_property_key).ok();
             return;
         }
         if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
@@ -2320,9 +2437,16 @@ impl ObjectsLayer {
         let Some(objects) = self.objects.as_ref() else {
             return;
         };
+        let labels = objects
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, obj)| {
+                self.object_property_label(idx, obj, &self.color_property_key)
+                    .map(|label| (idx, obj, label))
+            })
+            .collect::<Vec<_>>();
         self.color_groups =
-            build_color_groups_for_property(objects.iter().enumerate(), &self.color_property_key)
-                .ok();
+            build_color_groups_for_property_labels(labels, &self.color_property_key).ok();
     }
 
     pub(super) fn active_color_groups(&self) -> Option<&ObjectColorGroups> {
@@ -2335,7 +2459,7 @@ impl ObjectsLayer {
         !self.filter_query.trim().is_empty()
     }
 
-    fn object_matches_filter(&self, obj: &GeoJsonObjectFeature) -> bool {
+    fn object_matches_filter(&self, object_index: usize, obj: &GeoJsonObjectFeature) -> bool {
         // Filtering is intentionally simple substring matching over a single projected display
         // field. The expensive part is not the predicate itself, but rebuilding the derived subset
         // state once the predicate changes.
@@ -2346,9 +2470,7 @@ impl ObjectsLayer {
         let haystack = if self.filter_property_key == "id" {
             obj.id.clone()
         } else {
-            obj.properties
-                .get(&self.filter_property_key)
-                .map(value_to_display_text)
+            self.object_property_display(object_index, obj, &self.filter_property_key)
                 .unwrap_or_default()
         };
         haystack
@@ -2391,14 +2513,16 @@ impl ObjectsLayer {
         true
     }
 
-    pub(super) fn object_color_value_visible(&self, obj: &GeoJsonObjectFeature) -> bool {
+    pub(super) fn object_color_value_visible(
+        &self,
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+    ) -> bool {
         if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
             return true;
         }
-        let Some(value_label) = obj
-            .properties
-            .get(&self.color_property_key)
-            .and_then(property_scalar_value)
+        let Some(value_label) =
+            self.object_property_label(object_index, obj, &self.color_property_key)
         else {
             return true;
         };
@@ -2419,7 +2543,7 @@ impl ObjectsLayer {
         };
         objects
             .get(idx)
-            .map(|obj| self.object_color_value_visible(obj))
+            .map(|obj| self.object_color_value_visible(idx, obj))
             .unwrap_or(true)
     }
 
@@ -2671,7 +2795,13 @@ impl ObjectsLayer {
                     name: key.clone(),
                     values: objects
                         .iter()
-                        .map(|obj| obj.properties.get(key).map(export_scalar_from_json))
+                        .enumerate()
+                        .map(|(idx, obj)| {
+                            export_scalar_from_property_store(&snapshot.property_store, key, idx)
+                                .or_else(|| {
+                                    obj.inline_properties.get(key).map(export_scalar_from_json)
+                                })
+                        })
                         .collect(),
                 });
             }
@@ -2803,8 +2933,11 @@ impl ObjectsLayer {
                     name: live_name,
                     values: objects
                         .iter()
-                        .map(|obj| {
+                        .enumerate()
+                        .map(|(idx, obj)| {
                             Some(ExportScalar::Bool(object_passes_threshold_rules(
+                                &snapshot.property_store,
+                                idx,
                                 obj,
                                 &snapshot.analysis_property_thresholds,
                             )))
@@ -2822,11 +2955,14 @@ impl ObjectsLayer {
                     name: column_name,
                     values: objects
                         .iter()
-                        .map(|obj| {
+                        .enumerate()
+                        .map(|(idx, obj)| {
                             if threshold_call_marks_failed(element) {
                                 Some(ExportScalar::String("FAIL".to_string()))
                             } else {
                                 Some(ExportScalar::Bool(object_passes_threshold_rules(
+                                    &snapshot.property_store,
+                                    idx,
                                     obj,
                                     &element.rules,
                                 )))
@@ -3109,9 +3245,17 @@ impl ObjectsLayer {
         if objects.is_empty() {
             anyhow::bail!("no objects loaded");
         }
+        let mut property_keys = self.object_property_keys.clone();
+        for key in self.property_store.loaded_keys() {
+            match property_keys.binary_search_by(|existing| existing.as_str().cmp(&key)) {
+                Ok(_) => {}
+                Err(idx) => property_keys.insert(idx, key),
+            }
+        }
         Ok(ObjectExportSnapshot {
             objects: Arc::clone(objects),
-            property_keys: self.object_property_keys.clone(),
+            property_keys,
+            property_store: self.property_store.clone(),
             selected_object_indices: self.selected_object_indices.clone(),
             analysis_property_thresholds: self.analysis_property_thresholds.clone(),
             analysis_live_threshold_channel_name: self.analysis_live_threshold_channel_name.clone(),
@@ -3296,6 +3440,7 @@ fn load_in_thread(
             objects,
             Some(LazyParquetSource {
                 available_property_columns: schema.property_columns,
+                numeric_property_columns: schema.numeric_property_columns,
                 loaded_property_columns,
             }),
         )
@@ -3337,14 +3482,19 @@ pub fn preload_objects_from_path(
     let cancel = AtomicBool::new(false);
     let result = match settings.mode {
         ObjectPreloadMode::FullGeometry => {
-            let load_options = if settings.lazy_properties && is_parquet_objects_path(&path) {
-                minimal_parquet_load_options(&path)
+            if is_parquet_objects_path(&path) {
+                let load_options = minimal_parquet_load_options(&path)
                     .ok()
-                    .map(ObjectLoadOptions::Parquet)
+                    .map(ObjectLoadOptions::Parquet);
+                let mut result =
+                    load_in_thread(path.clone(), downsample_factor, load_options, 0, &cancel)?;
+                if !settings.lazy_properties {
+                    load_all_parquet_property_columns_into_result(&path, &mut result, &cancel)?;
+                }
+                Ok(result)
             } else {
-                None
-            };
-            load_in_thread(path, downsample_factor, load_options, 0, &cancel)
+                load_in_thread(path, downsample_factor, None, 0, &cancel)
+            }
         }
         ObjectPreloadMode::CentroidPoints => load_centroid_points_in_thread(
             path,
@@ -3377,13 +3527,9 @@ fn load_centroid_points_in_thread(
         &schema.numeric_property_columns,
         &["y_centroid", "y", "y_centroid_image", "centroid_y"],
     );
-    let initial_property_columns = if lazy_properties {
-        Some(preferred_object_id_property_columns(
-            &schema.property_columns,
-        ))
-    } else {
-        None
-    };
+    let initial_property_columns = Some(preferred_object_id_property_columns(
+        &schema.property_columns,
+    ));
     let loaded_property_columns = initial_property_columns
         .clone()
         .unwrap_or_else(|| schema.property_columns.clone())
@@ -3399,18 +3545,23 @@ fn load_centroid_points_in_thread(
         )?;
         let lazy_parquet_source = Some(LazyParquetSource {
             available_property_columns: schema.property_columns.clone(),
+            numeric_property_columns: schema.numeric_property_columns.clone(),
             loaded_property_columns,
         });
-        return load_result_from_objects(
+        let mut result = load_result_from_objects(
             request_id,
-            path,
+            path.clone(),
             downsample_factor,
             SpatialDataTransform2::default(),
             ObjectDisplayMode::Points,
             objects,
             lazy_parquet_source,
             cancel,
-        );
+        )?;
+        if !lazy_properties {
+            load_all_parquet_property_columns_into_result(&path, &mut result, cancel)?;
+        }
+        return Ok(result);
     }
 
     if schema.geometry_candidates.is_empty() {
@@ -3431,18 +3582,23 @@ fn load_centroid_points_in_thread(
     }
     let lazy_parquet_source = Some(LazyParquetSource {
         available_property_columns: schema.property_columns.clone(),
+        numeric_property_columns: schema.numeric_property_columns.clone(),
         loaded_property_columns,
     });
-    load_result_from_objects(
+    let mut result = load_result_from_objects(
         request_id,
-        path,
+        path.clone(),
         downsample_factor,
         SpatialDataTransform2::default(),
         ObjectDisplayMode::Points,
         objects,
         lazy_parquet_source,
         cancel,
-    )
+    )?;
+    if !lazy_properties {
+        load_all_parquet_property_columns_into_result(&path, &mut result, cancel)?;
+    }
+    Ok(result)
 }
 
 fn load_spatialdata_in_thread(
@@ -3506,6 +3662,12 @@ fn load_result_from_objects(
     let object_property_keys = discover_property_keys(&objects);
     let scalar_property_keys = discover_scalar_property_keys(&objects);
     let color_property_keys = discover_categorical_color_keys(&objects);
+    let property_store = ObjectPropertyStore::from_available_columns(
+        lazy_parquet_source
+            .as_ref()
+            .map(|source| source.available_property_columns.clone())
+            .unwrap_or_default(),
+    );
     Ok(LoadResult {
         request_id,
         path,
@@ -3523,9 +3685,47 @@ fn load_result_from_objects(
         object_property_keys,
         scalar_property_keys,
         color_property_keys,
+        property_store,
         lazy_parquet_source,
         bounds_local,
     })
+}
+
+fn load_all_parquet_property_columns_into_result(
+    path: &Path,
+    result: &mut LoadResult,
+    cancel: &AtomicBool,
+) -> anyhow::Result<()> {
+    let Some(source) = result.lazy_parquet_source.as_mut() else {
+        return Ok(());
+    };
+    let available_columns = source.available_property_columns.clone();
+    for property_key in available_columns {
+        check_cancel(cancel)?;
+        if result.property_store.has_loaded(&property_key) {
+            source.loaded_property_columns.insert(property_key);
+            continue;
+        }
+        let values_by_row = load_shapes_property_values_by_row(path, &property_key, cancel)
+            .with_context(|| format!("failed to load property column '{property_key}'"))?;
+        let column =
+            ObjectPropertyColumn::from_values_by_row(result.objects.as_ref(), &values_by_row);
+        let is_categorical = column.is_categorical(24);
+        result
+            .property_store
+            .insert_column(property_key.clone(), column);
+        source.loaded_property_columns.insert(property_key.clone());
+        if is_categorical
+            && !result
+                .color_property_keys
+                .iter()
+                .any(|key| key == &property_key)
+        {
+            result.color_property_keys.push(property_key);
+        }
+    }
+    result.color_property_keys.sort();
+    Ok(())
 }
 
 fn preferred_geometry_column(schema: &ShapesObjectSchema) -> String {
@@ -3657,7 +3857,7 @@ fn parse_geojson_objects(
             area_px,
             perimeter_px,
             centroid_world,
-            properties,
+            inline_properties: properties,
             source_row_index: None,
         });
     }
@@ -3695,7 +3895,7 @@ fn parse_spatialdata_objects(
             area_px,
             perimeter_px,
             centroid_world,
-            properties: obj.properties,
+            inline_properties: obj.properties,
             source_row_index: None,
         });
     }
@@ -3752,7 +3952,7 @@ fn parse_geoparquet_objects(
             area_px,
             perimeter_px,
             centroid_world,
-            properties: obj.properties,
+            inline_properties: obj.properties,
             source_row_index: obj.source_row_index,
         });
     }
@@ -3784,7 +3984,7 @@ fn parse_geoparquet_xy_point_features(
             area_px: obj.area_px,
             perimeter_px: obj.perimeter_px,
             centroid_world: obj.point_world,
-            properties: obj.properties,
+            inline_properties: obj.properties,
             source_row_index: obj.source_row_index,
         });
     }
@@ -3814,7 +4014,7 @@ fn parse_geoparquet_centroid_point_objects(
             area_px: obj.area_px,
             perimeter_px: obj.perimeter_px,
             centroid_world: obj.point_world,
-            properties: obj.properties,
+            inline_properties: obj.properties,
             source_row_index: obj.source_row_index,
         });
     }
@@ -4008,7 +4208,7 @@ fn parse_csv_objects(
             area_px,
             perimeter_px,
             centroid_world,
-            properties,
+            inline_properties: properties,
             source_row_index: Some(row_index),
         });
     }
@@ -4333,7 +4533,7 @@ fn export_object_feature_value(obj: &GeoJsonObjectFeature) -> serde_json::Value 
     serde_json::json!({
         "type": "Feature",
         "id": obj.id,
-        "properties": obj.properties,
+        "properties": obj.inline_properties,
         "geometry": geometry,
     })
 }
@@ -4394,6 +4594,69 @@ fn export_scalar_from_json(value: &serde_json::Value) -> ExportScalar {
         serde_json::Value::String(v) => ExportScalar::String(v.clone()),
         _ => ExportScalar::String(value.to_string()),
     }
+}
+
+fn export_scalar_from_property_store(
+    store: &ObjectPropertyStore,
+    key: &str,
+    object_index: usize,
+) -> Option<ExportScalar> {
+    let column = store.loaded_columns.get(key)?;
+    match column {
+        ObjectPropertyColumn::Bool(values) => values
+            .get(object_index)
+            .and_then(|value| value.map(ExportScalar::Bool)),
+        ObjectPropertyColumn::I64(values) => values
+            .get(object_index)
+            .and_then(|value| value.map(ExportScalar::Int64)),
+        ObjectPropertyColumn::F64(values) => values
+            .get(object_index)
+            .and_then(|value| value.map(ExportScalar::Float64)),
+        ObjectPropertyColumn::Dictionary { dictionary, values } => values
+            .get(object_index)
+            .and_then(|code| code.and_then(|code| dictionary.get(code as usize)))
+            .map(|value| ExportScalar::String(value.clone())),
+        ObjectPropertyColumn::Json(values) => values
+            .get(object_index)
+            .and_then(|value| value.as_ref())
+            .map(export_scalar_from_json),
+    }
+}
+
+fn numeric_property_value(
+    store: &ObjectPropertyStore,
+    object_index: usize,
+    obj: &ObjectFeature,
+    key: &str,
+) -> Option<f32> {
+    if let Some(column) = store.loaded_columns.get(key) {
+        match column {
+            ObjectPropertyColumn::I64(values) => {
+                return values
+                    .get(object_index)
+                    .and_then(|value| value.map(|value| value as f32))
+                    .filter(|value| value.is_finite());
+            }
+            ObjectPropertyColumn::F64(values) => {
+                return values
+                    .get(object_index)
+                    .and_then(|value| value.map(|value| value as f32))
+                    .filter(|value| value.is_finite());
+            }
+            ObjectPropertyColumn::Json(values) => {
+                if let Some(value) = values
+                    .get(object_index)
+                    .and_then(|value| value.as_ref())
+                    .and_then(numeric_json_value)
+                    .filter(|value| value.is_finite())
+                {
+                    return Some(value);
+                }
+            }
+            ObjectPropertyColumn::Bool(_) | ObjectPropertyColumn::Dictionary { .. } => {}
+        }
+    }
+    obj.inline_properties.get(key).and_then(numeric_json_value)
 }
 
 fn export_scalar_to_csv(value: Option<&ExportScalar>) -> String {
@@ -4556,15 +4819,14 @@ fn unique_export_name(base: &str, used_names: &mut HashSet<String>) -> String {
 }
 
 fn object_passes_threshold_rules(
+    store: &ObjectPropertyStore,
+    object_index: usize,
     obj: &ObjectFeature,
     rules: &[ObjectPropertyThresholdRule],
 ) -> bool {
     !rules.is_empty()
         && rules.iter().all(|rule| {
-            let Some(value) = obj
-                .properties
-                .get(&rule.column_key)
-                .and_then(numeric_json_value)
+            let Some(value) = numeric_property_value(store, object_index, obj, &rule.column_key)
             else {
                 return false;
             };

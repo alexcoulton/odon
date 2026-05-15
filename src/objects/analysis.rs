@@ -249,7 +249,7 @@ impl ObjectsLayer {
         }
         self.ui_selection_elements_editor(ui);
         self.normalize_threshold_call_elements();
-        ui.label("Source: Object properties");
+        ui.label("Source: Object columns");
         self.ui_threshold_set_editor(ui, _channels, selected_channel);
         self.ui_object_properties_analysis(
             ui,
@@ -268,7 +268,7 @@ impl ObjectsLayer {
     ) {
         let numeric_columns = self.available_numeric_object_property_keys();
         if numeric_columns.is_empty() {
-            ui.label("No numeric object properties are available for plotting.");
+            ui.label("No numeric object columns are available for plotting.");
             return;
         }
 
@@ -320,6 +320,11 @@ impl ObjectsLayer {
                 if self.analysis_hist_channel != prev_hist_channel {
                     self.analysis_hist_drag_rule = None;
                     self.sync_histogram_editor_to_column(column_name);
+                }
+                if self.property_column_available_but_unloaded(column_name) {
+                    self.ensure_property_loaded(column_name);
+                    ui.label(format!("Loading analysis column '{column_name}'..."));
+                    return;
                 }
                 ui.horizontal(|ui| {
                     ui.label("Transform");
@@ -461,6 +466,16 @@ impl ObjectsLayer {
                 let Some(y_column) = numeric_columns.get(self.analysis_scatter_y_channel) else {
                     return;
                 };
+                if self.property_column_available_but_unloaded(x_column) {
+                    self.ensure_property_loaded(x_column);
+                    ui.label(format!("Loading analysis column '{x_column}'..."));
+                    return;
+                }
+                if self.property_column_available_but_unloaded(y_column) {
+                    self.ensure_property_loaded(y_column);
+                    ui.label(format!("Loading analysis column '{y_column}'..."));
+                    return;
+                }
                 let points = self.object_property_scatter_points(x_column, y_column);
                 let prev_brush = self.analysis_scatter_brush;
                 let prev_x_column = numeric_columns
@@ -2102,35 +2117,61 @@ impl ObjectsLayer {
         let Some(objects) = self.objects.as_ref() else {
             return Vec::new();
         };
-        let out = self
-            .scalar_property_keys
-            .iter()
-            .filter(|key| key.as_str() != "id")
-            .filter(|key| {
-                objects.iter().any(|obj| {
-                    obj.properties
-                        .get(*key)
-                        .and_then(numeric_json_value)
-                        .is_some()
+        let mut out = self.property_store.numeric_keys();
+        let mut existing = out.iter().cloned().collect::<HashSet<_>>();
+        out.extend(
+            self.scalar_property_keys
+                .iter()
+                .filter(|key| key.as_str() != "id")
+                .filter(|key| !existing.contains(*key))
+                .filter(|key| {
+                    objects.iter().any(|obj| {
+                        obj.inline_properties
+                            .get(*key)
+                            .and_then(numeric_json_value)
+                            .is_some()
+                    })
                 })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+                .cloned(),
+        );
+        existing.extend(out.iter().cloned());
+        if let Some(source) = self.lazy_parquet_source.as_ref() {
+            out.extend(
+                source
+                    .numeric_property_columns
+                    .iter()
+                    .filter(|key| key.as_str() != "id")
+                    .filter(|key| !existing.contains(*key))
+                    .cloned(),
+            );
+        }
+        out.sort();
         self.object_property_numeric_keys_cache = Some(out.clone());
         out
     }
 
     fn object_property_column_pairs(&mut self, key: &str) -> Arc<Vec<(usize, f32)>> {
+        if self.property_column_available_but_unloaded(key) {
+            self.ensure_property_loaded(key);
+            return Arc::new(Vec::new());
+        }
         if self.filtered_indices.is_none() {
             if let Some(cached) = self.object_property_base_pairs_cache.get(key) {
                 return cached.clone();
+            }
+            if let Some(out) = self.property_store.numeric_pairs(key) {
+                let out = Arc::new(out);
+                self.object_property_base_pairs_cache
+                    .insert(key.to_string(), out.clone());
+                return out;
             }
             let Some(objects) = self.objects.as_ref() else {
                 return Arc::new(Vec::new());
             };
             let mut out = Vec::new();
             for (idx, obj) in objects.iter().enumerate() {
-                let Some(value) = obj.properties.get(key).and_then(numeric_json_value) else {
+                let Some(value) = obj.inline_properties.get(key).and_then(numeric_json_value)
+                else {
                     continue;
                 };
                 if value.is_finite() {
@@ -2146,6 +2187,15 @@ impl ObjectsLayer {
         if let Some(cached) = self.object_property_pairs_cache.get(key) {
             return cached.clone();
         }
+        if let Some(mut out) = self.property_store.numeric_pairs(key) {
+            if let Some(filtered) = self.filtered_indices.as_ref() {
+                out.retain(|(idx, _)| filtered.contains(idx));
+            }
+            let out = Arc::new(out);
+            self.object_property_pairs_cache
+                .insert(key.to_string(), out.clone());
+            return out;
+        }
         let Some(objects) = self.objects.as_ref() else {
             return Arc::new(Vec::new());
         };
@@ -2155,7 +2205,7 @@ impl ObjectsLayer {
             if filtered.is_some_and(|set| !set.contains(&idx)) {
                 continue;
             }
-            let Some(value) = obj.properties.get(key).and_then(numeric_json_value) else {
+            let Some(value) = obj.inline_properties.get(key).and_then(numeric_json_value) else {
                 continue;
             };
             if value.is_finite() {

@@ -38,7 +38,8 @@ use crate::data::project_config::{ProjectLayerGroups, ProjectRoi};
 use crate::data::remote_store::{build_http_store, build_s3_store};
 use crate::data::samplesheet::load_samplesheet_csv;
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
-use crate::objects::ObjectPreloadSettings;
+use crate::objects::{ObjectPreloadSettings, PreloadedObjectLayer};
+use crate::project::ProjectViewSpec;
 use crate::project::groups as layer_groups;
 use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
@@ -124,6 +125,7 @@ impl LeftTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightTab {
     Properties,
+    Views,
     Layout,
     Memory,
 }
@@ -132,6 +134,7 @@ impl RightTab {
     fn storage_key(self) -> &'static str {
         match self {
             Self::Properties => "properties",
+            Self::Views => "views",
             Self::Layout => "layout",
             Self::Memory => "memory",
         }
@@ -140,6 +143,7 @@ impl RightTab {
     fn from_storage_key(value: &str) -> Option<Self> {
         match value {
             "properties" => Some(Self::Properties),
+            "views" => Some(Self::Views),
             "layout" => Some(Self::Layout),
             "memory" => Some(Self::Memory),
             _ => None,
@@ -408,6 +412,7 @@ impl ChannelListHost for MosaicViewerApp {
 pub enum MosaicRequest {
     BackToSingle,
     OpenProjectRoi(ProjectRoi),
+    OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
     PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
@@ -708,6 +713,22 @@ impl MosaicViewerApp {
 
     pub fn set_project_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
         self.project_space.set_object_cache_ui_state(state);
+    }
+
+    pub fn install_preloaded_project_segmentations(
+        &mut self,
+        preloaded: &[(PathBuf, Arc<PreloadedObjectLayer>)],
+    ) -> usize {
+        let mut installed = 0usize;
+        for (path, layer) in preloaded {
+            installed += self.seg_geojson.install_preloaded(path, layer.as_ref());
+        }
+        if installed > 0 {
+            self.seg_geojson.visible = true;
+            self.active_layer = MosaicLayerId::SegmentationGeoJson;
+            self.status = format!("Using cached object segmentations for {installed} ROI(s).");
+        }
+        installed
     }
 
     pub fn set_project_space(&mut self, mut project_space: ProjectSpace) {
@@ -2196,6 +2217,9 @@ impl eframe::App for MosaicViewerApp {
             );
             self.left_tab = tab;
         }
+        if let Some(action) = self.project_space.ui_floating_windows(ctx, false) {
+            self.handle_project_space_action(action);
+        }
 
         if self.show_right_panel {
             let mut tab = self.right_tab;
@@ -2211,6 +2235,11 @@ impl eframe::App for MosaicViewerApp {
                         scroll: true,
                     },
                     right_panel::TabSpec {
+                        tab: RightTab::Views,
+                        label: "Views",
+                        scroll: true,
+                    },
+                    right_panel::TabSpec {
                         tab: RightTab::Layout,
                         label: "Layout",
                         scroll: true,
@@ -2223,6 +2252,11 @@ impl eframe::App for MosaicViewerApp {
                 ],
                 |ui, tab| match tab {
                     RightTab::Properties => self.ui_properties(ui),
+                    RightTab::Views => {
+                        if let Some(action) = self.project_space.ui_views_panel(ui, None, false) {
+                            self.handle_project_space_action(action);
+                        }
+                    }
                     RightTab::Layout => self.ui_layout(ui, ctx),
                     RightTab::Memory => self.ui_memory(ui),
                 },
@@ -2701,7 +2735,7 @@ impl MosaicViewerApp {
     fn layer_display_name(&self, id: MosaicLayerId) -> String {
         match id {
             MosaicLayerId::TextLabels => "Text labels".to_string(),
-            MosaicLayerId::SegmentationGeoJson => "Segmentation (GeoJSON)".to_string(),
+            MosaicLayerId::SegmentationGeoJson => "Segmentation Objects".to_string(),
             MosaicLayerId::Annotation(id) => self
                 .annotation_layers
                 .iter()
@@ -3328,25 +3362,33 @@ impl MosaicViewerApp {
 
     fn ui_project(&mut self, ui: &mut egui::Ui) {
         if let Some(action) = self.project_space.ui(ui, None) {
-            match action {
-                crate::project::ProjectSpaceAction::Open(roi) => {
-                    self.pending_request = Some(MosaicRequest::OpenProjectRoi(roi));
-                }
-                crate::project::ProjectSpaceAction::OpenMosaic(rois) => {
-                    self.pending_request = Some(MosaicRequest::OpenProjectMosaic(rois));
-                }
-                crate::project::ProjectSpaceAction::OpenRemoteDialog => {
-                    self.pending_request = Some(MosaicRequest::OpenRemoteDialog);
-                }
-                crate::project::ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
-                    self.pending_request = Some(MosaicRequest::PreloadObjectSegmentations(
-                        self.project_space.clone(),
-                        mode,
-                    ));
-                }
-                crate::project::ProjectSpaceAction::ClearObjectCache => {
-                    self.pending_request = Some(MosaicRequest::ClearObjectCache);
-                }
+            self.handle_project_space_action(action);
+        }
+    }
+
+    fn handle_project_space_action(&mut self, action: crate::project::ProjectSpaceAction) {
+        match action {
+            crate::project::ProjectSpaceAction::Open(roi) => {
+                self.pending_request = Some(MosaicRequest::OpenProjectRoi(roi));
+            }
+            crate::project::ProjectSpaceAction::OpenView(roi, spec) => {
+                self.pending_request = Some(MosaicRequest::OpenProjectRoiView(roi, spec));
+            }
+            crate::project::ProjectSpaceAction::CaptureCurrentView => {}
+            crate::project::ProjectSpaceAction::OpenMosaic(rois) => {
+                self.pending_request = Some(MosaicRequest::OpenProjectMosaic(rois));
+            }
+            crate::project::ProjectSpaceAction::OpenRemoteDialog => {
+                self.pending_request = Some(MosaicRequest::OpenRemoteDialog);
+            }
+            crate::project::ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                self.pending_request = Some(MosaicRequest::PreloadObjectSegmentations(
+                    self.project_space.clone(),
+                    mode,
+                ));
+            }
+            crate::project::ProjectSpaceAction::ClearObjectCache => {
+                self.pending_request = Some(MosaicRequest::ClearObjectCache);
             }
         }
     }
@@ -3434,11 +3476,11 @@ impl MosaicViewerApp {
                 if have_any_seg {
                     let (loaded, loading, total) = self.seg_geojson.loaded_stats();
                     ui.label(format!(
-                        "GeoJSON: {loaded}/{total} loaded ({loading} loading)"
+                        "Objects: {loaded}/{total} loaded ({loading} loading)"
                     ));
                     let missing = self.seg_geojson.last_missing_bins();
                     if self.seg_geojson.visible && missing > 0 {
-                        ui.label(format!("GeoJSON bins: {missing} pending GPU uploads"));
+                        ui.label(format!("Object bins: {missing} pending GPU uploads"));
                     }
                 }
             }

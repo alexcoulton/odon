@@ -1080,8 +1080,22 @@ impl RootApp {
                         event.settings.property_label(),
                         event.path.display()
                     );
+                    let preloaded = Arc::new(preloaded);
                     self.object_preload_cache
-                        .insert((event.path, event.settings), Arc::new(preloaded));
+                        .insert((event.path.clone(), event.settings), preloaded.clone());
+                    if event.settings == self.object_preload_settings
+                        && let Mode::Mosaic { mosaic, .. } = &mut self.mode
+                    {
+                        let installed = mosaic.install_preloaded_project_segmentations(&[(
+                            event.path.clone(),
+                            preloaded,
+                        )]);
+                        if installed > 0 {
+                            log_warn!(
+                                "project preload: installed cached object segmentation for {installed} visible mosaic ROI(s)"
+                            );
+                        }
+                    }
                 }
                 Err(err) => {
                     self.object_preload_failed = self.object_preload_failed.saturating_add(1);
@@ -1190,6 +1204,27 @@ impl RootApp {
         self.object_preload_cache
             .get(&(path, self.object_preload_settings))
             .cloned()
+    }
+
+    fn cached_project_object_layers_for_rois(
+        &self,
+        project_space: &ProjectSpace,
+        rois: &[ProjectRoi],
+    ) -> Vec<(PathBuf, Arc<PreloadedObjectLayer>)> {
+        let mut seen = HashSet::new();
+        rois.iter()
+            .filter_map(|roi| {
+                let path = project_roi_segmentation_path(project_space, roi)?;
+                if !seen.insert(path.clone()) {
+                    return None;
+                }
+                let preloaded = self
+                    .object_preload_cache
+                    .get(&(path.clone(), self.object_preload_settings))
+                    .cloned()?;
+                Some((path, preloaded))
+            })
+            .collect()
     }
 
     pub fn add_paths_to_project(&mut self, paths: Vec<PathBuf>) {
@@ -1499,10 +1534,17 @@ impl RootApp {
             self.mode = Mode::Project { project_space: ps };
             return;
         }
+        let cached_objects = self.cached_project_object_layers_for_rois(&project_space, &rois);
         let mosaic_result =
             MosaicViewerApp::from_project_rois(ctx, self.gpu_available, rois, project_dir, None);
         match mosaic_result {
             Ok(mut mosaic) => {
+                if !cached_objects.is_empty() {
+                    let installed = mosaic.install_preloaded_project_segmentations(&cached_objects);
+                    log_warn!(
+                        "project preload: installed cached object segmentations for {installed} mosaic ROI(s)"
+                    );
+                }
                 mosaic.set_project_space(project_space);
                 self.mode = Mode::Mosaic { mosaic, ret };
             }
@@ -1527,6 +1569,8 @@ impl RootApp {
         let project_space = single.take_project_space();
         let project_rois = project_space.rois_for_local_paths(&paths);
         let project_dir = project_space.project_dir();
+        let cached_objects =
+            self.cached_project_object_layers_for_rois(&project_space, &project_rois);
         let mosaic_result = if project_rois.len() >= 2 {
             MosaicViewerApp::from_project_rois(
                 ctx,
@@ -1541,6 +1585,12 @@ impl RootApp {
 
         match mosaic_result {
             Ok(mut mosaic) => {
+                if !cached_objects.is_empty() {
+                    let installed = mosaic.install_preloaded_project_segmentations(&cached_objects);
+                    log_warn!(
+                        "project preload: installed cached object segmentations for {installed} mosaic ROI(s)"
+                    );
+                }
                 mosaic.set_project_space(project_space);
                 self.mode = Mode::Mosaic { mosaic, ret };
             }
@@ -2259,6 +2309,12 @@ impl eframe::App for RootApp {
                                     let ps = std::mem::take(project_space);
                                     open_project_roi = Some((roi, ps, None));
                                 }
+                                ProjectSpaceAction::OpenView(roi, spec) => {
+                                    let req = spec.to_deep_link_request(None);
+                                    let ps = std::mem::take(project_space);
+                                    open_project_roi = Some((roi, ps, Some(req)));
+                                }
+                                ProjectSpaceAction::CaptureCurrentView => {}
                                 ProjectSpaceAction::OpenMosaic(rois) => {
                                     let ps = std::mem::take(project_space);
                                     open_mosaic_from_project = Some((rois, ps));
@@ -2285,6 +2341,34 @@ impl eframe::App for RootApp {
                         );
                     });
                 });
+                if let Some(action) = project_space.ui_floating_windows(ctx, false) {
+                    match action {
+                        ProjectSpaceAction::Open(roi) => {
+                            let ps = std::mem::take(project_space);
+                            open_project_roi = Some((roi, ps, None));
+                        }
+                        ProjectSpaceAction::OpenView(roi, spec) => {
+                            let req = spec.to_deep_link_request(None);
+                            let ps = std::mem::take(project_space);
+                            open_project_roi = Some((roi, ps, Some(req)));
+                        }
+                        ProjectSpaceAction::CaptureCurrentView => {}
+                        ProjectSpaceAction::OpenMosaic(rois) => {
+                            let ps = std::mem::take(project_space);
+                            open_mosaic_from_project = Some((rois, ps));
+                        }
+                        ProjectSpaceAction::OpenRemoteDialog => {
+                            self.remote_dialog_open = true;
+                            self.remote_status.clear();
+                        }
+                        ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                            object_preload_start = Some((project_space.clone(), mode));
+                        }
+                        ProjectSpaceAction::ClearObjectCache => {
+                            object_preload_clear = true;
+                        }
+                    }
+                }
 
                 // Startup open (e.g. when launched with a dataset path that isn't a direct OME image root).
                 if open_single.is_none() && self.spatial_open.is_none() {
@@ -2311,6 +2395,15 @@ impl eframe::App for RootApp {
                         ViewerRequest::OpenProjectRoi(roi) => {
                             let ps = app.take_project_space();
                             open_project_roi = Some((roi, ps, None));
+                        }
+                        ViewerRequest::OpenProjectRoiView(roi, spec) => {
+                            let req = spec.to_deep_link_request(None);
+                            if app.is_viewing_project_roi(&roi) {
+                                app.apply_deep_link_request(&req);
+                            } else {
+                                let ps = app.take_project_space();
+                                open_project_roi = Some((roi, ps, Some(req)));
+                            }
                         }
                         ViewerRequest::OpenProjectMosaic(rois) => {
                             let ps = app.take_project_space();
@@ -2357,6 +2450,11 @@ impl eframe::App for RootApp {
                         MosaicRequest::OpenProjectRoi(roi) => {
                             let ps = mosaic.take_project_space();
                             open_project_roi = Some((roi, ps, None));
+                        }
+                        MosaicRequest::OpenProjectRoiView(roi, spec) => {
+                            let req = spec.to_deep_link_request(None);
+                            let ps = mosaic.take_project_space();
+                            open_project_roi = Some((roi, ps, Some(req)));
                         }
                         MosaicRequest::OpenProjectMosaic(rois) => {
                             let ps = mosaic.take_project_space();

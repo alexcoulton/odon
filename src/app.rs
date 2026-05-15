@@ -65,6 +65,7 @@ use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
     ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
     ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction, ProjectUiState,
+    ProjectViewChannelRef, ProjectViewSpec,
 };
 use crate::render::labels::{LabelZarrDataset, discover_label_names_local};
 use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
@@ -156,6 +157,7 @@ impl LeftTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightTab {
     Properties,
+    Views,
     Analysis,
     Measurements,
     Memory,
@@ -166,6 +168,7 @@ impl RightTab {
     fn storage_key(self) -> &'static str {
         match self {
             Self::Properties => "properties",
+            Self::Views => "views",
             Self::Analysis => "analysis",
             Self::Measurements => "measurements",
             Self::Memory => "memory",
@@ -176,6 +179,7 @@ impl RightTab {
     fn from_storage_key(value: &str) -> Option<Self> {
         match value {
             "properties" => Some(Self::Properties),
+            "views" => Some(Self::Views),
             "analysis" => Some(Self::Analysis),
             "measurements" => Some(Self::Measurements),
             "memory" => Some(Self::Memory),
@@ -606,6 +610,7 @@ struct LayerTransformState {
 #[derive(Debug, Clone)]
 pub enum ViewerRequest {
     OpenProjectRoi(ProjectRoi),
+    OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
     PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
@@ -675,6 +680,183 @@ fn normalize_deep_link_name(value: &str) -> String {
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect()
+}
+
+fn marker_name_from_channel_label(value: &str) -> &str {
+    let marker = value
+        .split_once(" - ")
+        .map(|(_, marker)| marker)
+        .unwrap_or(value)
+        .trim();
+    marker
+        .split_once(" (")
+        .map(|(marker, _)| marker)
+        .or_else(|| marker.split_once(" [").map(|(marker, _)| marker))
+        .unwrap_or(marker)
+        .trim()
+}
+
+fn suggest_channel_alias(value: &str) -> String {
+    let marker = marker_name_from_channel_label(value);
+    let tokens = marker
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .filter(|token| !looks_like_channel_id_token(token))
+        .filter(|token| !looks_like_fluorophore_token(token))
+        .map(|token| token.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if !tokens.is_empty() {
+        return tokens.join("_");
+    }
+    normalize_deep_link_name(marker)
+}
+
+fn looks_like_channel_id_token(token: &str) -> bool {
+    let token = token.trim();
+    let Some(rest) = token.strip_prefix('C').or_else(|| token.strip_prefix('c')) else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn looks_like_fluorophore_token(token: &str) -> bool {
+    let token = normalize_deep_link_name(token);
+    if token.is_empty() {
+        return false;
+    }
+    if token.chars().all(|ch| ch.is_ascii_digit()) {
+        return true;
+    }
+    matches!(
+        token.as_str(),
+        "fitc"
+            | "apc"
+            | "pe"
+            | "cy3"
+            | "cy5"
+            | "cy7"
+            | "tritc"
+            | "texasred"
+            | "dylight"
+            | "alexa"
+            | "fluor"
+            | "af"
+    ) || token
+        .strip_prefix("opal")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
+        || token
+            .strip_prefix("af")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn cd_marker_digit_suffix(value: &str) -> Option<(&str, &str)> {
+    let rest = value.strip_prefix("cd")?;
+    let digit_len = rest
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit())
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if digit_len == 0 {
+        return None;
+    }
+    let (digits, suffix) = rest.split_at(digit_len);
+    Some((digits, suffix))
+}
+
+fn marker_alias_matches(requested: &str, candidate_marker: &str) -> bool {
+    let requested = normalize_deep_link_name(requested);
+    let candidate = normalize_deep_link_name(candidate_marker);
+    if requested.is_empty() || candidate.is_empty() {
+        return false;
+    }
+    if requested == candidate {
+        return true;
+    }
+
+    let Some((requested_digits, requested_suffix)) = cd_marker_digit_suffix(&requested) else {
+        return false;
+    };
+    let Some((candidate_digits, candidate_suffix)) = cd_marker_digit_suffix(&candidate) else {
+        return false;
+    };
+    if requested_digits != candidate_digits {
+        return false;
+    }
+    if requested_suffix.is_empty() {
+        return candidate_suffix
+            .chars()
+            .next()
+            .is_none_or(|ch| ch.is_ascii_alphabetic());
+    }
+    candidate_suffix == requested_suffix
+}
+
+fn deep_link_channel_groups(raw: &[String], alternatives: &[Vec<String>]) -> Vec<Vec<String>> {
+    let mut groups = alternatives
+        .iter()
+        .filter_map(|terms| {
+            let mut group = Vec::new();
+            for term in terms {
+                push_unique_term(&mut group, term);
+            }
+            (!group.is_empty()).then_some(group)
+        })
+        .collect::<Vec<_>>();
+    for term in raw {
+        let mut group = Vec::new();
+        push_unique_term(&mut group, term);
+        if !group.is_empty() {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+fn push_unique_term(dst: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() && !dst.iter().any(|existing| existing == value) {
+        dst.push(value.to_string());
+    }
+}
+
+#[cfg(test)]
+mod deep_link_channel_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_marker_name_from_channel_label() {
+        assert_eq!(
+            marker_name_from_channel_label("C013 - Desmin (FITC) [S]"),
+            "Desmin"
+        );
+        assert_eq!(
+            marker_name_from_channel_label("C028 - CD8a (APC) [S]"),
+            "CD8a"
+        );
+        assert_eq!(marker_name_from_channel_label("DAPI [S]"), "DAPI");
+    }
+
+    #[test]
+    fn matches_marker_aliases_without_cd_prefix_collisions() {
+        assert!(marker_alias_matches("desmin", "Desmin"));
+        assert!(marker_alias_matches("myogenin", "Myogenin"));
+        assert!(marker_alias_matches("cd68", "CD68"));
+        assert!(marker_alias_matches("cd8", "CD8a"));
+        assert!(!marker_alias_matches("cd8", "CD88"));
+        assert!(!marker_alias_matches("cd3", "CD31"));
+        assert!(!marker_alias_matches("cd4", "CD45"));
+        assert!(!marker_alias_matches("cd1", "CD163"));
+    }
+
+    #[test]
+    fn suggests_channel_aliases_from_common_labels() {
+        assert_eq!(suggest_channel_alias("C013 - Desmin (FITC) [S]"), "desmin");
+        assert_eq!(suggest_channel_alias("Desmin_Opal520"), "desmin");
+        assert_eq!(suggest_channel_alias("CD8a-AF647"), "cd8a");
+        assert_eq!(suggest_channel_alias("C019_MYOG"), "myog");
+        assert_eq!(suggest_channel_alias("DAPI"), "dapi");
+    }
 }
 
 fn build_tiff_dataset(
@@ -858,10 +1040,21 @@ impl OmeZarrViewerApp {
         let load_bundled_labels = request
             .load_segmentation_labels
             .unwrap_or(bundled_labels_requested);
+        let suppress_bundled_label_prompt = !load_bundled_labels
+            || object_segmentation_requested
+            || segmentation_source.as_deref() == Some("none");
+        if suppress_bundled_label_prompt {
+            self.seg_label_prompt_open = false;
+        }
 
         let mut channel_visibility_changed = false;
-        if let Some(channel_name) = request.channel.as_deref() {
-            match self.find_channel_index_for_link(channel_name) {
+        let channel_terms = if request.channel_alternatives.is_empty() {
+            request.channel.iter().cloned().collect::<Vec<_>>()
+        } else {
+            request.channel_alternatives.clone()
+        };
+        if !channel_terms.is_empty() {
+            match self.find_channel_index_for_link_terms(&channel_terms) {
                 Some(idx) => {
                     self.selected_channel = idx;
                     if let Some(channel) = self.channels.get_mut(idx) {
@@ -870,37 +1063,54 @@ impl OmeZarrViewerApp {
                     }
                     self.set_active_layer(LayerId::Channel(idx));
                 }
-                None => notes.push(format!("channel '{channel_name}' was not found")),
+                None => notes.push(format!(
+                    "channel '{}' was not found",
+                    channel_terms.join("' or '")
+                )),
             }
         }
 
-        if !request.visible_channels.is_empty() {
+        let visible_channel_groups = deep_link_channel_groups(
+            &request.visible_channels,
+            &request.visible_channel_alternatives,
+        );
+        if !visible_channel_groups.is_empty() {
             for channel in &mut self.channels {
                 channel_visibility_changed |= channel.visible;
                 channel.visible = false;
             }
-            for channel_name in &request.visible_channels {
-                match self.find_channel_index_for_link(channel_name) {
+            for channel_terms in &visible_channel_groups {
+                match self.find_channel_index_for_link_terms(channel_terms) {
                     Some(idx) => {
                         if let Some(channel) = self.channels.get_mut(idx) {
                             channel_visibility_changed |= !channel.visible;
                             channel.visible = true;
                         }
                     }
-                    None => notes.push(format!("visible channel '{channel_name}' was not found")),
+                    None => notes.push(format!(
+                        "visible channel '{}' was not found",
+                        channel_terms.join("' or '")
+                    )),
                 }
             }
         }
 
-        for channel_name in &request.hidden_channels {
-            match self.find_channel_index_for_link(channel_name) {
+        let hidden_channel_groups = deep_link_channel_groups(
+            &request.hidden_channels,
+            &request.hidden_channel_alternatives,
+        );
+        for channel_terms in &hidden_channel_groups {
+            match self.find_channel_index_for_link_terms(channel_terms) {
                 Some(idx) => {
                     if let Some(channel) = self.channels.get_mut(idx) {
                         channel_visibility_changed |= channel.visible;
                         channel.visible = false;
                     }
                 }
-                None => notes.push(format!("hidden channel '{channel_name}' was not found")),
+                None => notes.push(format!(
+                    "hidden channel '{}' was not found",
+                    channel_terms.join("' or '")
+                )),
             }
         }
         if channel_visibility_changed {
@@ -964,7 +1174,7 @@ impl OmeZarrViewerApp {
             } else {
                 notes.push(format!("labels/{label_name} was not found"));
             }
-        } else if request.load_segmentation_labels == Some(false) {
+        } else if suppress_bundled_label_prompt {
             self.cells_outlines_visible = false;
         }
 
@@ -1030,14 +1240,57 @@ impl OmeZarrViewerApp {
 
     fn find_channel_index_for_link(&self, channel_name: &str) -> Option<usize> {
         let needle = normalize_deep_link_name(channel_name);
-        self.channels
+        if needle.is_empty() {
+            return None;
+        }
+
+        if let Some(idx) = self
+            .channels
             .iter()
             .position(|channel| normalize_deep_link_name(&channel.name) == needle)
-            .or_else(|| {
-                self.channels
-                    .iter()
-                    .position(|channel| normalize_deep_link_name(&channel.name).contains(&needle))
+        {
+            return Some(idx);
+        }
+
+        if let Some(idx) = self.channels.iter().position(|channel| {
+            normalize_deep_link_name(marker_name_from_channel_label(&channel.name)) == needle
+        }) {
+            return Some(idx);
+        }
+
+        let marker_matches = self
+            .channels
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, channel)| {
+                marker_alias_matches(channel_name, marker_name_from_channel_label(&channel.name))
+                    .then_some(idx)
             })
+            .collect::<Vec<_>>();
+        if marker_matches.len() == 1 {
+            return marker_matches.first().copied();
+        }
+
+        let contains_matches = self
+            .channels
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, channel)| {
+                normalize_deep_link_name(&channel.name)
+                    .contains(&needle)
+                    .then_some(idx)
+            })
+            .collect::<Vec<_>>();
+        (contains_matches.len() == 1).then(|| contains_matches[0])
+    }
+
+    fn find_channel_index_for_link_terms(&self, terms: &[String]) -> Option<usize> {
+        for term in terms {
+            if let Some(idx) = self.find_channel_index_for_link(term) {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     fn set_channel_window_for_link(&mut self, idx: usize, lo: f32, hi: f32) -> bool {
@@ -2466,6 +2719,96 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn current_project_view_spec(&mut self) -> ProjectViewSpec {
+        let display = self.seg_objects.project_display_state();
+        let analysis = self.seg_objects.project_analysis_state();
+        let (cell_color_by, visible_cell_types, hidden_cell_types) = self
+            .seg_objects
+            .active_color_value_visibility_snapshot()
+            .map(|(property_key, visible_values, hidden_values)| {
+                let visible_values = if hidden_values.is_empty() {
+                    Vec::new()
+                } else {
+                    visible_values
+                };
+                (Some(property_key), visible_values, hidden_values)
+            })
+            .unwrap_or_else(|| (display.color_property_key.clone(), Vec::new(), Vec::new()));
+        let uses_object_segmentation =
+            self.seg_objects.object_count() > 0 || cell_color_by.is_some() || display.fill_cells;
+        let channel_ref =
+            self.channels
+                .get(self.selected_channel)
+                .map(|channel| ProjectViewChannelRef {
+                    label: channel.name.clone(),
+                    alias: suggest_channel_alias(&channel.name),
+                });
+        let visible_channel_refs = self
+            .channels
+            .iter()
+            .filter(|channel| channel.visible)
+            .map(|channel| ProjectViewChannelRef {
+                label: channel.name.clone(),
+                alias: suggest_channel_alias(&channel.name),
+            })
+            .collect::<Vec<_>>();
+
+        ProjectViewSpec {
+            channel: None,
+            channel_ref,
+            visible_channels: Vec::new(),
+            visible_channel_refs,
+            hidden_channels: Vec::new(),
+            segmentation_source: uses_object_segmentation.then(|| "geoparquet".to_string()),
+            load_labels: uses_object_segmentation.then_some(false),
+            cell_color_by,
+            visible_cell_types,
+            hidden_cell_types,
+            fill_cells: uses_object_segmentation.then_some(display.fill_cells),
+            show_selection_overlay: uses_object_segmentation
+                .then_some(analysis.show_selection_overlay),
+            camera: Some(self.project_camera_state()),
+        }
+    }
+
+    fn handle_project_space_action(&mut self, action: ProjectSpaceAction) {
+        match action {
+            ProjectSpaceAction::Open(roi) => {
+                self.project_space
+                    .set_status(format!("Opening: {}", roi.source_display()));
+                self.pending_request = Some(ViewerRequest::OpenProjectRoi(roi));
+            }
+            ProjectSpaceAction::OpenView(roi, spec) => {
+                self.project_space
+                    .set_status(format!("Opening view: {}", roi.source_display()));
+                self.pending_request = Some(ViewerRequest::OpenProjectRoiView(roi, spec));
+            }
+            ProjectSpaceAction::CaptureCurrentView => {
+                let spec = self.current_project_view_spec();
+                self.project_space.set_view_preset_draft(spec);
+            }
+            ProjectSpaceAction::OpenMosaic(rois) => {
+                self.project_space
+                    .set_status(format!("Opening mosaic ({} items)...", rois.len()));
+                self.pending_request = Some(ViewerRequest::OpenProjectMosaic(rois));
+            }
+            ProjectSpaceAction::OpenRemoteDialog => {
+                self.remote_dialog_open = true;
+                self.remote_status.clear();
+            }
+            ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                self.sync_current_view_state_into_project_space();
+                self.pending_request = Some(ViewerRequest::PreloadObjectSegmentations(
+                    self.project_space.clone(),
+                    mode,
+                ));
+            }
+            ProjectSpaceAction::ClearObjectCache => {
+                self.pending_request = Some(ViewerRequest::ClearObjectCache);
+            }
+        }
+    }
+
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
         self.apply_view_state_from_project_space();
@@ -3440,41 +3783,15 @@ impl eframe::App for OmeZarrViewerApp {
                         let cur = self.dataset.source.local_path().map(Path::to_path_buf);
                         self.sync_current_view_state_into_project_space();
                         if let Some(action) = self.project_space.ui(ui, cur.as_deref()) {
-                            match action {
-                                ProjectSpaceAction::Open(roi) => {
-                                    self.project_space
-                                        .set_status(format!("Opening: {}", roi.source_display()));
-                                    self.pending_request = Some(ViewerRequest::OpenProjectRoi(roi));
-                                }
-                                ProjectSpaceAction::OpenMosaic(rois) => {
-                                    self.project_space.set_status(format!(
-                                        "Opening mosaic ({} items)...",
-                                        rois.len()
-                                    ));
-                                    self.pending_request =
-                                        Some(ViewerRequest::OpenProjectMosaic(rois));
-                                }
-                                ProjectSpaceAction::OpenRemoteDialog => {
-                                    self.remote_dialog_open = true;
-                                    self.remote_status.clear();
-                                }
-                                ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
-                                    self.sync_current_view_state_into_project_space();
-                                    self.pending_request =
-                                        Some(ViewerRequest::PreloadObjectSegmentations(
-                                            self.project_space.clone(),
-                                            mode,
-                                        ));
-                                }
-                                ProjectSpaceAction::ClearObjectCache => {
-                                    self.pending_request = Some(ViewerRequest::ClearObjectCache);
-                                }
-                            }
+                            self.handle_project_space_action(action);
                         }
                     }
                 },
             );
             self.left_tab = tab;
+        }
+        if let Some(action) = self.project_space.ui_floating_windows(ctx, true) {
+            self.handle_project_space_action(action);
         }
 
         if self.show_right_panel {
@@ -3488,6 +3805,11 @@ impl eframe::App for OmeZarrViewerApp {
                     right_panel::TabSpec {
                         tab: RightTab::Properties,
                         label: "Properties",
+                        scroll: true,
+                    },
+                    right_panel::TabSpec {
+                        tab: RightTab::Views,
+                        label: "Views",
                         scroll: true,
                     },
                     right_panel::TabSpec {
@@ -3513,6 +3835,12 @@ impl eframe::App for OmeZarrViewerApp {
                 ],
                 |ui, tab| match tab {
                     RightTab::Properties => self.ui_layer_properties(ui, ctx),
+                    RightTab::Views => {
+                        let roi = self.current_project_roi().cloned();
+                        if let Some(action) = self.project_space.ui_views_panel(ui, roi, true) {
+                            self.handle_project_space_action(action);
+                        }
+                    }
                     RightTab::Analysis => {
                         let suspend_live_selection_sync =
                             matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect);

@@ -5,5 +5,5 @@ pub(crate) use space::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
     ProjectChannelViewState, ProjectMosaicViewState, ProjectObjectCacheUiState,
     ProjectRoiViewState, ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction,
-    ProjectUiState,
+    ProjectUiState, ProjectViewChannelRef, ProjectViewSpec,
 };

@@ -13,8 +13,11 @@ pub struct DeepLinkRequest {
     pub roi: Option<String>,
     pub sample: Option<String>,
     pub channel: Option<String>,
+    pub channel_alternatives: Vec<String>,
     pub visible_channels: Vec<String>,
+    pub visible_channel_alternatives: Vec<Vec<String>>,
     pub hidden_channels: Vec<String>,
+    pub hidden_channel_alternatives: Vec<Vec<String>>,
     pub contrast_min: Option<f32>,
     pub contrast_max: Option<f32>,
     pub channel_contrasts: Vec<DeepLinkChannelContrast>,
@@ -68,8 +71,11 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         roi: None,
         sample: None,
         channel: None,
+        channel_alternatives: Vec::new(),
         visible_channels: Vec::new(),
+        visible_channel_alternatives: Vec::new(),
         hidden_channels: Vec::new(),
+        hidden_channel_alternatives: Vec::new(),
         contrast_min: None,
         contrast_max: None,
         channel_contrasts: Vec::new(),
@@ -294,6 +300,23 @@ mod tests {
     #[test]
     fn ignores_non_odon_args() {
         assert!(DeepLinkRequest::parse_arg("--project").unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_load_label_aliases() {
+        let req = DeepLinkRequest::parse_arg(
+            "odon://open?segmentation_source=geoparquet&load_ome_zarr_labels=false",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(req.segmentation_source.as_deref(), Some("geoparquet"));
+        assert_eq!(req.load_segmentation_labels, Some(false));
+
+        let req = DeepLinkRequest::parse_arg("odon://open?load_bundled_labels=1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(req.load_segmentation_labels, Some(true));
     }
 
     #[test]

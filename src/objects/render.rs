@@ -662,31 +662,13 @@ impl ObjectsLayer {
             centroid_world.x, centroid_world.y
         ));
 
-        let mut keys = obj.properties.keys().cloned().collect::<Vec<_>>();
-        keys.sort();
         const MAX_TOOLTIP_PROPERTIES: usize = 11;
-        let mut added = 0usize;
-        for key in keys {
-            if added >= MAX_TOOLTIP_PROPERTIES {
-                break;
-            }
-            let Some(value) = obj.properties.get(&key) else {
-                continue;
-            };
-            let text = match value {
-                serde_json::Value::Null => continue,
-                serde_json::Value::Bool(v) => v.to_string(),
-                serde_json::Value::Number(v) => v.to_string(),
-                serde_json::Value::String(v) => {
-                    if v.trim().is_empty() {
-                        continue;
-                    }
-                    v.clone()
-                }
-                _ => continue,
-            };
+        for (key, text) in self
+            .loaded_property_display_pairs(idx, obj)
+            .into_iter()
+            .take(MAX_TOOLTIP_PROPERTIES)
+        {
             lines.push(format!("{key}: {text}"));
-            added += 1;
         }
 
         Some(lines)
@@ -1953,7 +1935,7 @@ pub(super) fn discover_categorical_color_keys(objects: &[GeoJsonObjectFeature]) 
     let mut overflow = HashSet::new();
 
     for obj in objects {
-        for (key, value) in &obj.properties {
+        for (key, value) in &obj.inline_properties {
             let Some(text) = property_scalar_value(value) else {
                 continue;
             };
@@ -1977,7 +1959,7 @@ pub(super) fn discover_categorical_color_keys(objects: &[GeoJsonObjectFeature]) 
 pub(super) fn discover_property_keys(objects: &[GeoJsonObjectFeature]) -> Vec<String> {
     let mut keys = HashSet::new();
     for obj in objects {
-        keys.extend(obj.properties.keys().cloned());
+        keys.extend(obj.inline_properties.keys().cloned());
     }
     let mut out = keys.into_iter().collect::<Vec<_>>();
     out.sort();
@@ -1987,7 +1969,7 @@ pub(super) fn discover_property_keys(objects: &[GeoJsonObjectFeature]) -> Vec<St
 pub(super) fn discover_scalar_property_keys(objects: &[GeoJsonObjectFeature]) -> Vec<String> {
     let mut keys = HashSet::new();
     for obj in objects {
-        for (key, value) in &obj.properties {
+        for (key, value) in &obj.inline_properties {
             if property_scalar_value(value).is_some() {
                 keys.insert(key.clone());
             }
@@ -1998,12 +1980,12 @@ pub(super) fn discover_scalar_property_keys(objects: &[GeoJsonObjectFeature]) ->
     out
 }
 
-pub(super) fn build_color_groups_for_property<'a, I>(
+pub(super) fn build_color_groups_for_property_labels<'a, I>(
     objects: I,
     property_key: &str,
 ) -> anyhow::Result<ObjectColorGroups>
 where
-    I: IntoIterator<Item = (usize, &'a GeoJsonObjectFeature)>,
+    I: IntoIterator<Item = (usize, &'a GeoJsonObjectFeature, String)>,
 {
     use std::collections::BTreeMap;
     use std::hash::{Hash, Hasher};
@@ -2014,15 +1996,8 @@ where
     let mut grouped_indices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut object_count = 0usize;
 
-    for (object_index, obj) in objects {
+    for (object_index, obj, value) in objects {
         object_count = object_count.max(object_index.saturating_add(1));
-        let Some(value) = obj
-            .properties
-            .get(property_key)
-            .and_then(property_scalar_value)
-        else {
-            continue;
-        };
         counts
             .entry(value.clone())
             .and_modify(|count| *count += 1)

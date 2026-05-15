@@ -17,6 +17,7 @@ use crate::data::project_config::{
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
+use crate::deep_link::DeepLinkRequest;
 use crate::objects::{
     ObjectPreloadMode, ObjectPreloadSettings, ObjectProjectAnalysisState, ObjectProjectDisplayState,
 };
@@ -81,6 +82,8 @@ struct ProjectState {
     browser: ProjectBrowserState,
     #[serde(default)]
     roi_views: BTreeMap<String, ProjectRoiViewState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    view_presets: Vec<ProjectViewPreset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mosaic: Option<ProjectMosaicViewState>,
 }
@@ -255,6 +258,155 @@ pub struct ProjectMosaicViewState {
     pub annotation_layers: Vec<ProjectAnnotationLayerState>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectViewChannelRef {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alias: String,
+}
+
+impl ProjectViewChannelRef {
+    fn search_terms(&self) -> Vec<String> {
+        let mut terms = Vec::new();
+        push_unique_non_empty(&mut terms, self.alias.trim());
+        push_unique_non_empty(&mut terms, self.label.trim());
+        terms
+    }
+
+    fn display_name(&self) -> String {
+        if self.alias.trim().is_empty() {
+            self.label.clone()
+        } else {
+            format!("{} ({})", self.alias.trim(), self.label)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectViewSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_ref: Option<ProjectViewChannelRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_channels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_channel_refs: Vec<ProjectViewChannelRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_channels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmentation_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_labels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_color_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_cell_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_cell_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_cells: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_selection_overlay: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ProjectCameraState>,
+}
+
+impl ProjectViewSpec {
+    pub fn to_deep_link_request(&self, roi: Option<String>) -> DeepLinkRequest {
+        let channel_alternatives = self
+            .channel_ref
+            .as_ref()
+            .map(ProjectViewChannelRef::search_terms)
+            .unwrap_or_default();
+        let channel = if channel_alternatives.is_empty() {
+            self.channel.clone()
+        } else {
+            channel_alternatives.first().cloned()
+        };
+        let visible_channel_alternatives = self
+            .visible_channel_refs
+            .iter()
+            .map(ProjectViewChannelRef::search_terms)
+            .filter(|terms| !terms.is_empty())
+            .collect::<Vec<_>>();
+        DeepLinkRequest {
+            project_path: None,
+            roi,
+            sample: None,
+            channel,
+            channel_alternatives,
+            visible_channels: self.visible_channels.clone(),
+            visible_channel_alternatives,
+            hidden_channels: self.hidden_channels.clone(),
+            hidden_channel_alternatives: Vec::new(),
+            contrast_min: None,
+            contrast_max: None,
+            channel_contrasts: Vec::new(),
+            segmentation: None,
+            segmentation_source: self.segmentation_source.clone(),
+            load_segmentation_labels: self.load_labels,
+            cell_color_by: self.cell_color_by.clone(),
+            fill_cells: self.fill_cells,
+            show_selection_overlay: self.show_selection_overlay,
+            visible_cell_types: self.visible_cell_types.clone(),
+            hidden_cell_types: self.hidden_cell_types.clone(),
+            center_world: self.camera.as_ref().map(|camera| camera.center_world_lvl0),
+            zoom: self
+                .camera
+                .as_ref()
+                .map(|camera| camera.zoom_screen_per_lvl0_px),
+        }
+    }
+}
+
+fn push_unique_non_empty(dst: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() && !dst.iter().any(|existing| existing == value) {
+        dst.push(value.to_string());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectViewPreset {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub spec: ProjectViewSpec,
+}
+
+fn view_preset_summary(preset: &ProjectViewPreset) -> String {
+    let channel_names = visible_channel_display_names(&preset.spec);
+    let channels = if channel_names.is_empty() {
+        "(current channels)".to_string()
+    } else {
+        channel_names.join(", ")
+    };
+    let cell_types = if preset.spec.visible_cell_types.is_empty() {
+        "(all cell types)".to_string()
+    } else {
+        preset.spec.visible_cell_types.join(", ")
+    };
+    let color_by = preset
+        .spec
+        .cell_color_by
+        .as_deref()
+        .unwrap_or("(single color)");
+    format!("Markers: {channels}\nColor by: {color_by}\nCell types: {cell_types}")
+}
+
+fn visible_channel_display_names(spec: &ProjectViewSpec) -> Vec<String> {
+    if !spec.visible_channel_refs.is_empty() {
+        spec.visible_channel_refs
+            .iter()
+            .map(ProjectViewChannelRef::display_name)
+            .collect()
+    } else {
+        spec.visible_channels.clone()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectItem {
     pub path: PathBuf,
@@ -265,6 +417,8 @@ struct ProjectItem {
 #[derive(Debug, Clone)]
 pub enum ProjectSpaceAction {
     Open(ProjectRoi),
+    OpenView(ProjectRoi, ProjectViewSpec),
+    CaptureCurrentView,
     OpenMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
     PreloadObjectSegmentations(ObjectPreloadSettings),
@@ -302,6 +456,10 @@ pub struct ProjectSpace {
     roi_browse: RoiBrowseState,
     object_cache_ui: ProjectObjectCacheUiState,
     object_cache_settings: ObjectPreloadSettings,
+    selected_view_preset: usize,
+    view_preset_name_input: String,
+    views_dialog_open: bool,
+    view_preset_draft: Option<ProjectViewSpec>,
 }
 
 impl ProjectSpace {
@@ -544,6 +702,50 @@ impl ProjectSpace {
         }
         *dst = view;
         self.config_generation = self.config_generation.wrapping_add(1);
+    }
+
+    pub fn save_view_preset(&mut self, name: String, spec: ProjectViewSpec) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.status = "View preset name is empty.".to_string();
+            return;
+        }
+        let mut spec = spec;
+        if let Some(active) = spec.channel_ref.as_mut()
+            && let Some(visible) = spec
+                .visible_channel_refs
+                .iter()
+                .find(|visible| visible.label == active.label)
+        {
+            active.alias = visible.alias.clone();
+        }
+        let preset = ProjectViewPreset {
+            name: name.to_string(),
+            description: String::new(),
+            spec,
+        };
+        if let Some((idx, existing)) = self
+            .state
+            .view_presets
+            .iter_mut()
+            .enumerate()
+            .find(|(_, preset)| preset.name == name)
+        {
+            *existing = preset;
+            self.selected_view_preset = idx;
+            self.status = format!("Updated view preset '{name}'.");
+        } else {
+            self.state.view_presets.push(preset);
+            self.selected_view_preset = self.state.view_presets.len().saturating_sub(1);
+            self.status = format!("Saved view preset '{name}'.");
+        }
+        self.config_generation = self.config_generation.wrapping_add(1);
+    }
+
+    pub fn set_view_preset_draft(&mut self, spec: ProjectViewSpec) {
+        self.view_preset_draft = Some(spec);
+        self.views_dialog_open = true;
+        self.status = "Captured current view. Review aliases, then save.".to_string();
     }
 
     pub fn mosaic_view_state(&self) -> Option<&ProjectMosaicViewState> {
@@ -1031,6 +1233,8 @@ impl ProjectSpace {
         });
         ui.add_space(6.0);
         self.ui_object_cache(ui, &mut action);
+        ui.add_space(6.0);
+        self.ui_views_launcher(ui);
         ui.add_space(6.0);
         ui.label("Browse ROIs");
         let browse = crate::ui::roi_browser::ui(
@@ -1570,6 +1774,139 @@ impl ProjectSpace {
         action
     }
 
+    pub fn ui_floating_windows(
+        &mut self,
+        ctx: &egui::Context,
+        can_capture_current_view: bool,
+    ) -> Option<ProjectSpaceAction> {
+        let mut action = None;
+        self.ui_views_dialog(ctx, can_capture_current_view, &mut action);
+        action
+    }
+
+    pub fn ui_views_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        target_roi: Option<ProjectRoi>,
+        can_capture_current_view: bool,
+    ) -> Option<ProjectSpaceAction> {
+        let mut action = None;
+        ui.heading("Views");
+        ui.horizontal(|ui| {
+            if ui.button("Manage...").clicked() {
+                self.views_dialog_open = true;
+            }
+            if ui
+                .add_enabled(can_capture_current_view, egui::Button::new("Capture"))
+                .clicked()
+            {
+                action = Some(ProjectSpaceAction::CaptureCurrentView);
+            }
+        });
+
+        if self.state.view_presets.is_empty() {
+            ui.label("No saved views.");
+            ui.small("Configure the viewer, then capture and save a view.");
+            return action;
+        }
+
+        self.selected_view_preset = self
+            .selected_view_preset
+            .min(self.state.view_presets.len().saturating_sub(1));
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Prev").clicked() {
+                self.selected_view_preset = if self.selected_view_preset == 0 {
+                    self.state.view_presets.len() - 1
+                } else {
+                    self.selected_view_preset - 1
+                };
+                if let (Some(roi), Some(preset)) = (
+                    target_roi.clone(),
+                    self.state
+                        .view_presets
+                        .get(self.selected_view_preset)
+                        .cloned(),
+                ) {
+                    action = Some(ProjectSpaceAction::OpenView(roi, preset.spec));
+                }
+            }
+            if ui.button("Next").clicked() {
+                self.selected_view_preset =
+                    (self.selected_view_preset + 1) % self.state.view_presets.len();
+                if let (Some(roi), Some(preset)) = (
+                    target_roi.clone(),
+                    self.state
+                        .view_presets
+                        .get(self.selected_view_preset)
+                        .cloned(),
+                ) {
+                    action = Some(ProjectSpaceAction::OpenView(roi, preset.spec));
+                }
+            }
+            if ui
+                .add_enabled(target_roi.is_some(), egui::Button::new("Apply"))
+                .clicked()
+                && let (Some(roi), Some(preset)) = (
+                    target_roi.clone(),
+                    self.state
+                        .view_presets
+                        .get(self.selected_view_preset)
+                        .cloned(),
+                )
+            {
+                action = Some(ProjectSpaceAction::OpenView(roi, preset.spec));
+            }
+        });
+
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt("project-views-right-panel-list")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (idx, preset) in self.state.view_presets.iter().enumerate() {
+                    let selected = idx == self.selected_view_preset;
+                    let resp = ui
+                        .selectable_label(selected, preset.name.as_str())
+                        .on_hover_text(view_preset_summary(preset));
+                    if resp.clicked() {
+                        self.selected_view_preset = idx;
+                    }
+                    if resp.double_clicked()
+                        && let Some(roi) = target_roi.clone()
+                    {
+                        action = Some(ProjectSpaceAction::OpenView(roi, preset.spec.clone()));
+                    }
+                }
+            });
+
+        if let Some(preset) = self.state.view_presets.get(self.selected_view_preset) {
+            ui.separator();
+            let channel_names = visible_channel_display_names(&preset.spec);
+            let channels = if channel_names.is_empty() {
+                "(current channels)".to_string()
+            } else {
+                channel_names.join(", ")
+            };
+            ui.small(format!("Channels: {channels}"));
+            if let Some(color_by) = preset.spec.cell_color_by.as_deref() {
+                ui.small(format!("Color by: {color_by}"));
+            }
+            if !preset.spec.visible_cell_types.is_empty() {
+                ui.small(format!(
+                    "Visible values: {}",
+                    preset.spec.visible_cell_types.join(", ")
+                ));
+            }
+        }
+        if target_roi.is_none() {
+            ui.separator();
+            ui.small("Open a project ROI to apply views from this tab.");
+        }
+        action
+    }
+
     fn ui_object_cache(&mut self, ui: &mut egui::Ui, action: &mut Option<ProjectSpaceAction>) {
         let cache = self.object_cache_ui;
         ui.separator();
@@ -1641,6 +1978,205 @@ impl ProjectSpace {
             cache.failed,
             if cache.loading { ", loading" } else { "" }
         ));
+    }
+
+    fn ui_views_launcher(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            let count = self.state.view_presets.len();
+            if ui.button(format!("Views... ({count})")).clicked() {
+                self.views_dialog_open = true;
+            }
+            if let Some(preset) = self.state.view_presets.get(self.selected_view_preset) {
+                ui.small(format!("Selected: {}", preset.name));
+            }
+        });
+    }
+
+    fn ui_views_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        can_capture_current_view: bool,
+        action: &mut Option<ProjectSpaceAction>,
+    ) {
+        if !self.views_dialog_open {
+            return;
+        }
+        let mut open = self.views_dialog_open;
+        egui::Window::new("Project Views")
+            .open(&mut open)
+            .default_width(560.0)
+            .default_height(420.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                self.ui_views_dialog_contents(ui, can_capture_current_view, action);
+            });
+        self.views_dialog_open = open;
+    }
+
+    fn ui_views_dialog_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        can_capture_current_view: bool,
+        action: &mut Option<ProjectSpaceAction>,
+    ) {
+        ui.heading("Save Current View");
+
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.add_sized(
+                [ui.available_width().max(180.0), 0.0],
+                egui::TextEdit::singleline(&mut self.view_preset_name_input)
+                    .hint_text("e.g. Tumour overview"),
+            );
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    can_capture_current_view,
+                    egui::Button::new("Capture current view"),
+                )
+                .clicked()
+            {
+                *action = Some(ProjectSpaceAction::CaptureCurrentView);
+            }
+            let can_save =
+                self.view_preset_draft.is_some() && !self.view_preset_name_input.trim().is_empty();
+            if ui
+                .add_enabled(can_save, egui::Button::new("Save view"))
+                .clicked()
+                && let Some(spec) = self.view_preset_draft.clone()
+            {
+                self.save_view_preset(self.view_preset_name_input.clone(), spec);
+            }
+        });
+        if !can_capture_current_view {
+            ui.small("Open an ROI to save a view from the live viewer.");
+        }
+        if let Some(draft) = self.view_preset_draft.as_mut() {
+            ui.add_space(6.0);
+            ui.label("Channel aliases");
+            if draft.visible_channel_refs.is_empty() {
+                ui.small("No visible channels were captured.");
+            } else {
+                egui::Grid::new("project-view-draft-channel-aliases")
+                    .num_columns(2)
+                    .spacing([12.0, 4.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.small("Channel");
+                        ui.small("Alias");
+                        ui.end_row();
+                        for channel in &mut draft.visible_channel_refs {
+                            ui.label(channel.label.as_str());
+                            ui.add(
+                                egui::TextEdit::singleline(&mut channel.alias).desired_width(160.0),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            }
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.heading("Saved Views");
+
+        if self.state.view_presets.is_empty() {
+            ui.small("No saved views.");
+            return;
+        }
+
+        self.selected_view_preset = self
+            .selected_view_preset
+            .min(self.state.view_presets.len().saturating_sub(1));
+
+        let list_height = (ui.available_height() * 0.45).clamp(120.0, 220.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("project-view-preset-list")
+                .max_height(list_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (idx, preset) in self.state.view_presets.iter().enumerate() {
+                        let selected = idx == self.selected_view_preset;
+                        if ui
+                            .selectable_label(selected, preset.name.as_str())
+                            .on_hover_text(view_preset_summary(preset))
+                            .clicked()
+                        {
+                            self.selected_view_preset = idx;
+                            if self.view_preset_name_input.trim().is_empty() {
+                                self.view_preset_name_input = preset.name.clone();
+                            }
+                        }
+                    }
+                });
+        });
+
+        if let Some(preset) = self.state.view_presets.get(self.selected_view_preset) {
+            if !preset.description.trim().is_empty() {
+                ui.label(preset.description.clone());
+            }
+            let channel_names = visible_channel_display_names(&preset.spec);
+            let channels = if channel_names.is_empty() {
+                "(current channels)".to_string()
+            } else {
+                channel_names.join(", ")
+            };
+            let cell_types = if preset.spec.visible_cell_types.is_empty() {
+                "(all cell types)".to_string()
+            } else {
+                preset.spec.visible_cell_types.join(", ")
+            };
+            ui.small(format!("Markers: {channels}"));
+            ui.small(format!("Cell types: {cell_types}"));
+        }
+
+        let focused_roi = self.focused_roi().cloned();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(focused_roi.is_some(), egui::Button::new("Open view"))
+                .clicked()
+                && let (Some(roi), Some(preset)) = (
+                    focused_roi.clone(),
+                    self.state
+                        .view_presets
+                        .get(self.selected_view_preset)
+                        .cloned(),
+                )
+            {
+                *action = Some(ProjectSpaceAction::OpenView(roi, preset.spec));
+            }
+            if ui.button("Prev preset").clicked() && !self.state.view_presets.is_empty() {
+                self.selected_view_preset = if self.selected_view_preset == 0 {
+                    self.state.view_presets.len() - 1
+                } else {
+                    self.selected_view_preset - 1
+                };
+            }
+            if ui.button("Next preset").clicked() && !self.state.view_presets.is_empty() {
+                self.selected_view_preset =
+                    (self.selected_view_preset + 1) % self.state.view_presets.len();
+            }
+            if ui.button("Delete").clicked() && !self.state.view_presets.is_empty() {
+                let idx = self
+                    .selected_view_preset
+                    .min(self.state.view_presets.len().saturating_sub(1));
+                let removed = self.state.view_presets.remove(idx);
+                self.selected_view_preset = self
+                    .selected_view_preset
+                    .min(self.state.view_presets.len().saturating_sub(1));
+                self.status = format!("Deleted view preset '{}'.", removed.name);
+                self.config_generation = self.config_generation.wrapping_add(1);
+            }
+        });
+
+        if let Some(roi) = focused_roi {
+            ui.small(format!("Focused ROI: {}", roi.source_display()));
+        } else {
+            ui.small("Focus an ROI below to open a preset view.");
+        }
     }
 
     fn import_rois_from_csv(&mut self, path: &Path) -> anyhow::Result<()> {

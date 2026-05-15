@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::objects::{
-    ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectsLayer, SelectedObjectDetails,
+    ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectsLayer, PreloadedObjectLayer,
+    SelectedObjectDetails,
 };
 use crate::spatialdata::SpatialDataTransform2;
 
@@ -95,6 +96,39 @@ impl MosaicGeoJsonSegmentationOverlay {
         st.seg_path = Some(resolved);
     }
 
+    pub fn install_preloaded(
+        &mut self,
+        seg_path: &std::path::Path,
+        preloaded: &PreloadedObjectLayer,
+    ) -> usize {
+        let style = self.shared_style();
+        let color_level_overrides = self.current_color_level_overrides().clone();
+        let mut installed = 0usize;
+        for st in self.items.values_mut() {
+            let Some(path) = st.seg_path.as_ref() else {
+                continue;
+            };
+            if !paths_match(path, seg_path) {
+                continue;
+            }
+            let mut layer = ObjectsLayer::default();
+            apply_style(
+                &mut layer,
+                style,
+                Some(self.color_property_key.as_str()),
+                &color_level_overrides,
+            );
+            layer.install_preloaded(preloaded);
+            st.status = format!("Using cached objects: {}", path.to_string_lossy());
+            st.layer = Some(layer);
+            installed += 1;
+        }
+        if installed > 0 {
+            self.force_repaint_frames = self.force_repaint_frames.max(4);
+        }
+        installed
+    }
+
     pub fn is_busy(&self) -> bool {
         self.force_repaint_frames > 0
             || self.items.values().any(|s| {
@@ -114,7 +148,7 @@ impl MosaicGeoJsonSegmentationOverlay {
         ui.heading("Segmentation");
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.visible, "");
-            ui.label("Selectable GeoJSON objects");
+            ui.label("Object segmentations");
         });
         ui.add_enabled(
             self.visible,
@@ -181,7 +215,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                     .range(1..=8)
                     .speed(1),
             )
-            .on_hover_text("Maximum number of GeoJSON files to load concurrently.");
+            .on_hover_text("Maximum number of segmentation files to load concurrently.");
         });
         ui.horizontal(|ui| {
             ui.add(
@@ -189,7 +223,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                     .speed(0.1)
                     .prefix("Downsample "),
             )
-            .on_hover_text("Scales GeoJSON coordinates by this factor (use if GeoJSON was generated on downsampled imagery).");
+            .on_hover_text("Scales object coordinates by this factor (use if segmentations were generated on downsampled imagery).");
         });
         if !self.color_property_key.is_empty() {
             let legend = self.active_color_legend_entries();
@@ -347,7 +381,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             };
             if !path.exists() {
-                st.status = "Missing GeoJSON".to_string();
+                st.status = "Missing object segmentation".to_string();
                 st.seg_path = None;
                 continue;
             }
@@ -595,6 +629,16 @@ impl MosaicGeoJsonSegmentationOverlay {
         self.color_level_overrides
             .get(&self.color_property_key)
             .unwrap_or(&EMPTY_COLOR_LEVEL_OVERRIDES)
+    }
+}
+
+fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a.to_string_lossy() == b.to_string_lossy(),
     }
 }
 
