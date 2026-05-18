@@ -12,6 +12,14 @@ impl Default for ActiveHandle {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DragState {
+    handle: ActiveHandle,
+    last_pointer_x: f32,
+    lo: f32,
+    hi: f32,
+}
+
 fn value_to_x(value: f32, min: f32, max: f32, rect: egui::Rect) -> f32 {
     let t = if max > min {
         ((value - min) / (max - min)).clamp(0.0, 1.0)
@@ -46,7 +54,7 @@ pub fn range_slider(
     let desired_size = egui::vec2(170.0, 18.0);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
     response = response.on_hover_text(format!(
-        "min {:.0}\nmax {:.0}",
+        "min {:.0}\nmax {:.0}\nHold Ctrl for fine adjustment",
         (*lo).clamp(min, max),
         (*hi).clamp(min, max)
     ));
@@ -101,7 +109,7 @@ pub fn range_slider(
     painter.rect_filled(h_lo, 2.0, visuals.fg_stroke.color);
     painter.rect_filled(h_hi, 2.0, visuals.fg_stroke.color);
 
-    let active_id = id.with("active_handle");
+    let drag_state_id = id.with("drag_state");
     if response.drag_started() {
         let pointer_x = ui.input(|i| i.pointer.interact_pos()).map(|p| p.x);
         let which = pointer_x.map(|x| {
@@ -113,23 +121,54 @@ pub fn range_slider(
                 ActiveHandle::High
             }
         });
-        if let Some(which) = which {
-            ui.data_mut(|d| d.insert_temp(active_id, which));
+        if let (Some(start_pointer_x), Some(handle)) = (pointer_x, which) {
+            ui.data_mut(|d| {
+                d.insert_temp(
+                    drag_state_id,
+                    DragState {
+                        handle,
+                        last_pointer_x: start_pointer_x,
+                        lo: lo_v,
+                        hi: hi_v,
+                    },
+                )
+            });
         }
     }
 
     if response.dragged() {
-        let which = ui
-            .data(|d| d.get_temp::<ActiveHandle>(active_id))
+        let mut drag_state = ui.data(|d| d.get_temp::<DragState>(drag_state_id));
+        let which = drag_state
+            .map(|state| state.handle)
             .unwrap_or(ActiveHandle::High);
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-            let v = x_to_value(pos.x, min, max, track);
-            match which {
-                ActiveHandle::Low => {
-                    lo_v = v.min(hi_v - min_sep).clamp(min, max);
+            let fine_adjust = ui.input(|i| i.modifiers.ctrl);
+            if let Some(mut state) = drag_state.take() {
+                let value_span = (max - min).max(0.0);
+                let pixels = track.width().max(1.0);
+                let fine_factor = if fine_adjust { 0.1 } else { 1.0 };
+                let delta = (pos.x - state.last_pointer_x) / pixels * value_span * fine_factor;
+                match which {
+                    ActiveHandle::Low => {
+                        lo_v = (state.lo + delta).min(state.hi - min_sep).clamp(min, max);
+                    }
+                    ActiveHandle::High => {
+                        hi_v = (state.hi + delta).max(state.lo + min_sep).clamp(min, max);
+                    }
                 }
-                ActiveHandle::High => {
-                    hi_v = v.max(lo_v + min_sep).clamp(min, max);
+                state.last_pointer_x = pos.x;
+                state.lo = lo_v;
+                state.hi = hi_v;
+                ui.data_mut(|d| d.insert_temp(drag_state_id, state));
+            } else {
+                let v = x_to_value(pos.x, min, max, track);
+                match which {
+                    ActiveHandle::Low => {
+                        lo_v = v.min(hi_v - min_sep).clamp(min, max);
+                    }
+                    ActiveHandle::High => {
+                        hi_v = v.max(lo_v + min_sep).clamp(min, max);
+                    }
                 }
             }
         }
@@ -137,7 +176,7 @@ pub fn range_slider(
 
     if response.drag_stopped() {
         ui.data_mut(|d| {
-            d.remove_temp::<ActiveHandle>(active_id);
+            d.remove_temp::<DragState>(drag_state_id);
         });
     }
 

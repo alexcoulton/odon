@@ -374,12 +374,24 @@ pub fn ui_quick_contrast(
         );
         response.changed |= slider.changed();
 
+        let fine_adjust = ui.input(|i| i.modifiers.ctrl);
+        let drag_speed = if fine_adjust { 1.0 } else { 10.0 };
         ui.horizontal(|ui| {
             response.changed |= ui
-                .add(egui::DragValue::new(&mut lo).speed(10.0).prefix("min "))
+                .add(
+                    egui::DragValue::new(&mut lo)
+                        .speed(drag_speed)
+                        .prefix("min "),
+                )
+                .on_hover_text("Drag to adjust. Hold Ctrl for fine adjustment.")
                 .changed();
             response.changed |= ui
-                .add(egui::DragValue::new(&mut hi).speed(10.0).prefix("max "))
+                .add(
+                    egui::DragValue::new(&mut hi)
+                        .speed(drag_speed)
+                        .prefix("max "),
+                )
+                .on_hover_text("Drag to adjust. Hold Ctrl for fine adjustment.")
                 .changed();
         });
 
