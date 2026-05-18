@@ -89,7 +89,7 @@ use crate::spatialdata::SpatialDataLayers;
 use crate::spatialdata::SpatialImageLayers;
 use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2, discover_spatialdata};
 use crate::ui::canvas_overlays;
-use crate::ui::channels_panel::{self, ChannelListHost};
+use crate::ui::channels_panel::{self, ChannelListHost, ChannelSortMode};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
 use crate::ui::icons::{Icon, icon_button};
@@ -201,6 +201,14 @@ impl ChannelListHost for OmeZarrViewerApp {
 
     fn channel_search_mut(&mut self) -> &mut String {
         &mut self.channel_list_search
+    }
+
+    fn channel_sort_mode(&self) -> ChannelSortMode {
+        self.channel_sort_mode
+    }
+
+    fn set_channel_sort_mode(&mut self, mode: ChannelSortMode) {
+        self.channel_sort_mode = mode;
     }
 
     fn channel_count(&self) -> usize {
@@ -562,6 +570,7 @@ pub struct OmeZarrViewerApp {
 
     overlay_layer_order: Vec<LayerId>,
     channel_layer_order: Vec<usize>,
+    channel_sort_mode: ChannelSortMode,
     layer_drag: Option<LayerDragState>,
     layer_move: Option<LayerMoveState>,
     layer_transform: Option<LayerTransformState>,
@@ -611,6 +620,9 @@ struct LayerTransformState {
 pub enum ViewerRequest {
     OpenProjectRoi(ProjectRoi),
     OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
+    OpenProject(PathBuf),
+    ForgetRecentProject(PathBuf),
+    ClearRecentProjects,
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
     PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
@@ -1854,6 +1866,7 @@ impl OmeZarrViewerApp {
 
             overlay_layer_order: Vec::new(),
             channel_layer_order: (0..dataset.channels.len()).collect(),
+            channel_sort_mode: ChannelSortMode::Manual,
             layer_drag: None,
             layer_move: None,
             layer_transform: None,
@@ -2116,6 +2129,7 @@ impl OmeZarrViewerApp {
 
             overlay_layer_order: Vec::new(),
             channel_layer_order: (0..dataset.channels.len()).collect(),
+            channel_sort_mode: ChannelSortMode::Manual,
             layer_drag: None,
             layer_move: None,
             layer_transform: None,
@@ -2447,6 +2461,7 @@ impl OmeZarrViewerApp {
             xenium_transcripts_offset_world: egui::Vec2::ZERO,
             overlay_layer_order: Vec::new(),
             channel_layer_order: (0..dataset.channels.len()).collect(),
+            channel_sort_mode: ChannelSortMode::Manual,
             layer_drag: None,
             layer_move: None,
             layer_transform: None,
@@ -2702,6 +2717,10 @@ impl OmeZarrViewerApp {
         &self.project_space
     }
 
+    pub fn project_space_mut(&mut self) -> &mut ProjectSpace {
+        &mut self.project_space
+    }
+
     pub fn set_project_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
         self.project_space.set_object_cache_ui_state(state);
     }
@@ -2782,6 +2801,15 @@ impl OmeZarrViewerApp {
                 self.project_space
                     .set_status(format!("Opening view: {}", roi.source_display()));
                 self.pending_request = Some(ViewerRequest::OpenProjectRoiView(roi, spec));
+            }
+            ProjectSpaceAction::OpenProject(path) => {
+                self.pending_request = Some(ViewerRequest::OpenProject(path));
+            }
+            ProjectSpaceAction::ForgetRecentProject(path) => {
+                self.pending_request = Some(ViewerRequest::ForgetRecentProject(path));
+            }
+            ProjectSpaceAction::ClearRecentProjects => {
+                self.pending_request = Some(ViewerRequest::ClearRecentProjects);
             }
             ProjectSpaceAction::CaptureCurrentView => {
                 let spec = self.current_project_view_spec();
@@ -6648,6 +6676,7 @@ impl OmeZarrViewerApp {
                                 icon,
                                 visible,
                                 color_rgb: None,
+                                draggable: true,
                             },
                         );
                         let mods = ctx.input(|i| i.modifiers);
@@ -8089,6 +8118,7 @@ impl OmeZarrViewerApp {
             show_right_panel: Some(self.show_right_panel),
             left_tab: Some(self.left_tab.storage_key().to_string()),
             right_tab: Some(self.right_tab.storage_key().to_string()),
+            channel_sort: Some(self.channel_sort_mode.storage_key().to_string()),
             smooth_pixels: Some(self.smooth_pixels),
             show_tile_debug: Some(self.show_tile_debug),
             show_scale_bar: Some(self.show_scale_bar),
@@ -8238,6 +8268,13 @@ impl OmeZarrViewerApp {
             .and_then(RightTab::from_storage_key)
         {
             self.right_tab = right_tab;
+        }
+        if let Some(channel_sort) = state
+            .channel_sort
+            .as_deref()
+            .and_then(ChannelSortMode::from_storage_key)
+        {
+            self.channel_sort_mode = channel_sort;
         }
         if let Some(smooth_pixels) = state.smooth_pixels {
             self.smooth_pixels = smooth_pixels;

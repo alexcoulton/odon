@@ -23,6 +23,7 @@ pub struct LayerRowOptions {
     pub icon: Icon,
     pub visible: Option<bool>,
     pub color_rgb: Option<[u8; 3]>,
+    pub draggable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +101,7 @@ pub fn ui_layer_row<K: Copy + Eq + std::hash::Hash>(
     }
 
     // Start drag from anywhere on the row.
-    if row.drag_started() && drag.is_none() && !is_dragged {
+    if opts.draggable && row.drag_started() && drag.is_none() && !is_dragged {
         *drag = Some(LayerDragState {
             group,
             from: index,

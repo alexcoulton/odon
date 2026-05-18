@@ -14,6 +14,7 @@ pub enum Icon {
     Image,
     Points,
     Text,
+    Sort,
 }
 
 const ICONS_FAMILY: &str = "icons";
@@ -86,6 +87,7 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
         Icon::Image,
         Icon::Points,
         Icon::Text,
+        Icon::Sort,
     ] {
         if let Some(ch) = resolve_fontawesome_glyph(&css, icon) {
             glyphs.insert(icon, ch);
@@ -230,6 +232,7 @@ fn resolve_fontawesome_glyph(css: &str, icon: Icon) -> Option<char> {
         Icon::Image => &["fa-image"],
         Icon::Points => &["fa-braille", "fa-circle-dot", "fa-dot-circle"],
         Icon::Text => &["fa-font", "fa-i-cursor", "fa-text-height"],
+        Icon::Sort => &["fa-sort", "fa-arrow-down-wide-short", "fa-arrow-down-a-z"],
     };
 
     for name in candidates {
@@ -367,7 +370,59 @@ pub fn paint_icon_in_rect(
         Icon::Image => paint_image(p, rect, stroke),
         Icon::Points => paint_points(p, rect, stroke),
         Icon::Text => paint_text(p, rect, stroke),
+        Icon::Sort => paint_sort(p, rect, stroke),
     }
+}
+
+fn paint_sort(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+    let r = rect.shrink(1.0);
+    let y1 = r.top() + r.height() * 0.25;
+    let y2 = r.top() + r.height() * 0.50;
+    let y3 = r.top() + r.height() * 0.75;
+    p.line_segment(
+        [
+            egui::pos2(r.left(), y1),
+            egui::pos2(r.left() + r.width() * 0.55, y1),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.left(), y2),
+            egui::pos2(r.left() + r.width() * 0.40, y2),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.left(), y3),
+            egui::pos2(r.left() + r.width() * 0.25, y3),
+        ],
+        stroke,
+    );
+
+    let x = r.right() - r.width() * 0.20;
+    p.line_segment(
+        [
+            egui::pos2(x, r.top() + r.height() * 0.18),
+            egui::pos2(x, r.bottom() - r.height() * 0.18),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(x, r.bottom() - r.height() * 0.18),
+            egui::pos2(x - r.width() * 0.13, r.bottom() - r.height() * 0.31),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(x, r.bottom() - r.height() * 0.18),
+            egui::pos2(x + r.width() * 0.13, r.bottom() - r.height() * 0.31),
+        ],
+        stroke,
+    );
 }
 
 fn paint_hand(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {

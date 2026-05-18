@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -233,6 +233,61 @@ impl RootApp {
             Err(err) => {
                 self.settings_status = format!("Settings save failed: {err}");
             }
+        }
+    }
+
+    fn record_recent_project(&mut self, path: &Path) {
+        if self.app_settings.record_recent_project(path) {
+            self.persist_app_settings();
+        }
+    }
+
+    fn forget_recent_project(&mut self, path: &Path) {
+        if self.app_settings.forget_recent_project(path) {
+            self.persist_app_settings();
+        }
+    }
+
+    fn clear_recent_projects(&mut self) {
+        if self.app_settings.clear_recent_projects() {
+            self.persist_app_settings();
+        }
+    }
+
+    fn load_project_space_from_file(project_space: &mut ProjectSpace, path: &Path) -> bool {
+        match project_space.load_from_file(path) {
+            Ok(()) => true,
+            Err(err) => {
+                project_space.set_status(format!("Load project failed: {err}"));
+                false
+            }
+        }
+    }
+
+    fn load_project_into_current_mode(&mut self, path: &Path) {
+        let loaded = match &mut self.mode {
+            Mode::Project { project_space } => {
+                Self::load_project_space_from_file(project_space, path)
+            }
+            Mode::Single(app) => {
+                let mut ps = app.take_project_space();
+                let loaded = Self::load_project_space_from_file(&mut ps, path);
+                app.set_project_space(ps);
+                loaded
+            }
+            Mode::Mosaic { mosaic, .. } => {
+                let mut ps = mosaic.take_project_space();
+                let loaded = Self::load_project_space_from_file(&mut ps, path);
+                if loaded {
+                    mosaic.set_layer_groups(ps.layer_groups().clone());
+                }
+                mosaic.set_project_space(ps);
+                loaded
+            }
+            Mode::Transition => false,
+        };
+        if loaded {
+            self.record_recent_project(path);
         }
     }
 
@@ -1901,6 +1956,9 @@ impl eframe::App for RootApp {
         let mut open_single: Option<(PathBuf, ProjectSpace)> = None;
         let mut open_project_roi: Option<(ProjectRoi, ProjectSpace, Option<DeepLinkRequest>)> =
             None;
+        let mut open_project_path: Option<PathBuf> = None;
+        let mut forget_recent_project_path: Option<PathBuf> = None;
+        let mut clear_recent_projects = false;
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
 
         if let Some(req) = self.pending_deep_link.take() {
@@ -1923,14 +1981,18 @@ impl eframe::App for RootApp {
                         path.display(),
                         project_space.config().rois.len()
                     );
+                    self.record_recent_project(path);
                 } else {
                     log_warn!("deep_link: loading project {}", path.display());
                     match project_space.load_from_file(path) {
-                        Ok(()) => log_warn!(
-                            "deep_link: loaded project {} ({} ROIs)",
-                            path.display(),
-                            project_space.config().rois.len()
-                        ),
+                        Ok(()) => {
+                            log_warn!(
+                                "deep_link: loaded project {} ({} ROIs)",
+                                path.display(),
+                                project_space.config().rois.len()
+                            );
+                            self.record_recent_project(path);
+                        }
                         Err(err) => {
                             log_warn!("deep_link: project load failed: {err:?}");
                             status = Some(format!("Deep link project load failed: {err}"));
@@ -2038,31 +2100,7 @@ impl eframe::App for RootApp {
                                 .set_title("Load Project")
                                 .pick_file()
                             {
-                                match &mut self.mode {
-                                    Mode::Project { project_space } => {
-                                        if let Err(err) = project_space.load_from_file(&path) {
-                                            project_space
-                                                .set_status(format!("Load project failed: {err}"));
-                                        }
-                                    }
-                                    Mode::Single(app) => {
-                                        let mut ps = app.take_project_space();
-                                        if let Err(err) = ps.load_from_file(&path) {
-                                            ps.set_status(format!("Load project failed: {err}"));
-                                        }
-                                        app.set_project_space(ps);
-                                    }
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        let mut ps = mosaic.take_project_space();
-                                        if let Err(err) = ps.load_from_file(&path) {
-                                            ps.set_status(format!("Load project failed: {err}"));
-                                        } else {
-                                            mosaic.set_layer_groups(ps.layer_groups().clone());
-                                        }
-                                        mosaic.set_project_space(ps);
-                                    }
-                                    Mode::Transition => {}
-                                }
+                                self.load_project_into_current_mode(&path);
                             }
                         }
                         NativeMenuAction::SaveProject => {
@@ -2262,6 +2300,7 @@ impl eframe::App for RootApp {
 
         match &mut self.mode {
             Mode::Project { project_space } => {
+                project_space.set_recent_projects(&self.app_settings.recent_projects);
                 let dropped = ctx.input(|i| i.raw.dropped_files.clone());
                 if !dropped.is_empty() {
                     project_space.handle_dropped_paths(
@@ -2314,6 +2353,15 @@ impl eframe::App for RootApp {
                                     let ps = std::mem::take(project_space);
                                     open_project_roi = Some((roi, ps, Some(req)));
                                 }
+                                ProjectSpaceAction::OpenProject(path) => {
+                                    open_project_path = Some(path);
+                                }
+                                ProjectSpaceAction::ForgetRecentProject(path) => {
+                                    forget_recent_project_path = Some(path);
+                                }
+                                ProjectSpaceAction::ClearRecentProjects => {
+                                    clear_recent_projects = true;
+                                }
                                 ProjectSpaceAction::CaptureCurrentView => {}
                                 ProjectSpaceAction::OpenMosaic(rois) => {
                                     let ps = std::mem::take(project_space);
@@ -2352,6 +2400,15 @@ impl eframe::App for RootApp {
                             let ps = std::mem::take(project_space);
                             open_project_roi = Some((roi, ps, Some(req)));
                         }
+                        ProjectSpaceAction::OpenProject(path) => {
+                            open_project_path = Some(path);
+                        }
+                        ProjectSpaceAction::ForgetRecentProject(path) => {
+                            forget_recent_project_path = Some(path);
+                        }
+                        ProjectSpaceAction::ClearRecentProjects => {
+                            clear_recent_projects = true;
+                        }
                         ProjectSpaceAction::CaptureCurrentView => {}
                         ProjectSpaceAction::OpenMosaic(rois) => {
                             let ps = std::mem::take(project_space);
@@ -2379,6 +2436,8 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Single(app) => {
+                app.project_space_mut()
+                    .set_recent_projects(&self.app_settings.recent_projects);
                 app.set_project_object_cache_ui_state(project_object_cache_ui_state(
                     app.project_space(),
                     object_preload_cached,
@@ -2405,6 +2464,15 @@ impl eframe::App for RootApp {
                                 open_project_roi = Some((roi, ps, Some(req)));
                             }
                         }
+                        ViewerRequest::OpenProject(path) => {
+                            open_project_path = Some(path);
+                        }
+                        ViewerRequest::ForgetRecentProject(path) => {
+                            forget_recent_project_path = Some(path);
+                        }
+                        ViewerRequest::ClearRecentProjects => {
+                            clear_recent_projects = true;
+                        }
                         ViewerRequest::OpenProjectMosaic(rois) => {
                             let ps = app.take_project_space();
                             open_mosaic_from_project = Some((rois, ps));
@@ -2423,6 +2491,9 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Mosaic { mosaic, .. } => {
+                mosaic
+                    .project_space_mut()
+                    .set_recent_projects(&self.app_settings.recent_projects);
                 mosaic.set_project_object_cache_ui_state(project_object_cache_ui_state(
                     mosaic.project_space(),
                     object_preload_cached,
@@ -2455,6 +2526,15 @@ impl eframe::App for RootApp {
                             let req = spec.to_deep_link_request(None);
                             let ps = mosaic.take_project_space();
                             open_project_roi = Some((roi, ps, Some(req)));
+                        }
+                        MosaicRequest::OpenProject(path) => {
+                            open_project_path = Some(path);
+                        }
+                        MosaicRequest::ForgetRecentProject(path) => {
+                            forget_recent_project_path = Some(path);
+                        }
+                        MosaicRequest::ClearRecentProjects => {
+                            clear_recent_projects = true;
                         }
                         MosaicRequest::OpenProjectMosaic(rois) => {
                             let ps = mosaic.take_project_space();
@@ -2529,6 +2609,16 @@ impl eframe::App for RootApp {
                     }
                 }
             }
+        }
+
+        if let Some(path) = forget_recent_project_path {
+            self.forget_recent_project(&path);
+        }
+        if clear_recent_projects {
+            self.clear_recent_projects();
+        }
+        if let Some(path) = open_project_path {
+            self.load_project_into_current_mode(&path);
         }
 
         if let Some((root, ps)) = open_single {

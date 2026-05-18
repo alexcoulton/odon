@@ -47,7 +47,7 @@ use crate::project::{
     ProjectUiState,
 };
 use crate::ui::canvas_overlays;
-use crate::ui::channels_panel::{self, ChannelListHost};
+use crate::ui::channels_panel::{self, ChannelListHost, ChannelSortMode};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
 use crate::ui::icons::Icon;
@@ -216,6 +216,7 @@ pub struct MosaicViewerApp {
     overlay_select_anchor_pos: Option<usize>,
     overlay_layer_order: Vec<MosaicLayerId>,
     channel_layer_order: Vec<usize>,
+    channel_sort_mode: ChannelSortMode,
     annotation_layers: Vec<AnnotationPointsLayer>,
     next_annotation_layer_id: u64,
     last_target_level_by_dataset_id: Vec<Option<usize>>,
@@ -279,6 +280,14 @@ impl ChannelListHost for MosaicViewerApp {
 
     fn channel_search_mut(&mut self) -> &mut String {
         &mut self.channel_list_search
+    }
+
+    fn channel_sort_mode(&self) -> ChannelSortMode {
+        self.channel_sort_mode
+    }
+
+    fn set_channel_sort_mode(&mut self, mode: ChannelSortMode) {
+        self.channel_sort_mode = mode;
     }
 
     fn channel_count(&self) -> usize {
@@ -413,6 +422,9 @@ pub enum MosaicRequest {
     BackToSingle,
     OpenProjectRoi(ProjectRoi),
     OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
+    OpenProject(PathBuf),
+    ForgetRecentProject(PathBuf),
+    ClearRecentProjects,
     OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
     PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
@@ -484,6 +496,7 @@ impl MosaicViewerApp {
             show_right_panel: Some(self.show_right_panel),
             left_tab: Some(self.left_tab.storage_key().to_string()),
             right_tab: Some(self.right_tab.storage_key().to_string()),
+            channel_sort: Some(self.channel_sort_mode.storage_key().to_string()),
             smooth_pixels: Some(self.smooth_pixels),
             show_tile_debug: Some(self.show_tile_debug),
             show_scale_bar: None,
@@ -633,6 +646,13 @@ impl MosaicViewerApp {
             .and_then(RightTab::from_storage_key)
         {
             self.right_tab = right_tab;
+        }
+        if let Some(channel_sort) = state
+            .channel_sort
+            .as_deref()
+            .and_then(ChannelSortMode::from_storage_key)
+        {
+            self.channel_sort_mode = channel_sort;
         }
         if let Some(smooth_pixels) = state.smooth_pixels {
             self.smooth_pixels = smooth_pixels;
@@ -1066,6 +1086,7 @@ impl MosaicViewerApp {
             overlay_select_anchor_pos: None,
             overlay_layer_order,
             channel_layer_order,
+            channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
             next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
@@ -1289,6 +1310,7 @@ impl MosaicViewerApp {
             overlay_select_anchor_pos: None,
             overlay_layer_order,
             channel_layer_order,
+            channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
             next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
@@ -1545,6 +1567,7 @@ impl MosaicViewerApp {
             overlay_select_anchor_pos: None,
             overlay_layer_order,
             channel_layer_order,
+            channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
             next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
@@ -1821,6 +1844,7 @@ impl MosaicViewerApp {
             overlay_select_anchor_pos: None,
             overlay_layer_order,
             channel_layer_order,
+            channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
             next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
@@ -2041,6 +2065,7 @@ impl MosaicViewerApp {
             overlay_select_anchor_pos: None,
             overlay_layer_order,
             channel_layer_order,
+            channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
             next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
@@ -3023,6 +3048,7 @@ impl MosaicViewerApp {
                     icon,
                     visible,
                     color_rgb: None,
+                    draggable: true,
                 },
             );
             let mods = ctx.input(|i| i.modifiers);
@@ -3373,6 +3399,15 @@ impl MosaicViewerApp {
             }
             crate::project::ProjectSpaceAction::OpenView(roi, spec) => {
                 self.pending_request = Some(MosaicRequest::OpenProjectRoiView(roi, spec));
+            }
+            crate::project::ProjectSpaceAction::OpenProject(path) => {
+                self.pending_request = Some(MosaicRequest::OpenProject(path));
+            }
+            crate::project::ProjectSpaceAction::ForgetRecentProject(path) => {
+                self.pending_request = Some(MosaicRequest::ForgetRecentProject(path));
+            }
+            crate::project::ProjectSpaceAction::ClearRecentProjects => {
+                self.pending_request = Some(MosaicRequest::ClearRecentProjects);
             }
             crate::project::ProjectSpaceAction::CaptureCurrentView => {}
             crate::project::ProjectSpaceAction::OpenMosaic(rois) => {

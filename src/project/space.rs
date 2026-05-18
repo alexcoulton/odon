@@ -7,6 +7,7 @@ use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 
 use crate::app_support::memory::format_bytes;
+use crate::app_support::settings::RecentProject;
 use crate::data::dataset_kind::{
     LocalDatasetKind, can_open_in_mosaic, classify_local_dataset_path, normalize_local_dataset_path,
 };
@@ -172,6 +173,8 @@ pub struct ProjectUiState {
     pub left_tab: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right_tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_sort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smooth_pixels: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +421,9 @@ struct ProjectItem {
 pub enum ProjectSpaceAction {
     Open(ProjectRoi),
     OpenView(ProjectRoi, ProjectViewSpec),
+    OpenProject(PathBuf),
+    ForgetRecentProject(PathBuf),
+    ClearRecentProjects,
     CaptureCurrentView,
     OpenMosaic(Vec<ProjectRoi>),
     OpenRemoteDialog,
@@ -456,6 +462,7 @@ pub struct ProjectSpace {
     roi_browse: RoiBrowseState,
     object_cache_ui: ProjectObjectCacheUiState,
     object_cache_settings: ObjectPreloadSettings,
+    recent_projects: Vec<RecentProject>,
     selected_view_preset: usize,
     view_preset_name_input: String,
     views_dialog_open: bool,
@@ -507,6 +514,10 @@ impl ProjectSpace {
 
     pub fn set_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
         self.object_cache_ui = state;
+    }
+
+    pub fn set_recent_projects(&mut self, recent_projects: &[RecentProject]) {
+        self.recent_projects = recent_projects.to_vec();
     }
 
     pub fn load_from_file(&mut self, path: &Path) -> anyhow::Result<()> {
@@ -1760,10 +1771,12 @@ impl ProjectSpace {
                             .pick_file()
                         {
                             self.load_path = path.to_string_lossy().to_string();
-                            self.load_from_path();
+                            action = Some(ProjectSpaceAction::OpenProject(path));
                         }
                     }
                 });
+
+                self.ui_recent_projects(ui, &mut action);
 
                 if !self.status.is_empty() {
                     ui.add_space(6.0);
@@ -1772,6 +1785,42 @@ impl ProjectSpace {
             });
 
         action
+    }
+
+    fn ui_recent_projects(&mut self, ui: &mut egui::Ui, action: &mut Option<ProjectSpaceAction>) {
+        ui.add_space(8.0);
+        ui.label("Recent Projects");
+        if self.recent_projects.is_empty() {
+            ui.small("No recent projects yet.");
+            return;
+        }
+
+        for recent in self.recent_projects.iter().take(10) {
+            let path = recent.path.clone();
+            let label = recent.display_name();
+            ui.horizontal(|ui| {
+                let response = ui
+                    .add_sized(
+                        [ui.available_width().max(80.0) - 28.0, 22.0],
+                        egui::Button::new(label).wrap(),
+                    )
+                    .on_hover_text(path.to_string_lossy());
+                if response.clicked() {
+                    *action = Some(ProjectSpaceAction::OpenProject(path.clone()));
+                }
+                if ui
+                    .small_button("x")
+                    .on_hover_text("Remove from recent")
+                    .clicked()
+                {
+                    *action = Some(ProjectSpaceAction::ForgetRecentProject(path));
+                }
+            });
+        }
+
+        if ui.small_button("Clear recent projects").clicked() {
+            *action = Some(ProjectSpaceAction::ClearRecentProjects);
+        }
     }
 
     pub fn ui_floating_windows(

@@ -10,11 +10,56 @@ use crate::project::groups as layer_groups;
 use crate::ui::icons::Icon;
 use crate::ui::layer_list as ui_layer_list;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ChannelSortMode {
+    #[default]
+    Manual,
+    NameAsc,
+    NameDesc,
+    VisibleFirst,
+    HiddenFirst,
+}
+
+impl ChannelSortMode {
+    pub(crate) fn storage_key(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::NameAsc => "name_asc",
+            Self::NameDesc => "name_desc",
+            Self::VisibleFirst => "visible_first",
+            Self::HiddenFirst => "hidden_first",
+        }
+    }
+
+    pub(crate) fn from_storage_key(value: &str) -> Option<Self> {
+        match value {
+            "manual" | "project_order" => Some(Self::Manual),
+            "name_asc" | "alphabetical_asc" => Some(Self::NameAsc),
+            "name_desc" | "alphabetical_desc" => Some(Self::NameDesc),
+            "visible_first" | "enabled_desc" => Some(Self::VisibleFirst),
+            "hidden_first" | "enabled_asc" => Some(Self::HiddenFirst),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Manual => "Project order",
+            Self::NameAsc => "Name A to Z",
+            Self::NameDesc => "Name Z to A",
+            Self::VisibleFirst => "Visible first",
+            Self::HiddenFirst => "Hidden first",
+        }
+    }
+}
+
 pub(crate) trait ChannelListHost {
     type LayerId: Copy + Eq + std::hash::Hash;
 
     fn channel_search(&self) -> &str;
     fn channel_search_mut(&mut self) -> &mut String;
+    fn channel_sort_mode(&self) -> ChannelSortMode;
+    fn set_channel_sort_mode(&mut self, mode: ChannelSortMode);
     fn channel_count(&self) -> usize;
     fn channel_order(&self) -> &[usize];
     fn channel_name(&self, idx: usize) -> Option<String>;
@@ -71,6 +116,9 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
             channels_changed = true;
         }
         create_group_clicked |= ui.button("+ Group").clicked();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui_sort_button(host, ui);
+        });
     });
     ui.horizontal(|ui| {
         ui.label("Search");
@@ -106,11 +154,12 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
     let mut drop_channel_to_ungroup = false;
 
     let channel_search = host.channel_search().trim().to_string();
+    let sort_mode = host.channel_sort_mode();
     let ChannelPartition {
         visible_channel_indices,
         members_by_group,
         ungrouped,
-    } = partition_channels_for_display(host, &groups_cfg, &channel_search);
+    } = partition_channels_for_display(host, &groups_cfg, &channel_search, sort_mode);
     let ungrouped_range_indices = ungrouped
         .iter()
         .map(|&(_pos, ch_idx)| ch_idx)
@@ -265,6 +314,7 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
                         pos,
                         &group_range_indices,
                         &visible_channel_indices,
+                        sort_mode == ChannelSortMode::Manual,
                         &mut channels_changed,
                     );
                 }
@@ -338,6 +388,7 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
                 pos,
                 &ungrouped_range_indices,
                 &visible_channel_indices,
+                sort_mode == ChannelSortMode::Manual,
                 &mut channels_changed,
             );
         }
@@ -387,6 +438,7 @@ fn render_channel_row<H: ChannelListHost>(
     pos: usize,
     range_indices: &[usize],
     visible_indices: &[usize],
+    draggable: bool,
     channels_changed: &mut bool,
 ) {
     let id = host.channel_layer_id(ch_idx);
@@ -410,6 +462,7 @@ fn render_channel_row<H: ChannelListHost>(
             icon: Icon::Image,
             visible,
             color_rgb: None,
+            draggable,
         },
     );
     let modifiers = ctx.input(|i| i.modifiers);
@@ -438,6 +491,61 @@ fn render_channel_row<H: ChannelListHost>(
             ui.close();
         }
     });
+}
+
+fn ui_sort_button<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui) {
+    let popup_state_id = ui.make_persistent_id(("channel-sort-popup-open", type_name::<H>()));
+    let mut popup_open = ui
+        .data(|d| d.get_temp::<bool>(popup_state_id))
+        .unwrap_or(false);
+    let sort_mode = host.channel_sort_mode();
+    let resp = crate::ui::icons::icon_button(
+        ui,
+        Icon::Sort,
+        sort_mode != ChannelSortMode::Manual,
+        egui::Sense::click(),
+    )
+    .on_hover_text(format!("Sort channels: {}", sort_mode.label()));
+    if resp.clicked() {
+        popup_open = !popup_open;
+    }
+
+    let popup_id = ui.make_persistent_id(("channel-sort-popup", type_name::<H>()));
+    let mut request_close = false;
+    egui::Popup::from_response(&resp)
+        .id(popup_id)
+        .open_bool(&mut popup_open)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .gap(2.0)
+        .width(180.0)
+        .show(|ui| {
+            ui.set_min_width(180.0);
+            ui.label("Sort channels");
+            ui.separator();
+            for mode in [
+                ChannelSortMode::Manual,
+                ChannelSortMode::NameAsc,
+                ChannelSortMode::NameDesc,
+                ChannelSortMode::VisibleFirst,
+                ChannelSortMode::HiddenFirst,
+            ] {
+                if ui
+                    .selectable_label(sort_mode == mode, mode.label())
+                    .clicked()
+                {
+                    host.set_channel_sort_mode(mode);
+                    request_close = true;
+                }
+            }
+            if host.channel_sort_mode() != ChannelSortMode::Manual {
+                ui.separator();
+                ui.small("Drag reordering uses Project order.");
+            }
+        });
+    if request_close {
+        popup_open = false;
+    }
+    ui.data_mut(|d| d.insert_temp(popup_state_id, popup_open));
 }
 
 fn fuzzy_name_score_local(query: &str, candidate: &str) -> Option<i32> {
@@ -492,6 +600,7 @@ fn partition_channels_for_display<H: ChannelListHost>(
     host: &H,
     groups_cfg: &ProjectLayerGroups,
     channel_search: &str,
+    sort_mode: ChannelSortMode,
 ) -> ChannelPartition {
     let valid_group_ids = groups_cfg
         .channel_groups
@@ -499,7 +608,6 @@ fn partition_channels_for_display<H: ChannelListHost>(
         .map(|g| g.id)
         .collect::<HashSet<_>>();
 
-    let mut visible_channel_indices: Vec<usize> = Vec::new();
     let mut members_by_group: HashMap<u64, Vec<(usize, usize)>> = HashMap::new();
     let mut ungrouped: Vec<(usize, usize)> = Vec::new();
 
@@ -514,7 +622,6 @@ fn partition_channels_for_display<H: ChannelListHost>(
             .filter(|gid| valid_group_ids.contains(gid));
 
         if let Some(gid) = group_id {
-            visible_channel_indices.push(ch_idx);
             members_by_group.entry(gid).or_default().push((pos, ch_idx));
             continue;
         }
@@ -523,15 +630,67 @@ fn partition_channels_for_display<H: ChannelListHost>(
             continue;
         }
 
-        visible_channel_indices.push(ch_idx);
         ungrouped.push((pos, ch_idx));
     }
+
+    for members in members_by_group.values_mut() {
+        sort_channel_entries(host, members, sort_mode);
+    }
+    sort_channel_entries(host, &mut ungrouped, sort_mode);
+
+    let mut visible_channel_indices: Vec<usize> = Vec::new();
+    for group in &groups_cfg.channel_groups {
+        if let Some(members) = members_by_group.get(&group.id) {
+            visible_channel_indices.extend(members.iter().map(|&(_pos, ch_idx)| ch_idx));
+        }
+    }
+    visible_channel_indices.extend(ungrouped.iter().map(|&(_pos, ch_idx)| ch_idx));
 
     ChannelPartition {
         visible_channel_indices,
         members_by_group,
         ungrouped,
     }
+}
+
+fn sort_channel_entries<H: ChannelListHost>(
+    host: &H,
+    entries: &mut Vec<(usize, usize)>,
+    sort_mode: ChannelSortMode,
+) {
+    match sort_mode {
+        ChannelSortMode::Manual => {}
+        ChannelSortMode::NameAsc => entries.sort_by(|a, b| {
+            channel_name_sort_key(host, a.1)
+                .cmp(&channel_name_sort_key(host, b.1))
+                .then_with(|| a.0.cmp(&b.0))
+        }),
+        ChannelSortMode::NameDesc => entries.sort_by(|a, b| {
+            channel_name_sort_key(host, b.1)
+                .cmp(&channel_name_sort_key(host, a.1))
+                .then_with(|| a.0.cmp(&b.0))
+        }),
+        ChannelSortMode::VisibleFirst => entries.sort_by(|a, b| {
+            channel_visible_sort_key(host, b.1)
+                .cmp(&channel_visible_sort_key(host, a.1))
+                .then_with(|| a.0.cmp(&b.0))
+        }),
+        ChannelSortMode::HiddenFirst => entries.sort_by(|a, b| {
+            channel_visible_sort_key(host, a.1)
+                .cmp(&channel_visible_sort_key(host, b.1))
+                .then_with(|| a.0.cmp(&b.0))
+        }),
+    }
+}
+
+fn channel_name_sort_key<H: ChannelListHost>(host: &H, idx: usize) -> String {
+    host.channel_name(idx)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn channel_visible_sort_key<H: ChannelListHost>(host: &H, idx: usize) -> bool {
+    host.channel_visible(idx).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -548,6 +707,7 @@ mod tests {
         channel_search: String,
         channel_order: Vec<usize>,
         channel_names: Vec<Option<String>>,
+        channel_visible: Vec<bool>,
         layer_drag: Option<ui_layer_list::LayerDragState<TestLayerId>>,
     }
 
@@ -562,6 +722,12 @@ mod tests {
             &mut self.channel_search
         }
 
+        fn channel_sort_mode(&self) -> ChannelSortMode {
+            ChannelSortMode::Manual
+        }
+
+        fn set_channel_sort_mode(&mut self, _mode: ChannelSortMode) {}
+
         fn channel_count(&self) -> usize {
             self.channel_names.len()
         }
@@ -574,8 +740,8 @@ mod tests {
             self.channel_names.get(idx).cloned().flatten()
         }
 
-        fn channel_visible(&self, _idx: usize) -> Option<bool> {
-            Some(true)
+        fn channel_visible(&self, idx: usize) -> Option<bool> {
+            self.channel_visible.get(idx).copied()
         }
 
         fn set_channel_visible(&mut self, _idx: usize, _visible: bool) {}
@@ -638,6 +804,7 @@ mod tests {
                 Some("Grouped Two".to_string()),
                 Some("Beta".to_string()),
             ],
+            channel_visible: vec![true; 4],
             layer_drag: None,
         };
         let groups_cfg = ProjectLayerGroups {
@@ -666,8 +833,12 @@ mod tests {
             ..ProjectLayerGroups::default()
         };
 
-        let partition =
-            partition_channels_for_display(&host, &groups_cfg, host.channel_search().trim());
+        let partition = partition_channels_for_display(
+            &host,
+            &groups_cfg,
+            host.channel_search().trim(),
+            ChannelSortMode::Manual,
+        );
 
         assert_eq!(partition.visible_channel_indices, vec![1, 2, 3]);
         assert_eq!(partition.ungrouped, vec![(3, 3)]);
@@ -683,6 +854,7 @@ mod tests {
             channel_search: "beta".to_string(),
             channel_order: vec![0, 1],
             channel_names: vec![Some("Alpha".to_string()), Some("Beta".to_string())],
+            channel_visible: vec![true; 2],
             layer_drag: None,
         };
         let groups_cfg = ProjectLayerGroups {
@@ -696,11 +868,47 @@ mod tests {
             ..ProjectLayerGroups::default()
         };
 
-        let partition =
-            partition_channels_for_display(&host, &groups_cfg, host.channel_search().trim());
+        let partition = partition_channels_for_display(
+            &host,
+            &groups_cfg,
+            host.channel_search().trim(),
+            ChannelSortMode::Manual,
+        );
 
         assert!(partition.members_by_group.is_empty());
         assert_eq!(partition.visible_channel_indices, vec![1]);
         assert_eq!(partition.ungrouped, vec![(1, 1)]);
+    }
+
+    #[test]
+    fn sort_modes_reorder_filtered_ungrouped_channels() {
+        let host = TestHost {
+            channel_search: String::new(),
+            channel_order: vec![0, 1, 2],
+            channel_names: vec![
+                Some("Beta".to_string()),
+                Some("Alpha".to_string()),
+                Some("Gamma".to_string()),
+            ],
+            channel_visible: vec![false, true, false],
+            layer_drag: None,
+        };
+        let groups_cfg = ProjectLayerGroups::default();
+
+        let partition =
+            partition_channels_for_display(&host, &groups_cfg, "", ChannelSortMode::NameAsc);
+        assert_eq!(partition.ungrouped, vec![(1, 1), (0, 0), (2, 2)]);
+
+        let partition =
+            partition_channels_for_display(&host, &groups_cfg, "", ChannelSortMode::NameDesc);
+        assert_eq!(partition.ungrouped, vec![(2, 2), (0, 0), (1, 1)]);
+
+        let partition =
+            partition_channels_for_display(&host, &groups_cfg, "", ChannelSortMode::VisibleFirst);
+        assert_eq!(partition.ungrouped, vec![(1, 1), (0, 0), (2, 2)]);
+
+        let partition =
+            partition_channels_for_display(&host, &groups_cfg, "", ChannelSortMode::HiddenFirst);
+        assert_eq!(partition.ungrouped, vec![(0, 0), (2, 2), (1, 1)]);
     }
 }
