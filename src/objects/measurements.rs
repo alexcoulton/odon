@@ -246,10 +246,8 @@ impl ObjectsLayer {
             return Vec::new();
         };
         if self.bulk_measurement_filtered_only {
-            if let Some(filtered) = self.filtered_indices.as_ref() {
-                let mut out = filtered.iter().copied().collect::<Vec<_>>();
-                out.sort_unstable();
-                return out;
+            if let Some(filtered) = self.filtered_ordered_indices.as_ref() {
+                return filtered.as_ref().clone();
             }
         }
         (0..objects.len()).collect()

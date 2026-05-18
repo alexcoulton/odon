@@ -212,6 +212,7 @@ pub struct MosaicViewerApp {
     memory_selected_channels: HashSet<usize>,
     channel_select_anchor_idx: Option<usize>,
     selected_channel_group_id: Option<u64>,
+    quick_contrast_target: top_bar::QuickContrastTarget,
     selected_overlay_layers: HashSet<MosaicLayerId>,
     overlay_select_anchor_pos: Option<usize>,
     overlay_layer_order: Vec<MosaicLayerId>,
@@ -1082,6 +1083,7 @@ impl MosaicViewerApp {
             memory_selected_channels: initial_memory_selected_channels,
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order,
@@ -1306,6 +1308,7 @@ impl MosaicViewerApp {
             memory_selected_channels: initial_memory_selected_channels,
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order,
@@ -1563,6 +1566,7 @@ impl MosaicViewerApp {
             memory_selected_channels: initial_memory_selected_channels,
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order,
@@ -1840,6 +1844,7 @@ impl MosaicViewerApp {
             memory_selected_channels: initial_memory_selected_channels,
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order,
@@ -2061,6 +2066,7 @@ impl MosaicViewerApp {
             memory_selected_channels: initial_memory_selected_channels,
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order,
@@ -2182,33 +2188,9 @@ impl eframe::App for MosaicViewerApp {
                 }
                 ui.checkbox(&mut self.show_tile_debug, "Tile Debug");
 
-                // Compact contrast controls when both side panels are hidden.
-                if !self.show_left_panel && !self.show_right_panel && have_channels {
+                if have_channels {
                     ui.separator();
-                    let abs_max = self.abs_max.max(1.0);
-                    let ch_idx = self
-                        .selected_channel
-                        .min(self.channels.len().saturating_sub(1));
-                    let ch_name = self
-                        .channels
-                        .get(ch_idx)
-                        .map(|c| c.name.clone())
-                        .unwrap_or_default();
-                    let window = self.channels[ch_idx].window.unwrap_or((0.0, abs_max));
-                    if let Some((lo, hi)) = top_bar::ui_compact_contrast(
-                        ui,
-                        top_bar::CompactContrastParams {
-                            abs_max,
-                            channel_name: &ch_name,
-                            window,
-                            step: 1.0,
-                            id_salt: "top-contrast-range",
-                        },
-                    ) {
-                        if let Some(dst) = self.channels.get_mut(ch_idx) {
-                            dst.window = Some((lo, hi));
-                        }
-                    }
+                    self.ui_top_bar_quick_contrast(ui);
                 }
             });
         });
@@ -2670,6 +2652,150 @@ impl MosaicViewerApp {
             }
         }
         first_window.map(|window| (window, mixed))
+    }
+
+    fn visible_channel_indices(&self) -> Vec<usize> {
+        self.channel_layer_order
+            .iter()
+            .copied()
+            .filter(|&idx| self.channels.get(idx).is_some_and(|ch| ch.visible))
+            .collect()
+    }
+
+    fn quick_contrast_target_options(&self) -> Vec<top_bar::QuickContrastTargetOption> {
+        let visible_count = self.visible_channel_indices().len();
+        let group_count = self
+            .selected_channel_group_id
+            .map(|group_id| self.channel_indices_in_group(group_id).len())
+            .unwrap_or(0);
+        let group_label = self
+            .selected_channel_group_id
+            .and_then(|group_id| {
+                self.layer_groups
+                    .channel_groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .map(|group| format!("Selected group ({})", group.name))
+            })
+            .unwrap_or_else(|| "Selected group".to_string());
+
+        vec![
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::Visible,
+                label: format!("Visible channels ({visible_count})"),
+                enabled: visible_count > 0,
+            },
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::Active,
+                label: "Active channel".to_string(),
+                enabled: !self.channels.is_empty(),
+            },
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::SelectedGroup,
+                label: format!("{group_label} ({group_count})"),
+                enabled: group_count > 0,
+            },
+        ]
+    }
+
+    fn quick_contrast_indices_for_target(
+        &self,
+        target: top_bar::QuickContrastTarget,
+    ) -> Vec<usize> {
+        match target {
+            top_bar::QuickContrastTarget::Active => {
+                if self.channels.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![self.selected_channel.min(self.channels.len() - 1)]
+                }
+            }
+            top_bar::QuickContrastTarget::Visible => {
+                let visible = self.visible_channel_indices();
+                if visible.is_empty() {
+                    self.quick_contrast_indices_for_target(top_bar::QuickContrastTarget::Active)
+                } else {
+                    visible
+                }
+            }
+            top_bar::QuickContrastTarget::SelectedGroup => self
+                .selected_channel_group_id
+                .map(|group_id| self.channel_indices_in_group(group_id))
+                .filter(|indices| !indices.is_empty())
+                .unwrap_or_else(|| {
+                    self.quick_contrast_indices_for_target(top_bar::QuickContrastTarget::Visible)
+                }),
+        }
+    }
+
+    fn apply_channel_window_to_indices(&mut self, indices: &[usize], lo: f32, hi: f32) {
+        let abs_max = self.abs_max.max(1.0);
+        let lo = lo.clamp(0.0, abs_max);
+        let hi = hi.clamp(0.0, abs_max);
+        let (lo, hi) = if hi <= lo {
+            ((hi - 1.0).clamp(0.0, abs_max), hi)
+        } else {
+            (lo, hi)
+        };
+        for &idx in indices {
+            if let Some(dst) = self.channels.get_mut(idx) {
+                dst.window = Some((lo, hi));
+            }
+        }
+    }
+
+    fn ui_top_bar_quick_contrast(&mut self, ui: &mut egui::Ui) {
+        if self.channels.is_empty() {
+            return;
+        }
+        if self.quick_contrast_target == top_bar::QuickContrastTarget::SelectedGroup
+            && self
+                .selected_channel_group_id
+                .map(|group_id| self.channel_indices_in_group(group_id).is_empty())
+                .unwrap_or(true)
+        {
+            self.quick_contrast_target = top_bar::QuickContrastTarget::Visible;
+        }
+
+        let options = self.quick_contrast_target_options();
+        let indices = self.quick_contrast_indices_for_target(self.quick_contrast_target);
+        if indices.is_empty() {
+            return;
+        }
+        let abs_max = self.abs_max.max(1.0);
+        let ((window, mixed), reference_idx) = (
+            self.group_contrast_window_for_indices(&indices, abs_max)
+                .unwrap_or(((0.0, abs_max), false)),
+            self.selected_channel.min(self.channels.len() - 1),
+        );
+        let reference_name = self
+            .channels
+            .get(reference_idx)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| "channel".to_string());
+        let target_before = self.quick_contrast_target;
+        let response = top_bar::ui_quick_contrast(
+            ui,
+            top_bar::QuickContrastParams {
+                abs_max,
+                target: &mut self.quick_contrast_target,
+                target_options: &options,
+                target_count: indices.len(),
+                reference_channel_name: &reference_name,
+                window,
+                mixed,
+                step: 1.0,
+                id_salt: "mosaic-top-quick-contrast",
+            },
+        );
+        if response.changed && self.quick_contrast_target == target_before {
+            let target_indices = self.quick_contrast_indices_for_target(self.quick_contrast_target);
+            self.apply_channel_window_to_indices(
+                &target_indices,
+                response.window.0,
+                response.window.1,
+            );
+        }
     }
 
     fn ui_group_contrast(&mut self, ui: &mut egui::Ui, group_id: u64) {

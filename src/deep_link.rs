@@ -7,6 +7,18 @@ pub struct DeepLinkChannelContrast {
     pub max: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepLinkChannelColor {
+    pub channel: String,
+    pub color_rgb: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepLinkObjectFilterClause {
+    pub property_key: String,
+    pub query: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepLinkRequest {
     pub project_path: Option<PathBuf>,
@@ -16,11 +28,15 @@ pub struct DeepLinkRequest {
     pub channel_alternatives: Vec<String>,
     pub visible_channels: Vec<String>,
     pub visible_channel_alternatives: Vec<Vec<String>>,
+    pub group_visible_channels: bool,
+    pub visible_channel_group: Option<String>,
+    pub visible_channel_group_color: Option<[u8; 3]>,
     pub hidden_channels: Vec<String>,
     pub hidden_channel_alternatives: Vec<Vec<String>>,
     pub contrast_min: Option<f32>,
     pub contrast_max: Option<f32>,
     pub channel_contrasts: Vec<DeepLinkChannelContrast>,
+    pub channel_colors: Vec<DeepLinkChannelColor>,
     pub segmentation: Option<String>,
     pub segmentation_source: Option<String>,
     pub load_segmentation_labels: Option<bool>,
@@ -29,6 +45,7 @@ pub struct DeepLinkRequest {
     pub show_selection_overlay: Option<bool>,
     pub visible_cell_types: Vec<String>,
     pub hidden_cell_types: Vec<String>,
+    pub object_filters: Vec<DeepLinkObjectFilterClause>,
     pub center_world: Option<[f32; 2]>,
     pub zoom: Option<f32>,
 }
@@ -74,11 +91,15 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         channel_alternatives: Vec::new(),
         visible_channels: Vec::new(),
         visible_channel_alternatives: Vec::new(),
+        group_visible_channels: false,
+        visible_channel_group: None,
+        visible_channel_group_color: None,
         hidden_channels: Vec::new(),
         hidden_channel_alternatives: Vec::new(),
         contrast_min: None,
         contrast_max: None,
         channel_contrasts: Vec::new(),
+        channel_colors: Vec::new(),
         segmentation: None,
         segmentation_source: None,
         load_segmentation_labels: None,
@@ -87,9 +108,12 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         show_selection_overlay: None,
         visible_cell_types: Vec::new(),
         hidden_cell_types: Vec::new(),
+        object_filters: Vec::new(),
         center_world: None,
         zoom: None,
     };
+    let mut filter_property: Option<String> = None;
+    let mut filter_query: Option<String> = None;
 
     for (key, value) in query_pairs(query) {
         match key.as_str() {
@@ -100,6 +124,15 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             "visible_channels" | "show_channels" | "only_channels" => {
                 req.visible_channels = parse_list(&value)
             }
+            "group_visible_channels" | "group_channels" | "group_visible" => {
+                req.group_visible_channels = parse_bool(&value).unwrap_or(false)
+            }
+            "visible_channel_group" | "channel_group" | "group_name" => {
+                req.visible_channel_group = non_empty(value)
+            }
+            "visible_channel_group_color" | "channel_group_color" | "group_color" => {
+                req.visible_channel_group_color = parse_color_rgb(&value)
+            }
             "hidden_channels" | "hide_channels" => req.hidden_channels = parse_list(&value),
             "contrast_min" | "channel_min" | "window_min" => {
                 req.contrast_min = parse_finite_f32(&value)
@@ -109,6 +142,9 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             }
             "channel_contrast" | "channel_contrasts" | "channel_window" | "channel_windows" => {
                 req.channel_contrasts = parse_channel_contrasts(&value)
+            }
+            "channel_color" | "channel_colors" | "channel_colour" | "channel_colours" => {
+                req.channel_colors = parse_channel_colors(&value)
             }
             "segmentation" | "label" | "labels" => req.segmentation = non_empty(value),
             "segmentation_source" | "segmentation_layer" | "segmentation_kind" => {
@@ -129,6 +165,15 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
                 req.visible_cell_types = parse_list(&value)
             }
             "hidden_cell_types" | "hide_cell_types" => req.hidden_cell_types = parse_list(&value),
+            "filter" | "filters" | "object_filter" | "object_filters" => {
+                req.object_filters.extend(parse_object_filters(&value));
+            }
+            "filter_property" | "filter_key" | "object_filter_property" | "object_filter_key" => {
+                filter_property = non_empty(value);
+            }
+            "filter_query" | "filter_value" | "object_filter_query" | "object_filter_value" => {
+                filter_query = non_empty(value);
+            }
             "center" | "center_world" => req.center_world = parse_pair_f32(&value),
             "zoom" => {
                 req.zoom = value
@@ -139,6 +184,17 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             "v" | "version" => {}
             _ => {}
         }
+    }
+    if let (Some(property_key), Some(query)) = (filter_property, filter_query)
+        && !req
+            .object_filters
+            .iter()
+            .any(|clause| clause.property_key == property_key && clause.query == query)
+    {
+        req.object_filters.push(DeepLinkObjectFilterClause {
+            property_key,
+            query,
+        });
     }
 
     Ok(req)
@@ -214,6 +270,92 @@ fn parse_channel_contrasts(value: &str) -> Vec<DeepLinkChannelContrast> {
             })
         })
         .collect()
+}
+
+fn parse_channel_colors(value: &str) -> Vec<DeepLinkChannelColor> {
+    value
+        .split(['|', ';'])
+        .filter_map(|item| {
+            let item = item.trim();
+            let (channel, color) = item.rsplit_once(':').or_else(|| item.rsplit_once('='))?;
+            let channel = channel.trim();
+            if channel.is_empty() {
+                return None;
+            }
+            Some(DeepLinkChannelColor {
+                channel: channel.to_string(),
+                color_rgb: parse_color_rgb(color.trim())?,
+            })
+        })
+        .collect()
+}
+
+fn parse_object_filters(value: &str) -> Vec<DeepLinkObjectFilterClause> {
+    value
+        .split(['|', ';'])
+        .filter_map(parse_object_filter_clause)
+        .collect()
+}
+
+fn parse_object_filter_clause(item: &str) -> Option<DeepLinkObjectFilterClause> {
+    let item = item.trim();
+    let (property_key, query) = item
+        .split_once("==")
+        .or_else(|| item.split_once('='))
+        .or_else(|| item.split_once(':'))
+        .or_else(|| item.split_once('~'))?;
+    let property_key = property_key.trim();
+    let query = query.trim();
+    if property_key.is_empty() || query.is_empty() {
+        return None;
+    }
+    Some(DeepLinkObjectFilterClause {
+        property_key: property_key.to_string(),
+        query: query.to_string(),
+    })
+}
+
+fn parse_color_rgb(value: &str) -> Option<[u8; 3]> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "white" => Some([255, 255, 255]),
+        "black" => Some([0, 0, 0]),
+        "red" => Some([230, 57, 70]),
+        "green" => Some([42, 157, 143]),
+        "blue" => Some([69, 123, 157]),
+        "cyan" => Some([0, 188, 212]),
+        "magenta" => Some([216, 27, 96]),
+        "yellow" => Some([255, 202, 40]),
+        "orange" => Some([251, 133, 0]),
+        "purple" => Some([126, 87, 194]),
+        "pink" => Some([244, 143, 177]),
+        "lime" => Some([139, 195, 74]),
+        "teal" => Some([0, 150, 136]),
+        "amber" => Some([255, 193, 7]),
+        "gray" | "grey" => Some([158, 158, 158]),
+        _ => parse_hex_color_rgb(trimmed),
+    }
+}
+
+fn parse_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        return Some([r, g, b]);
+    }
+    if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
+        let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
+        let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
+        return Some([r * 17, g * 17, b * 17]);
+    }
+    None
 }
 
 fn parse_pair_f32(value: &str) -> Option<[f32; 2]> {
@@ -338,9 +480,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_object_filter_clauses() {
+        let req = DeepLinkRequest::parse_arg(
+            "odon://open?filter=broad_cell_type:immune_myeloid%7Czz_mask_galectin_3%3D%3DTRUE&filter_property=sample_id&filter_query=18S1746",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            req.object_filters,
+            vec![
+                DeepLinkObjectFilterClause {
+                    property_key: "broad_cell_type".to_string(),
+                    query: "immune_myeloid".to_string(),
+                },
+                DeepLinkObjectFilterClause {
+                    property_key: "zz_mask_galectin_3".to_string(),
+                    query: "TRUE".to_string(),
+                },
+                DeepLinkObjectFilterClause {
+                    property_key: "sample_id".to_string(),
+                    query: "18S1746".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn parses_channel_visibility_and_contrast() {
         let req = DeepLinkRequest::parse_arg(
-            "odon://open?channel=CD3&visible_channels=CD3%7CCD8&hidden_channels=DAPI&contrast_min=120&contrast_max=4500&channel_contrast=CD3:120:4500%7CCD8:80:3000",
+            "odon://open?channel=CD3&visible_channels=CD3%7CCD8&group_visible_channels=1&visible_channel_group=T%20cell%20markers&visible_channel_group_color=%23ffffff&channel_color=CD3:red%7CCD8:%2300ccff&hidden_channels=DAPI&contrast_min=120&contrast_max=4500&channel_contrast=CD3:120:4500%7CCD8:80:3000",
         )
         .unwrap()
         .unwrap();
@@ -349,6 +518,25 @@ mod tests {
         assert_eq!(
             req.visible_channels,
             vec!["CD3".to_string(), "CD8".to_string()]
+        );
+        assert!(req.group_visible_channels);
+        assert_eq!(
+            req.visible_channel_group,
+            Some("T cell markers".to_string())
+        );
+        assert_eq!(req.visible_channel_group_color, Some([255, 255, 255]));
+        assert_eq!(
+            req.channel_colors,
+            vec![
+                DeepLinkChannelColor {
+                    channel: "CD3".to_string(),
+                    color_rgb: [230, 57, 70],
+                },
+                DeepLinkChannelColor {
+                    channel: "CD8".to_string(),
+                    color_rgb: [0, 204, 255],
+                },
+            ]
         );
         assert_eq!(req.hidden_channels, vec!["DAPI".to_string()]);
         assert_eq!(req.contrast_min, Some(120.0));
@@ -368,5 +556,13 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn parses_hex_and_named_colours() {
+        assert_eq!(parse_color_rgb("#abc"), Some([170, 187, 204]));
+        assert_eq!(parse_color_rgb("00ff80"), Some([0, 255, 128]));
+        assert_eq!(parse_color_rgb("cyan"), Some([0, 188, 212]));
+        assert_eq!(parse_color_rgb("not-a-colour"), None);
     }
 }

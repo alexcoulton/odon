@@ -2155,7 +2155,7 @@ impl ObjectsLayer {
             self.ensure_property_loaded(key);
             return Arc::new(Vec::new());
         }
-        if self.filtered_indices.is_none() {
+        if self.filtered_mask.is_none() {
             if let Some(cached) = self.object_property_base_pairs_cache.get(key) {
                 return cached.clone();
             }
@@ -2188,8 +2188,8 @@ impl ObjectsLayer {
             return cached.clone();
         }
         if let Some(mut out) = self.property_store.numeric_pairs(key) {
-            if let Some(filtered) = self.filtered_indices.as_ref() {
-                out.retain(|(idx, _)| filtered.contains(idx));
+            if let Some(filtered_mask) = self.filtered_mask.as_ref() {
+                out.retain(|(idx, _)| filtered_mask.get(*idx).copied().unwrap_or(false));
             }
             let out = Arc::new(out);
             self.object_property_pairs_cache
@@ -2199,10 +2199,10 @@ impl ObjectsLayer {
         let Some(objects) = self.objects.as_ref() else {
             return Arc::new(Vec::new());
         };
-        let filtered = self.filtered_indices.as_ref();
+        let filtered_mask = self.filtered_mask.as_ref();
         let mut out = Vec::new();
         for (idx, obj) in objects.iter().enumerate() {
-            if filtered.is_some_and(|set| !set.contains(&idx)) {
+            if filtered_mask.is_some_and(|mask| !mask.get(idx).copied().unwrap_or(false)) {
                 continue;
             }
             let Some(value) = obj.inline_properties.get(key).and_then(numeric_json_value) else {
@@ -2219,7 +2219,7 @@ impl ObjectsLayer {
     }
 
     fn object_property_sorted_pairs(&mut self, key: &str) -> Arc<Vec<(usize, f32)>> {
-        if self.filtered_indices.is_none() {
+        if self.filtered_mask.is_none() {
             if let Some(cached) = self.object_property_base_sorted_pairs_cache.get(key) {
                 return cached.clone();
             }
@@ -2248,7 +2248,7 @@ impl ObjectsLayer {
         // Keep separate caches for base vs filtered histograms. Filter changes are much more
         // frequent than raw data changes, so this avoids rebuilding the unfiltered histogram when
         // users toggle subset views.
-        if self.filtered_indices.is_none() {
+        if self.filtered_mask.is_none() {
             let cache_key = (key.to_string(), self.analysis_hist_value_transform);
             if let Some(cached) = self.object_property_base_hist_cache.get(&cache_key) {
                 return Some(cached.clone());
@@ -2740,7 +2740,7 @@ impl ObjectsLayer {
         {
             return Arc::clone(&self.object_property_threshold_selection_cache);
         }
-        if self.filtered_indices.is_none() && self.analysis_property_thresholds.len() == 1 {
+        if self.filtered_mask.is_none() && self.analysis_property_thresholds.len() == 1 {
             let rule = self.analysis_property_thresholds[0].clone();
             let sorted = self.object_property_sorted_pairs(&rule.column_key);
             let out = Arc::new(match rule.op {
@@ -2794,7 +2794,7 @@ impl ObjectsLayer {
         method: HistogramLevelMethod,
         level_count: usize,
     ) -> Arc<Vec<f32>> {
-        if self.filtered_indices.is_none() {
+        if self.filtered_mask.is_none() {
             let cache_key = (
                 column_name.to_string(),
                 value_transform,
@@ -2854,7 +2854,7 @@ impl ObjectsLayer {
             .join("||");
         let cache_key = format!(
             "{}|||{}|||{}",
-            if self.filtered_indices.is_some() {
+            if self.filtered_mask.is_some() {
                 "filtered"
             } else {
                 "all"
@@ -2866,7 +2866,7 @@ impl ObjectsLayer {
             return Arc::clone(&self.object_property_threshold_order_cache);
         }
 
-        let out = if self.filtered_indices.is_none()
+        let out = if self.filtered_mask.is_none()
             && self.analysis_property_thresholds.len() == 1
             && self.analysis_property_thresholds[0].column_key == column_name
         {

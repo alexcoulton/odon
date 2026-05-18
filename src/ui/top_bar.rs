@@ -251,31 +251,145 @@ pub fn ui_smooth_toggle(ui: &mut egui::Ui, smooth_pixels: &mut bool) -> bool {
         .changed()
 }
 
-pub struct CompactContrastParams<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickContrastTarget {
+    Active,
+    Visible,
+    SelectedGroup,
+}
+
+impl QuickContrastTarget {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "Active channel",
+            Self::Visible => "Visible channels",
+            Self::SelectedGroup => "Selected group",
+        }
+    }
+}
+
+pub struct QuickContrastTargetOption {
+    pub target: QuickContrastTarget,
+    pub label: String,
+    pub enabled: bool,
+}
+
+pub struct QuickContrastParams<'a> {
     pub abs_max: f32,
-    pub channel_name: &'a str,
+    pub target: &'a mut QuickContrastTarget,
+    pub target_options: &'a [QuickContrastTargetOption],
+    pub target_count: usize,
+    pub reference_channel_name: &'a str,
     pub window: (f32, f32),
+    pub mixed: bool,
     pub step: f32,
     pub id_salt: &'a str,
 }
 
-pub fn ui_compact_contrast(
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuickContrastResponse {
+    pub window: (f32, f32),
+    pub changed: bool,
+}
+
+pub fn ui_quick_contrast(
     ui: &mut egui::Ui,
-    params: CompactContrastParams<'_>,
-) -> Option<(f32, f32)> {
-    ui.label(format!("Contrast: {}", params.channel_name));
-    let abs_max = params.abs_max.max(1.0);
-    let (mut lo, mut hi) = params.window;
-    lo = lo.clamp(0.0, abs_max);
-    hi = hi.clamp(0.0, abs_max);
-    if hi <= lo {
-        hi = (lo + 1.0).min(abs_max);
-    }
-    let id = ui.id().with(params.id_salt);
-    let resp =
-        crate::ui::range_slider::range_slider(ui, id, &mut lo, &mut hi, 0.0, abs_max, params.step);
-    if resp.changed() {
-        return Some((lo, hi));
-    }
-    None
+    params: QuickContrastParams<'_>,
+) -> QuickContrastResponse {
+    let mut response = QuickContrastResponse {
+        window: params.window,
+        changed: false,
+    };
+
+    ui.menu_button("Contrast", |ui| {
+        ui.set_min_width(340.0);
+
+        let current_target = *params.target;
+        let selected_label = params
+            .target_options
+            .iter()
+            .find(|option| option.target == current_target)
+            .map(|option| option.label.as_str())
+            .unwrap_or_else(|| current_target.label());
+        ui.horizontal(|ui| {
+            ui.label("Target");
+            egui::ComboBox::from_id_salt(ui.id().with(params.id_salt).with("target"))
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    for option in params.target_options {
+                        ui.add_enabled_ui(option.enabled, |ui| {
+                            ui.selectable_value(params.target, option.target, &option.label);
+                        });
+                    }
+                });
+        });
+
+        ui.small(format!(
+            "Editing {} channel(s), based on {}.",
+            params.target_count.max(1),
+            params.reference_channel_name
+        ));
+        if params.mixed {
+            ui.small("Target channels currently have mixed limits; editing will overwrite them.");
+        }
+        ui.separator();
+
+        let abs_max = params.abs_max.max(1.0);
+        let (mut lo, mut hi) = params.window;
+        lo = lo.clamp(0.0, abs_max);
+        hi = hi.clamp(0.0, abs_max);
+        if hi <= lo {
+            hi = (lo + 1.0).min(abs_max);
+        }
+
+        ui.horizontal(|ui| {
+            if ui
+                .button("Reset")
+                .on_hover_text("Set target to 0-max")
+                .clicked()
+            {
+                lo = 0.0;
+                hi = abs_max;
+                response.changed = true;
+            }
+            if ui
+                .button("Set max")
+                .on_hover_text("Keep the current minimum and set maximum to the dataset maximum")
+                .clicked()
+            {
+                hi = abs_max;
+                response.changed = true;
+            }
+        });
+
+        let id = ui.id().with(params.id_salt).with("range");
+        let slider = crate::ui::range_slider::range_slider(
+            ui,
+            id,
+            &mut lo,
+            &mut hi,
+            0.0,
+            abs_max,
+            params.step,
+        );
+        response.changed |= slider.changed();
+
+        ui.horizontal(|ui| {
+            response.changed |= ui
+                .add(egui::DragValue::new(&mut lo).speed(10.0).prefix("min "))
+                .changed();
+            response.changed |= ui
+                .add(egui::DragValue::new(&mut hi).speed(10.0).prefix("max "))
+                .changed();
+        });
+
+        lo = lo.clamp(0.0, abs_max);
+        hi = hi.clamp(0.0, abs_max);
+        if hi <= lo {
+            hi = (lo + 1.0).min(abs_max);
+        }
+        response.window = (lo, hi);
+    });
+
+    response
 }

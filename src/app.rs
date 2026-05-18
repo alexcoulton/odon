@@ -28,8 +28,9 @@ use crate::custom::cell_thresholds::CellThresholdsPanel;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
-use crate::data::project_config::ProjectLayerGroups;
-use crate::data::project_config::ProjectRoi;
+use crate::data::project_config::{
+    ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups, ProjectRoi,
+};
 use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
@@ -481,6 +482,7 @@ pub struct OmeZarrViewerApp {
     memory_selected_channels: HashSet<usize>,
     channel_select_anchor_idx: Option<usize>,
     selected_channel_group_id: Option<u64>,
+    quick_contrast_target: top_bar::QuickContrastTarget,
     selected_overlay_layers: HashSet<LayerId>,
     overlay_select_anchor_pos: Option<usize>,
     show_left_panel: bool,
@@ -1045,7 +1047,7 @@ impl OmeZarrViewerApp {
                     | "project_objects"
                     | "cells_geoparquet"
             )
-        });
+        }) || !request.object_filters.is_empty();
         let bundled_labels_requested = segmentation_source
             .as_deref()
             .is_none_or(|source| !object_segmentation_requested && source != "none");
@@ -1091,9 +1093,13 @@ impl OmeZarrViewerApp {
                 channel_visibility_changed |= channel.visible;
                 channel.visible = false;
             }
+            let mut visible_channel_indices = Vec::new();
             for channel_terms in &visible_channel_groups {
                 match self.find_channel_index_for_link_terms(channel_terms) {
                     Some(idx) => {
+                        if !visible_channel_indices.contains(&idx) {
+                            visible_channel_indices.push(idx);
+                        }
                         if let Some(channel) = self.channels.get_mut(idx) {
                             channel_visibility_changed |= !channel.visible;
                             channel.visible = true;
@@ -1103,6 +1109,23 @@ impl OmeZarrViewerApp {
                         "visible channel '{}' was not found",
                         channel_terms.join("' or '")
                     )),
+                }
+            }
+            if request.group_visible_channels || request.visible_channel_group.is_some() {
+                if visible_channel_indices.is_empty() {
+                    notes.push("no visible channels were available to group".to_string());
+                } else {
+                    let group_name = request
+                        .visible_channel_group
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("Deep link channels");
+                    self.group_channel_indices_for_deep_link(
+                        group_name,
+                        &visible_channel_indices,
+                        request.visible_channel_group_color,
+                    );
                 }
             }
         }
@@ -1127,6 +1150,24 @@ impl OmeZarrViewerApp {
         }
         if channel_visibility_changed {
             self.bump_render_id();
+        }
+
+        for channel_color in &request.channel_colors {
+            match self
+                .find_channel_index_for_link_terms(std::slice::from_ref(&channel_color.channel))
+            {
+                Some(idx) => {
+                    if let Some(channel) = self.channels.get_mut(idx) {
+                        channel.color_rgb = channel_color.color_rgb;
+                    }
+                    self.set_channel_group_color_inheritance(idx, false);
+                    self.bump_render_id();
+                }
+                None => notes.push(format!(
+                    "channel colour target '{}' was not found",
+                    channel_color.channel
+                )),
+            }
         }
 
         if request.contrast_min.is_some() || request.contrast_max.is_some() {
@@ -1224,6 +1265,17 @@ impl OmeZarrViewerApp {
                 &request.visible_cell_types,
                 &request.hidden_cell_types,
             );
+        }
+
+        if !request.object_filters.is_empty() {
+            let filter_pairs = request
+                .object_filters
+                .iter()
+                .map(|clause| (clause.property_key.clone(), clause.query.clone()))
+                .collect::<Vec<_>>();
+            self.seg_objects
+                .set_filter_clauses_from_pairs(&filter_pairs);
+            self.set_active_layer(LayerId::SegmentationObjects);
         }
 
         if let Some(center) = request.center_world {
@@ -1770,6 +1822,7 @@ impl OmeZarrViewerApp {
             memory_selected_channels: (0..dataset.channels.len()).collect(),
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             show_left_panel: true,
@@ -2036,6 +2089,7 @@ impl OmeZarrViewerApp {
             memory_selected_channels: (0..dataset.channels.len()).collect(),
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             show_left_panel: true,
@@ -2373,6 +2427,7 @@ impl OmeZarrViewerApp {
             memory_selected_channels: (0..dataset.channels.len()).collect(),
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
+            quick_contrast_target: top_bar::QuickContrastTarget::Visible,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             show_left_panel: true,
@@ -3747,37 +3802,9 @@ impl eframe::App for OmeZarrViewerApp {
                 }
                 ui.checkbox(&mut self.show_tile_debug, "Tile Debug");
 
-                // Compact contrast controls when both side panels are hidden.
-                if !self.show_left_panel && !self.show_right_panel && have_channels {
+                if have_channels {
                     ui.separator();
-                    let abs_max = self.dataset.abs_max.max(1.0);
-                    let ch_idx = self
-                        .selected_channel
-                        .min(self.channels.len().saturating_sub(1));
-                    let ch_name = self
-                        .channels
-                        .get(ch_idx)
-                        .map(|c| c.name.clone())
-                        .unwrap_or_default();
-                    let window = self.channels[ch_idx].window.unwrap_or((0.0, abs_max));
-                    if let Some((lo, hi)) = top_bar::ui_compact_contrast(
-                        ui,
-                        top_bar::CompactContrastParams {
-                            abs_max,
-                            channel_name: &ch_name,
-                            window,
-                            step: 1.0,
-                            id_salt: "top-contrast-range",
-                        },
-                    ) {
-                        if let Some(dst) = self.channels.get_mut(ch_idx) {
-                            dst.window = Some((lo, hi));
-                            self.channel_window_overrides
-                                .insert(dst.name.clone(), (lo, hi));
-                        }
-                        self.hist_dirty = true;
-                        self.bump_render_id();
-                    }
+                    self.ui_top_bar_quick_contrast(ui);
                 }
             });
         });
@@ -6968,6 +6995,90 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn group_channel_indices_for_deep_link(
+        &mut self,
+        name: &str,
+        indices: &[usize],
+        color_rgb: Option<[u8; 3]>,
+    ) {
+        let first_color = indices
+            .first()
+            .and_then(|idx| self.channels.get(*idx))
+            .map(|ch| {
+                layer_groups::effective_channel_color_rgb(
+                    &self.current_layer_groups(),
+                    &ch.name,
+                    ch.color_rgb,
+                )
+            })
+            .unwrap_or([255, 255, 255]);
+        let group_color = color_rgb.unwrap_or(first_color);
+
+        let mut groups = self.current_layer_groups();
+        let group_id = match groups
+            .channel_groups
+            .iter_mut()
+            .find(|group| group.name.eq_ignore_ascii_case(name))
+        {
+            Some(group) => {
+                group.expanded = true;
+                group.color_rgb = group_color;
+                group.id
+            }
+            None => {
+                let existing_ids = groups
+                    .channel_groups
+                    .iter()
+                    .map(|group| group.id)
+                    .collect::<Vec<_>>();
+                let id = layer_groups::next_group_id(&existing_ids);
+                groups.channel_groups.push(ProjectChannelGroup {
+                    id,
+                    name: name.to_string(),
+                    expanded: true,
+                    color_rgb: group_color,
+                });
+                id
+            }
+        };
+
+        groups
+            .channel_members
+            .retain(|_, member| member.group_id != group_id);
+        for idx in indices {
+            if let Some(channel) = self.channels.get(*idx) {
+                groups.channel_members.insert(
+                    channel.name.clone(),
+                    ProjectChannelGroupMember {
+                        group_id,
+                        inherit_color: true,
+                    },
+                );
+            }
+        }
+        self.selected_channel_group_id = Some(group_id);
+        self.set_current_layer_groups(groups);
+        self.bump_render_id();
+    }
+
+    fn set_channel_group_color_inheritance(&mut self, channel_idx: usize, inherit_color: bool) {
+        let Some(channel_name) = self
+            .channels
+            .get(channel_idx)
+            .map(|channel| channel.name.clone())
+        else {
+            return;
+        };
+        let mut groups = self.current_layer_groups();
+        let Some(member) = groups.channel_members.get_mut(&channel_name) else {
+            return;
+        };
+        if member.inherit_color != inherit_color {
+            member.inherit_color = inherit_color;
+            self.set_current_layer_groups(groups);
+        }
+    }
+
     fn selected_memory_channel_indices(&self) -> Vec<usize> {
         self.channel_layer_order
             .iter()
@@ -8345,6 +8456,158 @@ impl OmeZarrViewerApp {
             }
         }
         first_window.map(|window| (window, mixed))
+    }
+
+    fn visible_channel_indices(&self) -> Vec<usize> {
+        self.channel_layer_order
+            .iter()
+            .copied()
+            .filter(|&idx| self.channels.get(idx).is_some_and(|ch| ch.visible))
+            .collect()
+    }
+
+    fn quick_contrast_target_options(&self) -> Vec<top_bar::QuickContrastTargetOption> {
+        let visible_count = self.visible_channel_indices().len();
+        let group_count = self
+            .selected_channel_group_id
+            .map(|group_id| self.channel_indices_in_group(group_id).len())
+            .unwrap_or(0);
+        let group_label = self
+            .selected_channel_group_id
+            .and_then(|group_id| {
+                self.current_layer_groups()
+                    .channel_groups
+                    .iter()
+                    .find(|group| group.id == group_id)
+                    .map(|group| format!("Selected group ({})", group.name))
+            })
+            .unwrap_or_else(|| "Selected group".to_string());
+
+        vec![
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::Visible,
+                label: format!("Visible channels ({visible_count})"),
+                enabled: visible_count > 0,
+            },
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::Active,
+                label: "Active channel".to_string(),
+                enabled: !self.channels.is_empty(),
+            },
+            top_bar::QuickContrastTargetOption {
+                target: top_bar::QuickContrastTarget::SelectedGroup,
+                label: format!("{group_label} ({group_count})"),
+                enabled: group_count > 0,
+            },
+        ]
+    }
+
+    fn quick_contrast_indices_for_target(
+        &self,
+        target: top_bar::QuickContrastTarget,
+    ) -> Vec<usize> {
+        match target {
+            top_bar::QuickContrastTarget::Active => {
+                if self.channels.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![self.selected_channel.min(self.channels.len() - 1)]
+                }
+            }
+            top_bar::QuickContrastTarget::Visible => {
+                let visible = self.visible_channel_indices();
+                if visible.is_empty() {
+                    self.quick_contrast_indices_for_target(top_bar::QuickContrastTarget::Active)
+                } else {
+                    visible
+                }
+            }
+            top_bar::QuickContrastTarget::SelectedGroup => self
+                .selected_channel_group_id
+                .map(|group_id| self.channel_indices_in_group(group_id))
+                .filter(|indices| !indices.is_empty())
+                .unwrap_or_else(|| {
+                    self.quick_contrast_indices_for_target(top_bar::QuickContrastTarget::Visible)
+                }),
+        }
+    }
+
+    fn apply_channel_window_to_indices(&mut self, indices: &[usize], lo: f32, hi: f32) {
+        let abs_max = self.dataset.abs_max.max(1.0);
+        let lo = lo.clamp(0.0, abs_max);
+        let hi = hi.clamp(0.0, abs_max);
+        let (lo, hi) = if hi <= lo {
+            ((hi - 1.0).clamp(0.0, abs_max), hi)
+        } else {
+            (lo, hi)
+        };
+        let mut changed = false;
+        for &idx in indices {
+            if let Some(dst) = self.channels.get_mut(idx) {
+                dst.window = Some((lo, hi));
+                self.channel_window_overrides
+                    .insert(dst.name.clone(), (lo, hi));
+                changed = true;
+            }
+        }
+        if changed {
+            self.hist_dirty = true;
+            self.bump_render_id();
+        }
+    }
+
+    fn ui_top_bar_quick_contrast(&mut self, ui: &mut egui::Ui) {
+        if self.channels.is_empty() {
+            return;
+        }
+        if self.quick_contrast_target == top_bar::QuickContrastTarget::SelectedGroup
+            && self
+                .selected_channel_group_id
+                .map(|group_id| self.channel_indices_in_group(group_id).is_empty())
+                .unwrap_or(true)
+        {
+            self.quick_contrast_target = top_bar::QuickContrastTarget::Visible;
+        }
+
+        let options = self.quick_contrast_target_options();
+        let indices = self.quick_contrast_indices_for_target(self.quick_contrast_target);
+        if indices.is_empty() {
+            return;
+        }
+        let abs_max = self.dataset.abs_max.max(1.0);
+        let ((window, mixed), reference_idx) = (
+            self.group_contrast_window_for_indices(&indices, abs_max)
+                .unwrap_or(((0.0, abs_max), false)),
+            self.selected_channel.min(self.channels.len() - 1),
+        );
+        let reference_name = self
+            .channels
+            .get(reference_idx)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| "channel".to_string());
+        let target_before = self.quick_contrast_target;
+        let response = top_bar::ui_quick_contrast(
+            ui,
+            top_bar::QuickContrastParams {
+                abs_max,
+                target: &mut self.quick_contrast_target,
+                target_options: &options,
+                target_count: indices.len(),
+                reference_channel_name: &reference_name,
+                window,
+                mixed,
+                step: 1.0,
+                id_salt: "top-quick-contrast",
+            },
+        );
+        if response.changed && self.quick_contrast_target == target_before {
+            let target_indices = self.quick_contrast_indices_for_target(self.quick_contrast_target);
+            self.apply_channel_window_to_indices(
+                &target_indices,
+                response.window.0,
+                response.window.1,
+            );
+        }
     }
 
     fn ui_group_contrast(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui, group_id: u64) {

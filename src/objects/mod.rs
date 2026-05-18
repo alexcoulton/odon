@@ -138,6 +138,23 @@ impl Default for ObjectColorLevelOverride {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObjectFilterClause {
+    enabled: bool,
+    property_key: String,
+    query: String,
+}
+
+impl Default for ObjectFilterClause {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            property_key: "id".to_string(),
+            query: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ObjectsLayer {
     pub visible: bool,
@@ -174,9 +191,9 @@ pub struct ObjectsLayer {
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     pending_color_value_visibility: Option<PendingColorValueVisibility>,
-    filter_property_key: String,
-    filter_query: String,
-    filtered_indices: Option<HashSet<usize>>,
+    filter_clauses: Vec<ObjectFilterClause>,
+    filtered_ordered_indices: Option<Arc<Vec<usize>>>,
+    filtered_mask: Option<Arc<Vec<bool>>>,
     filtered_render_lods: Option<Vec<ObjectRenderLod>>,
     filtered_point_positions_world: Option<Arc<Vec<egui::Pos2>>>,
     filtered_point_values: Option<Arc<Vec<f32>>>,
@@ -380,6 +397,12 @@ impl ObjectPropertyStore {
             .get(key)
             .is_some_and(|column| column.is_categorical(max_distinct))
     }
+
+    fn filter_value_options(&self, key: &str, max_options: usize) -> Option<Vec<String>> {
+        self.loaded_columns
+            .get(key)
+            .and_then(|column| column.filter_value_options(max_options))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +415,26 @@ enum ObjectPropertyColumn {
         values: Arc<Vec<Option<u32>>>,
     },
     Json(Arc<Vec<Option<serde_json::Value>>>),
+}
+
+#[derive(Debug, Clone)]
+enum ObjectPropertyContainsMatcher {
+    Bool {
+        true_matches: bool,
+        false_matches: bool,
+    },
+    I64 {
+        needle: String,
+    },
+    F64 {
+        needle: String,
+    },
+    Dictionary {
+        matching_codes: Vec<bool>,
+    },
+    Json {
+        needle: String,
+    },
 }
 
 impl ObjectPropertyColumn {
@@ -515,6 +558,84 @@ impl ObjectPropertyColumn {
             _ => self
                 .label_at(object_index)
                 .filter(|value| !value.trim().is_empty()),
+        }
+    }
+
+    fn contains_matcher(&self, query: &str) -> ObjectPropertyContainsMatcher {
+        let needle = query.trim().to_ascii_lowercase();
+        match self {
+            Self::Bool(_) => ObjectPropertyContainsMatcher::Bool {
+                true_matches: "true".contains(&needle),
+                false_matches: "false".contains(&needle),
+            },
+            Self::I64(_) => ObjectPropertyContainsMatcher::I64 { needle },
+            Self::F64(_) => ObjectPropertyContainsMatcher::F64 { needle },
+            Self::Dictionary { dictionary, .. } => {
+                let matching_codes = dictionary
+                    .iter()
+                    .map(|label| label.to_ascii_lowercase().contains(&needle))
+                    .collect::<Vec<_>>();
+                ObjectPropertyContainsMatcher::Dictionary { matching_codes }
+            }
+            Self::Json(_) => ObjectPropertyContainsMatcher::Json { needle },
+        }
+    }
+
+    fn matches_contains(
+        &self,
+        object_index: usize,
+        matcher: &ObjectPropertyContainsMatcher,
+    ) -> bool {
+        match (self, matcher) {
+            (
+                Self::Bool(values),
+                ObjectPropertyContainsMatcher::Bool {
+                    true_matches,
+                    false_matches,
+                },
+            ) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .is_some_and(|value| if value { *true_matches } else { *false_matches }),
+            (Self::I64(values), ObjectPropertyContainsMatcher::I64 { needle }) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .is_some_and(|value| value.to_string().contains(needle)),
+            (Self::F64(values), ObjectPropertyContainsMatcher::F64 { needle }) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .is_some_and(|value| value.to_string().contains(needle)),
+            (
+                Self::Dictionary { values, .. },
+                ObjectPropertyContainsMatcher::Dictionary { matching_codes },
+            ) => values
+                .get(object_index)
+                .and_then(|code| *code)
+                .is_some_and(|code| matching_codes.get(code as usize).copied().unwrap_or(false)),
+            (Self::Json(values), ObjectPropertyContainsMatcher::Json { needle }) => values
+                .get(object_index)
+                .and_then(|value| value.as_ref())
+                .is_some_and(|value| {
+                    column_value_to_display_text(value)
+                        .to_ascii_lowercase()
+                        .contains(needle)
+                }),
+            _ => false,
+        }
+    }
+
+    fn filter_value_options(&self, max_options: usize) -> Option<Vec<String>> {
+        match self {
+            Self::Bool(_) => Some(vec!["true".to_string(), "false".to_string()]),
+            Self::Dictionary { dictionary, .. } => {
+                if dictionary.is_empty() || dictionary.len() > max_options {
+                    return None;
+                }
+                let mut values = dictionary.as_ref().clone();
+                values.sort_by_key(|value| value.to_ascii_lowercase());
+                Some(values)
+            }
+            Self::I64(_) | Self::F64(_) | Self::Json(_) => None,
         }
     }
 
@@ -1153,9 +1274,9 @@ impl Default for ObjectsLayer {
             color_level_overrides_property_key: String::new(),
             color_level_overrides: BTreeMap::new(),
             pending_color_value_visibility: None,
-            filter_property_key: "id".to_string(),
-            filter_query: String::new(),
-            filtered_indices: None,
+            filter_clauses: vec![ObjectFilterClause::default()],
+            filtered_ordered_indices: None,
+            filtered_mask: None,
             filtered_render_lods: None,
             filtered_point_positions_world: None,
             filtered_point_values: None,
@@ -1261,5 +1382,102 @@ impl Default for ObjectsLayer {
             property_load_key: None,
             status: String::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod property_column_tests {
+    use super::*;
+
+    #[test]
+    fn dictionary_contains_filter_matches_codes_without_decoding_rows() {
+        let column = ObjectPropertyColumn::from_json_values(vec![
+            Some(serde_json::Value::String("immune_myeloid".to_string())),
+            Some(serde_json::Value::String("tumor_myogenic".to_string())),
+            Some(serde_json::Value::String("immune_lymphoid".to_string())),
+            None,
+        ]);
+
+        let matcher = column.contains_matcher("MYELOID");
+
+        assert!(matches!(column, ObjectPropertyColumn::Dictionary { .. }));
+        assert!(column.matches_contains(0, &matcher));
+        assert!(!column.matches_contains(1, &matcher));
+        assert!(!column.matches_contains(2, &matcher));
+        assert!(!column.matches_contains(3, &matcher));
+    }
+
+    #[test]
+    fn bool_contains_filter_uses_typed_values() {
+        let column = ObjectPropertyColumn::from_json_values(vec![
+            Some(serde_json::Value::Bool(true)),
+            Some(serde_json::Value::Bool(false)),
+            None,
+        ]);
+
+        let matcher = column.contains_matcher("TRUE");
+
+        assert!(column.matches_contains(0, &matcher));
+        assert!(!column.matches_contains(1, &matcher));
+        assert!(!column.matches_contains(2, &matcher));
+    }
+
+    #[test]
+    fn numeric_contains_filter_preserves_text_matching_behavior() {
+        let column = ObjectPropertyColumn::from_json_values(vec![
+            Some(serde_json::Value::Number(serde_json::Number::from(1234))),
+            Some(serde_json::Value::Number(serde_json::Number::from(56))),
+        ]);
+
+        let matcher = column.contains_matcher("23");
+
+        assert!(column.matches_contains(0, &matcher));
+        assert!(!column.matches_contains(1, &matcher));
+    }
+
+    #[test]
+    fn categorical_filter_options_are_available_for_dictionary_columns() {
+        let column = ObjectPropertyColumn::from_json_values(vec![
+            Some(serde_json::Value::String("tumor_myogenic".to_string())),
+            Some(serde_json::Value::String("immune_myeloid".to_string())),
+            Some(serde_json::Value::String("tumor_myogenic".to_string())),
+        ]);
+
+        assert_eq!(
+            column.filter_value_options(8),
+            Some(vec![
+                "immune_myeloid".to_string(),
+                "tumor_myogenic".to_string()
+            ])
+        );
+        assert_eq!(column.filter_value_options(1), None);
+    }
+
+    #[test]
+    fn categorical_filter_options_are_available_for_bool_columns() {
+        let column = ObjectPropertyColumn::from_json_values(vec![
+            Some(serde_json::Value::Bool(true)),
+            Some(serde_json::Value::Bool(false)),
+        ]);
+
+        assert_eq!(
+            column.filter_value_options(8),
+            Some(vec!["true".to_string(), "false".to_string()])
+        );
+    }
+
+    #[test]
+    fn filtered_mask_contains_uses_dense_membership() {
+        let mut layer = ObjectsLayer::default();
+        layer.filtered_mask = Some(Arc::new(vec![false, true, false, true]));
+
+        assert!(!layer.filtered_mask_contains(0));
+        assert!(layer.filtered_mask_contains(1));
+        assert!(!layer.filtered_mask_contains(2));
+        assert!(layer.filtered_mask_contains(3));
+        assert!(!layer.filtered_mask_contains(4));
+
+        layer.filtered_mask = None;
+        assert!(layer.filtered_mask_contains(4));
     }
 }

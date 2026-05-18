@@ -341,11 +341,15 @@ impl ProjectViewSpec {
             channel_alternatives,
             visible_channels: self.visible_channels.clone(),
             visible_channel_alternatives,
+            group_visible_channels: false,
+            visible_channel_group: None,
+            visible_channel_group_color: None,
             hidden_channels: self.hidden_channels.clone(),
             hidden_channel_alternatives: Vec::new(),
             contrast_min: None,
             contrast_max: None,
             channel_contrasts: Vec::new(),
+            channel_colors: Vec::new(),
             segmentation: None,
             segmentation_source: self.segmentation_source.clone(),
             load_segmentation_labels: self.load_labels,
@@ -354,6 +358,7 @@ impl ProjectViewSpec {
             show_selection_overlay: self.show_selection_overlay,
             visible_cell_types: self.visible_cell_types.clone(),
             hidden_cell_types: self.hidden_cell_types.clone(),
+            object_filters: Vec::new(),
             center_world: self.camera.as_ref().map(|camera| camera.center_world_lvl0),
             zoom: self
                 .camera

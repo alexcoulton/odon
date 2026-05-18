@@ -71,6 +71,7 @@ impl ObjectsLayer {
         if !self.visible {
             return;
         }
+        self.ensure_filter_cache();
         self.ensure_color_groups();
 
         let visible_local = self.world_to_local_rect(visible_world, local_to_world_offset);
@@ -283,10 +284,11 @@ impl ObjectsLayer {
                 } else {
                     let fill_color =
                         egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                    let filtered_indices = self.filtered_indices.as_ref();
+                    let filtered_mask = self.filtered_mask.as_ref();
                     for tri in fill_mesh.vertices_local.chunks_exact(3) {
                         let object_index = tri[0][2].round().max(0.0) as usize;
-                        if filtered_indices.is_some_and(|indices| !indices.contains(&object_index))
+                        if filtered_mask
+                            .is_some_and(|mask| !mask.get(object_index).copied().unwrap_or(false))
                         {
                             continue;
                         }
@@ -735,9 +737,9 @@ impl ObjectsLayer {
     }
 
     pub fn filtered_count(&self) -> usize {
-        self.filtered_indices
+        self.filtered_ordered_indices
             .as_ref()
-            .map(|set| set.len())
+            .map(|indices| indices.len())
             .unwrap_or_else(|| self.object_count())
     }
 
@@ -794,9 +796,9 @@ impl ObjectsLayer {
     }
 
     pub fn select_filtered_objects(&mut self) {
-        if let Some(filtered) = self.filtered_indices.as_ref() {
-            self.selected_object_indices = filtered.clone();
-            self.selected_object_index = filtered.iter().next().copied();
+        if let Some(filtered) = self.filtered_ordered_indices.as_ref() {
+            self.selected_object_indices = filtered.iter().copied().collect();
+            self.selected_object_index = filtered.first().copied();
         } else if let Some(objects) = self.objects.as_ref() {
             self.selected_object_indices = (0..objects.len()).collect();
             self.selected_object_index = if objects.is_empty() { None } else { Some(0) };
@@ -1209,16 +1211,12 @@ impl ObjectsLayer {
         }
 
         let base_positions = if self.has_active_filter() {
-            self.filtered_point_positions_world
-                .as_ref()
-                .or(self.point_positions_world.as_ref())
+            self.filtered_point_positions_world.as_ref()
         } else {
             self.point_positions_world.as_ref()
         };
         let base_values = if self.has_active_filter() {
-            self.filtered_point_values
-                .as_ref()
-                .or(self.point_values.as_ref())
+            self.filtered_point_values.as_ref()
         } else {
             self.point_values.as_ref()
         };
@@ -1308,16 +1306,12 @@ impl ObjectsLayer {
         gpu_available: bool,
     ) {
         let base_positions = if self.has_active_filter() {
-            self.filtered_point_positions_world
-                .as_ref()
-                .or(self.point_positions_world.as_ref())
+            self.filtered_point_positions_world.as_ref()
         } else {
             self.point_positions_world.as_ref()
         };
         let base_values = if self.has_active_filter() {
-            self.filtered_point_values
-                .as_ref()
-                .or(self.point_values.as_ref())
+            self.filtered_point_values.as_ref()
         } else {
             self.point_values.as_ref()
         };

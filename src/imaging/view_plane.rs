@@ -271,6 +271,10 @@ mod tests {
         );
 
         let selection = clamp_selection(&dims, &level0, ViewPlaneMode::Xz, 20);
+        assert_eq!(
+            map_level0_slice_to_level(&dims, &level0, &level2, selection),
+            Some(3)
+        );
         let ranges = image_subset_ranges_for_view(
             &dims,
             &level0,
@@ -281,6 +285,6 @@ mod tests {
             selection,
         )
         .expect("ranges");
-        assert_eq!(ranges, vec![2..3, 11..29, 20..21, 31..47]);
+        assert_eq!(ranges, vec![2..3, 11..29, 3..4, 31..47]);
     }
 }

@@ -28,6 +28,13 @@ use std::collections::{BTreeSet, HashMap};
 // live in sibling modules; this file decides when those derived products are invalidated or
 // rebuilt.
 
+struct PreparedObjectFilterClause<'a> {
+    property_key: &'a str,
+    needle: String,
+    column: Option<&'a ObjectPropertyColumn>,
+    column_matcher: Option<ObjectPropertyContainsMatcher>,
+}
+
 impl ObjectsLayer {
     fn cancel_current_load(&mut self) {
         if let Some(cancel) = self.object_load_cancel.take() {
@@ -262,22 +269,10 @@ impl ObjectsLayer {
             self.color_level_overrides_property_key.clear();
             self.color_level_overrides.clear();
         }
-        if self.filter_property_key != "id"
-            && !self
-                .scalar_property_keys
-                .iter()
-                .any(|k| k == &self.filter_property_key)
-            && !self.lazy_parquet_source.as_ref().is_some_and(|source| {
-                source
-                    .available_property_columns
-                    .iter()
-                    .any(|k| k == &self.filter_property_key)
-            })
-        {
-            self.filter_property_key = "id".to_string();
-        }
+        self.reconcile_filter_clauses();
         self.color_groups = None;
-        self.filtered_indices = None;
+        self.filtered_ordered_indices = None;
+        self.filtered_mask = None;
         self.filtered_render_lods = None;
         self.filtered_point_positions_world = None;
         self.filtered_point_values = None;
@@ -356,9 +351,9 @@ impl ObjectsLayer {
         self.color_level_overrides.clear();
         self.pending_color_value_visibility = None;
         self.color_mode = ObjectColorMode::Single;
-        self.filter_property_key = "id".to_string();
-        self.filter_query.clear();
-        self.filtered_indices = None;
+        self.filter_clauses = vec![ObjectFilterClause::default()];
+        self.filtered_ordered_indices = None;
+        self.filtered_mask = None;
         self.filtered_render_lods = None;
         self.filtered_point_positions_world = None;
         self.filtered_point_values = None;
@@ -442,14 +437,7 @@ impl ObjectsLayer {
                 Err(idx) => self.scalar_property_keys.insert(idx, column_key.clone()),
             }
         }
-        if self.filter_property_key != "id"
-            && !self
-                .filter_property_candidates()
-                .iter()
-                .any(|(key, _)| key == &self.filter_property_key)
-        {
-            self.filter_property_key = "id".to_string();
-        }
+        self.reconcile_filter_clauses();
         self.analysis_channel_mapping_suggestions_cache_key = 0;
         self.analysis_channel_mapping_suggestions_cache_channels_len = 0;
         self.analysis_channel_mapping_suggestions_cache_numeric_len = 0;
@@ -1288,42 +1276,101 @@ impl ObjectsLayer {
         ui.separator();
         ui.label("Filter");
         let mut filter_changed = false;
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("seg_objects_filter_key")
-                .selected_text(self.filter_property_key.clone())
-                .show_ui(ui, |ui| {
-                    filter_changed |= ui
-                        .selectable_value(&mut self.filter_property_key, "id".to_string(), "id")
-                        .changed();
-                    for (key, needs_load) in self.filter_property_candidates() {
-                        let label = if needs_load {
-                            format!("{key} (load)")
-                        } else {
-                            key.clone()
-                        };
+        self.ensure_filter_clause_row();
+        let filter_candidates = self.filter_property_candidates();
+        let filter_value_options = self.filter_value_options_by_key(64);
+        let mut remove_filter_clause = None;
+        let mut add_filter_clause = false;
+        for idx in 0..self.filter_clauses.len() {
+            let is_last = idx == self.filter_clauses.len().saturating_sub(1);
+            ui.horizontal(|ui| {
+                let clause = &mut self.filter_clauses[idx];
+                filter_changed |= ui.checkbox(&mut clause.enabled, "").changed();
+                let previous_property_key = clause.property_key.clone();
+                egui::ComboBox::from_id_salt(format!("seg_objects_filter_key_{idx}"))
+                    .selected_text(clause.property_key.clone())
+                    .show_ui(ui, |ui| {
                         filter_changed |= ui
-                            .selectable_value(&mut self.filter_property_key, key, label)
+                            .selectable_value(&mut clause.property_key, "id".to_string(), "id")
                             .changed();
-                    }
-                });
-            filter_changed |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.filter_query)
-                        .hint_text("contains...")
-                        .desired_width(180.0),
-                )
-                .changed();
+                        for (key, needs_load) in &filter_candidates {
+                            let label = if *needs_load {
+                                format!("{key} (load)")
+                            } else {
+                                key.clone()
+                            };
+                            filter_changed |= ui
+                                .selectable_value(&mut clause.property_key, key.clone(), label)
+                                .changed();
+                        }
+                    });
+                if clause.property_key != previous_property_key {
+                    clause.query.clear();
+                }
+
+                if let Some(options) = filter_value_options.get(&clause.property_key) {
+                    let selected_text = if clause.query.trim().is_empty() {
+                        "(select value)".to_string()
+                    } else {
+                        clause.query.clone()
+                    };
+                    ui.add_enabled_ui(clause.enabled, |ui| {
+                        egui::ComboBox::from_id_salt(format!("seg_objects_filter_value_{idx}"))
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                for value in options {
+                                    filter_changed |= ui
+                                        .selectable_value(
+                                            &mut clause.query,
+                                            value.clone(),
+                                            value.as_str(),
+                                        )
+                                        .changed();
+                                }
+                            });
+                    });
+                } else {
+                    filter_changed |= ui
+                        .add_enabled(
+                            clause.enabled,
+                            egui::TextEdit::singleline(&mut clause.query)
+                                .hint_text("contains...")
+                                .desired_width(180.0),
+                        )
+                        .changed();
+                }
+                if ui
+                    .small_button("-")
+                    .on_hover_text("Remove filter")
+                    .clicked()
+                {
+                    remove_filter_clause = Some(idx);
+                }
+                if is_last && ui.small_button("+").on_hover_text("Add filter").clicked() {
+                    add_filter_clause = true;
+                }
+            });
+        }
+        if add_filter_clause {
+            self.filter_clauses.push(ObjectFilterClause::default());
+            filter_changed = true;
+        }
+        if let Some(idx) = remove_filter_clause {
+            if idx < self.filter_clauses.len() {
+                self.filter_clauses.remove(idx);
+                self.ensure_filter_clause_row();
+                filter_changed = true;
+            }
+        }
+        ui.horizontal(|ui| {
             if ui.button("Clear").clicked() {
-                self.filter_property_key = "id".to_string();
-                self.filter_query.clear();
+                self.filter_clauses = vec![ObjectFilterClause::default()];
                 filter_changed = true;
             }
         });
         if filter_changed {
-            if self.filter_property_key != "id" {
-                let key = self.filter_property_key.clone();
-                self.ensure_property_loaded(&key);
-            }
+            self.reconcile_filter_clauses();
+            self.ensure_active_filter_properties_loaded();
             self.invalidate_filter_cache();
             self.ensure_filter_cache();
             self.ensure_color_groups();
@@ -1630,6 +1677,100 @@ impl ObjectsLayer {
         out
     }
 
+    fn ensure_filter_clause_row(&mut self) {
+        if self.filter_clauses.is_empty() {
+            self.filter_clauses.push(ObjectFilterClause::default());
+        }
+    }
+
+    fn filter_property_key_available(&self, property_key: &str) -> bool {
+        property_key == "id"
+            || self
+                .scalar_property_keys
+                .iter()
+                .any(|key| key == property_key)
+            || self.property_store.has_loaded(property_key)
+            || self.lazy_parquet_source.as_ref().is_some_and(|source| {
+                source
+                    .available_property_columns
+                    .iter()
+                    .any(|key| key == property_key)
+            })
+    }
+
+    fn reconcile_filter_clauses(&mut self) {
+        if self.filter_clauses.is_empty() {
+            self.filter_clauses.push(ObjectFilterClause::default());
+        }
+        let validity = self
+            .filter_clauses
+            .iter()
+            .map(|clause| self.filter_property_key_available(&clause.property_key))
+            .collect::<Vec<_>>();
+        for (clause, valid) in self.filter_clauses.iter_mut().zip(validity) {
+            if !valid {
+                clause.property_key = "id".to_string();
+            }
+        }
+    }
+
+    fn active_filter_clauses(&self) -> impl Iterator<Item = &ObjectFilterClause> {
+        self.filter_clauses
+            .iter()
+            .filter(|clause| clause.enabled && !clause.query.trim().is_empty())
+    }
+
+    fn ensure_active_filter_properties_loaded(&mut self) {
+        let key = self
+            .active_filter_clauses()
+            .filter_map(|clause| (clause.property_key != "id").then(|| clause.property_key.clone()))
+            .find(|key| self.property_column_available_but_unloaded(key));
+        if let Some(key) = key {
+            self.ensure_property_loaded(&key);
+        }
+    }
+
+    fn filter_value_options_by_key(&self, max_options: usize) -> HashMap<String, Vec<String>> {
+        let mut out = HashMap::new();
+        for (key, _) in self.filter_property_candidates() {
+            if let Some(options) = self.property_store.filter_value_options(&key, max_options) {
+                out.insert(key, options);
+            }
+        }
+        out
+    }
+
+    pub(crate) fn set_filter_clauses_from_pairs(&mut self, pairs: &[(String, String)]) {
+        self.filter_clauses = pairs
+            .iter()
+            .filter_map(|(property_key, query)| {
+                let property_key = property_key.trim();
+                let query = query.trim();
+                (!property_key.is_empty() && !query.is_empty()).then(|| ObjectFilterClause {
+                    enabled: true,
+                    property_key: property_key.to_string(),
+                    query: query.to_string(),
+                })
+            })
+            .collect();
+        self.ensure_filter_clause_row();
+
+        if self.objects.is_some()
+            || self.lazy_parquet_source.is_some()
+            || !self.object_property_keys.is_empty()
+            || !self.scalar_property_keys.is_empty()
+        {
+            self.reconcile_filter_clauses();
+            self.ensure_active_filter_properties_loaded();
+            self.invalidate_filter_cache();
+            self.ensure_filter_cache();
+            self.ensure_color_groups();
+        } else {
+            self.invalidate_filter_cache();
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
     pub fn active_color_legend_entries(&mut self) -> Option<Vec<ObjectColorLegendEntry>> {
         if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
             return None;
@@ -1645,8 +1786,8 @@ impl ObjectsLayer {
 
         let objects = self.objects.as_ref()?;
         let mut counts = BTreeMap::<String, usize>::new();
-        if let Some(filtered_indices) = self.filtered_indices.as_ref() {
-            for idx in filtered_indices {
+        if let Some(filtered_ordered_indices) = self.filtered_ordered_indices.as_ref() {
+            for idx in filtered_ordered_indices.iter() {
                 let Some(obj) = objects.get(*idx) else {
                     continue;
                 };
@@ -2299,7 +2440,8 @@ impl ObjectsLayer {
     }
 
     fn invalidate_filter_cache(&mut self) {
-        self.filtered_indices = None;
+        self.filtered_ordered_indices = None;
+        self.filtered_mask = None;
         self.filtered_render_lods = None;
         self.filtered_point_positions_world = None;
         self.filtered_point_values = None;
@@ -2312,8 +2454,9 @@ impl ObjectsLayer {
     }
 
     pub(super) fn ensure_filter_cache(&mut self) {
-        if self.filter_query.trim().is_empty() {
-            if self.filtered_indices.is_some()
+        self.reconcile_filter_clauses();
+        if !self.has_active_filter() {
+            if self.filtered_mask.is_some()
                 || self.filtered_render_lods.is_some()
                 || self.filtered_color_groups.is_some()
             {
@@ -2321,13 +2464,15 @@ impl ObjectsLayer {
             }
             return;
         }
-        if self.filtered_indices.is_some() {
+        if self.filtered_mask.is_some() {
             return;
         }
-        if self.filter_property_key != "id"
-            && self.property_column_available_but_unloaded(&self.filter_property_key)
-        {
-            let key = self.filter_property_key.clone();
+        let unloaded_key = self.active_filter_clauses().find_map(|clause| {
+            (clause.property_key != "id"
+                && self.property_column_available_but_unloaded(&clause.property_key))
+            .then(|| clause.property_key.clone())
+        });
+        if let Some(key) = unloaded_key {
             self.ensure_property_loaded(&key);
             return;
         }
@@ -2338,17 +2483,23 @@ impl ObjectsLayer {
         // Filtering materializes a subset snapshot plus the derived render/point/color products
         // for that subset. The rest of the layer reads from these caches instead of re-evaluating
         // the filter predicate on every paint or analysis pass.
-        let mut indices = HashSet::new();
+        let prepared_clauses = self.prepare_filter_clauses();
+        let mut ordered_indices = Vec::new();
+        let mut mask = vec![false; objects.len()];
         let mut subset = Vec::new();
         for (idx, obj) in objects.iter().enumerate() {
-            if !self.object_matches_filter(idx, obj) {
+            if !Self::object_matches_prepared_filter(idx, obj, &prepared_clauses) {
                 continue;
             }
-            indices.insert(idx);
+            ordered_indices.push(idx);
+            if let Some(slot) = mask.get_mut(idx) {
+                *slot = true;
+            }
             subset.push(obj.clone());
         }
 
-        self.filtered_indices = Some(indices.clone());
+        self.filtered_ordered_indices = Some(Arc::new(ordered_indices));
+        self.filtered_mask = Some(Arc::new(mask));
         if subset.is_empty() {
             self.filtered_render_lods = None;
             self.filtered_point_positions_world = None;
@@ -2368,7 +2519,13 @@ impl ObjectsLayer {
                 let labels = objects
                     .iter()
                     .enumerate()
-                    .filter(|(idx, _)| indices.contains(idx))
+                    .filter(|(idx, _)| {
+                        self.filtered_mask
+                            .as_ref()
+                            .and_then(|mask| mask.get(*idx))
+                            .copied()
+                            .unwrap_or(false)
+                    })
                     .filter_map(|(idx, obj)| {
                         self.object_property_label(idx, obj, &self.color_property_key)
                             .map(|label| (idx, obj, label))
@@ -2380,8 +2537,12 @@ impl ObjectsLayer {
             };
         }
 
+        let filtered_mask = self.filtered_mask.clone();
         self.selected_object_indices
-            .retain(|idx| indices.contains(idx));
+            .retain(|idx| match filtered_mask.as_ref() {
+                Some(mask) => mask.get(*idx).copied().unwrap_or(false),
+                None => true,
+            });
         self.rebuild_selection_render_lods();
         self.mark_live_analysis_selection_dirty();
         self.invalidate_table_cache();
@@ -2391,7 +2552,8 @@ impl ObjectsLayer {
         // Color grouping is lazily built against either the full set or the filtered subset,
         // depending on which view is currently active. This keeps legend/group generation aligned
         // with what the user actually sees.
-        if self.filtered_indices.is_some() {
+        if self.has_active_filter() {
+            self.ensure_filter_cache();
             if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty()
             {
                 self.filtered_color_groups = None;
@@ -2405,8 +2567,8 @@ impl ObjectsLayer {
                 return;
             }
             self.ensure_filter_cache();
-            let (Some(objects), Some(filtered_indices)) =
-                (self.objects.as_ref(), self.filtered_indices.as_ref())
+            let (Some(objects), Some(filtered_mask)) =
+                (self.objects.as_ref(), self.filtered_mask.as_ref())
             else {
                 self.filtered_color_groups = None;
                 return;
@@ -2414,7 +2576,7 @@ impl ObjectsLayer {
             let labels = objects
                 .iter()
                 .enumerate()
-                .filter(|(idx, _)| filtered_indices.contains(idx))
+                .filter(|(idx, _)| filtered_mask.get(*idx).copied().unwrap_or(false))
                 .filter_map(|(idx, obj)| {
                     self.object_property_label(idx, obj, &self.color_property_key)
                         .map(|label| (idx, obj, label))
@@ -2424,6 +2586,7 @@ impl ObjectsLayer {
                 build_color_groups_for_property_labels(labels, &self.color_property_key).ok();
             return;
         }
+        self.filtered_color_groups = None;
         if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
             return;
         }
@@ -2450,32 +2613,69 @@ impl ObjectsLayer {
     }
 
     pub(super) fn active_color_groups(&self) -> Option<&ObjectColorGroups> {
-        self.filtered_color_groups
-            .as_ref()
-            .or(self.color_groups.as_ref())
+        if self.has_active_filter() {
+            self.filtered_color_groups.as_ref()
+        } else {
+            self.color_groups.as_ref()
+        }
     }
 
     pub(super) fn has_active_filter(&self) -> bool {
-        !self.filter_query.trim().is_empty()
+        self.active_filter_clauses().next().is_some()
     }
 
-    fn object_matches_filter(&self, object_index: usize, obj: &GeoJsonObjectFeature) -> bool {
-        // Filtering is intentionally simple substring matching over a single projected display
-        // field. The expensive part is not the predicate itself, but rebuilding the derived subset
-        // state once the predicate changes.
-        let needle = self.filter_query.trim();
-        if needle.is_empty() {
-            return true;
+    pub(super) fn filtered_mask_contains(&self, idx: usize) -> bool {
+        match self.filtered_mask.as_ref() {
+            Some(mask) => mask.get(idx).copied().unwrap_or(false),
+            None => true,
         }
-        let haystack = if self.filter_property_key == "id" {
-            obj.id.clone()
-        } else {
-            self.object_property_display(object_index, obj, &self.filter_property_key)
-                .unwrap_or_default()
-        };
-        haystack
-            .to_ascii_lowercase()
-            .contains(&needle.to_ascii_lowercase())
+    }
+
+    fn prepare_filter_clauses(&self) -> Vec<PreparedObjectFilterClause<'_>> {
+        self.active_filter_clauses()
+            .map(|clause| {
+                let column = self.property_store.loaded_columns.get(&clause.property_key);
+                PreparedObjectFilterClause {
+                    property_key: clause.property_key.as_str(),
+                    needle: clause.query.trim().to_ascii_lowercase(),
+                    column,
+                    column_matcher: column.map(|column| column.contains_matcher(&clause.query)),
+                }
+            })
+            .collect()
+    }
+
+    fn object_matches_prepared_filter(
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+        clauses: &[PreparedObjectFilterClause<'_>],
+    ) -> bool {
+        for clause in clauses {
+            if clause.property_key == "id" {
+                if !obj.id.to_ascii_lowercase().contains(&clause.needle) {
+                    return false;
+                }
+                continue;
+            }
+
+            if let (Some(column), Some(matcher)) = (clause.column, clause.column_matcher.as_ref()) {
+                if !column.matches_contains(object_index, matcher) {
+                    return false;
+                }
+                continue;
+            }
+
+            let Some(value) = obj.inline_properties.get(clause.property_key) else {
+                return false;
+            };
+            if !value_to_display_text(value)
+                .to_ascii_lowercase()
+                .contains(&clause.needle)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     pub(super) fn color_value_visible_for_label(
@@ -2530,12 +2730,7 @@ impl ObjectsLayer {
     }
 
     pub(super) fn is_index_visible(&self, idx: usize) -> bool {
-        let filter_visible = self
-            .filtered_indices
-            .as_ref()
-            .map(|set| set.contains(&idx))
-            .unwrap_or(true);
-        if !filter_visible {
+        if !self.filtered_mask_contains(idx) {
             return false;
         }
         let Some(objects) = self.objects.as_ref() else {
@@ -2567,8 +2762,8 @@ impl ObjectsLayer {
         if !self.table_cache_dirty {
             return &self.table_indices_cache;
         }
-        let mut out = if let Some(filtered) = self.filtered_indices.as_ref() {
-            filtered.iter().copied().collect::<Vec<_>>()
+        let mut out = if let Some(filtered) = self.filtered_ordered_indices.as_ref() {
+            filtered.as_ref().clone()
         } else if let Some(objects) = self.objects.as_ref() {
             (0..objects.len()).collect::<Vec<_>>()
         } else {
@@ -2594,8 +2789,8 @@ impl ObjectsLayer {
     }
 
     fn export_filtered_with_dialog(&mut self, default_dir: &Path) -> anyhow::Result<()> {
-        let indices = if let Some(filtered) = self.filtered_indices.as_ref() {
-            filtered.iter().copied().collect::<Vec<_>>()
+        let indices = if let Some(filtered) = self.filtered_ordered_indices.as_ref() {
+            filtered.as_ref().clone()
         } else if let Some(objects) = self.objects.as_ref() {
             (0..objects.len()).collect::<Vec<_>>()
         } else {
