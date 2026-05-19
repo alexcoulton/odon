@@ -191,6 +191,7 @@ pub struct ObjectsLayer {
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     pending_color_value_visibility: Option<PendingColorValueVisibility>,
+    pending_color_value_colors: Option<PendingColorValueColors>,
     filter_clauses: Vec<ObjectFilterClause>,
     filtered_ordered_indices: Option<Arc<Vec<usize>>>,
     filtered_mask: Option<Arc<Vec<bool>>>,
@@ -719,6 +720,12 @@ struct PendingColorValueVisibility {
     property_key: String,
     visible_values: Vec<String>,
     hidden_values: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingColorValueColors {
+    property_key: String,
+    colors: Vec<(String, [u8; 3])>,
 }
 
 #[derive(Debug, Clone)]
@@ -1274,6 +1281,7 @@ impl Default for ObjectsLayer {
             color_level_overrides_property_key: String::new(),
             color_level_overrides: BTreeMap::new(),
             pending_color_value_visibility: None,
+            pending_color_value_colors: None,
             filter_clauses: vec![ObjectFilterClause::default()],
             filtered_ordered_indices: None,
             filtered_mask: None,

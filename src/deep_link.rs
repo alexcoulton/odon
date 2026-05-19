@@ -14,6 +14,12 @@ pub struct DeepLinkChannelColor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeepLinkObjectLevelColor {
+    pub value: String,
+    pub color_rgb: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepLinkObjectFilterClause {
     pub property_key: String,
     pub query: String,
@@ -45,6 +51,7 @@ pub struct DeepLinkRequest {
     pub show_selection_overlay: Option<bool>,
     pub visible_cell_types: Vec<String>,
     pub hidden_cell_types: Vec<String>,
+    pub object_level_colors: Vec<DeepLinkObjectLevelColor>,
     pub object_filters: Vec<DeepLinkObjectFilterClause>,
     pub center_world: Option<[f32; 2]>,
     pub zoom: Option<f32>,
@@ -108,6 +115,7 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         show_selection_overlay: None,
         visible_cell_types: Vec::new(),
         hidden_cell_types: Vec::new(),
+        object_level_colors: Vec::new(),
         object_filters: Vec::new(),
         center_world: None,
         zoom: None,
@@ -165,6 +173,14 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
                 req.visible_cell_types = parse_list(&value)
             }
             "hidden_cell_types" | "hide_cell_types" => req.hidden_cell_types = parse_list(&value),
+            "object_level_colors"
+            | "object_level_colours"
+            | "level_colors"
+            | "level_colours"
+            | "cell_type_colors"
+            | "cell_type_colours"
+            | "category_colors"
+            | "category_colours" => req.object_level_colors = parse_object_level_colors(&value),
             "filter" | "filters" | "object_filter" | "object_filters" => {
                 req.object_filters.extend(parse_object_filters(&value));
             }
@@ -284,6 +300,24 @@ fn parse_channel_colors(value: &str) -> Vec<DeepLinkChannelColor> {
             }
             Some(DeepLinkChannelColor {
                 channel: channel.to_string(),
+                color_rgb: parse_color_rgb(color.trim())?,
+            })
+        })
+        .collect()
+}
+
+fn parse_object_level_colors(value: &str) -> Vec<DeepLinkObjectLevelColor> {
+    value
+        .split(['|', ';'])
+        .filter_map(|item| {
+            let item = item.trim();
+            let (value, color) = item.rsplit_once(':').or_else(|| item.rsplit_once('='))?;
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some(DeepLinkObjectLevelColor {
+                value: value.to_string(),
                 color_rgb: parse_color_rgb(color.trim())?,
             })
         })
@@ -435,6 +469,7 @@ mod tests {
         assert_eq!(req.show_selection_overlay, Some(false));
         assert!(req.visible_cell_types.is_empty());
         assert!(req.hidden_cell_types.is_empty());
+        assert!(req.object_level_colors.is_empty());
         assert_eq!(req.center_world, Some([10.5, 20.0]));
         assert_eq!(req.zoom, Some(0.25));
     }
@@ -501,6 +536,33 @@ mod tests {
                 DeepLinkObjectFilterClause {
                     property_key: "sample_id".to_string(),
                     query: "18S1746".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_object_level_colours() {
+        let req = DeepLinkRequest::parse_arg(
+            "odon://open?cell_color_by=broad_cell_type&object_level_colors=tumor_myogenic:%23ff4f8b%7Cimmune_myeloid:cyan%7Cendothelial=00aa66",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            req.object_level_colors,
+            vec![
+                DeepLinkObjectLevelColor {
+                    value: "tumor_myogenic".to_string(),
+                    color_rgb: [255, 79, 139],
+                },
+                DeepLinkObjectLevelColor {
+                    value: "immune_myeloid".to_string(),
+                    color_rgb: [0, 188, 212],
+                },
+                DeepLinkObjectLevelColor {
+                    value: "endothelial".to_string(),
+                    color_rgb: [0, 170, 102],
                 },
             ]
         );

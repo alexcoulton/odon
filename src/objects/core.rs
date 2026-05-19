@@ -320,6 +320,7 @@ impl ObjectsLayer {
             );
             self.set_color_by_property(Some(self.color_property_key.clone()));
         }
+        self.apply_pending_color_value_colors();
         self.apply_pending_color_value_visibility();
         self.analysis_hist_focus_object_index = None;
         self.pending_zoom_object_index = None;
@@ -350,6 +351,7 @@ impl ObjectsLayer {
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
         self.pending_color_value_visibility = None;
+        self.pending_color_value_colors = None;
         self.color_mode = ObjectColorMode::Single;
         self.filter_clauses = vec![ObjectFilterClause::default()];
         self.filtered_ordered_indices = None;
@@ -1870,6 +1872,7 @@ impl ObjectsLayer {
             if !self.is_loading() {
                 self.reconcile_active_color_property();
             }
+            self.apply_pending_color_value_colors();
             self.apply_pending_color_value_visibility();
         }
         self.color_groups = None;
@@ -1944,6 +1947,8 @@ impl ObjectsLayer {
         self.set_color_by_property(None);
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
+        self.pending_color_value_colors = None;
+        self.pending_color_value_visibility = None;
         self.fill_cells = false;
         self.fill_opacity = 0.30;
         self.selected_fill_opacity = 0.70;
@@ -1985,6 +1990,71 @@ impl ObjectsLayer {
             hidden_values: hidden_values.to_vec(),
         });
         self.apply_pending_color_value_visibility();
+    }
+
+    pub(crate) fn set_color_value_colors(
+        &mut self,
+        property_key: Option<&str>,
+        colors: &[(String, [u8; 3])],
+    ) {
+        let property_key = property_key
+            .filter(|key| !key.trim().is_empty())
+            .unwrap_or(self.color_property_key.as_str())
+            .trim();
+        if property_key.is_empty() || colors.is_empty() {
+            return;
+        }
+        self.pending_color_value_colors = Some(PendingColorValueColors {
+            property_key: property_key.to_string(),
+            colors: colors.to_vec(),
+        });
+        self.apply_pending_color_value_colors();
+    }
+
+    fn apply_pending_color_value_colors(&mut self) {
+        let Some(pending) = self.pending_color_value_colors.clone() else {
+            return;
+        };
+        if self.color_mode != ObjectColorMode::ByProperty
+            || self.color_property_key != pending.property_key
+        {
+            return;
+        }
+
+        let Some(entries) = self.active_color_legend_entries() else {
+            return;
+        };
+
+        let requested_colors = pending
+            .colors
+            .iter()
+            .map(|(value, color_rgb)| (normalize_color_value_label(value), *color_rgb))
+            .collect::<HashMap<_, _>>();
+
+        self.color_level_overrides_property_key = pending.property_key.clone();
+        let mut applied_count = 0usize;
+        for entry in entries {
+            let normalized = normalize_color_value_label(&entry.value_label);
+            let Some(color_rgb) = requested_colors.get(&normalized).copied() else {
+                continue;
+            };
+            let override_style = self
+                .color_level_overrides
+                .entry(entry.value_label)
+                .or_default();
+            override_style.color_rgb = (color_rgb != entry.color_rgb).then_some(color_rgb);
+            applied_count += 1;
+        }
+        crate::log_warn!(
+            "objects: applied Color by colours for '{}' ({} legend value(s))",
+            pending.property_key,
+            applied_count
+        );
+        self.pending_color_value_colors = None;
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.ensure_color_groups();
+        self.generation = self.generation.wrapping_add(1).max(1);
     }
 
     fn apply_pending_color_value_visibility(&mut self) {

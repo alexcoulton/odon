@@ -1047,7 +1047,8 @@ impl OmeZarrViewerApp {
                     | "project_objects"
                     | "cells_geoparquet"
             )
-        }) || !request.object_filters.is_empty();
+        }) || !request.object_filters.is_empty()
+            || !request.object_level_colors.is_empty();
         let bundled_labels_requested = segmentation_source
             .as_deref()
             .is_none_or(|source| !object_segmentation_requested && source != "none");
@@ -1257,6 +1258,17 @@ impl OmeZarrViewerApp {
                 .map(|channel| channel.name.as_str());
             self.seg_objects
                 .apply_project_analysis_state(&analysis, active_channel_name);
+        }
+
+        if !request.object_level_colors.is_empty() {
+            let colors = request
+                .object_level_colors
+                .iter()
+                .map(|level| (level.value.clone(), level.color_rgb))
+                .collect::<Vec<_>>();
+            self.seg_objects
+                .set_color_value_colors(request.cell_color_by.as_deref(), &colors);
+            self.set_active_layer(LayerId::SegmentationObjects);
         }
 
         if !request.visible_cell_types.is_empty() || !request.hidden_cell_types.is_empty() {

@@ -358,6 +358,7 @@ impl ProjectViewSpec {
             show_selection_overlay: self.show_selection_overlay,
             visible_cell_types: self.visible_cell_types.clone(),
             hidden_cell_types: self.hidden_cell_types.clone(),
+            object_level_colors: Vec::new(),
             object_filters: Vec::new(),
             center_world: self.camera.as_ref().map(|camera| camera.center_world_lvl0),
             zoom: self
