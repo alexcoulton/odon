@@ -1308,10 +1308,34 @@ impl OmeZarrViewerApp {
 
     pub fn install_preloaded_project_segmentation(&mut self, preloaded: &PreloadedObjectLayer) {
         self.seg_objects.install_preloaded(preloaded);
+        self.restore_project_object_state_after_segmentation_load();
         self.set_active_layer(LayerId::SegmentationObjects);
         self.roi_selector
             .set_status("Loaded cached project segmentation.");
         self.sync_current_view_state_into_project_space();
+    }
+
+    fn restore_project_object_state_after_segmentation_load(&mut self) {
+        if let Some(view) = self.project_space.roi_view_state(&self.dataset.source) {
+            if let Some(object_display) = view
+                .segmentation
+                .as_ref()
+                .and_then(|segmentation| segmentation.object_display.as_ref())
+            {
+                self.seg_objects
+                    .apply_project_display_state_preserving_color_visibility(object_display);
+            } else {
+                self.seg_objects.clear_project_display_state();
+            }
+            if let Some(analysis) = view.analysis.as_ref() {
+                let active_channel_name = self
+                    .channels
+                    .get(self.selected_channel)
+                    .map(|channel| channel.name.as_str());
+                self.seg_objects
+                    .apply_project_analysis_state(analysis, active_channel_name);
+            }
+        }
     }
 
     fn find_channel_index_for_link(&self, channel_name: &str) -> Option<usize> {
@@ -3686,26 +3710,7 @@ impl eframe::App for OmeZarrViewerApp {
             && !self.seg_objects.is_loading()
             && self.seg_objects.object_count() > 0
         {
-            if let Some(view) = self.project_space.roi_view_state(&self.dataset.source) {
-                if let Some(object_display) = view
-                    .segmentation
-                    .as_ref()
-                    .and_then(|segmentation| segmentation.object_display.as_ref())
-                {
-                    self.seg_objects
-                        .apply_project_display_state_preserving_color_visibility(object_display);
-                } else {
-                    self.seg_objects.clear_project_display_state();
-                }
-                if let Some(analysis) = view.analysis.as_ref() {
-                    let active_channel_name = self
-                        .channels
-                        .get(self.selected_channel)
-                        .map(|channel| channel.name.as_str());
-                    self.seg_objects
-                        .apply_project_analysis_state(analysis, active_channel_name);
-                }
-            }
+            self.restore_project_object_state_after_segmentation_load();
         }
         self.spatial_image_layers.tick();
         self.spatial_layers.tick();

@@ -1,5 +1,6 @@
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 
 use crate::deep_link::DeepLinkRequest;
 
@@ -11,6 +12,7 @@ pub fn send_to_running(raw_url: &str) -> bool {
 
     match UnixStream::connect(socket_path()) {
         Ok(mut stream) => {
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
             let _ = stream.write_all(raw_url.as_bytes());
             let _ = stream.write_all(b"\n");
             true

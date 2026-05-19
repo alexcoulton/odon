@@ -140,6 +140,13 @@ func sendToRunningOdon(_ rawUrl: String) -> Bool {
         return false
     }
     defer { close(fd) }
+    var socketTimeout = timeval(tv_sec: 0, tv_usec: 250_000)
+    withUnsafePointer(to: &socketTimeout) { timeoutPtr in
+        timeoutPtr.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<timeval>.size) { rawPtr in
+            _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, rawPtr, socklen_t(MemoryLayout<timeval>.size))
+            _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, rawPtr, socklen_t(MemoryLayout<timeval>.size))
+        }
+    }
 
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
@@ -216,11 +223,13 @@ func launchOdon(url rawUrl: String?) {
 }
 
 func handleDeepLink(_ rawUrl: String) {
+    let started = Date()
     appendLog("Received URL: \\(rawUrl)")
     if !sendToRunningOdon(rawUrl) {
         appendLog("No running Odon IPC listener; falling back to cargo.")
         launchOdon(url: rawUrl)
     }
+    appendLog(String(format: "URL handling returned after %.3fs.", Date().timeIntervalSince(started)))
 }
 
 if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--send" {
@@ -232,7 +241,6 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--send" {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var handledUrl = false
     private var launchTimer: Timer?
-    private var quitTimer: Timer?
 
     override init() {
         super.init()
@@ -272,8 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handledUrl = true
         launchTimer?.invalidate()
         handleDeepLink(rawUrl)
-        quitTimer?.invalidate()
-        quitTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { _ in
+        DispatchQueue.main.async {
             NSApp.terminate(nil)
         }
     }

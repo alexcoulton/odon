@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, collections::HashSet};
 
 use eframe::egui;
@@ -1962,6 +1962,7 @@ impl eframe::App for RootApp {
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
 
         if let Some(req) = self.pending_deep_link.take() {
+            let deep_link_started = Instant::now();
             log_warn!("deep_link: handling {:?}", req);
             let previous_mode = std::mem::replace(&mut self.mode, Mode::Transition);
             let (mut project_space, single_restore, mosaic_restore) = match previous_mode {
@@ -1987,9 +1988,10 @@ impl eframe::App for RootApp {
                     match project_space.load_from_file(path) {
                         Ok(()) => {
                             log_warn!(
-                                "deep_link: loaded project {} ({} ROIs)",
+                                "deep_link: loaded project {} ({} ROIs) after {:.3}s",
                                 path.display(),
-                                project_space.config().rois.len()
+                                project_space.config().rois.len(),
+                                deep_link_started.elapsed().as_secs_f32()
                             );
                             self.record_recent_project(path);
                         }
@@ -2030,7 +2032,13 @@ impl eframe::App for RootApp {
                                 );
                                 app.set_project_space(project_space);
                                 log_warn!("deep_link: applying view request {:?}", req);
+                                let apply_started = Instant::now();
                                 app.apply_deep_link_request(&req);
+                                log_warn!(
+                                    "deep_link: applied view request to existing ROI after {:.3}s (total {:.3}s)",
+                                    apply_started.elapsed().as_secs_f32(),
+                                    deep_link_started.elapsed().as_secs_f32()
+                                );
                                 self.mode = Mode::Single(app);
                             } else {
                                 open_project_roi = Some((roi, project_space, Some(req)));
@@ -2628,10 +2636,22 @@ impl eframe::App for RootApp {
             if deep_link.is_some() {
                 log_warn!("deep_link: opening ROI {}", roi.source_display());
             }
+            let open_started = Instant::now();
             self.open_project_roi(ctx, roi, ps);
+            if deep_link.is_some() {
+                log_warn!(
+                    "deep_link: ROI open returned after {:.3}s",
+                    open_started.elapsed().as_secs_f32()
+                );
+            }
             if let (Some(req), Mode::Single(app)) = (deep_link.as_ref(), &mut self.mode) {
                 log_warn!("deep_link: applying view request {:?}", req);
+                let apply_started = Instant::now();
                 app.apply_deep_link_request(req);
+                log_warn!(
+                    "deep_link: applied view request after {:.3}s",
+                    apply_started.elapsed().as_secs_f32()
+                );
             }
         }
         if let Some((dataset, store, runtime, project_space)) = open_remote_single {
