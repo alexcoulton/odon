@@ -6,6 +6,15 @@ pub struct ContrastUiOptions {
     pub set_max_button_label: &'static str,
 }
 
+impl ContrastUiOptions {
+    pub fn standard(set_max_button_label: &'static str) -> Self {
+        Self {
+            show_nudge_buttons: true,
+            set_max_button_label,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ContrastUiResult {
     pub window: (f32, f32),

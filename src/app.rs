@@ -35,7 +35,7 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
-use crate::deep_link::DeepLinkRequest;
+use crate::deep_link::{DeepLinkChannelOrder, DeepLinkRequest};
 use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::geometry::threshold_regions::{
     ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
@@ -90,6 +90,7 @@ use crate::spatialdata::SpatialDataLayers;
 use crate::spatialdata::SpatialImageLayers;
 use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2, discover_spatialdata};
 use crate::ui::canvas_overlays;
+use crate::ui::channel_notes;
 use crate::ui::channels_panel::{self, ChannelListHost, ChannelSortMode};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
@@ -1127,6 +1128,13 @@ impl OmeZarrViewerApp {
                         &visible_channel_indices,
                         request.visible_channel_group_color,
                     );
+                }
+            }
+            if request.channel_order == Some(DeepLinkChannelOrder::Listed) {
+                if visible_channel_indices.is_empty() {
+                    notes.push("no visible channels were available to order".to_string());
+                } else {
+                    self.move_channels_to_top_for_deep_link(&visible_channel_indices);
                 }
             }
         }
@@ -2625,6 +2633,7 @@ impl OmeZarrViewerApp {
                     .iter()
                     .enumerate()
                     .map(|(idx, ch)| ProjectChannelViewState {
+                        name: Some(ch.name.clone()),
                         visible: Some(ch.visible),
                         color_rgb: Some(ch.color_rgb),
                         window: ch.window.map(|(lo, hi)| [lo, hi]),
@@ -2634,6 +2643,7 @@ impl OmeZarrViewerApp {
                             .map(|off| [off.x, off.y]),
                         scale: self.channel_scales.get(idx).map(|scale| [scale.x, scale.y]),
                         rotation_rad: self.channel_rotations_rad.get(idx).copied(),
+                        note: (!ch.note.is_empty()).then(|| ch.note.clone()),
                     })
                     .collect(),
                 active_channel: Some(self.selected_channel),
@@ -2692,10 +2702,22 @@ impl OmeZarrViewerApp {
             if !view.channel_order.is_empty() {
                 self.channel_layer_order = view.channel_order.clone();
             }
+            let channel_notes_by_name = view
+                .channels
+                .iter()
+                .filter_map(|saved| {
+                    let name = saved.name.as_deref()?;
+                    let note = saved.note.as_ref()?;
+                    Some((name, note))
+                })
+                .collect::<HashMap<_, _>>();
             for (idx, saved) in view.channels.iter().enumerate() {
                 let Some(ch) = self.channels.get_mut(idx) else {
                     continue;
                 };
+                if let Some(note) = channel_notes_by_name.get(ch.name.as_str()) {
+                    ch.note = (*note).clone();
+                }
                 if let Some(visible) = saved.visible {
                     ch.visible = visible;
                 }
@@ -7096,6 +7118,46 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn move_channels_to_top_for_deep_link(&mut self, channel_indices: &[usize]) {
+        let channel_count = self.channels.len();
+        if channel_count == 0 || channel_indices.is_empty() {
+            return;
+        }
+
+        let mut pinned_seen = HashSet::new();
+        let pinned = channel_indices
+            .iter()
+            .copied()
+            .filter(|idx| *idx < channel_count && pinned_seen.insert(*idx))
+            .collect::<Vec<_>>();
+        if pinned.is_empty() {
+            return;
+        }
+        let pinned_set = pinned.iter().copied().collect::<HashSet<_>>();
+
+        let mut next_order = pinned;
+        let mut seen = next_order.iter().copied().collect::<HashSet<_>>();
+        next_order.extend(
+            self.channel_layer_order
+                .iter()
+                .copied()
+                .filter(|idx| *idx < channel_count)
+                .filter(|idx| !pinned_set.contains(idx))
+                .filter(|idx| seen.insert(*idx)),
+        );
+        for idx in 0..channel_count {
+            if seen.insert(idx) {
+                next_order.push(idx);
+            }
+        }
+
+        if self.channel_layer_order != next_order {
+            self.channel_layer_order = next_order;
+            self.bump_render_id();
+        }
+        self.channel_sort_mode = ChannelSortMode::Manual;
+    }
+
     fn selected_memory_channel_indices(&self) -> Vec<usize> {
         self.channel_layer_order
             .iter()
@@ -8665,10 +8727,7 @@ impl OmeZarrViewerApp {
             ui,
             abs_max,
             window,
-            contrast::ContrastUiOptions {
-                show_nudge_buttons: true,
-                set_max_button_label: "Set Max -> Group",
-            },
+            contrast::ContrastUiOptions::standard("Set Max -> Group"),
         );
         let (lo, hi) = out.window;
 
@@ -9386,10 +9445,7 @@ impl OmeZarrViewerApp {
             ui,
             abs_max,
             window,
-            contrast::ContrastUiOptions {
-                show_nudge_buttons: true,
-                set_max_button_label: "Set Max -> All",
-            },
+            contrast::ContrastUiOptions::standard("Set Max -> All"),
         );
         let (lo, hi) = out.window;
 
@@ -9543,6 +9599,11 @@ impl OmeZarrViewerApp {
                 ui.label(self.threshold_region_status.clone());
             }
         });
+
+        if let Some(ch) = self.channels.get_mut(selected_channel) {
+            let channel_name = ch.name.clone();
+            let _ = channel_notes::ui_channel_notes(ui, &channel_name, &mut ch.note);
+        }
     }
 
     fn ui_histogram(&mut self, ui: &mut egui::Ui, abs_max: f32, limits: (f32, f32)) {

@@ -47,6 +47,7 @@ use crate::project::{
     ProjectUiState,
 };
 use crate::ui::canvas_overlays;
+use crate::ui::channel_notes;
 use crate::ui::channels_panel::{self, ChannelListHost, ChannelSortMode};
 use crate::ui::contrast;
 use crate::ui::group_layers::{GroupLayersDialog, GroupLayersTarget, default_group_name};
@@ -78,6 +79,7 @@ struct GlobalChannel {
     color_rgb: [u8; 3],
     window: Option<(f32, f32)>,
     visible: bool,
+    note: String,
 }
 
 #[derive(Debug, Clone)]
@@ -676,12 +678,14 @@ impl MosaicViewerApp {
                     .channels
                     .iter()
                     .map(|ch| ProjectChannelViewState {
+                        name: Some(ch.name.clone()),
                         visible: Some(ch.visible),
                         color_rgb: Some(ch.color_rgb),
                         window: ch.window.map(|(lo, hi)| [lo, hi]),
                         offset_world: None,
                         scale: None,
                         rotation_rad: None,
+                        note: (!ch.note.is_empty()).then(|| ch.note.clone()),
                     })
                     .collect(),
                 active_channel: Some(self.selected_channel),
@@ -772,10 +776,22 @@ impl MosaicViewerApp {
                 }
                 self.channel_layer_order = channel_order;
             }
+            let channel_notes_by_name = view
+                .channels
+                .iter()
+                .filter_map(|saved| {
+                    let name = saved.name.as_deref()?;
+                    let note = saved.note.as_ref()?;
+                    Some((name, note))
+                })
+                .collect::<HashMap<_, _>>();
             for (idx, saved) in view.channels.iter().enumerate() {
                 let Some(ch) = self.channels.get_mut(idx) else {
                     continue;
                 };
+                if let Some(note) = channel_notes_by_name.get(ch.name.as_str()) {
+                    ch.note = (*note).clone();
+                }
                 if let Some(visible) = saved.visible {
                     ch.visible = visible;
                 }
@@ -2835,10 +2851,7 @@ impl MosaicViewerApp {
             ui,
             abs_max,
             window,
-            contrast::ContrastUiOptions {
-                show_nudge_buttons: false,
-                set_max_button_label: "Set Max -> Group",
-            },
+            contrast::ContrastUiOptions::standard("Set Max -> Group"),
         );
         let (lo, hi) = out.window;
 
@@ -4409,15 +4422,13 @@ impl MosaicViewerApp {
         if groups_changed {
             ui.ctx().request_repaint();
         }
+
         let window = sel.window.unwrap_or((0.0, abs_max));
         let out = contrast::ui_contrast_window(
             ui,
             abs_max,
             window,
-            contrast::ContrastUiOptions {
-                show_nudge_buttons: false,
-                set_max_button_label: "Set Max -> All",
-            },
+            contrast::ContrastUiOptions::standard("Set Max -> All"),
         );
         let (lo, hi) = out.window;
 
@@ -4440,6 +4451,11 @@ impl MosaicViewerApp {
             if let Some(dst) = self.channels.get_mut(self.selected_channel) {
                 dst.window = Some((lo, hi));
             }
+        }
+
+        if let Some(ch) = self.channels.get_mut(self.selected_channel) {
+            let channel_name = ch.name.clone();
+            let _ = channel_notes::ui_channel_notes(ui, &channel_name, &mut ch.note);
         }
     }
 
@@ -5702,6 +5718,7 @@ fn build_global_channels<'a>(
                 color_rgb: c.color_rgb,
                 window: c.window,
                 visible: c.visible,
+                note: String::new(),
             });
         }
     }

@@ -69,6 +69,7 @@ pub struct ChannelInfo {
     pub color_rgb: [u8; 3],
     pub window: Option<(f32, f32)>,
     pub visible: bool,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -331,6 +332,7 @@ fn build_channels(
                 color_rgb: default_channel_color(0),
                 window: None,
                 visible: true,
+                note: String::new(),
             }]);
         }
     };
@@ -352,6 +354,7 @@ fn build_channels(
             color_rgb: default_channel_color(i),
             window: None,
             visible: i == 0,
+            note: String::new(),
         })
         .collect();
 

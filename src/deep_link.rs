@@ -13,6 +13,11 @@ pub struct DeepLinkChannelColor {
     pub color_rgb: [u8; 3],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepLinkChannelOrder {
+    Listed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepLinkObjectLevelColor {
     pub value: String,
@@ -37,6 +42,7 @@ pub struct DeepLinkRequest {
     pub group_visible_channels: bool,
     pub visible_channel_group: Option<String>,
     pub visible_channel_group_color: Option<[u8; 3]>,
+    pub channel_order: Option<DeepLinkChannelOrder>,
     pub hidden_channels: Vec<String>,
     pub hidden_channel_alternatives: Vec<Vec<String>>,
     pub contrast_min: Option<f32>,
@@ -101,6 +107,7 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         group_visible_channels: false,
         visible_channel_group: None,
         visible_channel_group_color: None,
+        channel_order: None,
         hidden_channels: Vec::new(),
         hidden_channel_alternatives: Vec::new(),
         contrast_min: None,
@@ -140,6 +147,14 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             }
             "visible_channel_group_color" | "channel_group_color" | "group_color" => {
                 req.visible_channel_group_color = parse_color_rgb(&value)
+            }
+            "channel_order" | "channels_order" | "channel_sort" => {
+                req.channel_order = parse_channel_order(&value)
+            }
+            "order_visible_channels" | "order_listed_channels" => {
+                if parse_bool(&value).unwrap_or(false) {
+                    req.channel_order = Some(DeepLinkChannelOrder::Listed);
+                }
             }
             "hidden_channels" | "hide_channels" => req.hidden_channels = parse_list(&value),
             "contrast_min" | "channel_min" | "window_min" => {
@@ -266,6 +281,15 @@ fn parse_list(value: &str) -> Vec<String> {
 
 fn parse_finite_f32(value: &str) -> Option<f32> {
     value.trim().parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+fn parse_channel_order(value: &str) -> Option<DeepLinkChannelOrder> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "listed" | "link" | "deep_link" | "deeplink" | "visible" | "visible_channels" => {
+            Some(DeepLinkChannelOrder::Listed)
+        }
+        _ => None,
+    }
 }
 
 fn parse_channel_contrasts(value: &str) -> Vec<DeepLinkChannelContrast> {
@@ -457,6 +481,7 @@ mod tests {
         assert_eq!(req.roi.as_deref(), Some("18S1746/ROI2"));
         assert_eq!(req.channel.as_deref(), Some("CD68"));
         assert!(req.visible_channels.is_empty());
+        assert_eq!(req.channel_order, None);
         assert!(req.hidden_channels.is_empty());
         assert_eq!(req.contrast_min, None);
         assert_eq!(req.contrast_max, None);
@@ -571,7 +596,7 @@ mod tests {
     #[test]
     fn parses_channel_visibility_and_contrast() {
         let req = DeepLinkRequest::parse_arg(
-            "odon://open?channel=CD3&visible_channels=CD3%7CCD8&group_visible_channels=1&visible_channel_group=T%20cell%20markers&visible_channel_group_color=%23ffffff&channel_color=CD3:red%7CCD8:%2300ccff&hidden_channels=DAPI&contrast_min=120&contrast_max=4500&channel_contrast=CD3:120:4500%7CCD8:80:3000",
+            "odon://open?channel=CD3&visible_channels=CD3%7CCD8&channel_order=listed&group_visible_channels=1&visible_channel_group=T%20cell%20markers&visible_channel_group_color=%23ffffff&channel_color=CD3:red%7CCD8:%2300ccff&hidden_channels=DAPI&contrast_min=120&contrast_max=4500&channel_contrast=CD3:120:4500%7CCD8:80:3000",
         )
         .unwrap()
         .unwrap();
@@ -581,6 +606,7 @@ mod tests {
             req.visible_channels,
             vec!["CD3".to_string(), "CD8".to_string()]
         );
+        assert_eq!(req.channel_order, Some(DeepLinkChannelOrder::Listed));
         assert!(req.group_visible_channels);
         assert_eq!(
             req.visible_channel_group,

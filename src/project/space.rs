@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use rfd::FileDialog;
@@ -130,6 +131,8 @@ pub struct ProjectRoiViewState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ProjectChannelViewState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<[u8; 3]>,
@@ -141,6 +144,8 @@ pub struct ProjectChannelViewState {
     pub scale: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_rad: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -344,6 +349,7 @@ impl ProjectViewSpec {
             group_visible_channels: false,
             visible_channel_group: None,
             visible_channel_group_color: None,
+            channel_order: None,
             hidden_channels: self.hidden_channels.clone(),
             hidden_channel_alternatives: Vec::new(),
             contrast_min: None,
@@ -473,6 +479,13 @@ pub struct ProjectSpace {
     view_preset_name_input: String,
     views_dialog_open: bool,
     view_preset_draft: Option<ProjectViewSpec>,
+    save_toast: Option<ProjectSaveToast>,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectSaveToast {
+    message: String,
+    created_at: Instant,
 }
 
 impl ProjectSpace {
@@ -549,11 +562,76 @@ impl ProjectSpace {
         fs::write(path, text)?;
         self.project_file_path = Some(path.to_path_buf());
         self.status = format!("Saved: {}", path.to_string_lossy());
+        self.show_save_toast(path);
         Ok(())
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
         self.status = status.into();
+    }
+
+    fn show_save_toast(&mut self, path: &Path) {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("project");
+        self.save_toast = Some(ProjectSaveToast {
+            message: format!("Saved {name}"),
+            created_at: Instant::now(),
+        });
+    }
+
+    fn ui_save_toast(&mut self, ctx: &egui::Context) {
+        let Some(toast) = self.save_toast.as_ref() else {
+            return;
+        };
+
+        let elapsed = toast.created_at.elapsed();
+        let total = Duration::from_millis(2200);
+        if elapsed >= total {
+            self.save_toast = None;
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(16));
+
+        let fade = Duration::from_millis(300);
+        let alpha = if elapsed < fade {
+            elapsed.as_secs_f32() / fade.as_secs_f32()
+        } else if total.saturating_sub(elapsed) < fade {
+            total.saturating_sub(elapsed).as_secs_f32() / fade.as_secs_f32()
+        } else {
+            1.0
+        }
+        .clamp(0.0, 1.0);
+        let bg_alpha = (220.0 * alpha).round() as u8;
+        let text_alpha = (255.0 * alpha).round() as u8;
+        let message = toast.message.clone();
+
+        egui::Area::new(egui::Id::new("project-save-toast"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-22.0, -22.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_premultiplied(
+                        36, 38, 43, bg_alpha,
+                    ))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_premultiplied(110, 115, 125, bg_alpha),
+                    ))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(message)
+                                .color(egui::Color32::from_rgba_premultiplied(
+                                    245, 245, 245, text_alpha,
+                                ))
+                                .strong(),
+                        );
+                    });
+            });
     }
 
     fn resolved_segmentation_search_roots(&self) -> Vec<PathBuf> {
@@ -1835,6 +1913,7 @@ impl ProjectSpace {
         can_capture_current_view: bool,
     ) -> Option<ProjectSpaceAction> {
         let mut action = None;
+        self.ui_save_toast(ctx);
         self.ui_views_dialog(ctx, can_capture_current_view, &mut action);
         action
     }
@@ -2368,6 +2447,7 @@ impl ProjectSpace {
                 Ok(_) => {
                     self.project_file_path = Some(path.clone());
                     self.status = format!("Saved: {}", path.to_string_lossy());
+                    self.show_save_toast(&path);
                 }
                 Err(e) => self.status = format!("Save failed: {e}"),
             },

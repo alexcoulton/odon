@@ -286,6 +286,7 @@ impl TiffPyramid {
                 color_rgb: palette[0],
                 window: Some((0.0, self.abs_max)),
                 visible: true,
+                note: String::new(),
             }];
         }
 
@@ -313,6 +314,7 @@ impl TiffPyramid {
                     .unwrap_or_else(|| palette[(i + 1).min(palette.len() - 1)]),
                 window: Some((0.0, self.abs_max)),
                 visible: i < 3,
+                note: String::new(),
             })
             .collect()
     }
