@@ -72,6 +72,42 @@ impl DeepLinkRequest {
     }
 }
 
+impl Default for DeepLinkRequest {
+    fn default() -> Self {
+        Self {
+            project_path: None,
+            roi: None,
+            sample: None,
+            channel: None,
+            channel_alternatives: Vec::new(),
+            visible_channels: Vec::new(),
+            visible_channel_alternatives: Vec::new(),
+            group_visible_channels: false,
+            visible_channel_group: None,
+            visible_channel_group_color: None,
+            channel_order: None,
+            hidden_channels: Vec::new(),
+            hidden_channel_alternatives: Vec::new(),
+            contrast_min: None,
+            contrast_max: None,
+            channel_contrasts: Vec::new(),
+            channel_colors: Vec::new(),
+            segmentation: None,
+            segmentation_source: None,
+            load_segmentation_labels: None,
+            cell_color_by: None,
+            fill_cells: None,
+            show_selection_overlay: None,
+            visible_cell_types: Vec::new(),
+            hidden_cell_types: Vec::new(),
+            object_level_colors: Vec::new(),
+            object_filters: Vec::new(),
+            center_world: None,
+            zoom: None,
+        }
+    }
+}
+
 pub fn is_deep_link(value: &str) -> bool {
     value
         .get(..7)

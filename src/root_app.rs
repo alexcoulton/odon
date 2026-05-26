@@ -29,6 +29,7 @@ use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::discover_xenium_explorer;
 use crate::{log_debug, log_info, log_warn};
+use odon::mcp::{OdonControlBridge, OdonControlRequest};
 use rfd::FileDialog;
 
 #[derive(Debug, Clone)]
@@ -183,11 +184,31 @@ pub struct RootApp {
     app_settings: AppSettings,
     settings_open: bool,
     settings_status: String,
+    control_bridge: Option<OdonControlBridge>,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
 
 impl RootApp {
+    fn spawn_control_bridge(
+        ctx: &egui::Context,
+        settings_status: &mut String,
+    ) -> Option<OdonControlBridge> {
+        match OdonControlBridge::spawn_default(ctx.clone()) {
+            Ok(bridge) => Some(bridge),
+            Err(err) => {
+                let msg = format!("MCP control bridge unavailable: {err}");
+                if settings_status.trim().is_empty() {
+                    *settings_status = msg;
+                } else {
+                    settings_status.push_str("; ");
+                    settings_status.push_str(&msg);
+                }
+                None
+            }
+        }
+    }
+
     fn load_app_settings() -> (AppSettings, String) {
         match AppSettings::load() {
             Ok(settings) => (settings, String::new()),
@@ -252,6 +273,565 @@ impl RootApp {
         if self.app_settings.clear_recent_projects() {
             self.persist_app_settings();
         }
+    }
+
+    fn process_control_requests(&mut self) {
+        let mut requests = Vec::new();
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            while let Ok(request) = bridge.try_recv() {
+                requests.push(request);
+            }
+        }
+        for request in requests {
+            self.reply_to_control_request(request);
+        }
+    }
+
+    fn reply_to_control_request(&mut self, request: OdonControlRequest) {
+        let response = match request.method.as_str() {
+            "get_current_view" => self.control_current_view(),
+            "list_project_rois" => self.control_project_rois(),
+            "list_channels" => self.control_channels(),
+            "list_visible_channels" => self.control_visible_channels(),
+            "get_active_channel" => self.control_active_channel(),
+            "set_active_channel" => self.control_set_active_channel(&request.params),
+            "set_visible_channels" => self.control_set_visible_channels(&request.params),
+            "open_roi" => self.control_open_roi(&request.params),
+            "save_project" => self.control_save_project(),
+            "get_channel_contrast" => self.control_get_channel_contrast(&request.params),
+            "set_channel_contrast" => self.control_set_channel_contrast(&request.params),
+            "get_object_overlay_visibility" => {
+                self.control_get_object_overlay_visibility(&request.params)
+            }
+            "set_object_overlay_visibility" => {
+                self.control_set_object_overlay_visibility(&request.params)
+            }
+            "get_channel_intensity_stats" => {
+                self.control_get_channel_intensity_stats(&request.params)
+            }
+            "set_channel_order" => self.control_set_channel_order(&request.params),
+            "list_channel_groups" => self.control_list_channel_groups(),
+            "set_channel_group" => self.control_set_channel_group(&request.params),
+            "get_camera" => self.control_get_camera(),
+            "set_camera" => self.control_set_camera(&request.params),
+            "zoom_in" => self.control_zoom(&request.params, true),
+            "zoom_out" => self.control_zoom(&request.params, false),
+            "fit_to_view" => self.control_fit_to_view(),
+            "capture_screenshot" => self.control_capture_screenshot(&request.params),
+            method => serde_json::json!({
+                "error": format!("unknown Odon control method '{method}'"),
+            }),
+        };
+        let _ = request.reply.send(response);
+    }
+
+    fn current_project_space(&self) -> Option<&ProjectSpace> {
+        match &self.mode {
+            Mode::Project { project_space } => Some(project_space),
+            Mode::Single(app) => Some(app.project_space()),
+            Mode::Mosaic { mosaic, .. } => Some(mosaic.project_space()),
+            Mode::Transition => None,
+        }
+    }
+
+    fn control_project_rois(&self) -> serde_json::Value {
+        let Some(project_space) = self.current_project_space() else {
+            return serde_json::json!({"project": null, "rois": []});
+        };
+        let selected = project_space
+            .selected_rois()
+            .into_iter()
+            .filter_map(|roi| roi.source_key())
+            .collect::<HashSet<_>>();
+        let focused = project_space.focused_roi().and_then(ProjectRoi::source_key);
+        let rois = project_space
+            .rois()
+            .iter()
+            .map(|roi| {
+                let source_key = roi.source_key();
+                serde_json::json!({
+                    "id": roi.id,
+                    "display_name": roi.display_name,
+                    "dataset": roi.dataset,
+                    "source_key": source_key,
+                    "source": roi.source_display(),
+                    "segmentation_path": roi.segpath.as_ref().map(|p| p.to_string_lossy().to_string()),
+                    "selected": source_key.as_ref().is_some_and(|key| selected.contains(key)),
+                    "focused": source_key == focused,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "project_path": project_space
+                .saved_project_path()
+                .map(|path| path.to_string_lossy().to_string()),
+            "roi_count": rois.len(),
+            "rois": rois,
+        })
+    }
+
+    fn control_channels(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "channels": app.control_channel_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "channels": mosaic.control_channel_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "mode": "project",
+                "channels": [],
+                "note": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "mode": "transition",
+                "channels": [],
+            }),
+        }
+    }
+
+    fn control_get_channel_contrast(&self, params: &serde_json::Value) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "contrast": app.control_get_channel_contrast(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "contrast": mosaic.control_get_channel_contrast(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_channel_contrast(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "contrast": app.control_set_channel_contrast(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "contrast": mosaic.control_set_channel_contrast(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_object_overlay_visibility(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "overlay": app.control_get_object_overlay_visibility(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "overlay": mosaic.control_get_object_overlay_visibility(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_object_overlay_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "overlay": app.control_set_object_overlay_visibility(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "overlay": mosaic.control_set_object_overlay_visibility(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_channel_intensity_stats(&self, params: &serde_json::Value) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "stats": app.control_get_channel_intensity_stats(params),
+            }),
+            Mode::Mosaic { .. } => serde_json::json!({
+                "mode": "mosaic",
+                "error": "Channel intensity stats currently require a single-image viewer.",
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_channel_order(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_channel_order(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_channel_order(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_list_channel_groups(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "groups": app.control_channel_groups_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "groups": mosaic.control_channel_groups_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "mode": "project",
+                "groups": [],
+                "note": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "mode": "transition",
+                "groups": [],
+            }),
+        }
+    }
+
+    fn control_set_channel_group(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_channel_group(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_channel_group(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_camera(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "camera": app.control_camera_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "camera": mosaic.control_camera_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "camera": app.control_set_camera(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "camera": mosaic.control_set_camera(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_zoom(&mut self, params: &serde_json::Value, zoom_in: bool) -> serde_json::Value {
+        let raw_factor = params
+            .get("factor")
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            .unwrap_or(1.5);
+        let factor = if zoom_in {
+            raw_factor
+        } else if raw_factor > 0.0 {
+            1.0 / raw_factor
+        } else {
+            raw_factor
+        };
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "camera": app.control_zoom(factor),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "camera": mosaic.control_zoom(factor),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_fit_to_view(&mut self) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "camera": app.control_fit_to_view(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "camera": mosaic.control_fit_to_view(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "screenshot": app.control_capture_screenshot(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "screenshot": mosaic.control_capture_screenshot(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_visible_channels(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "channels": app.control_visible_channel_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "channels": mosaic.control_visible_channel_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "mode": "project",
+                "channels": [],
+                "note": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "mode": "transition",
+                "channels": [],
+            }),
+        }
+    }
+
+    fn control_active_channel(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "active_channel": app.control_active_channel_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "active_channel": mosaic.control_active_channel_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "mode": "project",
+                "active_channel": null,
+                "note": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "mode": "transition",
+                "active_channel": null,
+            }),
+        }
+    }
+
+    fn control_set_active_channel(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_active_channel(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_active_channel(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_visible_channels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_visible_channels(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_visible_channels(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_open_roi(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let roi = params
+            .get("roi")
+            .or_else(|| params.get("id"))
+            .or_else(|| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(roi) = roi else {
+            return serde_json::json!({"error": "open_roi requires roi, id, or name"});
+        };
+        let sample = params
+            .get("sample")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(project_space) = self.current_project_space() else {
+            return serde_json::json!({"error": "No project is currently loaded."});
+        };
+        match project_space.roi_for_link_target(Some(roi), sample) {
+            Ok(_) => {
+                let mut request = DeepLinkRequest::default();
+                request.roi = Some(roi.to_string());
+                request.sample = sample.map(str::to_string);
+                self.pending_deep_link = Some(request);
+                serde_json::json!({
+                    "queued": true,
+                    "roi": roi,
+                    "sample": sample,
+                })
+            }
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    fn control_save_project(&mut self) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Project { project_space } => {
+                let Some(path) = project_space.saved_project_path() else {
+                    return serde_json::json!({"error": "Project has no saved path."});
+                };
+                match project_space.save_to_file(&path) {
+                    Ok(()) => serde_json::json!({"saved": true, "path": path.to_string_lossy()}),
+                    Err(err) => serde_json::json!({"error": format!("{err}")}),
+                }
+            }
+            Mode::Single(app) => {
+                let mut project_space = app.take_project_space();
+                let Some(path) = project_space.saved_project_path() else {
+                    app.set_project_space(project_space);
+                    return serde_json::json!({"error": "Project has no saved path."});
+                };
+                let result = project_space.save_to_file(&path);
+                app.set_project_space(project_space);
+                match result {
+                    Ok(()) => serde_json::json!({"saved": true, "path": path.to_string_lossy()}),
+                    Err(err) => serde_json::json!({"error": format!("{err}")}),
+                }
+            }
+            Mode::Mosaic { mosaic, .. } => {
+                let mut project_space = mosaic.take_project_space();
+                let Some(path) = project_space.saved_project_path() else {
+                    mosaic.set_project_space(project_space);
+                    return serde_json::json!({"error": "Project has no saved path."});
+                };
+                let result = project_space.save_to_file(&path);
+                mosaic.set_project_space(project_space);
+                match result {
+                    Ok(()) => serde_json::json!({"saved": true, "path": path.to_string_lossy()}),
+                    Err(err) => serde_json::json!({"error": format!("{err}")}),
+                }
+            }
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_current_view(&self) -> serde_json::Value {
+        let (mode, view) = match &self.mode {
+            Mode::Project { .. } => ("project", serde_json::Value::Null),
+            Mode::Single(app) => ("single", app.control_view_snapshot()),
+            Mode::Mosaic { mosaic, .. } => ("mosaic", mosaic.control_view_snapshot()),
+            Mode::Transition => ("transition", serde_json::Value::Null),
+        };
+        serde_json::json!({
+            "mode": mode,
+            "view": view,
+            "project": self.control_project_rois(),
+        })
     }
 
     fn load_project_space_from_file(project_space: &mut ProjectSpace, path: &Path) -> bool {
@@ -961,7 +1541,8 @@ impl RootApp {
         cc: &eframe::CreationContext<'_>,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let (app_settings, settings_status) = Self::load_app_settings();
+        let (app_settings, mut settings_status) = Self::load_app_settings();
+        let control_bridge = Self::spawn_control_bridge(&cc.egui_ctx, &mut settings_status);
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -999,6 +1580,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -1010,7 +1592,8 @@ impl RootApp {
         store: std::sync::Arc<dyn zarrs::storage::ReadableStorageTraits>,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let (app_settings, settings_status) = Self::load_app_settings();
+        let (app_settings, mut settings_status) = Self::load_app_settings();
+        let control_bridge = Self::spawn_control_bridge(&cc.egui_ctx, &mut settings_status);
         let mut app = OmeZarrViewerApp::new(cc, dataset, store, app_settings.auto_contrast);
         app.set_show_scale_bar(true);
         if let Some(path) = project_path.as_deref() {
@@ -1051,6 +1634,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -1061,7 +1645,8 @@ impl RootApp {
         mut mosaic: MosaicViewerApp,
         project_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let (app_settings, settings_status) = Self::load_app_settings();
+        let (app_settings, mut settings_status) = Self::load_app_settings();
+        let control_bridge = Self::spawn_control_bridge(&cc.egui_ctx, &mut settings_status);
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -1103,6 +1688,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
         })
@@ -1916,6 +2502,7 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.process_control_requests();
         if let Some(rx) = self.deep_link_rx.as_ref() {
             ctx.request_repaint_after(Duration::from_millis(100));
             let mut received_deep_link = false;

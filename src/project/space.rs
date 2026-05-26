@@ -613,9 +613,7 @@ impl ProjectSpace {
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgba_premultiplied(
-                        36, 38, 43, bg_alpha,
-                    ))
+                    .fill(egui::Color32::from_rgba_premultiplied(36, 38, 43, bg_alpha))
                     .stroke(egui::Stroke::new(
                         1.0,
                         egui::Color32::from_rgba_premultiplied(110, 115, 125, bg_alpha),

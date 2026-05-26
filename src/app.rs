@@ -51,8 +51,8 @@ use crate::imaging::tiling::{
 };
 use crate::imaging::view_plane::{
     ViewPlaneMode, ViewPlaneSelection, clamp_selection as clamp_view_selection,
-    display_axes as display_axes_for_mode, display_downsample, local_to_world_scale,
-    slice_extent_level0, supported_modes,
+    display_axes as display_axes_for_mode, display_downsample, image_subset_ranges_for_view,
+    local_to_world_scale, slice_extent_level0, supported_modes,
 };
 use crate::masks::MaskLayer;
 use crate::masks::resolve_masks_geojson_path_and_downsample;
@@ -833,6 +833,208 @@ fn push_unique_term(dst: &mut Vec<String>, value: &str) {
     if !value.is_empty() && !dst.iter().any(|existing| existing == value) {
         dst.push(value.to_string());
     }
+}
+
+fn channel_intensity_stats_json(
+    idx: usize,
+    name: &str,
+    level: usize,
+    downsample: f32,
+    data: &ndarray::ArrayD<u16>,
+) -> serde_json::Value {
+    let mut values = data.iter().copied().collect::<Vec<_>>();
+    if values.is_empty() {
+        return serde_json::json!({
+            "index": idx,
+            "name": name,
+            "level": level,
+            "downsample": downsample,
+            "n": 0,
+            "error": "empty image subset",
+        });
+    }
+    values.sort_unstable();
+    let n = values.len();
+    let mut sum = 0u64;
+    let mut nonzero = 0usize;
+    for &value in &values {
+        sum = sum.saturating_add(value as u64);
+        if value != 0 {
+            nonzero += 1;
+        }
+    }
+    serde_json::json!({
+        "index": idx,
+        "name": name,
+        "level": level,
+        "downsample": downsample,
+        "shape": data.shape(),
+        "n": n,
+        "nonzero": nonzero,
+        "nonzero_fraction": nonzero as f64 / n as f64,
+        "min": values[0],
+        "q1": percentile_sorted_u16(&values, 0.25),
+        "median": percentile_sorted_u16(&values, 0.50),
+        "q3": percentile_sorted_u16(&values, 0.75),
+        "p95": percentile_sorted_u16(&values, 0.95),
+        "p99": percentile_sorted_u16(&values, 0.99),
+        "max": values[n - 1],
+        "mean": sum as f64 / n as f64,
+    })
+}
+
+fn percentile_sorted_u16(values: &[u16], q: f64) -> u16 {
+    if values.is_empty() {
+        return 0;
+    }
+    let idx = ((values.len().saturating_sub(1)) as f64 * q.clamp(0.0, 1.0)).round() as usize;
+    values[idx.min(values.len() - 1)]
+}
+
+fn channel_groups_snapshot(
+    groups: &ProjectLayerGroups,
+    channels: &[ChannelInfo],
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        groups
+            .channel_groups
+            .iter()
+            .map(|group| {
+                let members = channels
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, channel)| {
+                        let member = groups.channel_members.get(channel.name.as_str())?;
+                        (member.group_id == group.id).then(|| {
+                            serde_json::json!({
+                                "index": idx,
+                                "name": channel.name,
+                                "inherit_color": member.inherit_color,
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "id": group.id,
+                    "name": group.name,
+                    "expanded": group.expanded,
+                    "color_rgb": group.color_rgb,
+                    "members": members,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn ensure_channel_group(
+    groups: &mut ProjectLayerGroups,
+    requested_group_id: Option<u64>,
+    requested_name: Option<&str>,
+    color_rgb: Option<[u8; 3]>,
+) -> u64 {
+    if let Some(group_id) = requested_group_id
+        && let Some(group) = groups
+            .channel_groups
+            .iter_mut()
+            .find(|group| group.id == group_id)
+    {
+        if let Some(name) = requested_name {
+            group.name = name.to_string();
+        }
+        if let Some(color_rgb) = color_rgb {
+            group.color_rgb = color_rgb;
+        }
+        return group_id;
+    }
+    if let Some(name) = requested_name
+        && let Some(group) = groups
+            .channel_groups
+            .iter_mut()
+            .find(|group| group.name == name)
+    {
+        if let Some(color_rgb) = color_rgb {
+            group.color_rgb = color_rgb;
+        }
+        return group.id;
+    }
+    let existing = groups
+        .channel_groups
+        .iter()
+        .map(|group| group.id)
+        .collect::<Vec<_>>();
+    let id = requested_group_id
+        .filter(|id| !groups.channel_groups.iter().any(|group| group.id == *id))
+        .unwrap_or_else(|| layer_groups::next_group_id(&existing));
+    groups.channel_groups.push(ProjectChannelGroup {
+        id,
+        name: requested_name
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Group {id}")),
+        expanded: true,
+        color_rgb: color_rgb.unwrap_or([255, 255, 255]),
+    });
+    id
+}
+
+fn mcp_color_from_params(params: &serde_json::Value) -> Option<[u8; 3]> {
+    if let Some(values) = params
+        .get("color_rgb")
+        .and_then(serde_json::Value::as_array)
+        && values.len() == 3
+    {
+        let r = values[0].as_u64().filter(|value| *value <= 255)? as u8;
+        let g = values[1].as_u64().filter(|value| *value <= 255)? as u8;
+        let b = values[2].as_u64().filter(|value| *value <= 255)? as u8;
+        return Some([r, g, b]);
+    }
+    params
+        .get("color")
+        .or_else(|| params.get("colour"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_mcp_color_rgb)
+}
+
+fn parse_mcp_color_rgb(value: &str) -> Option<[u8; 3]> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "white" => Some([255, 255, 255]),
+        "black" => Some([0, 0, 0]),
+        "red" => Some([230, 57, 70]),
+        "green" => Some([42, 157, 143]),
+        "blue" => Some([69, 123, 157]),
+        "cyan" => Some([0, 188, 212]),
+        "magenta" => Some([216, 27, 96]),
+        "yellow" => Some([255, 202, 40]),
+        "orange" => Some([251, 133, 0]),
+        "purple" => Some([126, 87, 194]),
+        "pink" => Some([244, 143, 177]),
+        "lime" => Some([139, 195, 74]),
+        "teal" => Some([0, 150, 136]),
+        "amber" => Some([255, 193, 7]),
+        "gray" | "grey" => Some([158, 158, 158]),
+        _ => parse_mcp_hex_color_rgb(trimmed),
+    }
+}
+
+fn parse_mcp_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        return Some([r, g, b]);
+    }
+    if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
+        let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
+        let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
+        return Some([r * 17, g * 17, b * 17]);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -2832,6 +3034,604 @@ impl OmeZarrViewerApp {
 
     pub fn project_space_mut(&mut self) -> &mut ProjectSpace {
         &mut self.project_space
+    }
+
+    pub fn control_channel_snapshot(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.channels
+                .iter()
+                .enumerate()
+                .map(|(idx, ch)| {
+                    let [r, g, b] = ch.color_rgb;
+                    let window = ch
+                        .window
+                        .map(|(lo, hi)| serde_json::json!({"min": lo, "max": hi}))
+                        .unwrap_or(serde_json::Value::Null);
+                    serde_json::json!({
+                        "index": idx,
+                        "name": ch.name,
+                        "visible": ch.visible,
+                        "selected": idx == self.selected_channel,
+                        "color_rgb": [r, g, b],
+                        "window": window,
+                        "note": ch.note,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn control_visible_channel_snapshot(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.channels
+                .iter()
+                .enumerate()
+                .filter(|(_, ch)| ch.visible)
+                .map(|(idx, ch)| {
+                    serde_json::json!({
+                        "index": idx,
+                        "name": ch.name,
+                        "selected": idx == self.selected_channel,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn control_active_channel_snapshot(&self) -> serde_json::Value {
+        self.channels
+            .get(self.selected_channel)
+            .map(|ch| {
+                serde_json::json!({
+                    "index": self.selected_channel,
+                    "name": ch.name,
+                    "visible": ch.visible,
+                    "note": ch.note,
+                })
+            })
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    pub fn control_set_active_channel(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_channel_index_from_params(params) {
+            Ok(idx) => {
+                self.set_active_layer(LayerId::Channel(idx));
+                self.bump_render_id();
+                serde_json::json!({
+                    "changed": true,
+                    "active_channel": self.control_active_channel_snapshot(),
+                })
+            }
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_visible_channels(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("only");
+        let Some(values) = params.get("channels").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "set_visible_channels requires channels: [...]"});
+        };
+        let mut indices = Vec::new();
+        let mut unresolved = Vec::new();
+        for value in values {
+            match self.control_channel_index_from_value(value) {
+                Ok(idx) => {
+                    if !indices.contains(&idx) {
+                        indices.push(idx);
+                    }
+                }
+                Err(err) => unresolved.push(err),
+            }
+        }
+        if !unresolved.is_empty() {
+            return serde_json::json!({"error": format!("unresolved channel(s): {}", unresolved.join("; "))});
+        }
+
+        match mode {
+            "only" => {
+                for (idx, ch) in self.channels.iter_mut().enumerate() {
+                    ch.visible = indices.contains(&idx);
+                }
+            }
+            "show" => {
+                for idx in &indices {
+                    if let Some(ch) = self.channels.get_mut(*idx) {
+                        ch.visible = true;
+                    }
+                }
+            }
+            "hide" => {
+                for idx in &indices {
+                    if let Some(ch) = self.channels.get_mut(*idx) {
+                        ch.visible = false;
+                    }
+                }
+            }
+            other => {
+                return serde_json::json!({"error": format!("unknown visibility mode '{other}'")});
+            }
+        }
+        if let Some(first) = indices.first().copied() {
+            self.set_active_layer(LayerId::Channel(first));
+        }
+        self.bump_render_id();
+        serde_json::json!({
+            "changed": true,
+            "mode": mode,
+            "visible_channels": self.control_visible_channel_snapshot(),
+        })
+    }
+
+    pub fn control_get_channel_contrast(&self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = if params.is_object() && !params.as_object().is_some_and(|obj| obj.is_empty()) {
+            match self.control_channel_index_from_params(params) {
+                Ok(idx) => idx,
+                Err(error) => return serde_json::json!({"error": error}),
+            }
+        } else {
+            self.selected_channel
+        };
+        let Some(ch) = self.channels.get(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let abs_max = self.dataset.abs_max.max(1.0);
+        let (lo, hi) = ch.window.unwrap_or((0.0, abs_max));
+        serde_json::json!({
+            "index": idx,
+            "name": ch.name,
+            "min": lo,
+            "max": hi,
+            "abs_max": abs_max,
+        })
+    }
+
+    pub fn control_set_channel_contrast(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let lo = params
+            .get("min")
+            .or_else(|| params.get("lo"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        let hi = params
+            .get("max")
+            .or_else(|| params.get("hi"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        let (Some(lo), Some(hi)) = (lo, hi) else {
+            return serde_json::json!({"error": "set_channel_contrast requires min and max"});
+        };
+        if !self.set_channel_window_for_link(idx, lo, hi) {
+            return serde_json::json!({"error": "invalid contrast limits"});
+        }
+        self.control_get_channel_contrast(&serde_json::json!({"index": idx}))
+    }
+
+    pub fn control_get_object_overlay_visibility(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let target = params
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("objects");
+        serde_json::json!({
+            "target": target,
+            "segmentation_labels": self.cells_outlines_visible,
+            "segmentation_geojson": self.seg_geojson.visible,
+            "segmentation_objects": self.seg_objects.visible,
+            "object_count": self.seg_objects.object_count(),
+        })
+    }
+
+    pub fn control_set_object_overlay_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(visible) = params.get("visible").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "set_object_overlay_visibility requires visible"});
+        };
+        let target = params
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("objects");
+        match target {
+            "objects" => self.seg_objects.visible = visible,
+            "labels" => self.cells_outlines_visible = visible,
+            "geojson" => self.seg_geojson.visible = visible,
+            "all" => {
+                self.seg_objects.visible = visible;
+                self.cells_outlines_visible = visible;
+                self.seg_geojson.visible = visible;
+            }
+            other => {
+                return serde_json::json!({"error": format!("unknown overlay target '{other}'")});
+            }
+        }
+        self.bump_render_id();
+        self.control_get_object_overlay_visibility(params)
+    }
+
+    pub fn control_get_channel_intensity_stats(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let idx = if params.is_object() && !params.as_object().is_some_and(|obj| obj.is_empty()) {
+            match self.control_channel_index_from_params(params) {
+                Ok(idx) => idx,
+                Err(error) => return serde_json::json!({"error": error}),
+            }
+        } else {
+            self.selected_channel
+        };
+        let Some(ch) = self.channels.get(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let Some(level0) = self.dataset.levels.first() else {
+            return serde_json::json!({"error": "dataset has no pyramid levels"});
+        };
+        let requested_level = params
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value as usize);
+        let level_idx = requested_level
+            .unwrap_or_else(|| self.dataset.levels.len().saturating_sub(1))
+            .min(self.dataset.levels.len().saturating_sub(1));
+        let Some(level_info) = self.dataset.levels.get(level_idx) else {
+            return serde_json::json!({"error": format!("level {level_idx} is out of range")});
+        };
+        let Some(axes) = display_axes_for_mode(&self.dataset.dims, self.view_plane_mode) else {
+            return serde_json::json!({"error": "current view plane has no display axes"});
+        };
+        if axes.vertical >= level_info.shape.len() || axes.horizontal >= level_info.shape.len() {
+            return serde_json::json!({"error": "display axes are outside image shape"});
+        }
+        let row_range = 0..level_info.shape[axes.vertical];
+        let col_range = 0..level_info.shape[axes.horizontal];
+        let Some(ranges) = image_subset_ranges_for_view(
+            &self.dataset.dims,
+            level0,
+            level_info,
+            Some(ch.index as u64),
+            row_range,
+            col_range,
+            self.active_view_selection(),
+        ) else {
+            return serde_json::json!({"error": "failed to build image subset ranges"});
+        };
+        let zarr_path = format!("/{}", level_info.path.trim_start_matches('/'));
+        let array = match Array::open(self.store.clone(), &zarr_path) {
+            Ok(array) => array,
+            Err(err) => {
+                return serde_json::json!({"error": format!("failed to open level {level_idx}: {err}")});
+            }
+        };
+        let subset = ArraySubset::new_with_ranges(&ranges);
+        let data = match retrieve_image_subset_u16(&array, &subset, &level_info.dtype) {
+            Ok(data) => data,
+            Err(err) => {
+                return serde_json::json!({"error": format!("failed to read level {level_idx}: {err}")});
+            }
+        };
+        channel_intensity_stats_json(
+            idx,
+            &ch.name,
+            level_info.index,
+            level_info.downsample,
+            &data,
+        )
+    }
+
+    pub fn control_set_channel_order(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        if let Some(sort) = params.get("sort").and_then(serde_json::Value::as_str) {
+            let Some(mode) = ChannelSortMode::from_storage_key(sort) else {
+                return serde_json::json!({"error": format!("unknown channel sort mode '{sort}'")});
+            };
+            self.channel_sort_mode = mode;
+            return serde_json::json!({
+                "changed": true,
+                "sort": mode.storage_key(),
+                "order": self.control_channel_order_snapshot(),
+            });
+        }
+
+        let Some(values) = params.get("channels").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "set_channel_order requires channels or sort"});
+        };
+        let mut indices = Vec::new();
+        let mut unresolved = Vec::new();
+        for value in values {
+            match self.control_channel_index_from_value(value) {
+                Ok(idx) => {
+                    if !indices.contains(&idx) {
+                        indices.push(idx);
+                    }
+                }
+                Err(err) => unresolved.push(err),
+            }
+        }
+        if !unresolved.is_empty() {
+            return serde_json::json!({"error": format!("unresolved channel(s): {}", unresolved.join("; "))});
+        }
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("listed_first");
+        match mode {
+            "listed_first" => self.move_channels_to_top_for_deep_link(&indices),
+            "exact" => {
+                if indices.len() != self.channels.len() {
+                    return serde_json::json!({"error": "exact channel order must include every channel exactly once"});
+                }
+                self.channel_layer_order = indices;
+                self.channel_sort_mode = ChannelSortMode::Manual;
+                self.bump_render_id();
+            }
+            other => {
+                return serde_json::json!({"error": format!("unknown channel order mode '{other}'")});
+            }
+        }
+        serde_json::json!({
+            "changed": true,
+            "mode": mode,
+            "sort": self.channel_sort_mode.storage_key(),
+            "order": self.control_channel_order_snapshot(),
+        })
+    }
+
+    pub fn control_channel_groups_snapshot(&self) -> serde_json::Value {
+        channel_groups_snapshot(&self.current_layer_groups(), &self.channels)
+    }
+
+    pub fn control_set_channel_group(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(values) = params.get("channels").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "set_channel_group requires channels"});
+        };
+        let mut indices = Vec::new();
+        let mut unresolved = Vec::new();
+        for value in values {
+            match self.control_channel_index_from_value(value) {
+                Ok(idx) => {
+                    if !indices.contains(&idx) {
+                        indices.push(idx);
+                    }
+                }
+                Err(err) => unresolved.push(err),
+            }
+        }
+        if !unresolved.is_empty() {
+            return serde_json::json!({"error": format!("unresolved channel(s): {}", unresolved.join("; "))});
+        }
+        if indices.is_empty() {
+            return serde_json::json!({"error": "no channels resolved"});
+        }
+
+        let mut groups = self.current_layer_groups();
+        let requested_group_id = params.get("group_id").and_then(serde_json::Value::as_u64);
+        let requested_name = params
+            .get("group")
+            .or_else(|| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let group_id = ensure_channel_group(
+            &mut groups,
+            requested_group_id,
+            requested_name,
+            mcp_color_from_params(params),
+        );
+        if params
+            .get("replace_group_members")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            groups
+                .channel_members
+                .retain(|_, member| member.group_id != group_id);
+        }
+        let inherit_color = params
+            .get("inherit_color")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        for idx in &indices {
+            if let Some(ch) = self.channels.get(*idx) {
+                groups.channel_members.insert(
+                    ch.name.clone(),
+                    ProjectChannelGroupMember {
+                        group_id,
+                        inherit_color,
+                    },
+                );
+            }
+        }
+        self.selected_channel_group_id = Some(group_id);
+        self.set_current_layer_groups(groups);
+        serde_json::json!({
+            "changed": true,
+            "group_id": group_id,
+            "groups": self.control_channel_groups_snapshot(),
+        })
+    }
+
+    fn control_channel_order_snapshot(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.channel_layer_order
+                .iter()
+                .filter_map(|idx| {
+                    self.channels.get(*idx).map(|ch| {
+                        serde_json::json!({
+                            "index": idx,
+                            "name": ch.name,
+                            "visible": ch.visible,
+                        })
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn control_camera_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "center_world_lvl0": [
+                self.camera.center_world_lvl0.x,
+                self.camera.center_world_lvl0.y,
+            ],
+            "zoom_screen_per_lvl0_px": self.camera.zoom_screen_per_lvl0_px,
+        })
+    }
+
+    pub fn control_set_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        if let Some(center) = params
+            .get("center_world_lvl0")
+            .and_then(serde_json::Value::as_array)
+            && center.len() == 2
+        {
+            let x = center[0].as_f64().map(|value| value as f32);
+            let y = center[1].as_f64().map(|value| value as f32);
+            if let (Some(x), Some(y)) = (x, y)
+                && x.is_finite()
+                && y.is_finite()
+            {
+                self.camera.center_world_lvl0 = egui::pos2(x, y);
+            }
+        }
+        if let Some(x) = params
+            .get("center_x")
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            && x.is_finite()
+        {
+            self.camera.center_world_lvl0.x = x;
+        }
+        if let Some(y) = params
+            .get("center_y")
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            && y.is_finite()
+        {
+            self.camera.center_world_lvl0.y = y;
+        }
+        if let Some(zoom) = params
+            .get("zoom_screen_per_lvl0_px")
+            .or_else(|| params.get("zoom"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            && zoom.is_finite()
+            && zoom > 0.0
+        {
+            self.camera.zoom_screen_per_lvl0_px = zoom.clamp(0.000_01, 5000.0);
+        }
+        self.bump_render_id();
+        self.control_camera_snapshot()
+    }
+
+    pub fn control_zoom(&mut self, factor: f32) -> serde_json::Value {
+        if !factor.is_finite() || factor <= 0.0 {
+            return serde_json::json!({"error": "zoom factor must be finite and > 0"});
+        }
+        if let Some(viewport) = self.last_canvas_rect {
+            self.camera
+                .zoom_about_screen_point(viewport, viewport.center(), factor);
+        } else {
+            self.camera.zoom_screen_per_lvl0_px =
+                (self.camera.zoom_screen_per_lvl0_px * factor).clamp(0.000_01, 5000.0);
+        }
+        self.bump_render_id();
+        self.control_camera_snapshot()
+    }
+
+    pub fn control_fit_to_view(&mut self) -> serde_json::Value {
+        let Some(viewport) = self.last_canvas_rect else {
+            return serde_json::json!({"error": "No canvas viewport is available yet."});
+        };
+        self.fit_to_rect(viewport);
+        self.bump_render_id();
+        self.control_camera_snapshot()
+    }
+
+    pub fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        if let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let path = PathBuf::from(path);
+            self.request_screenshot_png(path.clone());
+            return serde_json::json!({
+                "queued": true,
+                "path": path.to_string_lossy(),
+            });
+        }
+        match self.request_quick_screenshot_png() {
+            Ok(path) => serde_json::json!({
+                "queued": true,
+                "path": path.to_string_lossy(),
+            }),
+            Err(err) => serde_json::json!({"error": format!("{err}")}),
+        }
+    }
+
+    fn control_channel_index_from_params(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<usize, String> {
+        if let Some(value) = params.get("index").or_else(|| params.get("channel_index")) {
+            return self.control_channel_index_from_value(value);
+        }
+        if let Some(value) = params
+            .get("name")
+            .or_else(|| params.get("channel"))
+            .or_else(|| params.get("marker"))
+        {
+            return self.control_channel_index_from_value(value);
+        }
+        Err("provide index, name, channel, or marker".to_string())
+    }
+
+    fn control_channel_index_from_value(&self, value: &serde_json::Value) -> Result<usize, String> {
+        if let Some(idx) = value.as_u64() {
+            let idx = idx as usize;
+            if idx < self.channels.len() {
+                return Ok(idx);
+            }
+            return Err(format!("channel index {idx} is out of range"));
+        }
+        let Some(name) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            return Err(format!("invalid channel selector: {value}"));
+        };
+        self.find_channel_index_for_link(name)
+            .ok_or_else(|| format!("no channel matches '{name}'"))
+    }
+
+    pub fn control_view_snapshot(&self) -> serde_json::Value {
+        let active_channel = self.channels.get(self.selected_channel).map(|ch| {
+            serde_json::json!({
+                "index": self.selected_channel,
+                "name": ch.name,
+            })
+        });
+        serde_json::json!({
+            "dataset": self.dataset.source.source_key(),
+            "active_channel": active_channel,
+            "channel_count": self.channels.len(),
+            "visible_channels": self.channels
+                .iter()
+                .filter(|ch| ch.visible)
+                .map(|ch| ch.name.clone())
+                .collect::<Vec<_>>(),
+        })
     }
 
     pub fn set_project_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
