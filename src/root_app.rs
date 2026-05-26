@@ -2919,7 +2919,7 @@ impl eframe::App for RootApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
 
-                // Minimal "landing" UI: show the project panel and let users open datasets.
+                // Minimal "landing" UI: show the project workspace and let users open datasets.
                 egui::TopBottomPanel::top("top").show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("odon");
@@ -2927,69 +2927,57 @@ impl eframe::App for RootApp {
                         ui.label("Project");
                     });
                 });
-                egui::SidePanel::left("project-left")
-                    .default_width(420.0)
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        project_space.set_object_cache_ui_state(project_object_cache_ui_state(
-                            project_space,
-                            object_preload_cached,
-                            object_preload_total,
-                            object_preload_done,
-                            object_preload_failed,
-                            object_preload_loading,
-                            object_preload_settings,
-                        ));
-                        let action = project_space.ui(ui, None);
-                        if let Some(action) = action {
-                            match action {
-                                ProjectSpaceAction::Open(roi) => {
-                                    let ps = std::mem::take(project_space);
-                                    open_project_roi = Some((roi, ps, None));
-                                }
-                                ProjectSpaceAction::OpenView(roi, spec) => {
-                                    let req = spec.to_deep_link_request(None);
-                                    let ps = std::mem::take(project_space);
-                                    open_project_roi = Some((roi, ps, Some(req)));
-                                }
-                                ProjectSpaceAction::OpenProject(path) => {
-                                    open_project_path = Some(path);
-                                }
-                                ProjectSpaceAction::ForgetRecentProject(path) => {
-                                    forget_recent_project_path = Some(path);
-                                }
-                                ProjectSpaceAction::ClearRecentProjects => {
-                                    clear_recent_projects = true;
-                                }
-                                ProjectSpaceAction::CaptureCurrentView => {}
-                                ProjectSpaceAction::OpenMosaic(rois) => {
-                                    let ps = std::mem::take(project_space);
-                                    open_mosaic_from_project = Some((rois, ps));
-                                }
-                                ProjectSpaceAction::OpenRemoteDialog => {
-                                    self.remote_dialog_open = true;
-                                    self.remote_status.clear();
-                                }
-                                ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
-                                    object_preload_start = Some((project_space.clone(), mode));
-                                }
-                                ProjectSpaceAction::ClearObjectCache => {
-                                    object_preload_clear = true;
-                                }
-                                ProjectSpaceAction::ShowHelp(topic) => {
-                                    self.active_help_topic = Some(topic);
-                                }
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    project_space.set_object_cache_ui_state(project_object_cache_ui_state(
+                        project_space,
+                        object_preload_cached,
+                        object_preload_total,
+                        object_preload_done,
+                        object_preload_failed,
+                        object_preload_loading,
+                        object_preload_settings,
+                    ));
+                    let action = project_space.ui(ui, None);
+                    if let Some(action) = action {
+                        match action {
+                            ProjectSpaceAction::Open(roi) => {
+                                let ps = std::mem::take(project_space);
+                                open_project_roi = Some((roi, ps, None));
+                            }
+                            ProjectSpaceAction::OpenView(roi, spec) => {
+                                let req = spec.to_deep_link_request(None);
+                                let ps = std::mem::take(project_space);
+                                open_project_roi = Some((roi, ps, Some(req)));
+                            }
+                            ProjectSpaceAction::OpenProject(path) => {
+                                open_project_path = Some(path);
+                            }
+                            ProjectSpaceAction::ForgetRecentProject(path) => {
+                                forget_recent_project_path = Some(path);
+                            }
+                            ProjectSpaceAction::ClearRecentProjects => {
+                                clear_recent_projects = true;
+                            }
+                            ProjectSpaceAction::CaptureCurrentView => {}
+                            ProjectSpaceAction::OpenMosaic(rois) => {
+                                let ps = std::mem::take(project_space);
+                                open_mosaic_from_project = Some((rois, ps));
+                            }
+                            ProjectSpaceAction::OpenRemoteDialog => {
+                                self.remote_dialog_open = true;
+                                self.remote_status.clear();
+                            }
+                            ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
+                                object_preload_start = Some((project_space.clone(), mode));
+                            }
+                            ProjectSpaceAction::ClearObjectCache => {
+                                object_preload_clear = true;
+                            }
+                            ProjectSpaceAction::ShowHelp(topic) => {
+                                self.active_help_topic = Some(topic);
                             }
                         }
-                    });
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(40.0);
-                        ui.heading("Drop OME-Zarr folders or TIFF files to start");
-                        ui.label(
-                            "Use the Project panel on the left to open a dataset or a mosaic.",
-                        );
-                    });
+                    }
                 });
                 if let Some(action) = project_space.ui_floating_windows(ctx, false) {
                     match action {

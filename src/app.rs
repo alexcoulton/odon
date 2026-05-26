@@ -4306,6 +4306,36 @@ impl OmeZarrViewerApp {
         save_mask_layers_geojson(path, std::slice::from_ref(layer))
     }
 
+    fn delete_mask_layer(&mut self, layer_id: u64) -> bool {
+        let Some(idx) = self.mask_layers.iter().position(|l| l.id == layer_id) else {
+            return false;
+        };
+
+        self.push_mask_undo_snapshot();
+        self.mask_layers.remove(idx);
+        if self
+            .selected_mask_polygon
+            .is_some_and(|selection| selection.layer_id == layer_id)
+        {
+            self.clear_mask_polygon_selection();
+        }
+        if self.drawing_mask_layer == Some(layer_id) {
+            self.drawing_mask_layer = None;
+            self.drawing_mask_polygon.clear();
+        }
+        self.layer_drag = None;
+        if self.active_layer == LayerId::Mask(layer_id) {
+            self.active_layer = if !self.channels.is_empty() {
+                LayerId::Channel(self.selected_channel.min(self.channels.len() - 1))
+            } else {
+                LayerId::Points
+            };
+        }
+        self.rebuild_layer_orders();
+        self.bump_render_id();
+        true
+    }
+
     fn sync_mask_layers_into_project_space(&mut self) {
         let Some(local_root) = self.dataset.source.local_path() else {
             return;
@@ -7766,6 +7796,7 @@ impl OmeZarrViewerApp {
                     }
                     let mut ann_headers_shown: HashSet<u64> = HashSet::new();
                     let mut delete_ann_group: Option<u64> = None;
+                    let mut delete_mask_layer: Option<u64> = None;
 
                     for i in 0..self.overlay_layer_order.len() {
                         let id = self.overlay_layer_order[i];
@@ -7979,6 +8010,10 @@ impl OmeZarrViewerApp {
                                     }
                                     ui.close();
                                 }
+                                if ui.button("Delete layer").clicked() {
+                                    delete_mask_layer = Some(mask_id);
+                                    ui.close();
+                                }
                                 ui.separator();
                             }
                             let selected_annotations: Vec<u64> = self
@@ -8007,6 +8042,11 @@ impl OmeZarrViewerApp {
                             .annotation_members
                             .retain(|_k, m| m.group_id != group_id);
                         groups_changed = true;
+                    }
+                    if let Some(mask_id) = delete_mask_layer
+                        && self.delete_mask_layer(mask_id)
+                    {
+                        self.set_status("Deleted mask layer.");
                     }
                 }
                 if groups_changed {
@@ -9443,27 +9483,7 @@ impl OmeZarrViewerApp {
                     changed = true;
                 }
                 if delete_clicked {
-                    self.push_mask_undo_snapshot();
-                    self.mask_layers.remove(idx);
-                    if self
-                        .selected_mask_polygon
-                        .is_some_and(|selection| selection.layer_id == id)
-                    {
-                        self.clear_mask_polygon_selection();
-                    }
-                    if self.drawing_mask_layer == Some(id) {
-                        self.drawing_mask_layer = None;
-                        self.drawing_mask_polygon.clear();
-                    }
-                    if self.active_layer == LayerId::Mask(id) {
-                        self.active_layer = if !self.channels.is_empty() {
-                            LayerId::Channel(self.selected_channel.min(self.channels.len() - 1))
-                        } else {
-                            LayerId::Points
-                        };
-                    }
-                    self.rebuild_layer_orders();
-                    self.bump_render_id();
+                    self.delete_mask_layer(id);
                     return;
                 }
 

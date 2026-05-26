@@ -1242,7 +1242,6 @@ impl ProjectSpace {
         let mut action = None;
 
         ui.heading("Project");
-        ui.label("Drag OME-Zarr folders, Xenium folders, or TIFF files onto the window.");
         ui.label(format!(
             "{} ROI(s), {} selected",
             self.config.rois.len(),
@@ -1334,7 +1333,7 @@ impl ProjectSpace {
         ui.add_space(6.0);
         self.ui_views_launcher(ui);
         ui.add_space(6.0);
-        ui.label("Browse ROIs");
+        ui.heading("ROIs");
         let browse = crate::ui::roi_browser::ui(
             ui,
             "project-space-roi-browser",
@@ -1342,14 +1341,22 @@ impl ProjectSpace {
             None,
             &mut self.roi_browse,
         );
-        ui.label(format!(
-            "Showing {} / {} ROI(s).",
-            browse.filtered_indices.len(),
-            browse.total_count
-        ));
         if browse.changed || self.roi_browse.has_filters() {
             self.sync_filtered_selection(&browse.filtered_indices);
         }
+        let has_rois = !self.config.rois.is_empty();
+        let files_hovered = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "Showing {} / {} ROI(s).",
+                browse.filtered_indices.len(),
+                browse.total_count
+            ));
+            if has_rois {
+                ui.separator();
+                ui.label("Drop OME-Zarr folders, Xenium folders, or TIFF files here to add more.");
+            }
+        });
         let seg_roots = self.resolved_segmentation_search_roots();
         if !seg_roots.is_empty() {
             ui.add_space(4.0);
@@ -1448,10 +1455,40 @@ impl ProjectSpace {
 
         let visible_indices = browse.filtered_indices;
 
-        ui.label(format!("ROIs ({})", visible_indices.len()));
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            let list_height = ui.available_height().clamp(180.0, 280.0);
+        ui.label(format!("ROI list ({})", visible_indices.len()));
+        let mut roi_frame = egui::Frame::group(ui.style());
+        if files_hovered {
+            roi_frame = roi_frame
+                .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.18))
+                .stroke(egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
+        }
+        roi_frame.show(ui, |ui| {
+            let list_height = if has_rois {
+                ui.available_height().clamp(180.0, 280.0)
+            } else {
+                ui.available_height().clamp(220.0, 360.0)
+            };
             ui.set_min_height(list_height);
+            if !has_rois {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), list_height),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        ui.add_space((list_height * 0.24).max(24.0));
+                        ui.label(
+                            egui::RichText::new(
+                                "Drop OME-Zarr folders, Xenium folders, or TIFF files here",
+                            )
+                            .size(22.0)
+                            .strong(),
+                        );
+                        ui.add_space(8.0);
+                        ui.label("Imported datasets will appear as ROIs in this list.");
+                        ui.label("You can also use Import Samplesheet CSV or Add OME-Zarr Root.");
+                    },
+                );
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt("project-roi-list")
                 .max_height(list_height)
