@@ -116,6 +116,9 @@ const RAW_TILE_CACHE_HEADROOM_TILES: usize = 256;
 const RAW_TILE_ADAPTIVE_CHANNEL_THRESHOLD: usize = 16;
 const RAW_TILE_ADAPTIVE_BRIDGE_TILES_PER_FRAME: usize = 1;
 const RAW_TILE_ADAPTIVE_COARSE_TILES_PER_FRAME: usize = 1;
+const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
+const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
+const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LayerId {
@@ -354,6 +357,68 @@ enum ToolMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MaskPolygonSelection {
+    layer_id: u64,
+    polygon_idx: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MaskVertexDrag {
+    selection: MaskPolygonSelection,
+    vertex_idx: usize,
+    undo_recorded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MaskPolygonHit {
+    polygon_idx: usize,
+    vertex_idx: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct MaskUndoSnapshot {
+    layers: Vec<MaskLayer>,
+    next_layer_id: u64,
+    active_layer: LayerId,
+    selection: Option<MaskPolygonSelection>,
+    selected_vertex: Option<usize>,
+    drawing_layer: Option<u64>,
+    drawing_polygon: Vec<egui::Pos2>,
+}
+
+fn distance_to_screen_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_sq();
+    if len_sq <= f32::EPSILON {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
+}
+
+fn point_in_mask_polygon(p: egui::Pos2, poly: &[egui::Pos2]) -> bool {
+    let n = OmeZarrViewerApp::mask_polygon_unique_vertex_count(poly);
+    if n < 3 {
+        return false;
+    }
+
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let pi = poly[i];
+        let pj = poly[j];
+        if (pi.y > p.y) != (pj.y > p.y) {
+            let x_intersection = (pj.x - pi.x) * (p.y - pi.y) / (pj.y - pi.y) + pi.x;
+            if p.x < x_intersection {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TilePrefetchMode {
     Off,
     TargetHalo,
@@ -508,6 +573,10 @@ pub struct OmeZarrViewerApp {
     tool_mode: ToolMode,
     drawing_mask_layer: Option<u64>,
     drawing_mask_polygon: Vec<egui::Pos2>,
+    selected_mask_polygon: Option<MaskPolygonSelection>,
+    selected_mask_vertex: Option<usize>,
+    dragging_mask_vertex: Option<MaskVertexDrag>,
+    mask_undo_stack: Vec<MaskUndoSnapshot>,
     selection_rect_start_world: Option<egui::Pos2>,
     selection_rect_current_world: Option<egui::Pos2>,
     selection_lasso_world: Vec<egui::Pos2>,
@@ -2099,6 +2168,10 @@ impl OmeZarrViewerApp {
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
+            selected_mask_polygon: None,
+            selected_mask_vertex: None,
+            dragging_mask_vertex: None,
+            mask_undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -2366,6 +2439,10 @@ impl OmeZarrViewerApp {
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
+            selected_mask_polygon: None,
+            selected_mask_vertex: None,
+            dragging_mask_vertex: None,
+            mask_undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -2704,6 +2781,10 @@ impl OmeZarrViewerApp {
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
+            selected_mask_polygon: None,
+            selected_mask_vertex: None,
+            dragging_mask_vertex: None,
+            mask_undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -4213,14 +4294,17 @@ impl OmeZarrViewerApp {
     }
 
     fn restore_mask_layers_from_project_space(&mut self) {
+        self.mask_undo_stack.clear();
         let Some(local_root) = self.dataset.source.local_path() else {
             self.mask_layers.clear();
             self.next_mask_layer_id = 1;
+            self.clear_mask_polygon_selection();
             return;
         };
         let Some(layers) = self.project_space.roi_mask_layers(local_root) else {
             self.mask_layers.clear();
             self.next_mask_layer_id = 1;
+            self.clear_mask_polygon_selection();
             return;
         };
 
@@ -4260,6 +4344,237 @@ impl OmeZarrViewerApp {
         }
 
         self.create_editable_mask_layer(None)
+    }
+
+    fn push_mask_undo_snapshot(&mut self) {
+        const MAX_MASK_UNDO_SNAPSHOTS: usize = 64;
+        self.mask_undo_stack.push(MaskUndoSnapshot {
+            layers: self.mask_layers.clone(),
+            next_layer_id: self.next_mask_layer_id,
+            active_layer: self.active_layer,
+            selection: self.selected_mask_polygon,
+            selected_vertex: self.selected_mask_vertex,
+            drawing_layer: self.drawing_mask_layer,
+            drawing_polygon: self.drawing_mask_polygon.clone(),
+        });
+        if self.mask_undo_stack.len() > MAX_MASK_UNDO_SNAPSHOTS {
+            self.mask_undo_stack.remove(0);
+        }
+    }
+
+    fn undo_last_mask_edit(&mut self) -> bool {
+        let Some(snapshot) = self.mask_undo_stack.pop() else {
+            return false;
+        };
+        self.mask_layers = snapshot.layers;
+        self.next_mask_layer_id = snapshot.next_layer_id;
+        self.active_layer = snapshot.active_layer;
+        self.selected_mask_polygon = snapshot.selection;
+        self.selected_mask_vertex = snapshot.selected_vertex;
+        self.dragging_mask_vertex = None;
+        self.drawing_mask_layer = snapshot.drawing_layer;
+        self.drawing_mask_polygon = snapshot.drawing_polygon;
+        self.validate_mask_polygon_selection();
+        self.rebuild_layer_orders();
+        true
+    }
+
+    fn finish_drawing_mask_polygon(&mut self) -> bool {
+        if self.drawing_mask_polygon.len() < 3 {
+            return false;
+        }
+
+        self.push_mask_undo_snapshot();
+        let vertices = std::mem::take(&mut self.drawing_mask_polygon);
+        let id = self
+            .drawing_mask_layer
+            .unwrap_or_else(|| self.ensure_editable_mask_layer());
+        self.drawing_mask_layer = Some(id);
+        if let Some(layer) = self.mask_layers.iter_mut().find(|l| l.id == id) {
+            layer.add_closed_polygon(vertices);
+            layer.visible = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_mask_polygon_selection(&mut self) {
+        self.selected_mask_polygon = None;
+        self.selected_mask_vertex = None;
+        self.dragging_mask_vertex = None;
+    }
+
+    fn mask_polygon_unique_vertex_count(poly: &[egui::Pos2]) -> usize {
+        if poly.len() >= 2 && poly.first() == poly.last() {
+            poly.len() - 1
+        } else {
+            poly.len()
+        }
+    }
+
+    fn validate_mask_polygon_selection(&mut self) {
+        let Some(selection) = self.selected_mask_polygon else {
+            self.selected_mask_vertex = None;
+            self.dragging_mask_vertex = None;
+            return;
+        };
+        let valid = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == selection.layer_id)
+            .and_then(|layer| layer.polygons_world.get(selection.polygon_idx))
+            .is_some_and(|poly| Self::mask_polygon_unique_vertex_count(poly) >= 3);
+        if !valid {
+            self.clear_mask_polygon_selection();
+        }
+    }
+
+    fn hit_mask_polygon_at(
+        &self,
+        layer_id: u64,
+        pointer_world: egui::Pos2,
+        pointer_screen: egui::Pos2,
+        rect: egui::Rect,
+    ) -> Option<MaskPolygonHit> {
+        let layer = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == layer_id && layer.visible)?;
+        let pointer_local = pointer_world - layer.offset_world;
+
+        for (polygon_idx, poly) in layer.polygons_world.iter().enumerate().rev() {
+            let n = Self::mask_polygon_unique_vertex_count(poly);
+            if n < 3 {
+                continue;
+            }
+            for (vertex_idx, vertex) in poly.iter().copied().take(n).enumerate() {
+                let screen = self
+                    .camera
+                    .world_to_screen(vertex + layer.offset_world, rect);
+                if pointer_screen.distance(screen) <= MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX {
+                    return Some(MaskPolygonHit {
+                        polygon_idx,
+                        vertex_idx: Some(vertex_idx),
+                    });
+                }
+            }
+        }
+
+        for (polygon_idx, poly) in layer.polygons_world.iter().enumerate().rev() {
+            let n = Self::mask_polygon_unique_vertex_count(poly);
+            if n < 3 {
+                continue;
+            }
+            for i in 0..n {
+                let a = self
+                    .camera
+                    .world_to_screen(poly[i] + layer.offset_world, rect);
+                let b = self
+                    .camera
+                    .world_to_screen(poly[(i + 1) % n] + layer.offset_world, rect);
+                if distance_to_screen_segment(pointer_screen, a, b)
+                    <= MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX
+                {
+                    return Some(MaskPolygonHit {
+                        polygon_idx,
+                        vertex_idx: None,
+                    });
+                }
+            }
+        }
+
+        for (polygon_idx, poly) in layer.polygons_world.iter().enumerate().rev() {
+            if point_in_mask_polygon(pointer_local, poly) {
+                return Some(MaskPolygonHit {
+                    polygon_idx,
+                    vertex_idx: None,
+                });
+            }
+        }
+
+        None
+    }
+
+    fn select_mask_polygon_at(
+        &mut self,
+        layer_id: u64,
+        pointer_world: egui::Pos2,
+        pointer_screen: egui::Pos2,
+        rect: egui::Rect,
+    ) -> bool {
+        if let Some(hit) = self.hit_mask_polygon_at(layer_id, pointer_world, pointer_screen, rect) {
+            self.selected_mask_polygon = Some(MaskPolygonSelection {
+                layer_id,
+                polygon_idx: hit.polygon_idx,
+            });
+            self.selected_mask_vertex = hit.vertex_idx;
+            true
+        } else {
+            self.clear_mask_polygon_selection();
+            false
+        }
+    }
+
+    fn delete_selected_mask_polygon(&mut self) -> bool {
+        self.validate_mask_polygon_selection();
+        let Some(selection) = self.selected_mask_polygon else {
+            return false;
+        };
+        let valid = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == selection.layer_id)
+            .is_some_and(|layer| selection.polygon_idx < layer.polygons_world.len());
+        if !valid {
+            self.clear_mask_polygon_selection();
+            return false;
+        }
+        self.push_mask_undo_snapshot();
+        let Some(layer) = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == selection.layer_id)
+        else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+        layer.polygons_world.remove(selection.polygon_idx);
+        self.clear_mask_polygon_selection();
+        true
+    }
+
+    fn move_mask_polygon_vertex(
+        &mut self,
+        selection: MaskPolygonSelection,
+        vertex_idx: usize,
+        pointer_world: egui::Pos2,
+    ) -> bool {
+        let Some(layer) = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == selection.layer_id)
+        else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+        let Some(poly) = layer.polygons_world.get_mut(selection.polygon_idx) else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+        let n = Self::mask_polygon_unique_vertex_count(poly);
+        if n < 3 || vertex_idx >= n {
+            self.clear_mask_polygon_selection();
+            return false;
+        }
+
+        let local = pointer_world - layer.offset_world;
+        poly[vertex_idx] = local;
+        if vertex_idx == 0 && poly.len() > n {
+            let last_idx = poly.len() - 1;
+            poly[last_idx] = local;
+        }
+        true
     }
 
     fn create_editable_mask_layer(&mut self, name: Option<String>) -> u64 {
@@ -5810,6 +6125,8 @@ impl OmeZarrViewerApp {
         }
         self.auto_load_project_roi_segmentation();
         self.drawing_mask_polygon.clear();
+        self.clear_mask_polygon_selection();
+        self.mask_undo_stack.clear();
         if reload_exclusion_masks {
             if self.dataset.source.local_path().is_some() {
                 if let Err(err) = self.ensure_exclusion_masks_loaded() {
@@ -7020,6 +7337,7 @@ impl OmeZarrViewerApp {
         let x0 = preview.x0;
         let y0 = preview.y0;
         let downsample = preview.downsample;
+        self.push_mask_undo_snapshot();
         let layer_id = self.create_editable_mask_layer(Some(format!("Threshold {channel_name}")));
         let mut created = 0usize;
         let world_polygons = polygons
@@ -8896,10 +9214,26 @@ impl OmeZarrViewerApp {
                     return;
                 };
 
+                self.validate_mask_polygon_selection();
+                let selected_polygon_idx = self
+                    .selected_mask_polygon
+                    .filter(|selection| selection.layer_id == id)
+                    .map(|selection| selection.polygon_idx);
+                let selected_vertex_idx = selected_polygon_idx.and(self.selected_mask_vertex);
+                let selected_vertex_count = selected_polygon_idx
+                    .and_then(|polygon_idx| {
+                        self.mask_layers[idx]
+                            .polygons_world
+                            .get(polygon_idx)
+                            .map(|poly| Self::mask_polygon_unique_vertex_count(poly))
+                    })
+                    .unwrap_or(0);
+
                 let mut changed = false;
                 let mut new_layer_clicked = false;
                 let mut draw_tool_clicked = false;
                 let mut clear_clicked = false;
+                let mut delete_selected_polygon_clicked = false;
                 let mut delete_clicked = false;
                 let mut reload_from_roi_clicked = false;
                 let mut reload_from_file: Option<PathBuf> = None;
@@ -8959,6 +9293,22 @@ impl OmeZarrViewerApp {
                     }
 
                     ui.separator();
+                    if let Some(polygon_idx) = selected_polygon_idx {
+                        ui.label(format!(
+                            "Selected polygon {} of {}",
+                            polygon_idx + 1,
+                            layer.polygons_world.len()
+                        ));
+                        ui.label(format!("{selected_vertex_count} vertices"));
+                        if let Some(vertex_idx) = selected_vertex_idx {
+                            ui.label(format!("Vertex {} selected", vertex_idx + 1));
+                        }
+                        delete_selected_polygon_clicked |= ui.button("Delete polygon").clicked();
+                    } else {
+                        ui.label("No polygon selected.");
+                    }
+
+                    ui.separator();
                     ui.horizontal(|ui| {
                         new_layer_clicked |= ui.button("New layer").clicked();
                         draw_tool_clicked |= ui.button("Draw (tool)").clicked();
@@ -8976,15 +9326,19 @@ impl OmeZarrViewerApp {
                 }
 
                 if reload_from_roi_clicked {
+                    self.push_mask_undo_snapshot();
                     match self.ensure_exclusion_masks_loaded() {
                         Ok(_) => changed = true,
-                        Err(err) => self
-                            .roi_selector
-                            .set_status(format!("Reload masks failed: {err}")),
+                        Err(err) => {
+                            self.mask_undo_stack.pop();
+                            self.roi_selector
+                                .set_status(format!("Reload masks failed: {err}"));
+                        }
                     }
                 } else if let Some(path) = reload_from_file {
                     match load_geojson_polylines_world(&path, 1.0, PolygonRingMode::AllRings) {
                         Ok(polys) => {
+                            self.push_mask_undo_snapshot();
                             if let Some(layer) = self.mask_layers.get_mut(idx) {
                                 layer.polygons_world = polys;
                                 changed = true;
@@ -8997,6 +9351,7 @@ impl OmeZarrViewerApp {
                 }
 
                 if new_layer_clicked {
+                    self.push_mask_undo_snapshot();
                     let new_id = self.create_editable_mask_layer(None);
                     self.set_active_layer(LayerId::Mask(new_id));
                     changed = true;
@@ -9006,16 +9361,39 @@ impl OmeZarrViewerApp {
                     self.drawing_mask_layer = Some(id);
                 }
                 if clear_clicked {
+                    let should_record_undo = self
+                        .mask_layers
+                        .get(idx)
+                        .is_some_and(|layer| !layer.polygons_world.is_empty());
+                    if should_record_undo {
+                        self.push_mask_undo_snapshot();
+                    }
                     if let Some(layer) = self.mask_layers.get_mut(idx) {
                         layer.clear();
                         changed = true;
+                    }
+                    if self
+                        .selected_mask_polygon
+                        .is_some_and(|selection| selection.layer_id == id)
+                    {
+                        self.clear_mask_polygon_selection();
                     }
                     if self.drawing_mask_layer == Some(id) {
                         self.drawing_mask_polygon.clear();
                     }
                 }
+                if delete_selected_polygon_clicked && self.delete_selected_mask_polygon() {
+                    changed = true;
+                }
                 if delete_clicked {
+                    self.push_mask_undo_snapshot();
                     self.mask_layers.remove(idx);
+                    if self
+                        .selected_mask_polygon
+                        .is_some_and(|selection| selection.layer_id == id)
+                    {
+                        self.clear_mask_polygon_selection();
+                    }
                     if self.drawing_mask_layer == Some(id) {
                         self.drawing_mask_layer = None;
                         self.drawing_mask_polygon.clear();
@@ -9290,6 +9668,12 @@ impl OmeZarrViewerApp {
 
     fn set_active_layer(&mut self, id: LayerId) {
         self.active_layer = id;
+        if self
+            .selected_mask_polygon
+            .is_some_and(|selection| id != LayerId::Mask(selection.layer_id))
+        {
+            self.clear_mask_polygon_selection();
+        }
         if let LayerId::Channel(idx) = id {
             self.selected_channel = idx.min(self.channels.len().saturating_sub(1));
             self.hist_dirty = true;
@@ -10491,23 +10875,14 @@ impl OmeZarrViewerApp {
         // Gesture handling happens before any drawing so the frame is rendered from a coherent
         // camera/tool snapshot. Each tool owns a separate interaction path here; later code only
         // consumes the resulting state.
+        let mut closed_mask_polygon_this_frame = false;
         if response.double_clicked() {
             match self.tool_mode {
                 ToolMode::Pan => self.fit_to_rect(rect),
                 ToolMode::MoveLayer => self.fit_to_rect(rect),
                 ToolMode::TransformLayer => self.fit_to_rect(rect),
                 ToolMode::DrawMaskPolygon => {
-                    if self.drawing_mask_polygon.len() >= 3 {
-                        let vertices = std::mem::take(&mut self.drawing_mask_polygon);
-                        let id = self
-                            .drawing_mask_layer
-                            .unwrap_or_else(|| self.ensure_editable_mask_layer());
-                        self.drawing_mask_layer = Some(id);
-                        if let Some(layer) = self.mask_layers.iter_mut().find(|l| l.id == id) {
-                            layer.add_closed_polygon(vertices);
-                            layer.visible = true;
-                        }
-                    }
+                    closed_mask_polygon_this_frame = self.finish_drawing_mask_polygon();
                 }
                 ToolMode::RectSelect | ToolMode::LassoSelect => {}
             }
@@ -10536,6 +10911,7 @@ impl OmeZarrViewerApp {
 
         if self.tool_mode == ToolMode::DrawMaskPolygon
             && !space_down
+            && !closed_mask_polygon_this_frame
             && response.clicked_by(egui::PointerButton::Primary)
         {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -10545,7 +10921,17 @@ impl OmeZarrViewerApp {
                     .unwrap_or_else(|| self.ensure_editable_mask_layer());
                 self.drawing_mask_layer = Some(id);
                 let off = self.layer_offset_world(LayerId::Mask(id));
-                self.drawing_mask_polygon.push(world - off);
+                let closes_at_first_point = self.drawing_mask_polygon.len() >= 3
+                    && self.drawing_mask_polygon.first().is_some_and(|first| {
+                        let first_screen = self.camera.world_to_screen(*first + off, rect);
+                        pos.distance(first_screen) <= MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX
+                    });
+
+                if closes_at_first_point {
+                    self.finish_drawing_mask_polygon();
+                } else {
+                    self.drawing_mask_polygon.push(world - off);
+                }
             }
         }
 
@@ -10556,18 +10942,8 @@ impl OmeZarrViewerApp {
             if ctx.input(|i| i.key_pressed(egui::Key::Backspace)) {
                 self.drawing_mask_polygon.pop();
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::Enter))
-                && self.drawing_mask_polygon.len() >= 3
-            {
-                let vertices = std::mem::take(&mut self.drawing_mask_polygon);
-                let id = self
-                    .drawing_mask_layer
-                    .unwrap_or_else(|| self.ensure_editable_mask_layer());
-                self.drawing_mask_layer = Some(id);
-                if let Some(layer) = self.mask_layers.iter_mut().find(|l| l.id == id) {
-                    layer.add_closed_polygon(vertices);
-                    layer.visible = true;
-                }
+            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.finish_drawing_mask_polygon();
             }
         }
 
@@ -10635,6 +11011,75 @@ impl OmeZarrViewerApp {
             self.clear_spatial_selection_drag();
         }
 
+        let can_edit_mask_polygon = self.tool_mode == ToolMode::Pan
+            && !space_down
+            && !ctx.wants_keyboard_input()
+            && matches!(self.active_layer, LayerId::Mask(_));
+        if can_edit_mask_polygon
+            && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+            && let (LayerId::Mask(layer_id), Some(pos)) = (
+                self.active_layer,
+                response
+                    .interact_pointer_pos()
+                    .or_else(|| ui.input(|i| i.pointer.interact_pos())),
+            )
+        {
+            let world = self.camera.screen_to_world(pos, rect);
+            if let Some(hit) = self.hit_mask_polygon_at(layer_id, world, pos, rect) {
+                let selection = MaskPolygonSelection {
+                    layer_id,
+                    polygon_idx: hit.polygon_idx,
+                };
+                self.selected_mask_polygon = Some(selection);
+                self.selected_mask_vertex = hit.vertex_idx;
+                if let Some(vertex_idx) = hit.vertex_idx {
+                    self.dragging_mask_vertex = Some(MaskVertexDrag {
+                        selection,
+                        vertex_idx,
+                        undo_recorded: false,
+                    });
+                } else {
+                    self.dragging_mask_vertex = None;
+                }
+            }
+        }
+        if can_edit_mask_polygon
+            && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
+            && let (LayerId::Mask(layer_id), Some(pos)) =
+                (self.active_layer, ui.input(|i| i.pointer.hover_pos()))
+            && rect.contains(pos)
+        {
+            let world = self.camera.screen_to_world(pos, rect);
+            if let Some(hit) = self.hit_mask_polygon_at(layer_id, world, pos, rect) {
+                self.selected_mask_polygon = Some(MaskPolygonSelection {
+                    layer_id,
+                    polygon_idx: hit.polygon_idx,
+                });
+                self.selected_mask_vertex = hit.vertex_idx;
+            }
+        }
+        if can_edit_mask_polygon
+            && response.dragged_by(egui::PointerButton::Primary)
+            && let (Some(mut drag), Some(pos)) = (
+                self.dragging_mask_vertex,
+                response
+                    .interact_pointer_pos()
+                    .or_else(|| ui.input(|i| i.pointer.interact_pos())),
+            )
+        {
+            let world = self.camera.screen_to_world(pos, rect);
+            if !drag.undo_recorded {
+                self.push_mask_undo_snapshot();
+                drag.undo_recorded = true;
+                self.dragging_mask_vertex = Some(drag);
+            }
+            if self.move_mask_polygon_vertex(drag.selection, drag.vertex_idx, world) {
+                self.selected_mask_polygon = Some(drag.selection);
+                self.selected_mask_vertex = Some(drag.vertex_idx);
+                self.bump_render_id();
+            }
+        }
+
         if self.tool_mode == ToolMode::Pan
             && !space_down
             && !ctx.wants_keyboard_input()
@@ -10661,6 +11106,9 @@ impl OmeZarrViewerApp {
                             layer.select_at(world, mods.shift, mods.command, &self.camera);
                         }
                     }
+                    LayerId::Mask(id) => {
+                        self.select_mask_polygon_at(id, world, pos, rect);
+                    }
                     _ => {}
                 }
             }
@@ -10685,8 +11133,26 @@ impl OmeZarrViewerApp {
                         layer.clear_selection();
                     }
                 }
+                LayerId::Mask(_) => self.clear_mask_polygon_selection(),
                 _ => {}
             }
+        }
+
+        if !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z))
+            && self.undo_last_mask_edit()
+        {
+            self.bump_render_id();
+        }
+
+        if !ctx.wants_keyboard_input()
+            && matches!(self.active_layer, LayerId::Mask(_))
+            && self.tool_mode == ToolMode::Pan
+            && (ctx.input(|i| i.key_pressed(egui::Key::Delete))
+                || ctx.input(|i| i.key_pressed(egui::Key::Backspace)))
+            && self.delete_selected_mask_polygon()
+        {
+            self.bump_render_id();
         }
 
         if self.tool_mode == ToolMode::TransformLayer && !ctx.wants_keyboard_input() {
@@ -10697,7 +11163,10 @@ impl OmeZarrViewerApp {
         }
 
         let can_pan_primary = self.tool_mode == ToolMode::Pan || space_down;
-        if can_pan_primary && response.dragged_by(egui::PointerButton::Primary) {
+        if can_pan_primary
+            && self.dragging_mask_vertex.is_none()
+            && response.dragged_by(egui::PointerButton::Primary)
+        {
             let delta = ui.input(|i| i.pointer.delta());
             self.camera.pan_by_screen_delta(delta);
             camera_changed = true;
@@ -10730,6 +11199,7 @@ impl OmeZarrViewerApp {
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) {
             self.layer_move = None;
+            self.dragging_mask_vertex = None;
         }
 
         // Transform tool (channels only): translate/scale/rotate with handles drawn on-canvas.
@@ -11679,16 +12149,41 @@ impl OmeZarrViewerApp {
                 ui.painter().add(egui::Shape::line(pts.clone(), stroke));
             }
 
+            let mut cursor_closes_at_first_point = false;
             if let Some(cursor) = ui.input(|i| i.pointer.hover_pos()) {
                 if let Some(last) = pts.last().copied() {
+                    cursor_closes_at_first_point = pts.len() >= 3
+                        && pts.first().is_some_and(|first| {
+                            cursor.distance(*first) <= MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX
+                        });
+                    let preview_end = if cursor_closes_at_first_point {
+                        pts[0]
+                    } else {
+                        cursor
+                    };
+                    let preview_stroke = if cursor_closes_at_first_point {
+                        egui::Stroke::new(2.0, egui::Color32::WHITE)
+                    } else {
+                        egui::Stroke::new(1.0, color)
+                    };
                     ui.painter()
-                        .line_segment([last, cursor], egui::Stroke::new(1.0, color));
+                        .line_segment([last, preview_end], preview_stroke);
                 }
             }
 
             for (i, p) in pts.iter().copied().enumerate() {
-                let r = if i == 0 { 4.0 } else { 3.0 };
-                ui.painter().circle_filled(p, r, color);
+                if i == 0 && cursor_closes_at_first_point {
+                    ui.painter()
+                        .circle_filled(p, 6.0, egui::Color32::from_rgb(80, 220, 140));
+                    ui.painter().circle_stroke(
+                        p,
+                        8.0,
+                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    );
+                } else {
+                    let r = if i == 0 { 4.0 } else { 3.0 };
+                    ui.painter().circle_filled(p, r, color);
+                }
             }
         }
 
@@ -11734,6 +12229,38 @@ impl OmeZarrViewerApp {
         let selection_count = self.active_object_selection_count();
         let selection_elements = self.active_object_selection_elements_snapshot();
         response.context_menu(|ui| {
+            if let LayerId::Mask(id) = self.active_layer {
+                self.validate_mask_polygon_selection();
+                let selected_polygon_idx = self
+                    .selected_mask_polygon
+                    .filter(|selection| selection.layer_id == id)
+                    .map(|selection| selection.polygon_idx);
+                if let Some(polygon_idx) = selected_polygon_idx {
+                    ui.label(format!("Selected polygon {}", polygon_idx + 1));
+                    if ui.button("Delete polygon").clicked() {
+                        if self.delete_selected_mask_polygon() {
+                            self.bump_render_id();
+                        }
+                        ui.close();
+                    }
+                } else {
+                    ui.label("No polygon selected.");
+                }
+                if ui
+                    .add_enabled(
+                        !self.mask_undo_stack.is_empty(),
+                        egui::Button::new("Undo mask edit"),
+                    )
+                    .clicked()
+                {
+                    if self.undo_last_mask_edit() {
+                        self.bump_render_id();
+                    }
+                    ui.close();
+                }
+                return;
+            }
+
             if selection_count == 0 || !self.active_layer_supports_spatial_selection() {
                 ui.label("No selected cells.");
                 return;
@@ -12275,6 +12802,53 @@ impl OmeZarrViewerApp {
                 .map(|p| self.camera.world_to_screen(p + off, rect))
                 .collect::<Vec<_>>();
             ui.painter().add(egui::Shape::line(pts, stroke));
+        }
+
+        let Some(selection) = self.selected_mask_polygon else {
+            return;
+        };
+        if selection.layer_id != id {
+            return;
+        }
+        let Some(poly) = layer.polygons_world.get(selection.polygon_idx) else {
+            return;
+        };
+        let n = Self::mask_polygon_unique_vertex_count(poly);
+        if n < 3 {
+            return;
+        }
+
+        let mut selected_pts = poly
+            .iter()
+            .copied()
+            .take(n)
+            .map(|p| self.camera.world_to_screen(p + off, rect))
+            .collect::<Vec<_>>();
+        selected_pts.push(selected_pts[0]);
+
+        ui.painter().add(egui::Shape::line(
+            selected_pts.clone(),
+            egui::Stroke::new(layer.width_screen_px + 4.0, egui::Color32::WHITE),
+        ));
+        ui.painter().add(egui::Shape::line(
+            selected_pts.clone(),
+            egui::Stroke::new(layer.width_screen_px + 2.0, color),
+        ));
+
+        for (vertex_idx, p) in selected_pts.iter().copied().take(n).enumerate() {
+            let selected = self.selected_mask_vertex == Some(vertex_idx);
+            let fill = if selected {
+                egui::Color32::from_rgb(80, 220, 140)
+            } else {
+                egui::Color32::WHITE
+            };
+            let radius = if selected { 5.5 } else { 4.5 };
+            ui.painter().circle_filled(p, radius, fill);
+            ui.painter().circle_stroke(
+                p,
+                radius + 1.5,
+                egui::Stroke::new(1.5, egui::Color32::BLACK),
+            );
         }
     }
 
