@@ -117,42 +117,61 @@ fn component_pixels(
     pixels
 }
 
+type GridPoint = (i32, i32);
+type GridEdge = (GridPoint, GridPoint);
+
 fn component_to_polygons(width: usize, pixels: &[usize]) -> Vec<Vec<egui::Pos2>> {
     let pixel_set = pixels.iter().copied().collect::<HashSet<_>>();
-    let mut edges = HashMap::<(i32, i32), (i32, i32)>::new();
+    let mut edges = HashSet::<GridEdge>::new();
+    let mut outgoing = HashMap::<GridPoint, Vec<GridPoint>>::new();
 
     for &idx in pixels {
         let x = (idx % width) as i32;
         let y = (idx / width) as i32;
 
         if !pixel_set.contains(&(idx.saturating_sub(width))) || y == 0 {
-            edges.insert((x, y), (x + 1, y));
+            insert_boundary_edge(&mut edges, &mut outgoing, (x, y), (x + 1, y));
         }
         if !pixel_set.contains(&(idx + 1)) || (x as usize + 1 == width) {
-            edges.insert((x + 1, y), (x + 1, y + 1));
+            insert_boundary_edge(&mut edges, &mut outgoing, (x + 1, y), (x + 1, y + 1));
         }
         if !pixel_set.contains(&(idx + width)) {
-            edges.insert((x + 1, y + 1), (x, y + 1));
+            insert_boundary_edge(&mut edges, &mut outgoing, (x + 1, y + 1), (x, y + 1));
         }
         if !pixel_set.contains(&(idx.saturating_sub(1))) || x == 0 {
-            edges.insert((x, y + 1), (x, y));
+            insert_boundary_edge(&mut edges, &mut outgoing, (x, y + 1), (x, y));
         }
+    }
+    for targets in outgoing.values_mut() {
+        targets.sort_unstable();
+        targets.dedup();
     }
 
     let mut polygons = Vec::new();
-    while let Some((&start, _)) = edges.iter().next() {
-        let mut loop_vertices = Vec::<(i32, i32)>::new();
-        let mut cursor = start;
+    while let Some(&(start, first_next)) = edges.iter().min() {
+        let mut loop_vertices = Vec::<GridPoint>::new();
+        let mut prev = start;
+        let mut cursor = first_next;
+        edges.remove(&(start, first_next));
+        loop_vertices.push(start);
+
         loop {
-            loop_vertices.push(cursor);
-            let Some(next) = edges.remove(&cursor) else {
-                break;
-            };
-            cursor = next;
             if cursor == start {
                 break;
             }
+            loop_vertices.push(cursor);
+            let Some(next) = choose_next_boundary_edge(prev, cursor, &outgoing, &edges) else {
+                loop_vertices.clear();
+                break;
+            };
+            edges.remove(&(cursor, next));
+            prev = cursor;
+            cursor = next;
         }
+        if loop_vertices.is_empty() {
+            continue;
+        }
+
         let polygon = simplify_collinear_vertices(
             &loop_vertices
                 .into_iter()
@@ -165,6 +184,54 @@ fn component_to_polygons(width: usize, pixels: &[usize]) -> Vec<Vec<egui::Pos2>>
     }
 
     polygons
+}
+
+fn insert_boundary_edge(
+    edges: &mut HashSet<GridEdge>,
+    outgoing: &mut HashMap<GridPoint, Vec<GridPoint>>,
+    from: GridPoint,
+    to: GridPoint,
+) {
+    if edges.insert((from, to)) {
+        outgoing.entry(from).or_default().push(to);
+    }
+}
+
+fn choose_next_boundary_edge(
+    previous: GridPoint,
+    cursor: GridPoint,
+    outgoing: &HashMap<GridPoint, Vec<GridPoint>>,
+    unused_edges: &HashSet<GridEdge>,
+) -> Option<GridPoint> {
+    let incoming_dir = edge_direction(previous, cursor)?;
+    outgoing
+        .get(&cursor)?
+        .iter()
+        .copied()
+        .filter(|&candidate| unused_edges.contains(&(cursor, candidate)))
+        .min_by_key(|&candidate| {
+            let outgoing_dir = edge_direction(cursor, candidate).unwrap_or(incoming_dir);
+            (turn_priority(incoming_dir, outgoing_dir), candidate)
+        })
+}
+
+fn edge_direction(from: GridPoint, to: GridPoint) -> Option<u8> {
+    match (to.0 - from.0, to.1 - from.1) {
+        (1, 0) => Some(0),
+        (0, 1) => Some(1),
+        (-1, 0) => Some(2),
+        (0, -1) => Some(3),
+        _ => None,
+    }
+}
+
+fn turn_priority(incoming_dir: u8, outgoing_dir: u8) -> u8 {
+    match (outgoing_dir + 4 - incoming_dir) % 4 {
+        3 => 0, // left turn: separates contours that touch at a single grid vertex.
+        0 => 1, // straight
+        1 => 2, // right turn
+        _ => 3, // reverse
+    }
 }
 
 fn simplify_collinear_vertices(vertices: &[egui::Pos2]) -> Vec<egui::Pos2> {
@@ -184,4 +251,58 @@ fn simplify_collinear_vertices(vertices: &[egui::Pos2]) -> Vec<egui::Pos2> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mask_from_rows(rows: &[&str]) -> ThresholdRegionMask {
+        let height = rows.len();
+        let width = rows.first().map(|row| row.len()).unwrap_or(0);
+        let included = rows
+            .iter()
+            .flat_map(|row| {
+                assert_eq!(row.len(), width);
+                row.chars().map(|ch| ch == '#').collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        ThresholdRegionMask {
+            width,
+            height,
+            included,
+        }
+    }
+
+    fn assert_axis_aligned_polygon_edges(polygons: &[Vec<egui::Pos2>]) {
+        for polygon in polygons {
+            assert!(polygon.len() >= 3);
+            for idx in 0..polygon.len() {
+                let a = polygon[idx];
+                let b = polygon[(idx + 1) % polygon.len()];
+                assert!(
+                    (a.x - b.x).abs() < 1e-6 || (a.y - b.y).abs() < 1e-6,
+                    "non-axis-aligned edge from {a:?} to {b:?} in {polygon:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polygonizes_self_touching_notch_without_diagonal_closure() {
+        let mask = mask_from_rows(&["###.", "#.#.", ".##.", "...."]);
+        let polygons = threshold_region_mask_to_polygons(&mask);
+
+        assert_eq!(polygons.len(), 2);
+        assert_axis_aligned_polygon_edges(&polygons);
+    }
+
+    #[test]
+    fn polygonizes_single_pixel_hole_without_open_rings() {
+        let mask = mask_from_rows(&["###", "#.#", "###"]);
+        let polygons = threshold_region_mask_to_polygons(&mask);
+
+        assert_eq!(polygons.len(), 2);
+        assert_axis_aligned_polygon_edges(&polygons);
+    }
 }
