@@ -6,6 +6,50 @@ use eframe::egui;
 
 use crate::data::project_config::ProjectMaskLayer;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskDisplayMode {
+    OutlineOnly,
+    TranslucentFill,
+    FilledPreview,
+}
+
+impl MaskDisplayMode {
+    pub fn storage_key(self) -> &'static str {
+        match self {
+            Self::OutlineOnly => "outline_only",
+            Self::TranslucentFill => "translucent_fill",
+            Self::FilledPreview => "filled_preview",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OutlineOnly => "Outline",
+            Self::TranslucentFill => "Translucent fill",
+            Self::FilledPreview => "Mask preview",
+        }
+    }
+
+    pub fn from_storage_key(value: &str) -> Option<Self> {
+        match value {
+            "outline_only" | "outline" => Some(Self::OutlineOnly),
+            "translucent_fill" | "fill_outline" | "semi_transparent_fill" => {
+                Some(Self::TranslucentFill)
+            }
+            "filled_preview" | "mask_preview" => Some(Self::FilledPreview),
+            _ => None,
+        }
+    }
+
+    pub fn default_new_layer() -> Self {
+        Self::TranslucentFill
+    }
+
+    pub fn default_legacy_project() -> Self {
+        Self::OutlineOnly
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MaskLayer {
     pub id: u64,
@@ -13,6 +57,7 @@ pub struct MaskLayer {
     pub visible: bool,
     pub opacity: f32,
     pub width_screen_px: f32,
+    pub display_mode: MaskDisplayMode,
     pub color_rgb: [u8; 3],
     pub offset_world: egui::Vec2,
     pub editable: bool,
@@ -44,6 +89,7 @@ impl MaskLayer {
             visible: self.visible,
             opacity: self.opacity,
             width_screen_px: self.width_screen_px,
+            display_mode: Some(self.display_mode.storage_key().to_string()),
             color_rgb: self.color_rgb,
             offset_world: [self.offset_world.x, self.offset_world.y],
             editable: self.editable,
@@ -67,6 +113,11 @@ impl MaskLayer {
             } else {
                 p.width_screen_px
             },
+            display_mode: p
+                .display_mode
+                .as_deref()
+                .and_then(MaskDisplayMode::from_storage_key)
+                .unwrap_or_else(MaskDisplayMode::default_legacy_project),
             color_rgb: if p.color_rgb == [0, 0, 0] {
                 [255, 210, 60]
             } else {
@@ -119,6 +170,7 @@ pub fn export_mask_layers_geojson_value(layers: &[MaskLayer]) -> serde_json::Val
                             "layer_color_rgb": layer.color_rgb,
                             "layer_opacity": layer.opacity,
                             "layer_width_screen_px": layer.width_screen_px,
+                            "layer_display_mode": layer.display_mode.storage_key(),
                             "layer_visible": layer.visible,
                             "layer_editable": layer.editable,
                             "shape_index": shape_index as i64,

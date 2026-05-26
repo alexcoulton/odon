@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use eframe::egui;
 use glow::HasContext;
+use lyon_path::Path as LyonPath;
+use lyon_path::math::point as lyon_point;
+use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
 use ndarray::Array2;
 use rfd::FileDialog;
 use zarrs::array::{Array, ArraySubset};
@@ -54,9 +57,9 @@ use crate::imaging::view_plane::{
     display_axes as display_axes_for_mode, display_downsample, image_subset_ranges_for_view,
     local_to_world_scale, slice_extent_level0, supported_modes,
 };
-use crate::masks::MaskLayer;
 use crate::masks::resolve_masks_geojson_path_and_downsample;
 use crate::masks::save_mask_layers_geojson;
+use crate::masks::{MaskDisplayMode, MaskLayer};
 use crate::objects::GeoJsonSegmentationLayer;
 use crate::objects::ObjectPreloadSettings;
 use crate::objects::ObjectsLayer;
@@ -119,6 +122,7 @@ const RAW_TILE_ADAPTIVE_COARSE_TILES_PER_FRAME: usize = 1;
 const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
 const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
+const MAX_UNDO_ACTIONS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LayerId {
@@ -313,6 +317,14 @@ impl ChannelListHost for OmeZarrViewerApp {
         Self::open_group_layers_dialog_channels(self, members);
     }
 
+    fn can_reset_selected_layer_positions(&mut self) -> bool {
+        self.current_visible_move_targets_have_moved()
+    }
+
+    fn reset_selected_layer_positions(&mut self) -> bool {
+        self.reset_current_visible_move_targets_to_loaded()
+    }
+
     fn layer_groups(&self) -> crate::data::project_config::ProjectLayerGroups {
         self.current_layer_groups()
     }
@@ -384,6 +396,23 @@ struct MaskUndoSnapshot {
     selected_vertex: Option<usize>,
     drawing_layer: Option<u64>,
     drawing_polygon: Vec<egui::Pos2>,
+}
+
+#[derive(Debug, Clone)]
+struct LayerOffsetEntry {
+    layer: LayerId,
+    offset_world: egui::Vec2,
+}
+
+#[derive(Debug, Clone)]
+struct LayerOffsetUndoSnapshot {
+    offsets: Vec<LayerOffsetEntry>,
+}
+
+#[derive(Debug, Clone)]
+enum UndoAction {
+    Mask(MaskUndoSnapshot),
+    LayerOffsets(LayerOffsetUndoSnapshot),
 }
 
 fn distance_to_screen_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
@@ -576,7 +605,7 @@ pub struct OmeZarrViewerApp {
     selected_mask_polygon: Option<MaskPolygonSelection>,
     selected_mask_vertex: Option<usize>,
     dragging_mask_vertex: Option<MaskVertexDrag>,
-    mask_undo_stack: Vec<MaskUndoSnapshot>,
+    undo_stack: Vec<UndoAction>,
     selection_rect_start_world: Option<egui::Pos2>,
     selection_rect_current_world: Option<egui::Pos2>,
     selection_lasso_world: Vec<egui::Pos2>,
@@ -633,6 +662,7 @@ pub struct OmeZarrViewerApp {
     channel_offsets_world: Vec<egui::Vec2>,
     channel_scales: Vec<egui::Vec2>,
     channel_rotations_rad: Vec<f32>,
+    loaded_layer_offsets_world: HashMap<LayerId, egui::Vec2>,
     points_offset_world: egui::Vec2,
     spatial_points_offset_world: egui::Vec2,
     seg_labels_offset_world: egui::Vec2,
@@ -659,8 +689,7 @@ pub struct OmeZarrViewerApp {
 
 #[derive(Debug, Clone)]
 struct LayerMoveState {
-    layer: LayerId,
-    start_offset_world: egui::Vec2,
+    targets: Vec<LayerOffsetEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -2172,7 +2201,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
-            mask_undo_stack: Vec::new(),
+            undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -2230,6 +2259,7 @@ impl OmeZarrViewerApp {
             channel_offsets_world: vec![egui::Vec2::ZERO; dataset.channels.len()],
             channel_scales: vec![egui::Vec2::splat(1.0); dataset.channels.len()],
             channel_rotations_rad: vec![0.0; dataset.channels.len()],
+            loaded_layer_offsets_world: HashMap::new(),
             points_offset_world: egui::Vec2::ZERO,
             spatial_points_offset_world: egui::Vec2::ZERO,
             seg_labels_offset_world: egui::Vec2::ZERO,
@@ -2257,6 +2287,7 @@ impl OmeZarrViewerApp {
 
         app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
+        app.capture_loaded_layer_offsets();
         app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
@@ -2444,7 +2475,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
-            mask_undo_stack: Vec::new(),
+            undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -2499,6 +2530,7 @@ impl OmeZarrViewerApp {
             channel_offsets_world: vec![egui::Vec2::ZERO; dataset.channels.len()],
             channel_scales: vec![egui::Vec2::splat(1.0); dataset.channels.len()],
             channel_rotations_rad: vec![0.0; dataset.channels.len()],
+            loaded_layer_offsets_world: HashMap::new(),
             points_offset_world: egui::Vec2::ZERO,
             spatial_points_offset_world: egui::Vec2::ZERO,
             seg_labels_offset_world: egui::Vec2::ZERO,
@@ -2526,6 +2558,7 @@ impl OmeZarrViewerApp {
 
         app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
+        app.capture_loaded_layer_offsets();
         app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
@@ -2787,7 +2820,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
-            mask_undo_stack: Vec::new(),
+            undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
@@ -2838,6 +2871,7 @@ impl OmeZarrViewerApp {
             channel_offsets_world: vec![egui::Vec2::ZERO; dataset.channels.len()],
             channel_scales: vec![egui::Vec2::splat(1.0); dataset.channels.len()],
             channel_rotations_rad: vec![0.0; dataset.channels.len()],
+            loaded_layer_offsets_world: HashMap::new(),
             points_offset_world: egui::Vec2::ZERO,
             spatial_points_offset_world: egui::Vec2::ZERO,
             seg_labels_offset_world: egui::Vec2::ZERO,
@@ -2864,6 +2898,7 @@ impl OmeZarrViewerApp {
 
         app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
+        app.capture_loaded_layer_offsets();
         app.active_render_id = app.compute_render_id();
 
         // Initial fit.
@@ -2881,6 +2916,7 @@ impl OmeZarrViewerApp {
 
     fn sync_current_view_state_into_project_space(&mut self) {
         self.sync_mask_layers_into_project_space();
+        self.ensure_loaded_layer_offset_baselines();
         let layer_groups = self
             .project_space
             .roi_view_state(&self.dataset.source)
@@ -2910,6 +2946,19 @@ impl OmeZarrViewerApp {
                     .then(|| (Self::layer_id_storage_key(id), [off.x, off.y]))
             })
             .collect::<BTreeMap<_, _>>();
+        let overlay_original_offsets_world = self
+            .overlay_layer_order
+            .iter()
+            .copied()
+            .filter_map(|id| {
+                let current = self.layer_offset_world(id);
+                self.loaded_layer_offsets_world
+                    .get(&id)
+                    .copied()
+                    .filter(|baseline| layer_offsets_differ(current, *baseline))
+                    .map(|baseline| (Self::layer_id_storage_key(id), vec2_to_array(baseline)))
+            })
+            .collect::<BTreeMap<_, _>>();
         self.project_space.set_roi_view_state(
             &self.dataset.source,
             ProjectRoiViewState {
@@ -2928,6 +2977,16 @@ impl OmeZarrViewerApp {
                             .channel_offsets_world
                             .get(idx)
                             .map(|off| [off.x, off.y]),
+                        original_offset_world: self
+                            .channel_offsets_world
+                            .get(idx)
+                            .and_then(|current| {
+                                self.loaded_layer_offsets_world
+                                    .get(&LayerId::Channel(idx))
+                                    .copied()
+                                    .filter(|baseline| layer_offsets_differ(*current, *baseline))
+                            })
+                            .map(vec2_to_array),
                         scale: self.channel_scales.get(idx).map(|scale| [scale.x, scale.y]),
                         rotation_rad: self.channel_rotations_rad.get(idx).copied(),
                         note: (!ch.note.is_empty()).then(|| ch.note.clone()),
@@ -2938,6 +2997,7 @@ impl OmeZarrViewerApp {
                 overlay_order,
                 overlay_visibility,
                 overlay_offsets_world,
+                overlay_original_offsets_world,
                 segmentation: Some(ProjectSegmentationViewState {
                     label_name: (!self.seg_label_selected.is_empty())
                         .then(|| self.seg_label_selected.clone()),
@@ -3105,6 +3165,11 @@ impl OmeZarrViewerApp {
                         .min(self.channels.len().saturating_sub(1)),
                 ));
             }
+        }
+        if let Some(view) = saved_view.as_ref() {
+            self.restore_loaded_layer_offsets_from_project_view(view);
+        } else {
+            self.capture_loaded_layer_offsets();
         }
     }
 
@@ -3857,6 +3922,7 @@ impl OmeZarrViewerApp {
         self.apply_view_state_from_project_space();
         self.project_cfg_seen = u64::MAX;
         self.restore_mask_layers_from_project_space();
+        self.restore_loaded_layer_offsets_from_current_project_view_or_capture();
         self.auto_load_project_roi_segmentation();
     }
 
@@ -4345,7 +4411,7 @@ impl OmeZarrViewerApp {
     }
 
     fn restore_mask_layers_from_project_space(&mut self) {
-        self.mask_undo_stack.clear();
+        self.undo_stack.clear();
         let Some(local_root) = self.dataset.source.local_path() else {
             self.mask_layers.clear();
             self.next_mask_layer_id = 1;
@@ -4397,9 +4463,15 @@ impl OmeZarrViewerApp {
         self.create_editable_mask_layer(None)
     }
 
+    fn push_undo_action(&mut self, action: UndoAction) {
+        self.undo_stack.push(action);
+        if self.undo_stack.len() > MAX_UNDO_ACTIONS {
+            self.undo_stack.remove(0);
+        }
+    }
+
     fn push_mask_undo_snapshot(&mut self) {
-        const MAX_MASK_UNDO_SNAPSHOTS: usize = 64;
-        self.mask_undo_stack.push(MaskUndoSnapshot {
+        self.push_undo_action(UndoAction::Mask(MaskUndoSnapshot {
             layers: self.mask_layers.clone(),
             next_layer_id: self.next_mask_layer_id,
             active_layer: self.active_layer,
@@ -4407,26 +4479,52 @@ impl OmeZarrViewerApp {
             selected_vertex: self.selected_mask_vertex,
             drawing_layer: self.drawing_mask_layer,
             drawing_polygon: self.drawing_mask_polygon.clone(),
-        });
-        if self.mask_undo_stack.len() > MAX_MASK_UNDO_SNAPSHOTS {
-            self.mask_undo_stack.remove(0);
+        }));
+    }
+
+    fn push_layer_offsets_undo_snapshot(&mut self, layers: &[LayerId]) {
+        let offsets = layers
+            .iter()
+            .copied()
+            .filter(|&layer| self.layer_has_offset_world(layer))
+            .map(|layer| LayerOffsetEntry {
+                layer,
+                offset_world: self.layer_offset_world(layer),
+            })
+            .collect::<Vec<_>>();
+        if !offsets.is_empty() {
+            self.push_undo_action(UndoAction::LayerOffsets(LayerOffsetUndoSnapshot {
+                offsets,
+            }));
         }
     }
 
-    fn undo_last_mask_edit(&mut self) -> bool {
-        let Some(snapshot) = self.mask_undo_stack.pop() else {
+    fn undo_last_edit(&mut self) -> bool {
+        let Some(action) = self.undo_stack.pop() else {
             return false;
         };
-        self.mask_layers = snapshot.layers;
-        self.next_mask_layer_id = snapshot.next_layer_id;
-        self.active_layer = snapshot.active_layer;
-        self.selected_mask_polygon = snapshot.selection;
-        self.selected_mask_vertex = snapshot.selected_vertex;
-        self.dragging_mask_vertex = None;
-        self.drawing_mask_layer = snapshot.drawing_layer;
-        self.drawing_mask_polygon = snapshot.drawing_polygon;
-        self.validate_mask_polygon_selection();
-        self.rebuild_layer_orders();
+        match action {
+            UndoAction::Mask(snapshot) => {
+                self.mask_layers = snapshot.layers;
+                self.next_mask_layer_id = snapshot.next_layer_id;
+                self.active_layer = snapshot.active_layer;
+                self.selected_mask_polygon = snapshot.selection;
+                self.selected_mask_vertex = snapshot.selected_vertex;
+                self.dragging_mask_vertex = None;
+                self.drawing_mask_layer = snapshot.drawing_layer;
+                self.drawing_mask_polygon = snapshot.drawing_polygon;
+                self.validate_mask_polygon_selection();
+                self.rebuild_layer_orders();
+            }
+            UndoAction::LayerOffsets(snapshot) => {
+                for entry in snapshot.offsets {
+                    if let Some(offset) = self.layer_offset_world_mut(entry.layer) {
+                        *offset = entry.offset_world;
+                    }
+                }
+                self.hist_dirty = true;
+            }
+        }
         true
     }
 
@@ -4659,6 +4757,7 @@ impl OmeZarrViewerApp {
             visible: true,
             opacity: 0.9,
             width_screen_px: 2.0,
+            display_mode: MaskDisplayMode::default_new_layer(),
             color_rgb: [255, 210, 60],
             offset_world: egui::Vec2::ZERO,
             editable: true,
@@ -6178,6 +6277,7 @@ impl OmeZarrViewerApp {
         self.active_render_id = self.compute_render_id();
         self.last_render_view_selection = self.committed_view_selection();
         self.restore_mask_layers_from_project_space();
+        self.restore_loaded_layer_offsets_from_current_project_view_or_capture();
 
         self.hist = None;
         self.hist_request_id = 0;
@@ -6204,7 +6304,7 @@ impl OmeZarrViewerApp {
         self.auto_load_project_roi_segmentation();
         self.drawing_mask_polygon.clear();
         self.clear_mask_polygon_selection();
-        self.mask_undo_stack.clear();
+        self.undo_stack.clear();
         if reload_exclusion_masks {
             if self.dataset.source.local_path().is_some() {
                 if let Err(err) = self.ensure_exclusion_masks_loaded() {
@@ -6273,6 +6373,7 @@ impl OmeZarrViewerApp {
                     visible: true,
                     opacity: 0.85,
                     width_screen_px: 1.5,
+                    display_mode: MaskDisplayMode::default_new_layer(),
                     color_rgb: [50, 220, 255],
                     offset_world: egui::Vec2::ZERO,
                     editable: false,
@@ -7656,7 +7757,7 @@ impl OmeZarrViewerApp {
                 self.tool_mode == ToolMode::MoveLayer,
                 egui::Sense::click(),
             )
-            .on_hover_text("Move active layer")
+            .on_hover_text("Move selected visible layer(s)")
             .clicked()
             {
                 self.clear_spatial_selection_drag();
@@ -7988,6 +8089,13 @@ impl OmeZarrViewerApp {
 
                         // Context menu: group layers.
                         resp.row_response.context_menu(|ui| {
+                            if self.current_visible_move_targets_have_moved() {
+                                if ui.button("Reset position").clicked() {
+                                    self.reset_current_visible_move_targets_to_loaded();
+                                    ui.close();
+                                }
+                                ui.separator();
+                            }
                             if let LayerId::Mask(mask_id) = id {
                                 if ui.button("Export layer as GeoJSON...").clicked() {
                                     let default_name =
@@ -8790,15 +8898,14 @@ impl OmeZarrViewerApp {
                 .changed();
             reset_clicked = ui
                 .button("Reset")
-                .on_hover_text("Reset translation (and scale/rotation for channels)")
+                .on_hover_text("Reset selected visible layer translation to loaded position")
                 .clicked();
         });
 
-        if let Some(dst) = self.layer_offset_world_mut(active_layer) {
-            if reset_clicked {
-                *dst = egui::Vec2::ZERO;
-                changed = true;
-            } else if changed {
+        if reset_clicked {
+            changed |= self.reset_current_visible_move_targets_to_loaded();
+        } else if changed {
+            if let Some(dst) = self.layer_offset_world_mut(active_layer) {
                 *dst = off;
             }
         }
@@ -8857,12 +8964,6 @@ impl OmeZarrViewerApp {
                 }
             });
 
-            if reset_clicked {
-                scale = egui::Vec2::splat(1.0);
-                deg = 0.0;
-                changed = true;
-            }
-
             rot = deg.to_radians();
             if let Some(dst) = self.channel_scales.get_mut(idx) {
                 *dst = scale;
@@ -8874,6 +8975,7 @@ impl OmeZarrViewerApp {
 
         if changed {
             self.hist_dirty = true;
+            self.bump_render_id();
         }
         ui.separator();
 
@@ -9354,6 +9456,18 @@ impl OmeZarrViewerApp {
                                 .clamping(egui::SliderClamping::Always),
                         )
                         .changed();
+                    ui.horizontal(|ui| {
+                        ui.label("Display");
+                        for mode in [
+                            MaskDisplayMode::OutlineOnly,
+                            MaskDisplayMode::TranslucentFill,
+                            MaskDisplayMode::FilledPreview,
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut layer.display_mode, mode, mode.label())
+                                .changed();
+                        }
+                    });
                     changed |= ui
                         .add(
                             egui::Slider::new(&mut layer.width_screen_px, 0.25..=6.0)
@@ -9427,7 +9541,7 @@ impl OmeZarrViewerApp {
                     match self.ensure_exclusion_masks_loaded() {
                         Ok(_) => changed = true,
                         Err(err) => {
-                            self.mask_undo_stack.pop();
+                            self.undo_stack.pop();
                             self.roi_selector
                                 .set_status(format!("Reload masks failed: {err}"));
                         }
@@ -10301,6 +10415,205 @@ impl OmeZarrViewerApp {
             LayerId::XeniumCells => Some(&mut self.xenium_cells_offset_world),
             LayerId::XeniumTranscripts => Some(&mut self.xenium_transcripts_offset_world),
         }
+    }
+
+    fn layer_has_offset_world(&self, id: LayerId) -> bool {
+        match id {
+            LayerId::Channel(idx) => idx < self.channel_offsets_world.len(),
+            LayerId::SpatialImage(id) => {
+                self.spatial_image_layers.images.iter().any(|l| l.id == id)
+            }
+            LayerId::Points => true,
+            LayerId::Annotation(id) => self.annotation_layers.iter().any(|l| l.id == id),
+            LayerId::SpatialPoints => true,
+            LayerId::Mask(id) => self.mask_layers.iter().any(|l| l.id == id),
+            LayerId::SegmentationLabels
+            | LayerId::SegmentationGeoJson
+            | LayerId::SegmentationObjects
+            | LayerId::XeniumCells
+            | LayerId::XeniumTranscripts => true,
+            LayerId::SpatialShape(id) => self.spatial_layers.shapes.iter().any(|s| s.id == id),
+        }
+    }
+
+    fn current_offset_layer_ids(&self) -> Vec<LayerId> {
+        let mut layers = (0..self.channel_offsets_world.len())
+            .map(LayerId::Channel)
+            .collect::<Vec<_>>();
+        layers.extend(self.overlay_layer_order.iter().copied());
+        Self::dedupe_layer_ids(layers)
+    }
+
+    fn capture_loaded_layer_offsets(&mut self) {
+        self.loaded_layer_offsets_world.clear();
+        for layer in self.current_offset_layer_ids() {
+            if self.layer_has_offset_world(layer) {
+                self.loaded_layer_offsets_world
+                    .insert(layer, self.layer_offset_world(layer));
+            }
+        }
+    }
+
+    fn ensure_loaded_layer_offset_baselines(&mut self) {
+        for layer in self.current_offset_layer_ids() {
+            if self.layer_has_offset_world(layer) {
+                let offset = self.layer_offset_world(layer);
+                self.loaded_layer_offsets_world
+                    .entry(layer)
+                    .or_insert(offset);
+            }
+        }
+    }
+
+    fn ensure_loaded_layer_offset_baselines_for(&mut self, layers: &[LayerId]) {
+        self.ensure_loaded_layer_offset_baselines();
+        for &layer in layers {
+            if self.layer_has_offset_world(layer) {
+                let offset = self.layer_offset_world(layer);
+                self.loaded_layer_offsets_world
+                    .entry(layer)
+                    .or_insert(offset);
+            }
+        }
+    }
+
+    fn restore_loaded_layer_offsets_from_project_view(&mut self, view: &ProjectRoiViewState) {
+        self.loaded_layer_offsets_world.clear();
+        for (idx, saved) in view.channels.iter().enumerate() {
+            if let Some([x, y]) = saved.original_offset_world {
+                self.loaded_layer_offsets_world
+                    .insert(LayerId::Channel(idx), egui::vec2(x, y));
+            }
+        }
+        for (id, [x, y]) in &view.overlay_original_offsets_world {
+            if let Some(layer_id) = self.parse_layer_id_storage_key(id) {
+                self.loaded_layer_offsets_world
+                    .insert(layer_id, egui::vec2(*x, *y));
+            }
+        }
+        self.ensure_loaded_layer_offset_baselines();
+    }
+
+    fn restore_loaded_layer_offsets_from_current_project_view_or_capture(&mut self) {
+        let saved_view = self
+            .project_space
+            .roi_view_state(&self.dataset.source)
+            .cloned();
+        if let Some(view) = saved_view.as_ref() {
+            self.restore_loaded_layer_offsets_from_project_view(view);
+        } else {
+            self.capture_loaded_layer_offsets();
+        }
+    }
+
+    fn dedupe_layer_ids(layers: Vec<LayerId>) -> Vec<LayerId> {
+        let mut seen = HashSet::new();
+        layers
+            .into_iter()
+            .filter(|layer| seen.insert(*layer))
+            .collect()
+    }
+
+    fn filter_visible_movable_layers(&self, layers: Vec<LayerId>) -> Vec<LayerId> {
+        Self::dedupe_layer_ids(layers)
+            .into_iter()
+            .filter(|&layer| {
+                self.layer_has_offset_world(layer)
+                    && self.layer_is_available(layer)
+                    && self.layer_visible_value(layer).unwrap_or(false)
+            })
+            .collect()
+    }
+
+    fn current_visible_move_target_layers(&self) -> Vec<LayerId> {
+        let candidates = match self.active_layer {
+            LayerId::Channel(idx) => {
+                if let Some(group_id) = self.selected_channel_group_id {
+                    self.channel_indices_in_group(group_id)
+                        .into_iter()
+                        .map(LayerId::Channel)
+                        .collect()
+                } else if self.selected_channel_layers.contains(&idx) {
+                    self.selected_channel_layers
+                        .iter()
+                        .copied()
+                        .map(LayerId::Channel)
+                        .collect()
+                } else {
+                    vec![LayerId::Channel(idx)]
+                }
+            }
+            layer if self.selected_overlay_layers.contains(&layer) => {
+                self.selected_overlay_layers.iter().copied().collect()
+            }
+            layer => vec![layer],
+        };
+        self.filter_visible_movable_layers(candidates)
+    }
+
+    fn current_visible_move_targets_have_moved(&mut self) -> bool {
+        let targets = self.current_visible_move_target_layers();
+        if targets.is_empty() {
+            return false;
+        }
+        self.ensure_loaded_layer_offset_baselines_for(&targets);
+        targets.iter().any(|&layer| {
+            self.loaded_layer_offsets_world
+                .get(&layer)
+                .is_some_and(|baseline| {
+                    (self.layer_offset_world(layer) - *baseline).length_sq() > 1e-12
+                })
+        })
+    }
+
+    fn reset_current_visible_move_targets_to_loaded(&mut self) -> bool {
+        let targets = self.current_visible_move_target_layers();
+        if targets.is_empty() {
+            self.set_status("No visible movable layers selected.");
+            return false;
+        }
+        self.ensure_loaded_layer_offset_baselines_for(&targets);
+        let reset_offsets = targets
+            .iter()
+            .filter_map(|&layer| {
+                self.loaded_layer_offsets_world
+                    .get(&layer)
+                    .copied()
+                    .map(|offset_world| LayerOffsetEntry {
+                        layer,
+                        offset_world,
+                    })
+            })
+            .collect::<Vec<_>>();
+        let will_change = reset_offsets.iter().any(|entry| {
+            (self.layer_offset_world(entry.layer) - entry.offset_world).length_sq() > 1e-12
+        });
+        if !will_change {
+            return false;
+        }
+        self.push_layer_offsets_undo_snapshot(&targets);
+        if self.apply_layer_offsets(&reset_offsets) {
+            self.bump_render_id();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn apply_layer_offsets(&mut self, offsets: &[LayerOffsetEntry]) -> bool {
+        let mut changed = false;
+        for entry in offsets {
+            if let Some(offset) = self.layer_offset_world_mut(entry.layer) {
+                if (*offset - entry.offset_world).length_sq() > 1e-12 {
+                    *offset = entry.offset_world;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.hist_dirty = true;
+        }
+        changed
     }
 
     fn any_visible_channel_offset(&self) -> bool {
@@ -11223,7 +11536,7 @@ impl OmeZarrViewerApp {
 
         if !ctx.wants_keyboard_input()
             && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z))
-            && self.undo_last_mask_edit()
+            && self.undo_last_edit()
         {
             self.bump_render_id();
         }
@@ -11257,26 +11570,41 @@ impl OmeZarrViewerApp {
 
         let can_move_primary = self.tool_mode == ToolMode::MoveLayer && !space_down;
         if can_move_primary && response.drag_started_by(egui::PointerButton::Primary) {
-            let layer = self.active_layer;
-            let start_offset_world = self.layer_offset_world(layer);
-            self.layer_move = Some(LayerMoveState {
-                layer,
-                start_offset_world,
-            });
+            let targets = self.current_visible_move_target_layers();
+            if targets.is_empty() {
+                self.layer_move = None;
+                self.set_status("No visible movable layers selected.");
+            } else {
+                self.ensure_loaded_layer_offset_baselines_for(&targets);
+                self.push_layer_offsets_undo_snapshot(&targets);
+                self.layer_move = Some(LayerMoveState {
+                    targets: targets
+                        .into_iter()
+                        .map(|layer| LayerOffsetEntry {
+                            layer,
+                            offset_world: self.layer_offset_world(layer),
+                        })
+                        .collect(),
+                });
+            }
         }
         if can_move_primary && response.dragged_by(egui::PointerButton::Primary) {
             let z = self.camera.zoom_screen_per_lvl0_px.max(1e-6);
-            let (layer, start) = match self.layer_move.as_ref() {
-                None => (
-                    self.active_layer,
-                    self.layer_offset_world(self.active_layer),
-                ),
-                Some(s) => (s.layer, s.start_offset_world),
-            };
-            if let Some(delta) = ui.input(|i| i.pointer.total_drag_delta()) {
-                if let Some(off) = self.layer_offset_world_mut(layer) {
-                    // total_drag_delta is in screen points; convert to world lvl0.
-                    *off = start + delta / z;
+            if let (Some(state), Some(delta)) = (
+                self.layer_move.clone(),
+                ui.input(|i| i.pointer.total_drag_delta()),
+            ) {
+                // total_drag_delta is in screen points; convert to world lvl0.
+                let offsets = state
+                    .targets
+                    .into_iter()
+                    .map(|target| LayerOffsetEntry {
+                        layer: target.layer,
+                        offset_world: target.offset_world + delta / z,
+                    })
+                    .collect::<Vec<_>>();
+                if self.apply_layer_offsets(&offsets) {
+                    self.bump_render_id();
                 }
             }
         }
@@ -12209,14 +12537,19 @@ impl OmeZarrViewerApp {
                     None
                 }
             });
-            let (c, off) = mask_id
+            let (c, off, opacity, display_mode) = mask_id
                 .and_then(|id| {
                     self.mask_layers
                         .iter()
                         .find(|l| l.id == id)
-                        .map(|l| (l.color_rgb, l.offset_world))
+                        .map(|l| (l.color_rgb, l.offset_world, l.opacity, l.display_mode))
                 })
-                .unwrap_or(([255, 210, 60], egui::Vec2::ZERO));
+                .unwrap_or((
+                    [255, 210, 60],
+                    egui::Vec2::ZERO,
+                    0.9,
+                    MaskDisplayMode::default_new_layer(),
+                ));
 
             let color = egui::Color32::from_rgb(c[0], c[1], c[2]);
             let stroke = egui::Stroke::new(2.0, color);
@@ -12227,6 +12560,16 @@ impl OmeZarrViewerApp {
                 .copied()
                 .map(|p| self.camera.world_to_screen(p + off, rect))
                 .collect::<Vec<_>>();
+
+            if pts.len() >= 3 {
+                if let Some(fill_color) = mask_fill_color(c, opacity, display_mode) {
+                    let mut fill_pts = pts.clone();
+                    if let Some(cursor) = ui.input(|i| i.pointer.hover_pos()) {
+                        fill_pts.push(cursor);
+                    }
+                    paint_filled_polygon(ui, &fill_pts, fill_color);
+                }
+            }
 
             if pts.len() >= 2 {
                 ui.painter().add(egui::Shape::line(pts.clone(), stroke));
@@ -12331,12 +12674,12 @@ impl OmeZarrViewerApp {
                 }
                 if ui
                     .add_enabled(
-                        !self.mask_undo_stack.is_empty(),
-                        egui::Button::new("Undo mask edit"),
+                        !self.undo_stack.is_empty(),
+                        egui::Button::new("Undo last edit"),
                     )
                     .clicked()
                 {
-                    if self.undo_last_mask_edit() {
+                    if self.undo_last_edit() {
                         self.bump_render_id();
                     }
                     ui.close();
@@ -12871,9 +13214,14 @@ impl OmeZarrViewerApp {
 
         let off = layer.offset_world;
         let c = layer.color_rgb;
-        let a = (layer.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let color = egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], a);
-        let stroke = egui::Stroke::new(layer.width_screen_px, color);
+        let stroke_alpha = mask_stroke_alpha(layer.opacity);
+        let stroke_color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], stroke_alpha);
+        let stroke_width = match layer.display_mode {
+            MaskDisplayMode::FilledPreview => layer.width_screen_px.min(1.0).max(0.5),
+            _ => layer.width_screen_px,
+        };
+        let stroke = egui::Stroke::new(stroke_width, stroke_color);
+        let fill_color = mask_fill_color(c, layer.opacity, layer.display_mode);
 
         for poly in &layer.polygons_world {
             if poly.len() < 2 {
@@ -12884,6 +13232,9 @@ impl OmeZarrViewerApp {
                 .copied()
                 .map(|p| self.camera.world_to_screen(p + off, rect))
                 .collect::<Vec<_>>();
+            if let Some(fill_color) = fill_color {
+                paint_filled_polygon(ui, &pts, fill_color);
+            }
             ui.painter().add(egui::Shape::line(pts, stroke));
         }
 
@@ -12915,7 +13266,7 @@ impl OmeZarrViewerApp {
         ));
         ui.painter().add(egui::Shape::line(
             selected_pts.clone(),
-            egui::Stroke::new(layer.width_screen_px + 2.0, color),
+            egui::Stroke::new(layer.width_screen_px + 2.0, stroke_color),
         ));
 
         for (vertex_idx, p) in selected_pts.iter().copied().take(n).enumerate() {
@@ -14095,6 +14446,90 @@ fn xform_screen_point(
 fn rotate_vec2(v: egui::Vec2, rotation_rad: f32) -> egui::Vec2 {
     let (s, c) = rotation_rad.sin_cos();
     egui::vec2(v.x * c - v.y * s, v.x * s + v.y * c)
+}
+
+fn vec2_to_array(v: egui::Vec2) -> [f32; 2] {
+    [v.x, v.y]
+}
+
+fn layer_offsets_differ(a: egui::Vec2, b: egui::Vec2) -> bool {
+    (a - b).length_sq() > 1e-12
+}
+
+fn mask_stroke_alpha(opacity: f32) -> u8 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn mask_fill_color(
+    color_rgb: [u8; 3],
+    opacity: f32,
+    display_mode: MaskDisplayMode,
+) -> Option<egui::Color32> {
+    let alpha_scale = match display_mode {
+        MaskDisplayMode::OutlineOnly => return None,
+        MaskDisplayMode::TranslucentFill => 0.35,
+        MaskDisplayMode::FilledPreview => 1.0,
+    };
+    let a = (opacity.clamp(0.0, 1.0) * alpha_scale * 255.0).round() as u8;
+    (a > 0)
+        .then(|| egui::Color32::from_rgba_unmultiplied(color_rgb[0], color_rgb[1], color_rgb[2], a))
+}
+
+fn paint_filled_polygon(ui: &egui::Ui, points: &[egui::Pos2], fill: egui::Color32) -> bool {
+    let Some(clean) = cleaned_mask_fill_points(points) else {
+        return false;
+    };
+    let mut builder = LyonPath::builder();
+    builder.begin(lyon_point(clean[0].x, clean[0].y));
+    for point in &clean[1..] {
+        builder.line_to(lyon_point(point.x, point.y));
+    }
+    builder.close();
+    let path = builder.build();
+
+    let mut tess = FillTessellator::new();
+    let mut geometry: VertexBuffers<egui::Pos2, u32> = VertexBuffers::new();
+    if tess
+        .tessellate_path(
+            &path,
+            &FillOptions::default(),
+            &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex<'_>| {
+                let p = vertex.position();
+                egui::pos2(p.x, p.y)
+            }),
+        )
+        .is_err()
+        || geometry.indices.is_empty()
+    {
+        return false;
+    }
+
+    let mut mesh = egui::epaint::Mesh::default();
+    mesh.indices = geometry.indices;
+    mesh.vertices = geometry
+        .vertices
+        .into_iter()
+        .map(|pos| egui::epaint::Vertex {
+            pos,
+            uv: egui::epaint::WHITE_UV,
+            color: fill,
+        })
+        .collect();
+    ui.painter().add(egui::Shape::mesh(mesh));
+    true
+}
+
+fn cleaned_mask_fill_points(points: &[egui::Pos2]) -> Option<Vec<egui::Pos2>> {
+    let mut clean = points
+        .iter()
+        .copied()
+        .filter(|p| p.x.is_finite() && p.y.is_finite())
+        .collect::<Vec<_>>();
+    if clean.len() >= 2 && clean.first() == clean.last() {
+        clean.pop();
+    }
+    clean.dedup_by(|a, b| a.distance_sq(*b) <= 1e-6);
+    (clean.len() >= 3).then_some(clean)
 }
 
 fn inv_xform_world_point(

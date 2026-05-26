@@ -77,6 +77,8 @@ pub(crate) trait ChannelListHost {
     );
     fn handle_channel_secondary_click(&mut self, idx: usize);
     fn open_group_layers_dialog_channels(&mut self, members: Vec<usize>);
+    fn can_reset_selected_layer_positions(&mut self) -> bool;
+    fn reset_selected_layer_positions(&mut self) -> bool;
     fn layer_groups(&self) -> ProjectLayerGroups;
     fn set_layer_groups(&mut self, groups: ProjectLayerGroups);
     fn channels_changed(&mut self);
@@ -477,6 +479,13 @@ fn render_channel_row<H: ChannelListHost>(
     }
 
     resp.row_response.context_menu(|ui| {
+        if host.can_reset_selected_layer_positions() {
+            if ui.button("Reset position").clicked() {
+                host.reset_selected_layer_positions();
+                ui.close();
+            }
+            ui.separator();
+        }
         let selected = visible_indices
             .iter()
             .copied()
@@ -771,6 +780,14 @@ mod tests {
         fn handle_channel_secondary_click(&mut self, _idx: usize) {}
 
         fn open_group_layers_dialog_channels(&mut self, _members: Vec<usize>) {}
+
+        fn can_reset_selected_layer_positions(&mut self) -> bool {
+            false
+        }
+
+        fn reset_selected_layer_positions(&mut self) -> bool {
+            false
+        }
 
         fn layer_groups(&self) -> ProjectLayerGroups {
             ProjectLayerGroups::default()

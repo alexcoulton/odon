@@ -392,6 +392,14 @@ impl ChannelListHost for MosaicViewerApp {
         Self::open_group_layers_dialog_channels(self, members);
     }
 
+    fn can_reset_selected_layer_positions(&mut self) -> bool {
+        false
+    }
+
+    fn reset_selected_layer_positions(&mut self) -> bool {
+        false
+    }
+
     fn layer_groups(&self) -> ProjectLayerGroups {
         self.layer_groups.clone()
     }
@@ -686,6 +694,7 @@ impl MosaicViewerApp {
                         color_rgb: Some(ch.color_rgb),
                         window: ch.window.map(|(lo, hi)| [lo, hi]),
                         offset_world: None,
+                        original_offset_world: None,
                         scale: None,
                         rotation_rad: None,
                         note: (!ch.note.is_empty()).then(|| ch.note.clone()),

@@ -117,6 +117,8 @@ pub struct ProjectRoiViewState {
     pub overlay_visibility: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub overlay_offsets_world: BTreeMap<String, [f32; 2]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overlay_original_offsets_world: BTreeMap<String, [f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segmentation: Option<ProjectSegmentationViewState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +143,8 @@ pub struct ProjectChannelViewState {
     pub window: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset_world: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_offset_world: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<[f32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

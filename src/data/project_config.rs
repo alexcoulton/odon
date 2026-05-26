@@ -220,6 +220,8 @@ pub struct ProjectMaskLayer {
     #[serde(default)]
     pub width_screen_px: f32,
     #[serde(default)]
+    pub display_mode: Option<String>,
+    #[serde(default)]
     pub color_rgb: [u8; 3],
     /// Optional per-layer translation in viewer world coordinates (level-0 pixels).
     #[serde(default)]

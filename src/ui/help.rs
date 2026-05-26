@@ -329,9 +329,9 @@ impl HelpTopic {
                     ],
                 },
                 HelpSection {
-                    heading: "Move active layer",
+                    heading: "Move layers",
                     bullets: &[
-                        "Select the layer you want to move in the layer list.",
+                        "Select the visible layer or layers you want to move in the layer list.",
                         "Choose the move tool, then drag on the canvas.",
                         "The layer offset changes in viewer/project state; the underlying source image, mask, or object file is not rewritten.",
                         "Use this for visual alignment corrections between channels, masks, labels, and object layers.",
@@ -576,7 +576,7 @@ impl HelpTopic {
                         "Drag vertex handles to reshape the selected polygon; dragging the first vertex keeps the closing vertex in sync.",
                         "Drag empty canvas space to pan when you are not on a polygon handle.",
                         "Delete with Delete, Backspace, the right-click menu, or the mask layer properties panel.",
-                        "Undo mask edits with Ctrl+Z or Cmd+Z.",
+                        "Undo mask or layer-move edits with Ctrl+Z or Cmd+Z.",
                     ],
                 },
                 HelpSection {
@@ -607,7 +607,7 @@ impl HelpTopic {
                         "Esc cancels drawing or clears polygon selection.",
                         "Backspace removes the last in-progress point, or deletes a selected polygon in pan mode.",
                         "Delete deletes the selected polygon.",
-                        "Ctrl+Z or Cmd+Z undoes the previous mask edit.",
+                        "Ctrl+Z or Cmd+Z undoes the previous mask or layer-move edit.",
                     ],
                 },
                 HelpSection {
