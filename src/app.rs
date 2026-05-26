@@ -383,6 +383,13 @@ struct MaskVertexDrag {
     undo_recorded: bool,
 }
 
+#[derive(Debug, Clone)]
+struct MaskPolygonMoveState {
+    selection: MaskPolygonSelection,
+    start_polygon: Vec<egui::Pos2>,
+    start_pointer_world: egui::Pos2,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MaskPolygonHit {
     polygon_idx: usize,
@@ -608,6 +615,7 @@ pub struct OmeZarrViewerApp {
     selected_mask_polygon: Option<MaskPolygonSelection>,
     selected_mask_vertex: Option<usize>,
     dragging_mask_vertex: Option<MaskVertexDrag>,
+    moving_mask_polygon: Option<MaskPolygonMoveState>,
     undo_stack: Vec<UndoAction>,
     selection_rect_start_world: Option<egui::Pos2>,
     selection_rect_current_world: Option<egui::Pos2>,
@@ -2207,6 +2215,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
+            moving_mask_polygon: None,
             undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
@@ -2482,6 +2491,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
+            moving_mask_polygon: None,
             undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
@@ -2828,6 +2838,7 @@ impl OmeZarrViewerApp {
             selected_mask_polygon: None,
             selected_mask_vertex: None,
             dragging_mask_vertex: None,
+            moving_mask_polygon: None,
             undo_stack: Vec::new(),
             selection_rect_start_world: None,
             selection_rect_current_world: None,
@@ -4524,6 +4535,7 @@ impl OmeZarrViewerApp {
                 self.selected_mask_polygon = snapshot.selection;
                 self.selected_mask_vertex = snapshot.selected_vertex;
                 self.dragging_mask_vertex = None;
+                self.moving_mask_polygon = None;
                 self.drawing_mask_layer = snapshot.drawing_layer;
                 self.drawing_mask_polygon = snapshot.drawing_polygon;
                 self.validate_mask_polygon_selection();
@@ -4565,6 +4577,7 @@ impl OmeZarrViewerApp {
         self.selected_mask_polygon = None;
         self.selected_mask_vertex = None;
         self.dragging_mask_vertex = None;
+        self.moving_mask_polygon = None;
     }
 
     fn mask_polygon_unique_vertex_count(poly: &[egui::Pos2]) -> usize {
@@ -4579,6 +4592,7 @@ impl OmeZarrViewerApp {
         let Some(selection) = self.selected_mask_polygon else {
             self.selected_mask_vertex = None;
             self.dragging_mask_vertex = None;
+            self.moving_mask_polygon = None;
             return;
         };
         let valid = self
@@ -4736,6 +4750,66 @@ impl OmeZarrViewerApp {
             let last_idx = poly.len() - 1;
             poly[last_idx] = local;
         }
+        true
+    }
+
+    fn begin_mask_polygon_move(
+        &mut self,
+        selection: MaskPolygonSelection,
+        pointer_world: egui::Pos2,
+    ) -> bool {
+        let Some(start_polygon) = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == selection.layer_id && layer.visible)
+            .and_then(|layer| layer.polygons_world.get(selection.polygon_idx))
+            .cloned()
+        else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+        if Self::mask_polygon_unique_vertex_count(&start_polygon) < 3 {
+            self.clear_mask_polygon_selection();
+            return false;
+        }
+
+        self.push_mask_undo_snapshot();
+        self.selected_mask_polygon = Some(selection);
+        self.selected_mask_vertex = None;
+        self.dragging_mask_vertex = None;
+        self.moving_mask_polygon = Some(MaskPolygonMoveState {
+            selection,
+            start_polygon,
+            start_pointer_world: pointer_world,
+        });
+        true
+    }
+
+    fn move_mask_polygon_from_start(
+        &mut self,
+        state: &MaskPolygonMoveState,
+        pointer_world: egui::Pos2,
+    ) -> bool {
+        let Some(layer) = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == state.selection.layer_id)
+        else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+        let Some(poly) = layer.polygons_world.get_mut(state.selection.polygon_idx) else {
+            self.clear_mask_polygon_selection();
+            return false;
+        };
+
+        let delta = pointer_world - state.start_pointer_world;
+        *poly = state
+            .start_polygon
+            .iter()
+            .copied()
+            .map(|p| p + delta)
+            .collect();
         true
     }
 
@@ -7772,7 +7846,9 @@ impl OmeZarrViewerApp {
                 self.tool_mode == ToolMode::MoveLayer,
                 egui::Sense::click(),
             )
-            .on_hover_text("Move selected visible layer(s)")
+            .on_hover_text(
+                "Move selected visible layer(s); on mask layers, drag a polygon to move it",
+            )
             .clicked()
             {
                 self.clear_spatial_selection_drag();
@@ -11592,47 +11668,82 @@ impl OmeZarrViewerApp {
 
         let can_move_primary = self.tool_mode == ToolMode::MoveLayer && !space_down;
         if can_move_primary && response.drag_started_by(egui::PointerButton::Primary) {
-            let targets = self.current_visible_move_target_layers();
-            if targets.is_empty() {
-                self.layer_move = None;
-                self.set_status("No visible movable layers selected.");
+            let mut polygon_move_started = false;
+            let drag_start_pos = ui
+                .input(|i| i.pointer.press_origin())
+                .filter(|pos| rect.contains(*pos))
+                .or_else(|| response.interact_pointer_pos());
+            if let (LayerId::Mask(layer_id), Some(pos)) = (self.active_layer, drag_start_pos) {
+                let world = self.camera.screen_to_world(pos, rect);
+                if let Some(hit) = self.hit_mask_polygon_at(layer_id, world, pos, rect) {
+                    let selection = MaskPolygonSelection {
+                        layer_id,
+                        polygon_idx: hit.polygon_idx,
+                    };
+                    polygon_move_started = self.begin_mask_polygon_move(selection, world);
+                }
+            }
+
+            if !polygon_move_started {
+                let targets = self.current_visible_move_target_layers();
+                if targets.is_empty() {
+                    self.layer_move = None;
+                    self.set_status("No visible movable layers selected.");
+                } else {
+                    self.ensure_loaded_layer_offset_baselines_for(&targets);
+                    self.push_layer_offsets_undo_snapshot(&targets);
+                    self.layer_move = Some(LayerMoveState {
+                        targets: targets
+                            .into_iter()
+                            .map(|layer| LayerOffsetEntry {
+                                layer,
+                                offset_world: self.layer_offset_world(layer),
+                            })
+                            .collect(),
+                    });
+                }
             } else {
-                self.ensure_loaded_layer_offset_baselines_for(&targets);
-                self.push_layer_offsets_undo_snapshot(&targets);
-                self.layer_move = Some(LayerMoveState {
-                    targets: targets
-                        .into_iter()
-                        .map(|layer| LayerOffsetEntry {
-                            layer,
-                            offset_world: self.layer_offset_world(layer),
-                        })
-                        .collect(),
-                });
+                self.layer_move = None;
             }
         }
         if can_move_primary && response.dragged_by(egui::PointerButton::Primary) {
-            let z = self.camera.zoom_screen_per_lvl0_px.max(1e-6);
-            if let (Some(state), Some(delta)) = (
-                self.layer_move.clone(),
-                ui.input(|i| i.pointer.total_drag_delta()),
+            if let (Some(state), Some(pos)) = (
+                self.moving_mask_polygon.clone(),
+                response
+                    .interact_pointer_pos()
+                    .or_else(|| ui.input(|i| i.pointer.interact_pos())),
             ) {
-                // total_drag_delta is in screen points; convert to world lvl0.
-                let offsets = state
-                    .targets
-                    .into_iter()
-                    .map(|target| LayerOffsetEntry {
-                        layer: target.layer,
-                        offset_world: target.offset_world + delta / z,
-                    })
-                    .collect::<Vec<_>>();
-                if self.apply_layer_offsets(&offsets) {
+                let world = self.camera.screen_to_world(pos, rect);
+                if self.move_mask_polygon_from_start(&state, world) {
+                    self.selected_mask_polygon = Some(state.selection);
+                    self.selected_mask_vertex = None;
                     self.bump_render_id();
+                }
+            } else {
+                let z = self.camera.zoom_screen_per_lvl0_px.max(1e-6);
+                if let (Some(state), Some(delta)) = (
+                    self.layer_move.clone(),
+                    ui.input(|i| i.pointer.total_drag_delta()),
+                ) {
+                    // total_drag_delta is in screen points; convert to world lvl0.
+                    let offsets = state
+                        .targets
+                        .into_iter()
+                        .map(|target| LayerOffsetEntry {
+                            layer: target.layer,
+                            offset_world: target.offset_world + delta / z,
+                        })
+                        .collect::<Vec<_>>();
+                    if self.apply_layer_offsets(&offsets) {
+                        self.bump_render_id();
+                    }
                 }
             }
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) {
             self.layer_move = None;
             self.dragging_mask_vertex = None;
+            self.moving_mask_polygon = None;
         }
 
         // Transform tool (channels only): translate/scale/rotate with handles drawn on-canvas.
