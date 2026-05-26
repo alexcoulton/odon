@@ -870,6 +870,9 @@ impl ProjectSpace {
             it.local_path()
                 .is_some_and(|path| path == key.as_path() || path.to_string_lossy() == key_s)
         }) {
+            if it.mask_layers == layers {
+                return;
+            }
             it.mask_layers = layers;
             self.config_generation = self.config_generation.wrapping_add(1);
             return;

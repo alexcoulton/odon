@@ -534,7 +534,7 @@ impl HelpTopic {
                     heading: "Workflow",
                     bullets: &[
                         "Select the image channel you want to threshold and make sure you are in XY view.",
-                        "Pan and zoom so the region you want is visible, then start a threshold preview from the visible region.",
+                        "Choose Visible region for the current canvas area, or Entire image to threshold a selected pyramid level.",
                         "Adjust Threshold to include pixels at or above the chosen value.",
                         "Adjust Min component pixels to remove small connected components from the preview.",
                         "Apply the preview to create a new editable mask layer.",
@@ -543,10 +543,11 @@ impl HelpTopic {
                 HelpSection {
                     heading: "Preview behavior",
                     bullets: &[
-                        "The preview operates on the active channel and the currently visible canvas region, not the whole dataset.",
-                        "Refresh from visible region after panning, zooming, changing channel, or changing the area you want to capture.",
+                        "Visible-region preview uses the current viewer level and canvas area.",
+                        "Entire-image preview reads the whole active channel at the selected pyramid level and is disabled for levels that are too large.",
+                        "Refresh preview after panning, zooming, changing channel, or changing the area or level you want to capture.",
                         "The canvas overlay is a raster preview; after applying, Odon converts it into editable mask polygons.",
-                        "If the visible region is very large or high resolution, preview generation may take longer.",
+                        "Large previews or higher-resolution levels may take longer.",
                     ],
                 },
                 HelpSection {

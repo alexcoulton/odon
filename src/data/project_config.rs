@@ -209,7 +209,7 @@ impl ProjectRoi {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ProjectMaskLayer {
     pub id: u64,
     pub name: String,

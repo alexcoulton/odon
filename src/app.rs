@@ -59,7 +59,7 @@ use crate::imaging::view_plane::{
 };
 use crate::masks::resolve_masks_geojson_path_and_downsample;
 use crate::masks::save_mask_layers_geojson;
-use crate::masks::{MaskDisplayMode, MaskLayer};
+use crate::masks::{MaskDisplayMode, MaskLayer, MaskRasterDisplayCache};
 use crate::objects::GeoJsonSegmentationLayer;
 use crate::objects::ObjectPreloadSettings;
 use crate::objects::ObjectsLayer;
@@ -396,6 +396,20 @@ struct MaskPolygonHit {
     vertex_idx: Option<usize>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct MaskDrawDebugStats {
+    visible_layers: usize,
+    painted_polygons: usize,
+    painted_vertices: usize,
+    screen_polygons: usize,
+    screen_vertices: usize,
+    fill_polygons: usize,
+    fill_vertices: usize,
+    raster_layers: usize,
+    raster_pixels: usize,
+    draw_time: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct MaskUndoSnapshot {
     layers: Vec<MaskLayer>,
@@ -483,6 +497,7 @@ struct ThresholdRegionPreview {
     generation: u64,
     channel_index: usize,
     channel_name: String,
+    scope: ThresholdRegionScope,
     level_index: usize,
     downsample: f32,
     x0: u64,
@@ -493,6 +508,67 @@ struct ThresholdRegionPreview {
     min_component_pixels: usize,
     mask: ThresholdRegionMask,
     texture: Option<egui::TextureHandle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThresholdRegionScope {
+    VisibleRegion,
+    EntireImage,
+}
+
+impl ThresholdRegionScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::VisibleRegion => "visible region",
+            Self::EntireImage => "entire image",
+        }
+    }
+
+    fn layer_label(self) -> &'static str {
+        match self {
+            Self::VisibleRegion => "visible",
+            Self::EntireImage => "full",
+        }
+    }
+}
+
+const THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS: u64 = 10_000_000;
+
+#[derive(Debug, Clone, Copy)]
+struct ThresholdRegionExtent {
+    scope: ThresholdRegionScope,
+    level_index: usize,
+    x0: u64,
+    y0: u64,
+    x1: u64,
+    y1: u64,
+}
+
+fn threshold_level_size(
+    level: &crate::data::ome::LevelInfo,
+    y_dim: usize,
+    x_dim: usize,
+) -> Option<(u64, u64)> {
+    let height = level.shape.get(y_dim).copied()?;
+    let width = level.shape.get(x_dim).copied()?;
+    Some((width, height))
+}
+
+fn threshold_region_pixel_count(width: u64, height: u64) -> Option<u64> {
+    width.checked_mul(height)
+}
+
+fn default_threshold_full_level(
+    levels: &[crate::data::ome::LevelInfo],
+    y_dim: usize,
+    x_dim: usize,
+    max_pixels: u64,
+) -> Option<usize> {
+    levels.iter().find_map(|level| {
+        let (width, height) = threshold_level_size(level, y_dim, x_dim)?;
+        let pixels = threshold_region_pixel_count(width, height)?;
+        (pixels <= max_pixels).then_some(level.index)
+    })
 }
 
 // Grouping dialog state lives in `ui_group_layers`.
@@ -609,6 +685,7 @@ pub struct OmeZarrViewerApp {
     next_annotation_layer_id: u64,
     mask_layers: Vec<MaskLayer>,
     next_mask_layer_id: u64,
+    mask_layers_project_dirty: bool,
     tool_mode: ToolMode,
     drawing_mask_layer: Option<u64>,
     drawing_mask_polygon: Vec<egui::Pos2>,
@@ -621,6 +698,8 @@ pub struct OmeZarrViewerApp {
     selection_rect_current_world: Option<egui::Pos2>,
     selection_lasso_world: Vec<egui::Pos2>,
     threshold_region_min_pixels: usize,
+    threshold_region_scope: ThresholdRegionScope,
+    threshold_region_full_level: usize,
     threshold_region_status: String,
     threshold_region_preview: Option<ThresholdRegionPreview>,
     cells_outlines_visible: bool,
@@ -653,6 +732,7 @@ pub struct OmeZarrViewerApp {
 
     smooth_pixels: bool,
     show_tile_debug: bool,
+    mask_draw_debug_stats: MaskDrawDebugStats,
     show_scale_bar: bool,
     tile_loader_threads: usize,
     tile_prefetch_mode: TilePrefetchMode,
@@ -1151,6 +1231,20 @@ fn parse_mcp_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
 #[cfg(test)]
 mod deep_link_channel_tests {
     use super::*;
+    use crate::data::ome::LevelInfo;
+
+    fn test_level(index: usize, width: u64, height: u64) -> LevelInfo {
+        LevelInfo {
+            index,
+            path: index.to_string(),
+            shape: vec![1, 1, height, width],
+            chunks: vec![1, 1, height.min(1024), width.min(1024)],
+            downsample: 1.0,
+            dtype: "uint16".to_string(),
+            scale: Vec::new(),
+            translation: Vec::new(),
+        }
+    }
 
     #[test]
     fn extracts_marker_name_from_channel_label() {
@@ -1184,6 +1278,35 @@ mod deep_link_channel_tests {
         assert_eq!(suggest_channel_alias("CD8a-AF647"), "cd8a");
         assert_eq!(suggest_channel_alias("C019_MYOG"), "myog");
         assert_eq!(suggest_channel_alias("DAPI"), "dapi");
+    }
+
+    #[test]
+    fn default_threshold_full_level_uses_highest_resolution_safe_level() {
+        let levels = vec![
+            test_level(0, 100_000, 100_000),
+            test_level(1, 20_000, 20_000),
+            test_level(2, 5_000, 5_000),
+            test_level(3, 3_000, 3_000),
+            test_level(4, 1_000, 1_000),
+        ];
+
+        assert_eq!(
+            default_threshold_full_level(&levels, 2, 3, THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS,),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn default_threshold_full_level_returns_none_when_all_levels_are_too_large() {
+        let levels = vec![
+            test_level(0, 100_000, 100_000),
+            test_level(1, 10_000, 10_000),
+        ];
+
+        assert_eq!(
+            default_threshold_full_level(&levels, 2, 3, THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS),
+            None
+        );
     }
 }
 
@@ -2209,6 +2332,7 @@ impl OmeZarrViewerApp {
             next_annotation_layer_id: 1,
             mask_layers: Vec::new(),
             next_mask_layer_id: 1,
+            mask_layers_project_dirty: true,
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
@@ -2221,6 +2345,8 @@ impl OmeZarrViewerApp {
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
             threshold_region_min_pixels: 32,
+            threshold_region_scope: ThresholdRegionScope::VisibleRegion,
+            threshold_region_full_level: 0,
             threshold_region_status: String::new(),
             threshold_region_preview: None,
             cells_outlines_visible: true,
@@ -2254,6 +2380,7 @@ impl OmeZarrViewerApp {
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
+            mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
             tile_loader_threads,
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
@@ -2485,6 +2612,7 @@ impl OmeZarrViewerApp {
             next_annotation_layer_id: 1,
             mask_layers: Vec::new(),
             next_mask_layer_id: 1,
+            mask_layers_project_dirty: true,
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
@@ -2497,6 +2625,8 @@ impl OmeZarrViewerApp {
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
             threshold_region_min_pixels: 32,
+            threshold_region_scope: ThresholdRegionScope::VisibleRegion,
+            threshold_region_full_level: 0,
             threshold_region_status: String::new(),
             threshold_region_preview: None,
             cells_outlines_visible: true,
@@ -2527,6 +2657,7 @@ impl OmeZarrViewerApp {
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
+            mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
             tile_loader_threads: Self::default_tile_loader_threads(),
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
@@ -2832,6 +2963,7 @@ impl OmeZarrViewerApp {
             next_annotation_layer_id: 1,
             mask_layers: Vec::new(),
             next_mask_layer_id: 1,
+            mask_layers_project_dirty: true,
             tool_mode: ToolMode::Pan,
             drawing_mask_layer: None,
             drawing_mask_polygon: Vec::new(),
@@ -2844,6 +2976,8 @@ impl OmeZarrViewerApp {
             selection_rect_current_world: None,
             selection_lasso_world: Vec::new(),
             threshold_region_min_pixels: 32,
+            threshold_region_scope: ThresholdRegionScope::VisibleRegion,
+            threshold_region_full_level: 0,
             threshold_region_status: String::new(),
             threshold_region_preview: None,
             cells_outlines_visible: true,
@@ -2872,6 +3006,7 @@ impl OmeZarrViewerApp {
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
+            mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
             tile_loader_threads: Self::default_tile_loader_threads(),
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
@@ -4403,6 +4538,7 @@ impl OmeZarrViewerApp {
 
         self.push_mask_undo_snapshot();
         self.mask_layers.remove(idx);
+        self.mark_mask_layers_project_dirty();
         if self
             .selected_mask_polygon
             .is_some_and(|selection| selection.layer_id == layer_id)
@@ -4427,11 +4563,15 @@ impl OmeZarrViewerApp {
     }
 
     fn sync_mask_layers_into_project_space(&mut self) {
+        if !self.mask_layers_project_dirty {
+            return;
+        }
         let Some(local_root) = self.dataset.source.local_path() else {
             return;
         };
         let layers = self.mask_layers.iter().map(|l| l.to_project()).collect();
         self.project_space.set_roi_mask_layers(local_root, layers);
+        self.mask_layers_project_dirty = false;
     }
 
     fn restore_mask_layers_from_project_space(&mut self) {
@@ -4440,12 +4580,14 @@ impl OmeZarrViewerApp {
             self.mask_layers.clear();
             self.next_mask_layer_id = 1;
             self.clear_mask_polygon_selection();
+            self.mask_layers_project_dirty = false;
             return;
         };
         let Some(layers) = self.project_space.roi_mask_layers(local_root) else {
             self.mask_layers.clear();
             self.next_mask_layer_id = 1;
             self.clear_mask_polygon_selection();
+            self.mask_layers_project_dirty = false;
             return;
         };
 
@@ -4469,6 +4611,7 @@ impl OmeZarrViewerApp {
 
         self.rebuild_layer_orders();
         self.bump_render_id();
+        self.mask_layers_project_dirty = false;
     }
 
     fn ensure_editable_mask_layer(&mut self) -> u64 {
@@ -4492,6 +4635,10 @@ impl OmeZarrViewerApp {
         if self.undo_stack.len() > MAX_UNDO_ACTIONS {
             self.undo_stack.remove(0);
         }
+    }
+
+    fn mark_mask_layers_project_dirty(&mut self) {
+        self.mask_layers_project_dirty = true;
     }
 
     fn push_mask_undo_snapshot(&mut self) {
@@ -4540,6 +4687,7 @@ impl OmeZarrViewerApp {
                 self.drawing_mask_polygon = snapshot.drawing_polygon;
                 self.validate_mask_polygon_selection();
                 self.rebuild_layer_orders();
+                self.mark_mask_layers_project_dirty();
             }
             UndoAction::LayerOffsets(snapshot) => {
                 for entry in snapshot.offsets {
@@ -4548,6 +4696,7 @@ impl OmeZarrViewerApp {
                     }
                 }
                 self.hist_dirty = true;
+                self.mark_mask_layers_project_dirty();
             }
         }
         true
@@ -4567,6 +4716,7 @@ impl OmeZarrViewerApp {
         if let Some(layer) = self.mask_layers.iter_mut().find(|l| l.id == id) {
             layer.add_closed_polygon(vertices);
             layer.visible = true;
+            self.mark_mask_layers_project_dirty();
             true
         } else {
             false
@@ -4716,7 +4866,9 @@ impl OmeZarrViewerApp {
             return false;
         };
         layer.polygons_world.remove(selection.polygon_idx);
+        layer.raster_display = None;
         self.clear_mask_polygon_selection();
+        self.mark_mask_layers_project_dirty();
         true
     }
 
@@ -4750,6 +4902,8 @@ impl OmeZarrViewerApp {
             let last_idx = poly.len() - 1;
             poly[last_idx] = local;
         }
+        layer.raster_display = None;
+        self.mark_mask_layers_project_dirty();
         true
     }
 
@@ -4810,6 +4964,8 @@ impl OmeZarrViewerApp {
             .copied()
             .map(|p| p + delta)
             .collect();
+        layer.raster_display = None;
+        self.mark_mask_layers_project_dirty();
         true
     }
 
@@ -4849,8 +5005,10 @@ impl OmeZarrViewerApp {
             offset_world: egui::Vec2::ZERO,
             editable: true,
             polygons_world: Vec::new(),
+            raster_display: None,
             source_geojson: None,
         });
+        self.mark_mask_layers_project_dirty();
         id
     }
 
@@ -5779,6 +5937,73 @@ impl OmeZarrViewerApp {
         busy
     }
 
+    fn scene_busy_debug_reasons(&self) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        if self
+            .tiles_gl
+            .as_ref()
+            .is_some_and(|tiles_gl| tiles_gl.is_busy())
+        {
+            reasons.push("tiles_gl");
+        }
+        if self.cache.is_busy() {
+            reasons.push("tile_cache");
+        }
+        if self
+            .labels_gl
+            .as_ref()
+            .is_some_and(|labels_gl| labels_gl.is_busy())
+        {
+            reasons.push("labels_gl");
+        }
+        if self.seg_geojson.is_busy() {
+            reasons.push("seg_geojson");
+        }
+        if self.seg_objects.is_busy() {
+            reasons.push("seg_objects");
+        }
+        if self.spatial_image_layers.is_busy() {
+            reasons.push("spatial_images");
+        }
+        if self.spatial_layers.is_busy() {
+            reasons.push("spatial_layers");
+        }
+        if self.pinned_levels.has_loading() {
+            reasons.push("pinned_levels");
+        }
+        reasons
+    }
+
+    fn async_ui_debug_reasons(&self) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        let properties_hist_active = self.show_right_panel
+            && self.right_tab == RightTab::Properties
+            && matches!(self.active_layer, LayerId::Channel(_));
+        if properties_hist_active && self.hist_dirty {
+            reasons.push("hist_dirty");
+        }
+        if properties_hist_active && self.hist_request_pending {
+            reasons.push("hist_pending");
+        }
+        if properties_hist_active && self.hist_navigation_dirty_since.is_some() {
+            reasons.push("hist_nav_debounce");
+        }
+        if self.chanmax_pending.iter().any(|pending| *pending) {
+            reasons.push("channel_max_pending");
+        }
+        if self.screenshot_in_flight.is_some() {
+            reasons.push("screenshot");
+        }
+        if self
+            .annotation_layers
+            .iter()
+            .any(|layer| layer.has_pending_work())
+        {
+            reasons.push("annotations");
+        }
+        reasons
+    }
+
     fn image_tile_request_count(&self) -> usize {
         if let Some(tiles_gl) = self.tiles_gl.as_ref() {
             tiles_gl.in_flight_len()
@@ -5832,6 +6057,36 @@ impl OmeZarrViewerApp {
         } else {
             None
         }
+    }
+
+    fn tile_debug_overlay_text(&self) -> String {
+        let busy = self.scene_busy_debug_reasons();
+        let async_reasons = self.async_ui_debug_reasons();
+        let stats = &self.mask_draw_debug_stats;
+        let busy_text = if busy.is_empty() {
+            "none".to_string()
+        } else {
+            busy.join(",")
+        };
+        let async_text = if async_reasons.is_empty() {
+            "none".to_string()
+        } else {
+            async_reasons.join(",")
+        };
+        format!(
+            "Debug\nbusy: {busy_text}\nasync: {async_text}\nimage tiles: {}\nmask layers: {}\nmask painted: {} polys / {} verts\nmask on-screen: {} polys / {} verts\nmask fill: {} polys / {} verts\nmask raster: {} layers / {} px\nmask draw: {:.2} ms",
+            self.image_tile_request_count(),
+            stats.visible_layers,
+            stats.painted_polygons,
+            stats.painted_vertices,
+            stats.screen_polygons,
+            stats.screen_vertices,
+            stats.fill_polygons,
+            stats.fill_vertices,
+            stats.raster_layers,
+            stats.raster_pixels,
+            stats.draw_time.as_secs_f64() * 1000.0,
+        )
     }
 
     fn step_selected_channel_visibility(&mut self, step: i32) {
@@ -6125,6 +6380,7 @@ impl OmeZarrViewerApp {
                                 l.clear();
                             }
                         }
+                        self.mark_mask_layers_project_dirty();
 
                         // Refresh the read-only layer from disk so appended shapes show up there too.
                         if let Err(err) = self.ensure_exclusion_masks_loaded() {
@@ -6467,17 +6723,21 @@ impl OmeZarrViewerApp {
                     offset_world: egui::Vec2::ZERO,
                     editable: false,
                     polygons_world: Vec::new(),
+                    raster_display: None,
                     source_geojson: Some(resolved.geojson_path.clone()),
                 });
+                self.mark_mask_layers_project_dirty();
                 self.mask_layers.len().saturating_sub(1)
             }
         };
 
         if let Some(l) = self.mask_layers.get_mut(idx) {
             l.polygons_world = polylines;
+            l.raster_display = None;
             l.source_geojson = Some(resolved.geojson_path);
             l.visible = true;
             l.editable = false;
+            self.mark_mask_layers_project_dirty();
         }
 
         Ok(self
@@ -7392,41 +7652,128 @@ impl OmeZarrViewerApp {
         xform_screen_point(local, pivot, off, scale, rot)
     }
 
+    fn ensure_threshold_region_full_level_default(&mut self) {
+        if self.threshold_region_full_level < self.dataset.levels.len()
+            && self
+                .threshold_region_level_pixel_count(self.threshold_region_full_level)
+                .is_some_and(|pixels| pixels <= THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS)
+        {
+            return;
+        }
+        if let Some(level) = default_threshold_full_level(
+            &self.dataset.levels,
+            self.dataset.dims.y,
+            self.dataset.dims.x,
+            THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS,
+        ) {
+            self.threshold_region_full_level = level;
+        } else {
+            self.threshold_region_full_level = self.dataset.levels.len().saturating_sub(1);
+        }
+    }
+
+    fn threshold_region_level_pixel_count(&self, level_index: usize) -> Option<u64> {
+        let level = self.dataset.levels.get(level_index)?;
+        let (width, height) =
+            threshold_level_size(level, self.dataset.dims.y, self.dataset.dims.x)?;
+        threshold_region_pixel_count(width, height)
+    }
+
+    fn threshold_region_full_level_summary(&self, level_index: usize) -> Option<(u64, u64, u64)> {
+        let level = self.dataset.levels.get(level_index)?;
+        let (width, height) =
+            threshold_level_size(level, self.dataset.dims.y, self.dataset.dims.x)?;
+        let pixels = threshold_region_pixel_count(width, height)?;
+        Some((width, height, pixels))
+    }
+
+    fn threshold_region_extent(
+        &self,
+        viewport: Option<egui::Rect>,
+        ch_idx: usize,
+    ) -> anyhow::Result<ThresholdRegionExtent> {
+        match self.threshold_region_scope {
+            ThresholdRegionScope::VisibleRegion => {
+                let viewport =
+                    viewport.ok_or_else(|| anyhow::anyhow!("canvas viewport unavailable"))?;
+                let level_index = self.choose_level();
+                let Some(level_info) = self.dataset.levels.get(level_index) else {
+                    anyhow::bail!("invalid image level");
+                };
+                let visible_rect_lvl0 =
+                    self.selected_channel_visible_data_rect_lvl0(viewport, ch_idx);
+                if visible_rect_lvl0.width() <= 0.0 || visible_rect_lvl0.height() <= 0.0 {
+                    anyhow::bail!("no visible region intersects the active channel");
+                }
+                let downsample = level_info.downsample.max(1e-6);
+                let y_dim = self.dataset.dims.y;
+                let x_dim = self.dataset.dims.x;
+                let x0 = (visible_rect_lvl0.left() / downsample).floor().max(0.0) as u64;
+                let y0 = (visible_rect_lvl0.top() / downsample).floor().max(0.0) as u64;
+                let x1 = (visible_rect_lvl0.right() / downsample)
+                    .ceil()
+                    .min(level_info.shape[x_dim] as f32) as u64;
+                let y1 = (visible_rect_lvl0.bottom() / downsample)
+                    .ceil()
+                    .min(level_info.shape[y_dim] as f32) as u64;
+                if x1 <= x0 || y1 <= y0 {
+                    anyhow::bail!("visible region is empty at this level");
+                }
+                let _ = threshold_region_pixel_count(x1 - x0, y1 - y0)
+                    .ok_or_else(|| anyhow::anyhow!("threshold region is too large"))?;
+                Ok(ThresholdRegionExtent {
+                    scope: ThresholdRegionScope::VisibleRegion,
+                    level_index,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                })
+            }
+            ThresholdRegionScope::EntireImage => {
+                let level_index = self.threshold_region_full_level;
+                let Some(level_info) = self.dataset.levels.get(level_index) else {
+                    anyhow::bail!("invalid image level");
+                };
+                let (width, height) =
+                    threshold_level_size(level_info, self.dataset.dims.y, self.dataset.dims.x)
+                        .ok_or_else(|| anyhow::anyhow!("invalid image level shape"))?;
+                let pixel_count = threshold_region_pixel_count(width, height)
+                    .ok_or_else(|| anyhow::anyhow!("whole-image threshold size is too large"))?;
+                if pixel_count > THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS {
+                    anyhow::bail!(
+                        "Whole-image thresholding at this level would read {} pixels; choose a coarser level.",
+                        pixel_count
+                    );
+                }
+                Ok(ThresholdRegionExtent {
+                    scope: ThresholdRegionScope::EntireImage,
+                    level_index,
+                    x0: 0,
+                    y0: 0,
+                    x1: width,
+                    y1: height,
+                })
+            }
+        }
+    }
+
     fn uses_gpu_threshold_region_preview(&self, preview: &ThresholdRegionPreview) -> bool {
         self.threshold_preview_gl.is_some() && preview.min_component_pixels <= 1
     }
 
     fn start_threshold_region_preview(&mut self, ctx: &egui::Context) -> anyhow::Result<()> {
-        let viewport = self
-            .last_canvas_rect
-            .ok_or_else(|| anyhow::anyhow!("canvas viewport unavailable"))?;
         let ch_idx = self
             .selected_channel
             .min(self.channels.len().saturating_sub(1));
-        let Some(level_info) = self.dataset.levels.get(self.choose_level()) else {
+        let extent = self.threshold_region_extent(self.last_canvas_rect, ch_idx)?;
+        let Some(level_info) = self.dataset.levels.get(extent.level_index) else {
             anyhow::bail!("invalid image level");
         };
-
-        let visible_rect_lvl0 = self.selected_channel_visible_data_rect_lvl0(viewport, ch_idx);
-        if visible_rect_lvl0.width() <= 0.0 || visible_rect_lvl0.height() <= 0.0 {
-            anyhow::bail!("no visible region intersects the active channel");
-        }
 
         let downsample = level_info.downsample.max(1e-6);
         let y_dim = self.dataset.dims.y;
         let x_dim = self.dataset.dims.x;
-        let x0 = (visible_rect_lvl0.left() / downsample).floor().max(0.0) as u64;
-        let y0 = (visible_rect_lvl0.top() / downsample).floor().max(0.0) as u64;
-        let x1 = (visible_rect_lvl0.right() / downsample)
-            .ceil()
-            .min(level_info.shape[x_dim] as f32) as u64;
-        let y1 = (visible_rect_lvl0.bottom() / downsample)
-            .ceil()
-            .min(level_info.shape[y_dim] as f32) as u64;
-        if x1 <= x0 || y1 <= y0 {
-            anyhow::bail!("visible region is empty at this level");
-        }
-
         let level0 = self
             .dataset
             .levels
@@ -7443,8 +7790,8 @@ impl OmeZarrViewerApp {
             level0,
             level_info,
             Some(channel_index),
-            y0..y1,
-            x0..x1,
+            extent.y0..extent.y1,
+            extent.x0..extent.x1,
             plane,
         );
 
@@ -7477,10 +7824,11 @@ impl OmeZarrViewerApp {
             generation,
             channel_index: ch_idx,
             channel_name,
+            scope: extent.scope,
             level_index: level_info.index,
             downsample,
-            x0,
-            y0,
+            x0: extent.x0,
+            y0: extent.y0,
             plane,
             raw_values,
             threshold,
@@ -7529,8 +7877,10 @@ impl OmeZarrViewerApp {
     ) -> String {
         if uses_gpu {
             format!(
-                "Previewing {} at level {} on the GPU (threshold only; min component filtering is applied on Apply).",
-                preview.channel_name, preview.level_index
+                "Previewing {} {} at level {} on the GPU (threshold only; min component filtering is applied on Apply).",
+                preview.channel_name,
+                preview.scope.label(),
+                preview.level_index
             )
         } else {
             let included = preview
@@ -7540,8 +7890,11 @@ impl OmeZarrViewerApp {
                 .filter(|included| **included)
                 .count();
             format!(
-                "Preview: {} pixels selected in {} at level {}.",
-                included, preview.channel_name, preview.level_index
+                "Preview: {} pixels selected in {} {} at level {}.",
+                included,
+                preview.channel_name,
+                preview.scope.label(),
+                preview.level_index
             )
         }
     }
@@ -7585,28 +7938,84 @@ impl OmeZarrViewerApp {
         }
     }
 
-    fn create_threshold_mask_from_preview(&mut self) -> anyhow::Result<usize> {
-        let Some(preview) = self.threshold_region_preview.as_ref() else {
-            anyhow::bail!("no threshold preview is active");
-        };
-        let mask = extract_threshold_region_mask(
-            &preview.plane,
-            preview.threshold,
-            preview.min_component_pixels,
-        );
-        let polygons = threshold_region_mask_to_polygons(&mask);
-        if polygons.is_empty() {
-            anyhow::bail!("no visible regions found above the current threshold");
+    fn threshold_mask_raster_display_cache(
+        &self,
+        mask: &ThresholdRegionMask,
+        generation: u64,
+        channel_index: usize,
+        x0: u64,
+        y0: u64,
+        downsample: f32,
+    ) -> MaskRasterDisplayCache {
+        let width = mask.width;
+        let height = mask.height;
+        let x0 = x0 as f32 * downsample;
+        let y0 = y0 as f32 * downsample;
+        let x1 = x0 + width as f32 * downsample;
+        let y1 = y0 + height as f32 * downsample;
+        let corners_world = [
+            self.selected_channel_local_to_world(channel_index, egui::pos2(x0, y0)),
+            self.selected_channel_local_to_world(channel_index, egui::pos2(x1, y0)),
+            self.selected_channel_local_to_world(channel_index, egui::pos2(x1, y1)),
+            self.selected_channel_local_to_world(channel_index, egui::pos2(x0, y1)),
+        ];
+        let values = mask
+            .included
+            .iter()
+            .copied()
+            .map(|included| if included { u16::MAX } else { 0 })
+            .collect::<Vec<_>>();
+        MaskRasterDisplayCache {
+            generation,
+            width,
+            height,
+            values: Arc::new(values),
+            corners_world,
         }
+    }
 
-        let channel_index = preview.channel_index;
-        let channel_name = preview.channel_name.clone();
-        let level_index = preview.level_index;
-        let x0 = preview.x0;
-        let y0 = preview.y0;
-        let downsample = preview.downsample;
+    fn create_threshold_mask_from_preview(&mut self) -> anyhow::Result<usize> {
+        let (mask, polygons, channel_index, channel_name, scope, level_index, x0, y0, downsample) = {
+            let Some(preview) = self.threshold_region_preview.as_ref() else {
+                anyhow::bail!("no threshold preview is active");
+            };
+            let mask = extract_threshold_region_mask(
+                &preview.plane,
+                preview.threshold,
+                preview.min_component_pixels,
+            );
+            let polygons = threshold_region_mask_to_polygons(&mask);
+            if polygons.is_empty() {
+                anyhow::bail!("no visible regions found above the current threshold");
+            }
+            (
+                mask,
+                polygons,
+                preview.channel_index,
+                preview.channel_name.clone(),
+                preview.scope,
+                preview.level_index,
+                preview.x0,
+                preview.y0,
+                preview.downsample,
+            )
+        };
+        let raster_generation = self.threshold_region_preview_generation;
+        self.threshold_region_preview_generation =
+            self.threshold_region_preview_generation.wrapping_add(1);
+        let raster_display = self.threshold_mask_raster_display_cache(
+            &mask,
+            raster_generation,
+            channel_index,
+            x0,
+            y0,
+            downsample,
+        );
         self.push_mask_undo_snapshot();
-        let layer_id = self.create_editable_mask_layer(Some(format!("Threshold {channel_name}")));
+        let layer_id = self.create_editable_mask_layer(Some(format!(
+            "Threshold {channel_name} {} level {level_index}",
+            scope.layer_label()
+        )));
         let mut created = 0usize;
         let world_polygons = polygons
             .into_iter()
@@ -7633,14 +8042,18 @@ impl OmeZarrViewerApp {
             for polygon in world_polygons {
                 layer.add_closed_polygon(polygon);
             }
+            layer.display_mode = MaskDisplayMode::FilledPreview;
+            layer.raster_display = Some(raster_display);
             layer.visible = true;
             created = layer.polygons_world.len();
+            self.mark_mask_layers_project_dirty();
         }
 
         self.threshold_region_preview = None;
         self.active_layer = LayerId::Mask(layer_id);
         self.threshold_region_status = format!(
-            "Created {created} threshold region(s) from {channel_name} at level {level_index}."
+            "Created {created} threshold region(s) from {channel_name} {} at level {level_index}.",
+            scope.label()
         );
         self.rebuild_layer_orders();
         self.bump_render_id();
@@ -7964,13 +8377,19 @@ impl OmeZarrViewerApp {
                             .add(egui::Checkbox::new(&mut all, "All").indeterminate(overlays_mixed))
                             .changed()
                         {
+                            let mut mask_visibility_changed = false;
                             for id in overlay_ids.into_iter() {
                                 if !self.layer_is_available(id) {
                                     continue;
                                 }
                                 if let Some(v) = self.layer_visible_mut(id) {
+                                    mask_visibility_changed |=
+                                        matches!(id, LayerId::Mask(_)) && *v != all;
                                     *v = all;
                                 }
+                            }
+                            if mask_visibility_changed {
+                                self.mark_mask_layers_project_dirty();
                             }
                             self.bump_render_id();
                         }
@@ -8170,8 +8589,13 @@ impl OmeZarrViewerApp {
                             }
                         }
                         if let Some(v) = resp.visible_changed {
+                            let mut mask_visibility_changed = false;
                             if let Some(dst) = self.layer_visible_mut(id) {
+                                mask_visibility_changed = matches!(id, LayerId::Mask(_)) && *dst != v;
                                 *dst = v;
+                            }
+                            if mask_visibility_changed {
+                                self.mark_mask_layers_project_dirty();
                             }
                         }
                         if resp.changed {
@@ -9643,6 +10067,7 @@ impl OmeZarrViewerApp {
                             self.push_mask_undo_snapshot();
                             if let Some(layer) = self.mask_layers.get_mut(idx) {
                                 layer.polygons_world = polys;
+                                layer.raster_display = None;
                                 changed = true;
                             }
                         }
@@ -9693,6 +10118,7 @@ impl OmeZarrViewerApp {
                 }
 
                 if changed {
+                    self.mark_mask_layers_project_dirty();
                     self.bump_render_id();
                 }
             }
@@ -10693,16 +11119,21 @@ impl OmeZarrViewerApp {
 
     fn apply_layer_offsets(&mut self, offsets: &[LayerOffsetEntry]) -> bool {
         let mut changed = false;
+        let mut mask_changed = false;
         for entry in offsets {
             if let Some(offset) = self.layer_offset_world_mut(entry.layer) {
                 if (*offset - entry.offset_world).length_sq() > 1e-12 {
                     *offset = entry.offset_world;
                     changed = true;
+                    mask_changed |= matches!(entry.layer, LayerId::Mask(_));
                 }
             }
         }
         if changed {
             self.hist_dirty = true;
+        }
+        if mask_changed {
+            self.mark_mask_layers_project_dirty();
         }
         changed
     }
@@ -11157,10 +11588,87 @@ impl OmeZarrViewerApp {
                 return;
             }
             ui.label(
-                "Capture the visible pixels from the active channel, preview the thresholded raster on the canvas, then apply it as a mask layer.",
+                "Capture pixels from the active channel, preview the thresholded raster on the canvas, then apply it as a mask layer.",
             );
             if self.threshold_region_preview.is_none() {
-                if ui.button("Start threshold preview from visible region").clicked() {
+                ui.horizontal(|ui| {
+                    ui.label("Scope");
+                    ui.selectable_value(
+                        &mut self.threshold_region_scope,
+                        ThresholdRegionScope::VisibleRegion,
+                        "Visible region",
+                    );
+                    ui.selectable_value(
+                        &mut self.threshold_region_scope,
+                        ThresholdRegionScope::EntireImage,
+                        "Entire image",
+                    );
+                });
+
+                let mut start_enabled = true;
+                let mut start_label = match self.threshold_region_scope {
+                    ThresholdRegionScope::VisibleRegion => "Start threshold preview from visible region".to_string(),
+                    ThresholdRegionScope::EntireImage => "Start threshold preview from entire image".to_string(),
+                };
+                if self.threshold_region_scope == ThresholdRegionScope::EntireImage {
+                    self.ensure_threshold_region_full_level_default();
+                    let max_level = self.dataset.levels.len().saturating_sub(1);
+                    self.threshold_region_full_level =
+                        self.threshold_region_full_level.min(max_level);
+                    ui.horizontal(|ui| {
+                        ui.label("Level");
+                        egui::ComboBox::from_id_salt("threshold-region-full-level")
+                            .selected_text(format!("Level {}", self.threshold_region_full_level))
+                            .show_ui(ui, |ui| {
+                                for level in &self.dataset.levels {
+                                    let label = self
+                                        .threshold_region_full_level_summary(level.index)
+                                        .map(|(width, height, pixels)| {
+                                            let suffix = if pixels
+                                                > THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS
+                                            {
+                                                " - too large"
+                                            } else {
+                                                ""
+                                            };
+                                            format!(
+                                                "Level {}: {} x {} ({} px){}",
+                                                level.index, width, height, pixels, suffix
+                                            )
+                                        })
+                                        .unwrap_or_else(|| format!("Level {}", level.index));
+                                    ui.selectable_value(
+                                        &mut self.threshold_region_full_level,
+                                        level.index,
+                                        label,
+                                    );
+                                }
+                            });
+                    });
+                    if let Some((width, height, pixels)) =
+                        self.threshold_region_full_level_summary(self.threshold_region_full_level)
+                    {
+                        ui.label(format!(
+                            "Preview size: {width} x {height} ({pixels} pixels)."
+                        ));
+                        if pixels > THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS {
+                            start_enabled = false;
+                            start_label = "Choose a coarser level".to_string();
+                            ui.label(format!(
+                                "Whole-image thresholding at this level would read {pixels} pixels; choose a coarser level."
+                            ));
+                        }
+                    } else {
+                        start_enabled = false;
+                        start_label = "Invalid level".to_string();
+                        ui.label("Whole-image thresholding is unavailable for this level.");
+                    }
+                }
+
+                if ui
+                    .add_enabled(start_enabled, egui::Button::new(start_label))
+                    .clicked()
+                {
                     self.threshold_region_status.clear();
                     if let Err(err) = self.start_threshold_region_preview(ctx) {
                         self.threshold_region_status = format!("Threshold regions failed: {err}");
@@ -11233,7 +11741,7 @@ impl OmeZarrViewerApp {
                 }
 
                 ui.horizontal(|ui| {
-                    if ui.button("Refresh from visible region").clicked() {
+                    if ui.button("Refresh preview").clicked() {
                         self.threshold_region_status.clear();
                         if let Err(err) = self.start_threshold_region_preview(ctx) {
                             self.threshold_region_status =
@@ -11361,6 +11869,7 @@ impl OmeZarrViewerApp {
         let available = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
         self.last_canvas_rect = Some(rect);
+        self.mask_draw_debug_stats = MaskDrawDebugStats::default();
         ui.painter()
             .rect_filled(rect, 0.0, egui::Color32::from_gray(10));
 
@@ -12949,6 +13458,13 @@ impl OmeZarrViewerApp {
 
         // Loading indicator (top-right). Avoid capturing transient spinners in screenshots.
         if !screenshot_active {
+            if self.show_tile_debug {
+                canvas_overlays::paint_hud(
+                    ui,
+                    rect.translate(egui::vec2(0.0, 18.0)),
+                    self.tile_debug_overlay_text(),
+                );
+            }
             let loading_text = self.loading_indicator_text();
             let tile_loading_count = self.image_tile_request_count();
             let spinner_text = if self.show_tile_debug && tile_loading_count > 0 {
@@ -13338,13 +13854,16 @@ impl OmeZarrViewerApp {
         });
     }
 
-    fn draw_mask_layer_overlay(&self, ui: &mut egui::Ui, rect: egui::Rect, id: u64) {
+    fn draw_mask_layer_overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect, id: u64) {
+        let start = Instant::now();
+        let mut stats = MaskDrawDebugStats::default();
         let Some(layer) = self.mask_layers.iter().find(|l| l.id == id) else {
             return;
         };
         if !layer.visible || layer.polygons_world.is_empty() {
             return;
         }
+        stats.visible_layers = 1;
 
         let off = layer.offset_world;
         let c = layer.color_rgb;
@@ -13356,68 +13875,136 @@ impl OmeZarrViewerApp {
         };
         let stroke = egui::Stroke::new(stroke_width, stroke_color);
         let fill_color = mask_fill_color(c, layer.opacity, layer.display_mode);
-
-        for poly in &layer.polygons_world {
-            if poly.len() < 2 {
-                continue;
-            }
-            let pts = poly
-                .iter()
-                .copied()
-                .map(|p| self.camera.world_to_screen(p + off, rect))
-                .collect::<Vec<_>>();
-            if let Some(fill_color) = fill_color {
-                paint_filled_polygon(ui, &pts, fill_color);
-            }
-            ui.painter().add(egui::Shape::line(pts, stroke));
-        }
-
-        let Some(selection) = self.selected_mask_polygon else {
-            return;
-        };
-        if selection.layer_id != id {
-            return;
-        }
-        let Some(poly) = layer.polygons_world.get(selection.polygon_idx) else {
-            return;
-        };
-        let n = Self::mask_polygon_unique_vertex_count(poly);
-        if n < 3 {
-            return;
-        }
-
-        let mut selected_pts = poly
-            .iter()
-            .copied()
-            .take(n)
-            .map(|p| self.camera.world_to_screen(p + off, rect))
-            .collect::<Vec<_>>();
-        selected_pts.push(selected_pts[0]);
-
-        ui.painter().add(egui::Shape::line(
-            selected_pts.clone(),
-            egui::Stroke::new(layer.width_screen_px + 4.0, egui::Color32::WHITE),
-        ));
-        ui.painter().add(egui::Shape::line(
-            selected_pts.clone(),
-            egui::Stroke::new(layer.width_screen_px + 2.0, stroke_color),
-        ));
-
-        for (vertex_idx, p) in selected_pts.iter().copied().take(n).enumerate() {
-            let selected = self.selected_mask_vertex == Some(vertex_idx);
-            let fill = if selected {
-                egui::Color32::from_rgb(80, 220, 140)
+        let raster_drawn =
+            if let (Some(fill_color), Some(raster)) = (fill_color, layer.raster_display.as_ref()) {
+                self.draw_mask_raster_display(ui, rect, raster, off, fill_color)
             } else {
-                egui::Color32::WHITE
+                false
             };
-            let radius = if selected { 5.5 } else { 4.5 };
-            ui.painter().circle_filled(p, radius, fill);
-            ui.painter().circle_stroke(
-                p,
-                radius + 1.5,
-                egui::Stroke::new(1.5, egui::Color32::BLACK),
-            );
+
+        if raster_drawn {
+            if let Some(raster) = layer.raster_display.as_ref() {
+                stats.raster_layers += 1;
+                stats.raster_pixels += raster.width.saturating_mul(raster.height);
+            }
+        } else {
+            for poly in &layer.polygons_world {
+                if poly.len() < 2 {
+                    continue;
+                }
+                stats.painted_polygons += 1;
+                stats.painted_vertices += poly.len();
+                let pts = poly
+                    .iter()
+                    .copied()
+                    .map(|p| self.camera.world_to_screen(p + off, rect))
+                    .collect::<Vec<_>>();
+                let screen_bounds = bounds_for_points(&pts);
+                if screen_bounds.is_some_and(|bounds| bounds.intersects(rect)) {
+                    stats.screen_polygons += 1;
+                    stats.screen_vertices += poly.len();
+                }
+                if let Some(fill_color) = fill_color {
+                    stats.fill_polygons += 1;
+                    stats.fill_vertices += poly.len();
+                    paint_filled_polygon(ui, &pts, fill_color);
+                }
+                ui.painter().add(egui::Shape::line(pts, stroke));
+            }
         }
+        if let Some(selection) = self.selected_mask_polygon
+            && selection.layer_id == id
+            && let Some(poly) = layer.polygons_world.get(selection.polygon_idx)
+        {
+            let n = Self::mask_polygon_unique_vertex_count(poly);
+            if n >= 3 {
+                let mut selected_pts = poly
+                    .iter()
+                    .copied()
+                    .take(n)
+                    .map(|p| self.camera.world_to_screen(p + off, rect))
+                    .collect::<Vec<_>>();
+                selected_pts.push(selected_pts[0]);
+
+                ui.painter().add(egui::Shape::line(
+                    selected_pts.clone(),
+                    egui::Stroke::new(layer.width_screen_px + 4.0, egui::Color32::WHITE),
+                ));
+                ui.painter().add(egui::Shape::line(
+                    selected_pts.clone(),
+                    egui::Stroke::new(layer.width_screen_px + 2.0, stroke_color),
+                ));
+
+                for (vertex_idx, p) in selected_pts.iter().copied().take(n).enumerate() {
+                    let selected = self.selected_mask_vertex == Some(vertex_idx);
+                    let fill = if selected {
+                        egui::Color32::from_rgb(80, 220, 140)
+                    } else {
+                        egui::Color32::WHITE
+                    };
+                    let radius = if selected { 5.5 } else { 4.5 };
+                    ui.painter().circle_filled(p, radius, fill);
+                    ui.painter().circle_stroke(
+                        p,
+                        radius + 1.5,
+                        egui::Stroke::new(1.5, egui::Color32::BLACK),
+                    );
+                }
+            }
+        }
+
+        stats.draw_time += start.elapsed();
+        self.mask_draw_debug_stats.visible_layers += stats.visible_layers;
+        self.mask_draw_debug_stats.painted_polygons += stats.painted_polygons;
+        self.mask_draw_debug_stats.painted_vertices += stats.painted_vertices;
+        self.mask_draw_debug_stats.screen_polygons += stats.screen_polygons;
+        self.mask_draw_debug_stats.screen_vertices += stats.screen_vertices;
+        self.mask_draw_debug_stats.fill_polygons += stats.fill_polygons;
+        self.mask_draw_debug_stats.fill_vertices += stats.fill_vertices;
+        self.mask_draw_debug_stats.raster_layers += stats.raster_layers;
+        self.mask_draw_debug_stats.raster_pixels += stats.raster_pixels;
+        self.mask_draw_debug_stats.draw_time += stats.draw_time;
+    }
+
+    fn draw_mask_raster_display(
+        &self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        raster: &MaskRasterDisplayCache,
+        layer_offset_world: egui::Vec2,
+        tint: egui::Color32,
+    ) -> bool {
+        let Some(renderer) = self.threshold_preview_gl.clone() else {
+            return false;
+        };
+        if raster.width == 0 || raster.height == 0 || raster.values.is_empty() {
+            return false;
+        }
+
+        let corners_screen = raster.corners_world.map(|point| {
+            self.camera
+                .world_to_screen(point + layer_offset_world, rect)
+        });
+        let data = ThresholdPreviewGlDrawData {
+            generation: raster.generation,
+            width: raster.width,
+            height: raster.height,
+            values: raster.values.clone(),
+        };
+        let params = ThresholdPreviewGlDrawParams {
+            visible: true,
+            quad_screen: corners_screen,
+            threshold_u16: 1,
+            tint,
+        };
+        let cb = egui_glow::CallbackFn::new(move |info, painter| {
+            renderer.paint(info, painter, &data, &params);
+        });
+        ui.painter().add(egui::PaintCallback {
+            rect,
+            callback: Arc::new(cb),
+        });
+        true
     }
 
     fn draw_points_overlay(
@@ -14680,6 +15267,23 @@ fn cleaned_mask_fill_points(points: &[egui::Pos2]) -> Option<Vec<egui::Pos2>> {
     }
     clean.dedup_by(|a, b| a.distance_sq(*b) <= 1e-6);
     (clean.len() >= 3).then_some(clean)
+}
+
+fn bounds_for_points(points: &[egui::Pos2]) -> Option<egui::Rect> {
+    let mut iter = points
+        .iter()
+        .copied()
+        .filter(|p| p.x.is_finite() && p.y.is_finite());
+    let first = iter.next()?;
+    let mut min = first;
+    let mut max = first;
+    for p in iter {
+        min.x = min.x.min(p.x);
+        min.y = min.y.min(p.y);
+        max.x = max.x.max(p.x);
+        max.y = max.y.max(p.y);
+    }
+    Some(egui::Rect::from_min_max(min, max))
 }
 
 fn inv_xform_world_point(

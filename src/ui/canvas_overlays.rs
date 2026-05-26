@@ -1,13 +1,14 @@
 use eframe::egui;
 
 pub fn paint_hud(ui: &egui::Ui, rect: egui::Rect, text: impl Into<String>) {
-    ui.painter().text(
-        rect.left_top() + egui::vec2(8.0, 8.0),
-        egui::Align2::LEFT_TOP,
-        text.into(),
-        egui::FontId::monospace(12.0),
-        egui::Color32::from_gray(220),
-    );
+    let font = egui::FontId::monospace(12.0);
+    let color = egui::Color32::from_gray(220);
+    let mut pos = rect.left_top() + egui::vec2(8.0, 8.0);
+    for line in text.into().lines() {
+        ui.painter()
+            .text(pos, egui::Align2::LEFT_TOP, line, font.clone(), color);
+        pos.y += 14.0;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context;
 use eframe::egui;
@@ -51,6 +52,15 @@ impl MaskDisplayMode {
 }
 
 #[derive(Debug, Clone)]
+pub struct MaskRasterDisplayCache {
+    pub generation: u64,
+    pub width: usize,
+    pub height: usize,
+    pub values: Arc<Vec<u16>>,
+    pub corners_world: [egui::Pos2; 4],
+}
+
+#[derive(Debug, Clone)]
 pub struct MaskLayer {
     pub id: u64,
     pub name: String,
@@ -62,12 +72,14 @@ pub struct MaskLayer {
     pub offset_world: egui::Vec2,
     pub editable: bool,
     pub polygons_world: Vec<Vec<egui::Pos2>>,
+    pub raster_display: Option<MaskRasterDisplayCache>,
     pub source_geojson: Option<PathBuf>,
 }
 
 impl MaskLayer {
     pub fn clear(&mut self) {
         self.polygons_world.clear();
+        self.raster_display = None;
     }
 
     pub fn add_closed_polygon(&mut self, mut vertices_world: Vec<egui::Pos2>) {
@@ -80,6 +92,7 @@ impl MaskLayer {
             }
         }
         self.polygons_world.push(vertices_world);
+        self.raster_display = None;
     }
 
     pub fn to_project(&self) -> ProjectMaskLayer {
@@ -130,6 +143,7 @@ impl MaskLayer {
                 .iter()
                 .map(|poly| poly.iter().map(|xy| egui::pos2(xy[0], xy[1])).collect())
                 .collect(),
+            raster_display: None,
             source_geojson: p.source_geojson.clone(),
         }
     }
