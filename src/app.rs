@@ -362,6 +362,7 @@ impl ChannelListHost for OmeZarrViewerApp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolMode {
+    Select,
     Pan,
     MoveLayer,
     TransformLayer,
@@ -8243,6 +8244,18 @@ impl OmeZarrViewerApp {
         ui.horizontal(|ui| {
             if icon_button(
                 ui,
+                Icon::Select,
+                self.tool_mode == ToolMode::Select,
+                egui::Sense::click(),
+            )
+            .on_hover_text("Select and edit mask polygons or objects")
+            .clicked()
+            {
+                self.clear_spatial_selection_drag();
+                self.tool_mode = ToolMode::Select;
+            }
+            if icon_button(
+                ui,
                 Icon::Pan,
                 self.tool_mode == ToolMode::Pan,
                 egui::Sense::click(),
@@ -11881,6 +11894,7 @@ impl OmeZarrViewerApp {
         let mut closed_mask_polygon_this_frame = false;
         if response.double_clicked() {
             match self.tool_mode {
+                ToolMode::Select => {}
                 ToolMode::Pan => self.fit_to_rect(rect),
                 ToolMode::MoveLayer => self.fit_to_rect(rect),
                 ToolMode::TransformLayer => self.fit_to_rect(rect),
@@ -12014,7 +12028,7 @@ impl OmeZarrViewerApp {
             self.clear_spatial_selection_drag();
         }
 
-        let can_edit_mask_polygon = self.tool_mode == ToolMode::Pan
+        let can_edit_mask_polygon = self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
             && matches!(self.active_layer, LayerId::Mask(_));
@@ -12083,7 +12097,7 @@ impl OmeZarrViewerApp {
             }
         }
 
-        if self.tool_mode == ToolMode::Pan
+        if self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
             && response.clicked_by(egui::PointerButton::Primary)
@@ -12150,7 +12164,7 @@ impl OmeZarrViewerApp {
 
         if !ctx.wants_keyboard_input()
             && matches!(self.active_layer, LayerId::Mask(_))
-            && self.tool_mode == ToolMode::Pan
+            && self.tool_mode == ToolMode::Select
             && (ctx.input(|i| i.key_pressed(egui::Key::Delete))
                 || ctx.input(|i| i.key_pressed(egui::Key::Backspace)))
             && self.delete_selected_mask_polygon()

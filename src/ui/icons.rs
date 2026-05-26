@@ -5,6 +5,7 @@ use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
+    Select,
     Pan,
     Move,
     Transform,
@@ -78,6 +79,7 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
 
     let mut glyphs: HashMap<Icon, char> = HashMap::new();
     for icon in [
+        Icon::Select,
         Icon::Pan,
         Icon::Move,
         Icon::Transform,
@@ -215,6 +217,7 @@ fn app_bundle_resource_path(relative: &str) -> Option<PathBuf> {
 
 fn resolve_fontawesome_glyph(css: &str, icon: Icon) -> Option<char> {
     let candidates: &[&str] = match icon {
+        Icon::Select => &["fa-arrow-pointer", "fa-mouse-pointer"],
         Icon::Pan => &["fa-hand", "fa-hand-paper", "fa-hand-paper-o"],
         Icon::Move => &[
             "fa-up-down-left-right",
@@ -361,6 +364,7 @@ pub fn paint_icon_in_rect(
     }
 
     match icon {
+        Icon::Select => paint_select(p, rect, stroke),
         Icon::Pan => paint_hand(p, rect, stroke),
         Icon::Move => paint_move(p, rect, stroke),
         Icon::Transform => paint_transform(p, rect, stroke),
@@ -372,6 +376,20 @@ pub fn paint_icon_in_rect(
         Icon::Text => paint_text(p, rect, stroke),
         Icon::Sort => paint_sort(p, rect, stroke),
     }
+}
+
+fn paint_select(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+    let r = rect.shrink(1.0);
+    let points = vec![
+        egui::pos2(r.left() + r.width() * 0.18, r.top() + r.height() * 0.08),
+        egui::pos2(r.left() + r.width() * 0.18, r.top() + r.height() * 0.82),
+        egui::pos2(r.left() + r.width() * 0.40, r.top() + r.height() * 0.62),
+        egui::pos2(r.left() + r.width() * 0.53, r.bottom() - r.height() * 0.12),
+        egui::pos2(r.left() + r.width() * 0.68, r.bottom() - r.height() * 0.18),
+        egui::pos2(r.left() + r.width() * 0.54, r.top() + r.height() * 0.58),
+        egui::pos2(r.left() + r.width() * 0.84, r.top() + r.height() * 0.58),
+    ];
+    p.add(egui::Shape::closed_line(points, stroke));
 }
 
 fn paint_sort(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
