@@ -608,6 +608,7 @@ pub struct OmeZarrViewerApp {
     pending_request: Option<ViewerRequest>,
     group_layers_dialog: Option<GroupLayersDialog>,
     hover_tooltip_state: Option<HoverTooltipState>,
+    active_help_topic: Option<crate::ui::help::HelpTopic>,
     roi_info_open: bool,
 
     smooth_pixels: bool,
@@ -2205,6 +2206,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            active_help_topic: None,
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
@@ -2473,6 +2475,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            active_help_topic: None,
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
@@ -2813,6 +2816,7 @@ impl OmeZarrViewerApp {
             pending_request: None,
             group_layers_dialog: None,
             hover_tooltip_state: None,
+            active_help_topic: None,
             roi_info_open: false,
             smooth_pixels: true,
             show_tile_debug: false,
@@ -3828,7 +3832,24 @@ impl OmeZarrViewerApp {
             ProjectSpaceAction::ClearObjectCache => {
                 self.pending_request = Some(ViewerRequest::ClearObjectCache);
             }
+            ProjectSpaceAction::ShowHelp(topic) => {
+                self.active_help_topic = Some(topic);
+            }
         }
+    }
+
+    fn ui_help_heading(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        topic: crate::ui::help::HelpTopic,
+    ) {
+        ui.horizontal(|ui| {
+            ui.heading(title);
+            if crate::ui::help::help_button(ui, topic) {
+                self.active_help_topic = Some(topic);
+            }
+        });
     }
 
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
@@ -4884,6 +4905,9 @@ impl eframe::App for OmeZarrViewerApp {
                     &mut self.manual_level,
                     self.dataset.levels.len().saturating_sub(1),
                 );
+                if crate::ui::help::help_button(ui, crate::ui::help::HelpTopic::AutoLevel) {
+                    self.active_help_topic = Some(crate::ui::help::HelpTopic::AutoLevel);
+                }
                 let supported_view_planes = self.view_plane_modes();
                 if supported_view_planes.len() > 1 {
                     ui.separator();
@@ -5002,7 +5026,6 @@ impl eframe::App for OmeZarrViewerApp {
         if let Some(action) = self.project_space.ui_floating_windows(ctx, true) {
             self.handle_project_space_action(action);
         }
-
         if self.show_right_panel {
             let mut tab = self.right_tab;
             right_panel::show(
@@ -5045,12 +5068,20 @@ impl eframe::App for OmeZarrViewerApp {
                 |ui, tab| match tab {
                     RightTab::Properties => self.ui_layer_properties(ui, ctx),
                     RightTab::Views => {
+                        self.ui_help_heading(ui, "Views", crate::ui::help::HelpTopic::ViewsPanel);
+                        ui.separator();
                         let roi = self.current_project_roi().cloned();
                         if let Some(action) = self.project_space.ui_views_panel(ui, roi, true) {
                             self.handle_project_space_action(action);
                         }
                     }
                     RightTab::Analysis => {
+                        self.ui_help_heading(
+                            ui,
+                            "Analysis",
+                            crate::ui::help::HelpTopic::AnalysisPanel,
+                        );
+                        ui.separator();
                         let suspend_live_selection_sync =
                             matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect);
                         if self.seg_objects.object_count() > 0 {
@@ -5112,6 +5143,12 @@ impl eframe::App for OmeZarrViewerApp {
                         }
                     }
                     RightTab::Measurements => {
+                        self.ui_help_heading(
+                            ui,
+                            "Measurements",
+                            crate::ui::help::HelpTopic::MeasurementsPanel,
+                        );
+                        ui.separator();
                         if self.seg_objects.object_count() > 0 {
                             self.seg_objects.ui_measurements(
                                 ui,
@@ -5150,8 +5187,18 @@ impl eframe::App for OmeZarrViewerApp {
                             );
                         }
                     }
-                    RightTab::Memory => self.ui_memory(ui),
+                    RightTab::Memory => {
+                        self.ui_help_heading(ui, "Memory", crate::ui::help::HelpTopic::MemoryPanel);
+                        ui.separator();
+                        self.ui_memory(ui);
+                    }
                     RightTab::RoiSelector => {
+                        self.ui_help_heading(
+                            ui,
+                            "ROI Selector",
+                            crate::ui::help::HelpTopic::RoiSelectorPanel,
+                        );
+                        ui.separator();
                         if let Some(action) = self.roi_selector.ui(ui) {
                             self.handle_roi_selector_action(ctx, action);
                         }
@@ -5179,6 +5226,7 @@ impl eframe::App for OmeZarrViewerApp {
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
 
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
             if self.active_layer == LayerId::SegmentationObjects
@@ -7647,6 +7695,9 @@ impl OmeZarrViewerApp {
                     self.tool_mode = ToolMode::LassoSelect;
                 }
             });
+            if crate::ui::help::help_button(ui, crate::ui::help::HelpTopic::Tools) {
+                self.active_help_topic = Some(crate::ui::help::HelpTopic::Tools);
+            }
         });
         if !xy_tools_enabled {
             ui.small("Non-XY view is image-only. Overlays and editing tools stay disabled.");
@@ -8672,7 +8723,13 @@ impl OmeZarrViewerApp {
     }
 
     fn ui_layer_properties(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading(self.layer_display_name(self.active_layer));
+        let active_layer_name = self.layer_display_name(self.active_layer);
+        ui.horizontal(|ui| {
+            ui.heading(active_layer_name);
+            if crate::ui::help::help_button(ui, crate::ui::help::HelpTopic::PropertiesPanel) {
+                self.active_help_topic = Some(crate::ui::help::HelpTopic::PropertiesPanel);
+            }
+        });
         ui.separator();
         self.ui_current_roi_summary(ui);
         ui.separator();
@@ -10664,7 +10721,13 @@ impl OmeZarrViewerApp {
         self.ui_histogram(ui, abs_max, (lo, hi));
 
         ui.separator();
-        ui.collapsing("Threshold Regions", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Threshold Regions");
+            if crate::ui::help::help_button(ui, crate::ui::help::HelpTopic::Thresholding) {
+                self.active_help_topic = Some(crate::ui::help::HelpTopic::Thresholding);
+            }
+        });
+        ui.collapsing("Controls", |ui| {
             if !self.view_plane_is_xy() {
                 ui.label("Threshold-region preview is only available in XY view.");
                 return;

@@ -3,6 +3,7 @@ pub(crate) mod channel_notes;
 pub(crate) mod channels_panel;
 pub(crate) mod contrast;
 pub(crate) mod group_layers;
+pub(crate) mod help;
 pub(crate) mod icons;
 pub(crate) mod layer_list;
 pub(crate) mod left_panel;

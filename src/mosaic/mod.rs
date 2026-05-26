@@ -274,6 +274,7 @@ pub struct MosaicViewerApp {
     seg_geojson: MosaicGeoJsonSegmentationOverlay,
     seg_geojson_pending_visible: bool,
     project_space: ProjectSpace,
+    active_help_topic: Option<crate::ui::help::HelpTopic>,
 }
 
 impl ChannelListHost for MosaicViewerApp {
@@ -1747,6 +1748,7 @@ impl MosaicViewerApp {
             tile_request_generation: 1,
             last_tile_request_signature: None,
             project_space: ProjectSpace::default(),
+            active_help_topic: None,
         })
     }
 
@@ -1972,6 +1974,7 @@ impl MosaicViewerApp {
             tile_request_generation: 1,
             last_tile_request_signature: None,
             project_space: ProjectSpace::default(),
+            active_help_topic: None,
         })
     }
 
@@ -2230,6 +2233,7 @@ impl MosaicViewerApp {
             tile_request_generation: 1,
             last_tile_request_signature: None,
             project_space: ProjectSpace::default(),
+            active_help_topic: None,
         })
     }
 
@@ -2508,6 +2512,7 @@ impl MosaicViewerApp {
             tile_request_generation: 1,
             last_tile_request_signature: None,
             project_space: ProjectSpace::default(),
+            active_help_topic: None,
         })
     }
 
@@ -2736,6 +2741,7 @@ impl MosaicViewerApp {
             tile_request_generation: 1,
             last_tile_request_signature: None,
             project_space: ProjectSpace::default(),
+            active_help_topic: None,
         })
     }
 }
@@ -2889,6 +2895,7 @@ impl eframe::App for MosaicViewerApp {
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
 
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
             self.fit_mosaic();
@@ -4154,6 +4161,9 @@ impl MosaicViewerApp {
             }
             crate::project::ProjectSpaceAction::ClearObjectCache => {
                 self.pending_request = Some(MosaicRequest::ClearObjectCache);
+            }
+            crate::project::ProjectSpaceAction::ShowHelp(topic) => {
+                self.active_help_topic = Some(topic);
             }
         }
     }

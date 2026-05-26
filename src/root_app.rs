@@ -184,6 +184,7 @@ pub struct RootApp {
     app_settings: AppSettings,
     settings_open: bool,
     settings_status: String,
+    active_help_topic: Option<crate::ui::help::HelpTopic>,
     control_bridge: Option<OdonControlBridge>,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
@@ -1580,6 +1581,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            active_help_topic: None,
             control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
@@ -1634,6 +1636,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            active_help_topic: None,
             control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
@@ -1688,6 +1691,7 @@ impl RootApp {
             app_settings,
             settings_open: false,
             settings_status,
+            active_help_topic: None,
             control_bridge,
             #[cfg(target_os = "macos")]
             native_menu: None,
@@ -2972,6 +2976,9 @@ impl eframe::App for RootApp {
                                 ProjectSpaceAction::ClearObjectCache => {
                                     object_preload_clear = true;
                                 }
+                                ProjectSpaceAction::ShowHelp(topic) => {
+                                    self.active_help_topic = Some(topic);
+                                }
                             }
                         }
                     });
@@ -3018,6 +3025,9 @@ impl eframe::App for RootApp {
                         }
                         ProjectSpaceAction::ClearObjectCache => {
                             object_preload_clear = true;
+                        }
+                        ProjectSpaceAction::ShowHelp(topic) => {
+                            self.active_help_topic = Some(topic);
                         }
                     }
                 }
@@ -3277,5 +3287,6 @@ impl eframe::App for RootApp {
         if back_to_single {
             self.switch_mosaic_to_single(ctx);
         }
+        crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
     }
 }

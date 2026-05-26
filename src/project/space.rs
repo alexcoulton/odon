@@ -23,6 +23,7 @@ use crate::deep_link::DeepLinkRequest;
 use crate::objects::{
     ObjectPreloadMode, ObjectPreloadSettings, ObjectProjectAnalysisState, ObjectProjectDisplayState,
 };
+use crate::ui::help::HelpTopic;
 use crate::ui::roi_browser::RoiBrowseState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +442,7 @@ pub enum ProjectSpaceAction {
     OpenRemoteDialog,
     PreloadObjectSegmentations(ObjectPreloadSettings),
     ClearObjectCache,
+    ShowHelp(HelpTopic),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1250,6 +1252,9 @@ impl ProjectSpace {
 
         ui.separator();
         ui.horizontal(|ui| {
+            if crate::ui::help::help_button(ui, HelpTopic::ImportOpen) {
+                action = Some(ProjectSpaceAction::ShowHelp(HelpTopic::ImportOpen));
+            }
             if ui.button("Import Samplesheet CSV...").clicked() {
                 if let Some(path) = FileDialog::new()
                     .add_filter("CSV", &["csv"])
@@ -2042,7 +2047,12 @@ impl ProjectSpace {
     fn ui_object_cache(&mut self, ui: &mut egui::Ui, action: &mut Option<ProjectSpaceAction>) {
         let cache = self.object_cache_ui;
         ui.separator();
-        ui.heading("Object Cache");
+        ui.horizontal(|ui| {
+            ui.heading("Object Cache");
+            if crate::ui::help::help_button(ui, HelpTopic::ObjectCache) {
+                *action = Some(ProjectSpaceAction::ShowHelp(HelpTopic::ObjectCache));
+            }
+        });
         ui.label(format!(
             "{} GeoParquet/Parquet segmentation file(s), {} on disk.",
             cache.available_count,
