@@ -209,6 +209,7 @@ impl HelpTopic {
                         "Import Samplesheet CSV replaces the current project ROI list with rows from a CSV file; see Samplesheet CSV Format for required columns.",
                         "Export Samplesheet CSV writes local project ROIs back out as `id,path,...metadata` rows; remote ROIs are skipped.",
                         "Add OME-Zarr Root scans a local directory tree for OME-Zarr roots and adds each discovered ROI.",
+                        "Open TIFF / OME-TIFF opens a local TIFF file directly in the single-dataset viewer and adds it to the current project list.",
                         "Drag a supported local dataset into the window to add it quickly; supported local inputs include OME-Zarr roots, Xenium folders, and TIFF files.",
                         "Open Remote accepts HTTP(S) OME-Zarr URLs, or S3/R2 endpoint, region, bucket, prefix, and credentials.",
                     ],

@@ -437,6 +437,7 @@ pub enum MosaicRequest {
     OpenProjectRoi(ProjectRoi),
     OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
     OpenProject(PathBuf),
+    OpenLocalPath(PathBuf),
     ForgetRecentProject(PathBuf),
     ClearRecentProjects,
     OpenProjectMosaic(Vec<ProjectRoi>),
@@ -4148,6 +4149,9 @@ impl MosaicViewerApp {
             }
             crate::project::ProjectSpaceAction::OpenProject(path) => {
                 self.pending_request = Some(MosaicRequest::OpenProject(path));
+            }
+            crate::project::ProjectSpaceAction::OpenLocalPath(path) => {
+                self.pending_request = Some(MosaicRequest::OpenLocalPath(path));
             }
             crate::project::ProjectSpaceAction::ForgetRecentProject(path) => {
                 self.pending_request = Some(MosaicRequest::ForgetRecentProject(path));

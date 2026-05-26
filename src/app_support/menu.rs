@@ -4,6 +4,7 @@ use anyhow::Context;
 pub enum NativeMenuAction {
     Settings,
     OpenOmeZarr,
+    OpenTiff,
     OpenProject,
     SaveProject,
     SaveNewProject,
@@ -25,6 +26,7 @@ pub struct NativeMenu {
     _menu: muda::Menu,
     id_settings: muda::MenuId,
     id_open_omezarr: muda::MenuId,
+    id_open_tiff: muda::MenuId,
     id_open_project: muda::MenuId,
     id_save_project: muda::MenuId,
     id_save_new_project: muda::MenuId,
@@ -83,6 +85,7 @@ impl NativeMenu {
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyO)),
         );
+        let open_tiff = MenuItem::new("Open TIFF / OME-TIFF...", true, None);
         let open_project = MenuItem::new(
             "Open Project...",
             true,
@@ -126,6 +129,7 @@ impl NativeMenu {
             true,
             &[
                 &open_omezarr,
+                &open_tiff,
                 &PredefinedMenuItem::separator(),
                 &open_project,
                 &save_project,
@@ -176,6 +180,7 @@ impl NativeMenu {
             _menu: menu,
             id_settings: settings.id().clone(),
             id_open_omezarr: open_omezarr.id().clone(),
+            id_open_tiff: open_tiff.id().clone(),
             id_open_project: open_project.id().clone(),
             id_save_project: save_project.id().clone(),
             id_save_new_project: save_new_project.id().clone(),
@@ -208,6 +213,8 @@ impl NativeMenu {
                 out.push(NativeMenuAction::Settings);
             } else if id == &self.id_open_omezarr {
                 out.push(NativeMenuAction::OpenOmeZarr);
+            } else if id == &self.id_open_tiff {
+                out.push(NativeMenuAction::OpenTiff);
             } else if id == &self.id_open_project {
                 out.push(NativeMenuAction::OpenProject);
             } else if id == &self.id_save_project {

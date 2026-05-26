@@ -2693,6 +2693,33 @@ impl eframe::App for RootApp {
                                 open_single = Some((root, ps));
                             }
                         }
+                        NativeMenuAction::OpenTiff => {
+                            if let Some(root) = FileDialog::new()
+                                .add_filter("TIFF / OME-TIFF", &["tif", "tiff"])
+                                .set_title("Open TIFF / OME-TIFF")
+                                .pick_file()
+                            {
+                                let ps = match &mut self.mode {
+                                    Mode::Project { project_space } => {
+                                        let mut ps = std::mem::take(project_space);
+                                        ps.handle_dropped_paths([root.clone()]);
+                                        ps
+                                    }
+                                    Mode::Single(app) => {
+                                        let mut ps = app.take_project_space();
+                                        ps.handle_dropped_paths([root.clone()]);
+                                        ps
+                                    }
+                                    Mode::Mosaic { mosaic, .. } => {
+                                        let mut ps = mosaic.take_project_space();
+                                        ps.handle_dropped_paths([root.clone()]);
+                                        ps
+                                    }
+                                    Mode::Transition => ProjectSpace::default(),
+                                };
+                                open_single = Some((root, ps));
+                            }
+                        }
                         NativeMenuAction::OpenProject => {
                             if let Some(path) = FileDialog::new()
                                 .add_filter("Project JSON", &["json"])
@@ -2952,6 +2979,11 @@ impl eframe::App for RootApp {
                             ProjectSpaceAction::OpenProject(path) => {
                                 open_project_path = Some(path);
                             }
+                            ProjectSpaceAction::OpenLocalPath(path) => {
+                                let mut ps = std::mem::take(project_space);
+                                ps.handle_dropped_paths([path.clone()]);
+                                open_single = Some((path, ps));
+                            }
                             ProjectSpaceAction::ForgetRecentProject(path) => {
                                 forget_recent_project_path = Some(path);
                             }
@@ -2992,6 +3024,11 @@ impl eframe::App for RootApp {
                         }
                         ProjectSpaceAction::OpenProject(path) => {
                             open_project_path = Some(path);
+                        }
+                        ProjectSpaceAction::OpenLocalPath(path) => {
+                            let mut ps = std::mem::take(project_space);
+                            ps.handle_dropped_paths([path.clone()]);
+                            open_single = Some((path, ps));
                         }
                         ProjectSpaceAction::ForgetRecentProject(path) => {
                             forget_recent_project_path = Some(path);
@@ -3060,6 +3097,11 @@ impl eframe::App for RootApp {
                         ViewerRequest::OpenProject(path) => {
                             open_project_path = Some(path);
                         }
+                        ViewerRequest::OpenLocalPath(path) => {
+                            let mut ps = app.take_project_space();
+                            ps.handle_dropped_paths([path.clone()]);
+                            open_single = Some((path, ps));
+                        }
                         ViewerRequest::ForgetRecentProject(path) => {
                             forget_recent_project_path = Some(path);
                         }
@@ -3122,6 +3164,11 @@ impl eframe::App for RootApp {
                         }
                         MosaicRequest::OpenProject(path) => {
                             open_project_path = Some(path);
+                        }
+                        MosaicRequest::OpenLocalPath(path) => {
+                            let mut ps = mosaic.take_project_space();
+                            ps.handle_dropped_paths([path.clone()]);
+                            open_single = Some((path, ps));
                         }
                         MosaicRequest::ForgetRecentProject(path) => {
                             forget_recent_project_path = Some(path);

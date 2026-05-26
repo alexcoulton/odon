@@ -726,6 +726,7 @@ pub enum ViewerRequest {
     OpenProjectRoi(ProjectRoi),
     OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
     OpenProject(PathBuf),
+    OpenLocalPath(PathBuf),
     ForgetRecentProject(PathBuf),
     ClearRecentProjects,
     OpenProjectMosaic(Vec<ProjectRoi>),
@@ -3874,6 +3875,11 @@ impl OmeZarrViewerApp {
             }
             ProjectSpaceAction::OpenProject(path) => {
                 self.pending_request = Some(ViewerRequest::OpenProject(path));
+            }
+            ProjectSpaceAction::OpenLocalPath(path) => {
+                self.project_space
+                    .set_status(format!("Opening: {}", path.to_string_lossy()));
+                self.pending_request = Some(ViewerRequest::OpenLocalPath(path));
             }
             ProjectSpaceAction::ForgetRecentProject(path) => {
                 self.pending_request = Some(ViewerRequest::ForgetRecentProject(path));

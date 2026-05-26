@@ -438,6 +438,7 @@ struct ProjectItem {
 pub enum ProjectSpaceAction {
     Open(ProjectRoi),
     OpenView(ProjectRoi, ProjectViewSpec),
+    OpenLocalPath(PathBuf),
     OpenProject(PathBuf),
     ForgetRecentProject(PathBuf),
     ClearRecentProjects,
@@ -1317,6 +1318,15 @@ impl ProjectSpace {
                             if let Err(err) = self.import_rois_from_root(&path) {
                                 self.status = format!("OME-Zarr root import failed: {err}");
                             }
+                        }
+                    }
+                    if ui.button("Open TIFF / OME-TIFF...").clicked() {
+                        if let Some(path) = FileDialog::new()
+                            .add_filter("TIFF / OME-TIFF", &["tif", "tiff"])
+                            .set_title("Open TIFF / OME-TIFF Image")
+                            .pick_file()
+                        {
+                            action = Some(ProjectSpaceAction::OpenLocalPath(path));
                         }
                     }
                     if ui.button("Open Remote...").clicked() {
