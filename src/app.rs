@@ -123,6 +123,8 @@ const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
 const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
 const MAX_UNDO_ACTIONS: usize = 64;
+const HISTOGRAM_NAVIGATION_DEBOUNCE: Duration = Duration::from_millis(300);
+const HISTOGRAM_REQUEST_THROTTLE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LayerId {
@@ -543,6 +545,7 @@ pub struct OmeZarrViewerApp {
     hist_request_id: u64,
     hist_request_pending: bool,
     hist_dirty: bool,
+    hist_navigation_dirty_since: Option<Instant>,
     hist_last_sent: Instant,
 
     camera: Camera,
@@ -1934,6 +1937,7 @@ impl OmeZarrViewerApp {
         self.hist_request_id = self.hist_request_id.wrapping_add(1);
         self.hist_request_pending = false;
         self.hist_dirty = true;
+        self.hist_navigation_dirty_since = None;
         self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
         for pending in &mut self.chanmax_pending {
             *pending = false;
@@ -2122,6 +2126,7 @@ impl OmeZarrViewerApp {
             hist_request_id: 0,
             hist_request_pending: false,
             hist_dirty: true,
+            hist_navigation_dirty_since: None,
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
@@ -2396,6 +2401,7 @@ impl OmeZarrViewerApp {
             hist_request_id: 0,
             hist_request_pending: false,
             hist_dirty: true,
+            hist_navigation_dirty_since: None,
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
@@ -2742,6 +2748,7 @@ impl OmeZarrViewerApp {
             hist_request_id: 0,
             hist_request_pending: false,
             hist_dirty: true,
+            hist_navigation_dirty_since: None,
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
@@ -5519,6 +5526,7 @@ impl OmeZarrViewerApp {
         self.hist_request_id = 0;
         self.hist_request_pending = false;
         self.hist_dirty = true;
+        self.hist_navigation_dirty_since = None;
         self.hist_last_sent = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
@@ -6283,6 +6291,7 @@ impl OmeZarrViewerApp {
         self.hist_request_id = 0;
         self.hist_request_pending = false;
         self.hist_dirty = true;
+        self.hist_navigation_dirty_since = None;
         self.hist_last_sent = Instant::now()
             .checked_sub(Duration::from_secs(3600))
             .unwrap_or_else(Instant::now);
@@ -11194,11 +11203,7 @@ impl OmeZarrViewerApp {
         ui.painter()
             .rect_filled(rect, 0.0, egui::Color32::from_gray(18));
 
-        let Some(hist) = self
-            .hist
-            .as_ref()
-            .filter(|h| h.request_id == self.hist_request_id)
-        else {
+        let Some(hist) = self.hist.as_ref() else {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -11208,6 +11213,8 @@ impl OmeZarrViewerApp {
             );
             return;
         };
+        let histogram_stale =
+            hist.request_id != self.hist_request_id || self.hist_dirty || self.hist_request_pending;
 
         let bins = &hist.bins;
         if bins.is_empty() {
@@ -11257,6 +11264,15 @@ impl OmeZarrViewerApp {
         };
         ui.add_space(4.0);
         ui.label(stats_text);
+        if histogram_stale {
+            ui.painter().text(
+                rect.right_top() + egui::vec2(-8.0, 8.0),
+                egui::Align2::RIGHT_TOP,
+                "updating...",
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_gray(170),
+            );
+        }
     }
 
     fn ui_canvas(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -11739,6 +11755,7 @@ impl OmeZarrViewerApp {
 
         if camera_changed {
             self.hist_dirty = true;
+            self.hist_navigation_dirty_since = Some(Instant::now());
         }
 
         let visible_world = self.visible_world_rect(rect);
@@ -13791,7 +13808,10 @@ impl OmeZarrViewerApp {
         let properties_hist_active = self.show_right_panel
             && self.right_tab == RightTab::Properties
             && matches!(self.active_layer, LayerId::Channel(_));
-        (properties_hist_active && (self.hist_dirty || self.hist_request_pending))
+        (properties_hist_active
+            && (self.hist_dirty
+                || self.hist_request_pending
+                || self.hist_navigation_dirty_since.is_some()))
             || self.chanmax_pending.iter().any(|pending| *pending)
             || self.screenshot_in_flight.is_some()
             || self
@@ -14152,16 +14172,28 @@ impl OmeZarrViewerApp {
         if self.channels.is_empty() {
             self.hist_dirty = false;
             self.hist_request_pending = false;
+            self.hist_navigation_dirty_since = None;
             self.hist = None;
             return;
         }
         let Some(viewport) = self.last_canvas_rect else {
             return;
         };
-        let elapsed = Instant::now().duration_since(self.hist_last_sent);
-        let throttle = Duration::from_millis(200);
-        if elapsed < throttle {
-            ctx.request_repaint_after(throttle - elapsed);
+        let now = Instant::now();
+        if let Some(dirty_since) = self.hist_navigation_dirty_since {
+            let settled_for = now.duration_since(dirty_since);
+            if settled_for < HISTOGRAM_NAVIGATION_DEBOUNCE {
+                ctx.request_repaint_after(HISTOGRAM_NAVIGATION_DEBOUNCE - settled_for);
+                return;
+            }
+            if self.hist_request_pending {
+                ctx.request_repaint_after(Duration::from_millis(50));
+                return;
+            }
+        }
+        let elapsed = now.duration_since(self.hist_last_sent);
+        if elapsed < HISTOGRAM_REQUEST_THROTTLE {
+            ctx.request_repaint_after(HISTOGRAM_REQUEST_THROTTLE - elapsed);
             return;
         }
 
@@ -14234,6 +14266,7 @@ impl OmeZarrViewerApp {
         self.hist_last_sent = Instant::now();
         self.hist_request_pending = true;
         self.hist_dirty = false;
+        self.hist_navigation_dirty_since = None;
     }
 
     fn drain_tiles(&mut self, ctx: &egui::Context) {
