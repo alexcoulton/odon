@@ -327,6 +327,14 @@ impl ChannelListHost for OmeZarrViewerApp {
         self.reset_current_visible_move_targets_to_loaded()
     }
 
+    fn can_apply_rgb_preset(&self) -> bool {
+        self.channels.len() == 3
+    }
+
+    fn apply_rgb_preset(&mut self) -> bool {
+        self.apply_three_channel_rgb_preset()
+    }
+
     fn layer_groups(&self) -> crate::data::project_config::ProjectLayerGroups {
         self.current_layer_groups()
     }
@@ -367,7 +375,6 @@ enum ToolMode {
     MoveLayer,
     TransformLayer,
     DrawMaskPolygon,
-    RectSelect,
     LassoSelect,
 }
 
@@ -5458,7 +5465,7 @@ impl eframe::App for OmeZarrViewerApp {
                         );
                         ui.separator();
                         let suspend_live_selection_sync =
-                            matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect);
+                            matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect);
                         if self.seg_objects.object_count() > 0 {
                             self.seg_objects.ui_analysis(
                                 ui,
@@ -8235,9 +8242,7 @@ impl OmeZarrViewerApp {
             self.clear_spatial_selection_drag();
             self.tool_mode = ToolMode::Pan;
         }
-        if !can_object_select
-            && matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect)
-        {
+        if !can_object_select && matches!(self.tool_mode, ToolMode::LassoSelect) {
             self.clear_spatial_selection_drag();
             self.tool_mode = ToolMode::Pan;
         }
@@ -8318,18 +8323,6 @@ impl OmeZarrViewerApp {
                 }
             });
             ui.add_enabled_ui(can_object_select, |ui| {
-                if icon_button(
-                    ui,
-                    Icon::RectSelect,
-                    self.tool_mode == ToolMode::RectSelect,
-                    egui::Sense::click(),
-                )
-                .on_hover_text("Drag a rectangle to select cells by centroid")
-                .clicked()
-                {
-                    self.clear_spatial_selection_drag();
-                    self.tool_mode = ToolMode::RectSelect;
-                }
                 if icon_button(
                     ui,
                     Icon::LassoSelect,
@@ -10540,6 +10533,43 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn apply_three_channel_rgb_preset(&mut self) -> bool {
+        if self.channels.len() != 3 {
+            return false;
+        }
+        let rgb = [[255, 0, 0], [0, 255, 0], [0, 0, 255]];
+        let hi = self.dataset.abs_max.clamp(1.0, 255.0);
+        let mut changed = false;
+        for (idx, color) in rgb.into_iter().enumerate() {
+            let Some(channel) = self.channels.get_mut(idx) else {
+                continue;
+            };
+            changed |= channel.color_rgb != color;
+            channel.color_rgb = color;
+            changed |= !channel.visible;
+            channel.visible = true;
+            let window = (0.0, hi);
+            changed |= channel.window != Some(window);
+            channel.window = Some(window);
+            self.channel_window_overrides
+                .insert(channel.name.clone(), window);
+            self.selected_channel_layers.insert(idx);
+            self.memory_selected_channels.insert(idx);
+            self.set_channel_group_color_inheritance(idx, false);
+        }
+        if !changed {
+            return false;
+        }
+        self.selected_channel = 0;
+        self.active_layer = LayerId::Channel(0);
+        self.selected_channel_group_id = None;
+        self.channel_select_anchor_idx = Some(0);
+        self.hist_dirty = true;
+        self.bump_render_id();
+        self.set_status("Applied RGB preset to channels 0-2.");
+        true
+    }
+
     fn ui_top_bar_quick_contrast(&mut self, ui: &mut egui::Ui) {
         if self.channels.is_empty() {
             return;
@@ -11901,7 +11931,7 @@ impl OmeZarrViewerApp {
                 ToolMode::DrawMaskPolygon => {
                     closed_mask_polygon_this_frame = self.finish_drawing_mask_polygon();
                 }
-                ToolMode::RectSelect | ToolMode::LassoSelect => {}
+                ToolMode::LassoSelect => {}
             }
         }
 
@@ -11967,11 +11997,14 @@ impl OmeZarrViewerApp {
         // Spatial selection tools operate in world coordinates, but they are only valid for a
         // subset of active layers. The drag state is kept separate from the final selection so
         // Escape can cancel the gesture without mutating layer selections.
-        let can_rect_select = self.tool_mode == ToolMode::RectSelect
+        let can_rect_select = self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
             && self.active_layer_supports_spatial_selection();
-        if can_rect_select && response.drag_started_by(egui::PointerButton::Primary) {
+        if can_rect_select
+            && response.drag_started_by(egui::PointerButton::Primary)
+            && !ui.input(|i| i.modifiers.command)
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world = self.camera.screen_to_world(pos, rect);
                 self.selection_rect_start_world = Some(world);
@@ -11989,8 +12022,16 @@ impl OmeZarrViewerApp {
                 self.selection_rect_current_world,
             ) {
                 let selection_rect = egui::Rect::from_two_pos(start, end);
-                let additive = ctx.input(|i| i.modifiers.shift || i.modifiers.command);
-                let _ = self.apply_rect_selection_to_active_layer(selection_rect, additive);
+                let min_drag_world = 4.0 / self.camera.zoom_screen_per_lvl0_px.max(1e-6);
+                if selection_rect
+                    .width()
+                    .abs()
+                    .max(selection_rect.height().abs())
+                    >= min_drag_world
+                {
+                    let additive = ctx.input(|i| i.modifiers.shift);
+                    let _ = self.apply_rect_selection_to_active_layer(selection_rect, additive);
+                }
             }
             self.clear_spatial_selection_drag();
         }
@@ -12031,6 +12072,7 @@ impl OmeZarrViewerApp {
         let can_edit_mask_polygon = self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
+            && self.selection_rect_start_world.is_none()
             && matches!(self.active_layer, LayerId::Mask(_));
         if can_edit_mask_polygon
             && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
@@ -12100,6 +12142,7 @@ impl OmeZarrViewerApp {
         if self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
+            && self.selection_rect_start_world.is_none()
             && response.clicked_by(egui::PointerButton::Primary)
         {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -12133,13 +12176,13 @@ impl OmeZarrViewerApp {
 
         let cancel_selection_gesture = !ctx.wants_keyboard_input()
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-            && matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect)
+            && matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect)
             && (self.selection_rect_start_world.is_some()
                 || !self.selection_lasso_world.is_empty());
         if cancel_selection_gesture {
             self.clear_spatial_selection_drag();
         } else if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if matches!(self.tool_mode, ToolMode::RectSelect | ToolMode::LassoSelect) {
+            if matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect) {
                 self.clear_spatial_selection_drag();
             }
             match self.active_layer {
@@ -13272,7 +13315,7 @@ impl OmeZarrViewerApp {
 
         let selection_color = egui::Color32::from_rgba_unmultiplied(255, 210, 80, 180);
         let selection_stroke = egui::Stroke::new(2.0, selection_color);
-        if self.tool_mode == ToolMode::RectSelect
+        if self.tool_mode == ToolMode::Select
             && let (Some(start), Some(end)) = (
                 self.selection_rect_start_world,
                 self.selection_rect_current_world,

@@ -79,6 +79,8 @@ pub(crate) trait ChannelListHost {
     fn open_group_layers_dialog_channels(&mut self, members: Vec<usize>);
     fn can_reset_selected_layer_positions(&mut self) -> bool;
     fn reset_selected_layer_positions(&mut self) -> bool;
+    fn can_apply_rgb_preset(&self) -> bool;
+    fn apply_rgb_preset(&mut self) -> bool;
     fn layer_groups(&self) -> ProjectLayerGroups;
     fn set_layer_groups(&mut self, groups: ProjectLayerGroups);
     fn channels_changed(&mut self);
@@ -118,6 +120,14 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
             channels_changed = true;
         }
         create_group_clicked |= ui.button("+ Group").clicked();
+        if host.can_apply_rgb_preset() {
+            let resp = ui
+                .button("RGB")
+                .on_hover_text("Render channels 0, 1, and 2 as red, green, and blue");
+            if resp.clicked() && host.apply_rgb_preset() {
+                channels_changed = true;
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui_sort_button(host, ui);
         });
@@ -786,6 +796,14 @@ mod tests {
         }
 
         fn reset_selected_layer_positions(&mut self) -> bool {
+            false
+        }
+
+        fn can_apply_rgb_preset(&self) -> bool {
+            false
+        }
+
+        fn apply_rgb_preset(&mut self) -> bool {
             false
         }
 

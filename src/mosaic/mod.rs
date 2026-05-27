@@ -400,6 +400,39 @@ impl ChannelListHost for MosaicViewerApp {
         false
     }
 
+    fn can_apply_rgb_preset(&self) -> bool {
+        self.channels.len() == 3
+    }
+
+    fn apply_rgb_preset(&mut self) -> bool {
+        if self.channels.len() != 3 {
+            return false;
+        }
+        let rgb = [[255, 0, 0], [0, 255, 0], [0, 0, 255]];
+        let hi = self.abs_max.clamp(1.0, 255.0);
+        let mut changed = false;
+        for (idx, color) in rgb.into_iter().enumerate() {
+            let Some(channel) = self.channels.get_mut(idx) else {
+                continue;
+            };
+            changed |= channel.color_rgb != color;
+            channel.color_rgb = color;
+            changed |= !channel.visible;
+            channel.visible = true;
+            let window = (0.0, hi);
+            changed |= channel.window != Some(window);
+            channel.window = Some(window);
+            self.selected_channel_layers.insert(idx);
+        }
+        if changed {
+            self.active_layer = MosaicLayerId::Channel(0);
+            self.selected_channel_group_id = None;
+            self.channel_select_anchor_idx = Some(0);
+            self.status = "Applied RGB preset to channels 0-2.".to_string();
+        }
+        changed
+    }
+
     fn layer_groups(&self) -> ProjectLayerGroups {
         self.layer_groups.clone()
     }
