@@ -95,6 +95,23 @@ fn tools_list() -> Value {
                 "Return object/segmentation overlay visibility state for the active viewer."
             ),
             set_object_overlay_visibility_tool_schema(),
+            object_selection_tool_schema(
+                "get_object_selection",
+                "Return the current selectable object layer and selected object IDs/centroids."
+            ),
+            object_rect_tool_schema(
+                "query_object_ids_in_rect",
+                "Return object IDs whose rendered geometry intersects a world or screen rectangle without changing selection."
+            ),
+            object_selection_tool_schema(
+                "query_object_ids_in_view",
+                "Return object IDs whose rendered geometry intersects the current canvas viewport without changing selection."
+            ),
+            object_rect_select_tool_schema(),
+            object_selection_tool_schema(
+                "clear_object_selection",
+                "Clear selected objects on the active selectable object layer."
+            ),
             channel_intensity_stats_tool_schema(),
             set_channel_order_tool_schema(),
             tool_schema(
@@ -274,6 +291,116 @@ fn set_object_overlay_visibility_tool_schema() -> Value {
     })
 }
 
+fn object_selection_tool_schema(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "enum": ["active", "objects", "segmentation_objects", "spatial_shape"],
+                    "default": "active"
+                },
+                "layer_id": {"type": "integer", "minimum": 0},
+                "id": {"type": "integer", "minimum": 0},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "default": 64
+                }
+            },
+            "additionalProperties": false
+        }
+    })
+}
+
+fn object_rect_tool_schema(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": object_rect_tool_properties(false),
+            "additionalProperties": false
+        }
+    })
+}
+
+fn object_rect_select_tool_schema() -> Value {
+    json!({
+        "name": "select_object_ids_in_rect",
+        "description": "Select object IDs whose rendered geometry intersects a world or screen rectangle using the same logic as rectangle selection in the app.",
+        "inputSchema": {
+            "type": "object",
+            "properties": object_rect_tool_properties(true),
+            "additionalProperties": false
+        }
+    })
+}
+
+fn object_rect_tool_properties(include_additive: bool) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        (
+            "target".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["active", "objects", "segmentation_objects", "spatial_shape"],
+                "default": "active"
+            }),
+        ),
+        (
+            "layer_id".to_string(),
+            json!({"type": "integer", "minimum": 0}),
+        ),
+        ("id".to_string(), json!({"type": "integer", "minimum": 0})),
+        (
+            "world_rect".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 4,
+                "maxItems": 4
+            }),
+        ),
+        (
+            "screen_rect".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 4,
+                "maxItems": 4
+            }),
+        ),
+        ("min_x".to_string(), json!({"type": "number"})),
+        ("min_y".to_string(), json!({"type": "number"})),
+        ("max_x".to_string(), json!({"type": "number"})),
+        ("max_y".to_string(), json!({"type": "number"})),
+        ("x0".to_string(), json!({"type": "number"})),
+        ("y0".to_string(), json!({"type": "number"})),
+        ("x1".to_string(), json!({"type": "number"})),
+        ("y1".to_string(), json!({"type": "number"})),
+        (
+            "limit".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000,
+                "default": 64
+            }),
+        ),
+    ]);
+    if include_additive {
+        properties.insert(
+            "additive".to_string(),
+            json!({"type": "boolean", "default": false}),
+        );
+    }
+    serde_json::Value::Object(properties)
+}
+
 fn set_channel_order_tool_schema() -> Value {
     json!({
         "name": "set_channel_order",
@@ -415,6 +542,11 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "set_channel_contrast"
         | "get_object_overlay_visibility"
         | "set_object_overlay_visibility"
+        | "get_object_selection"
+        | "query_object_ids_in_rect"
+        | "query_object_ids_in_view"
+        | "select_object_ids_in_rect"
+        | "clear_object_selection"
         | "get_channel_intensity_stats"
         | "set_channel_order"
         | "list_channel_groups"

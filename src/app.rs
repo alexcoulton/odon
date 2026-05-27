@@ -3575,6 +3575,216 @@ impl OmeZarrViewerApp {
         self.control_get_object_overlay_visibility(params)
     }
 
+    pub fn control_get_object_selection(&self, params: &serde_json::Value) -> serde_json::Value {
+        let limit = control_object_debug_limit(params);
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "selection": self
+                    .seg_objects
+                    .selection_snapshot_json(self.seg_objects_offset_world, limit),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let Some(objects) = layer.object_layer() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer.name.as_str(),
+                    "selection": objects.selection_snapshot_json(layer.offset_world, limit),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_query_object_ids_in_rect(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let limit = control_object_debug_limit(params);
+        let world_rect = match self.control_world_rect_from_params(params) {
+            Ok(rect) => rect,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "query": self.seg_objects.query_world_rect_snapshot_json(
+                    world_rect,
+                    self.seg_objects_offset_world,
+                    limit,
+                ),
+                "selection": self
+                    .seg_objects
+                    .selection_snapshot_json(self.seg_objects_offset_world, limit),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let Some(objects) = layer.object_layer() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer.name.as_str(),
+                    "query": objects.query_world_rect_snapshot_json(
+                        world_rect,
+                        layer.offset_world,
+                        limit,
+                    ),
+                    "selection": objects.selection_snapshot_json(layer.offset_world, limit),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_query_object_ids_in_view(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(viewport) = self.last_canvas_rect else {
+            return serde_json::json!({"error": "No canvas viewport is available yet."});
+        };
+        let world_min = self.camera.screen_to_world(viewport.left_top(), viewport);
+        let world_max = self
+            .camera
+            .screen_to_world(viewport.right_bottom(), viewport);
+        let params = match params.as_object() {
+            Some(obj) => {
+                let mut obj = obj.clone();
+                obj.insert(
+                    "world_rect".to_string(),
+                    serde_json::json!([world_min.x, world_min.y, world_max.x, world_max.y]),
+                );
+                serde_json::Value::Object(obj)
+            }
+            None => serde_json::json!({
+                "world_rect": [world_min.x, world_min.y, world_max.x, world_max.y],
+            }),
+        };
+        self.control_query_object_ids_in_rect(&params)
+    }
+
+    pub fn control_select_object_ids_in_rect(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let limit = control_object_debug_limit(params);
+        let additive = params
+            .get("additive")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let world_rect = match self.control_world_rect_from_params(params) {
+            Ok(rect) => rect,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "result": self.seg_objects.select_in_world_rect_snapshot_json(
+                    world_rect,
+                    self.seg_objects_offset_world,
+                    additive,
+                    limit,
+                ),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset_world = layer.offset_world;
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "result": objects.select_in_world_rect_snapshot_json(
+                        world_rect,
+                        offset_world,
+                        additive,
+                        limit,
+                    ),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_clear_object_selection(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let limit = control_object_debug_limit(params);
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => {
+                self.seg_objects.clear_selection();
+                serde_json::json!({
+                    "target": "segmentation_objects",
+                    "selection": self
+                        .seg_objects
+                        .selection_snapshot_json(self.seg_objects_offset_world, limit),
+                })
+            }
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset_world = layer.offset_world;
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.clear_selection();
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "selection": objects.selection_snapshot_json(offset_world, limit),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
     pub fn control_get_channel_intensity_stats(
         &self,
         params: &serde_json::Value,
@@ -7479,6 +7689,100 @@ impl OmeZarrViewerApp {
                     .then_some(LayerId::SegmentationObjects)
             }
             _ => None,
+        }
+    }
+
+    fn control_object_selection_target(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<LayerId, String> {
+        match params
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("active")
+        {
+            "active" => self.spatial_selection_target_layer().ok_or_else(|| {
+                "active layer does not provide selectable objects in the current view".to_string()
+            }),
+            "objects" | "segmentation_objects" => {
+                if self.seg_objects.object_count() > 0 {
+                    Ok(LayerId::SegmentationObjects)
+                } else {
+                    Err("segmentation object layer is empty".to_string())
+                }
+            }
+            "spatial_shape" => {
+                let id = params
+                    .get("layer_id")
+                    .or_else(|| params.get("id"))
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| "target='spatial_shape' requires layer_id".to_string())?;
+                let id = id as u64;
+                if self
+                    .spatial_layers
+                    .shapes
+                    .iter()
+                    .any(|layer| layer.id == id && layer.has_object_layer())
+                {
+                    Ok(LayerId::SpatialShape(id))
+                } else {
+                    Err(format!(
+                        "spatial shape layer {id} was not found or has no objects"
+                    ))
+                }
+            }
+            other => Err(format!("unknown object selection target '{other}'")),
+        }
+    }
+
+    fn control_world_rect_from_params(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<egui::Rect, String> {
+        if let Some(values) = params
+            .get("world_rect")
+            .and_then(serde_json::Value::as_array)
+        {
+            return control_rect_from_array(values, "world_rect");
+        }
+        if let Some(values) = params
+            .get("screen_rect")
+            .and_then(serde_json::Value::as_array)
+        {
+            let screen_rect = control_rect_from_array(values, "screen_rect")?;
+            let Some(viewport) = self.last_canvas_rect else {
+                return Err("screen_rect requires an active canvas viewport".to_string());
+            };
+            let world_min = self.camera.screen_to_world(screen_rect.min, viewport);
+            let world_max = self.camera.screen_to_world(screen_rect.max, viewport);
+            return Ok(normalized_rect(world_min, world_max));
+        }
+
+        let x0 = params
+            .get("min_x")
+            .or_else(|| params.get("x0"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        let y0 = params
+            .get("min_y")
+            .or_else(|| params.get("y0"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        let x1 = params
+            .get("max_x")
+            .or_else(|| params.get("x1"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        let y1 = params
+            .get("max_y")
+            .or_else(|| params.get("y1"))
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32);
+        match (x0, y0, x1, y1) {
+            (Some(x0), Some(y0), Some(x1), Some(y1)) => {
+                Ok(normalized_rect(egui::pos2(x0, y0), egui::pos2(x1, y1)))
+            }
+            _ => Err("provide world_rect, screen_rect, or min_x/min_y/max_x/max_y".to_string()),
         }
     }
 
@@ -15168,6 +15472,42 @@ impl OmeZarrViewerApp {
             }
         }
     }
+}
+
+fn control_object_debug_limit(params: &serde_json::Value) -> usize {
+    params
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(64)
+        .clamp(1, 10_000)
+}
+
+fn control_rect_from_array(values: &[serde_json::Value], name: &str) -> Result<egui::Rect, String> {
+    if values.len() != 4 {
+        return Err(format!("{name} must contain exactly four numbers"));
+    }
+    let mut coords = [0.0_f32; 4];
+    for (idx, value) in values.iter().enumerate() {
+        let Some(coord) = value.as_f64().map(|value| value as f32) else {
+            return Err(format!("{name}[{idx}] is not a number"));
+        };
+        if !coord.is_finite() {
+            return Err(format!("{name}[{idx}] is not finite"));
+        }
+        coords[idx] = coord;
+    }
+    Ok(normalized_rect(
+        egui::pos2(coords[0], coords[1]),
+        egui::pos2(coords[2], coords[3]),
+    ))
+}
+
+fn normalized_rect(a: egui::Pos2, b: egui::Pos2) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(a.x.min(b.x), a.y.min(b.y)),
+        egui::pos2(a.x.max(b.x), a.y.max(b.y)),
+    )
 }
 
 fn apply_preserved_channel_settings(prev: &[ChannelInfo], new: &mut [ChannelInfo]) {

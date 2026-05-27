@@ -740,6 +740,40 @@ impl ObjectsLayer {
         self.selected_object_indices.len()
     }
 
+    pub fn selection_snapshot_json(
+        &self,
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> serde_json::Value {
+        let Some(objects) = self.objects.as_ref() else {
+            return serde_json::json!({
+                "object_count": 0,
+                "selection_count": 0,
+                "primary": null,
+                "selected": [],
+                "truncated": false,
+            });
+        };
+        let mut indices = self
+            .selected_object_indices
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        let selected = self.object_entries_json(objects, &indices, local_to_world_offset, limit);
+        serde_json::json!({
+            "object_count": objects.len(),
+            "selection_count": indices.len(),
+            "primary": self.selected_object_index.and_then(|idx| {
+                objects
+                    .get(idx)
+                    .map(|obj| self.object_entry_json(idx, obj, local_to_world_offset))
+            }),
+            "selected": selected,
+            "truncated": indices.len() > limit,
+        })
+    }
+
     pub fn filtered_count(&self) -> usize {
         self.filtered_ordered_indices
             .as_ref()
@@ -832,6 +866,46 @@ impl ObjectsLayer {
         indices.len()
     }
 
+    pub fn query_world_rect_snapshot_json(
+        &self,
+        world_rect: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> serde_json::Value {
+        let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
+        self.rect_query_snapshot_json(world_rect, local_to_world_offset, &indices, limit)
+    }
+
+    pub fn select_in_world_rect_snapshot_json(
+        &mut self,
+        world_rect: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        additive: bool,
+        limit: usize,
+    ) -> serde_json::Value {
+        let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
+        self.apply_selection_indices(&indices, additive);
+        let id_preview = self.selection_id_preview(&indices);
+        self.status = if id_preview.is_empty() {
+            format!("Selected {} object(s) by rectangle.", indices.len())
+        } else {
+            format!(
+                "Selected {} object(s) by rectangle: {}",
+                indices.len(),
+                id_preview
+            )
+        };
+        serde_json::json!({
+            "query": self.rect_query_snapshot_json(
+                world_rect,
+                local_to_world_offset,
+                &indices,
+                limit,
+            ),
+            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
+        })
+    }
+
     pub fn select_in_world_lasso(
         &mut self,
         world_points: &[egui::Pos2],
@@ -872,35 +946,87 @@ impl ObjectsLayer {
         let Some(objects) = self.objects.as_ref() else {
             return Vec::new();
         };
-        let Some(bins) = self.bins.as_ref() else {
-            return Vec::new();
-        };
         let local_rect = self.world_to_local_rect(world_rect, local_to_world_offset);
-        let (bx0, by0, bx1, by1) = bins.bin_range_for_world_rect(local_rect);
-        let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for by in by0..=by1 {
-            for bx in bx0..=bx1 {
-                let bi = by * bins.bins_w + bx;
-                for &idx_u32 in bins.bin_slice(bi) {
-                    let idx = idx_u32 as usize;
-                    if !seen.insert(idx) || !self.is_index_visible(idx) {
-                        continue;
-                    }
-                    let Some(obj) = objects.get(idx) else {
-                        continue;
-                    };
-                    if local_rect.contains(obj.centroid_world)
-                        || (self.display_mode == ObjectDisplayMode::Polygons
-                            && object_intersects_rect(obj, local_rect))
-                    {
-                        out.push(idx);
-                    }
-                }
+        for (idx, obj) in objects.iter().enumerate() {
+            if !self.is_index_visible(idx) {
+                continue;
+            }
+            if object_intersects_rect_for_selection(obj, local_rect) {
+                out.push(idx);
             }
         }
-        out.sort_unstable();
         out
+    }
+
+    fn rect_query_snapshot_json(
+        &self,
+        world_rect: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        indices: &[usize],
+        limit: usize,
+    ) -> serde_json::Value {
+        let local_rect = self.world_to_local_rect(world_rect, local_to_world_offset);
+        let objects = self.objects.as_ref();
+        let hits = objects
+            .map(|objects| self.object_entries_json(objects, indices, local_to_world_offset, limit))
+            .unwrap_or_default();
+        serde_json::json!({
+            "world_rect": rect_json(world_rect),
+            "local_rect": rect_json(local_rect),
+            "match_count": indices.len(),
+            "matches": hits,
+            "truncated": indices.len() > limit,
+        })
+    }
+
+    fn object_entries_json(
+        &self,
+        objects: &[ObjectFeature],
+        indices: &[usize],
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> Vec<serde_json::Value> {
+        indices
+            .iter()
+            .take(limit)
+            .filter_map(|idx| {
+                objects
+                    .get(*idx)
+                    .map(|obj| self.object_entry_json(*idx, obj, local_to_world_offset))
+            })
+            .collect()
+    }
+
+    fn object_entry_json(
+        &self,
+        idx: usize,
+        obj: &ObjectFeature,
+        local_to_world_offset: egui::Vec2,
+    ) -> serde_json::Value {
+        let centroid_world = self.local_to_world_point(obj.centroid_world, local_to_world_offset);
+        let bbox_min_world = self.local_to_world_point(obj.bbox_world.min, local_to_world_offset);
+        let bbox_max_world = self.local_to_world_point(obj.bbox_world.max, local_to_world_offset);
+        let bbox_world = egui::Rect::from_min_max(
+            egui::pos2(
+                bbox_min_world.x.min(bbox_max_world.x),
+                bbox_min_world.y.min(bbox_max_world.y),
+            ),
+            egui::pos2(
+                bbox_min_world.x.max(bbox_max_world.x),
+                bbox_min_world.y.max(bbox_max_world.y),
+            ),
+        );
+        serde_json::json!({
+            "index": idx,
+            "id": obj.id.as_str(),
+            "centroid_world": [centroid_world.x, centroid_world.y],
+            "centroid_local": [obj.centroid_world.x, obj.centroid_world.y],
+            "bbox_world": rect_json(bbox_world),
+            "bbox_local": rect_json(obj.bbox_world),
+            "area_px": obj.area_px,
+            "perimeter_px": obj.perimeter_px,
+        })
     }
 
     fn query_indices_in_world_lasso(
@@ -1851,7 +1977,7 @@ fn point_in_any_polygon(p: egui::Pos2, polygons: &[Vec<egui::Pos2>]) -> bool {
 }
 
 fn point_in_polygon(p: egui::Pos2, poly: &[egui::Pos2]) -> bool {
-    if poly.len() < 4 {
+    if poly.len() < 3 {
         return false;
     }
     let mut inside = false;
@@ -1871,83 +1997,256 @@ fn point_in_polygon(p: egui::Pos2, poly: &[egui::Pos2]) -> bool {
     inside
 }
 
-fn object_intersects_rect(obj: &GeoJsonObjectFeature, rect: egui::Rect) -> bool {
-    if !rects_overlap_or_touch(obj.bbox_world, rect) {
-        return false;
+fn object_intersects_rect_for_selection(object: &ObjectFeature, rect: egui::Rect) -> bool {
+    if !object.polygons_world.is_empty() {
+        if !rects_intersect_inclusive(object.bbox_world, rect) {
+            return false;
+        }
+        let mut tested_polygon = false;
+        for poly in &object.polygons_world {
+            if poly.len() < 3 {
+                continue;
+            }
+            tested_polygon = true;
+            if polygon_intersects_rect(poly, rect) {
+                return true;
+            }
+        }
+        if tested_polygon {
+            return false;
+        }
     }
-    obj.polygons_world
-        .iter()
-        .any(|poly| polygon_intersects_rect(poly, rect))
+
+    let point = object.point_position_world.unwrap_or(object.centroid_world);
+    rect_contains_point_inclusive(rect, point)
 }
 
 fn polygon_intersects_rect(poly: &[egui::Pos2], rect: egui::Rect) -> bool {
-    if poly.len() < 2 {
-        return false;
-    }
-
-    if poly.iter().any(|point| rect.contains(*point)) {
+    if poly
+        .iter()
+        .any(|point| rect_contains_point_inclusive(rect, *point))
+    {
         return true;
     }
 
-    let samples = [
-        egui::pos2(rect.min.x, rect.min.y),
-        egui::pos2(rect.max.x, rect.min.y),
-        egui::pos2(rect.max.x, rect.max.y),
-        egui::pos2(rect.min.x, rect.max.y),
-        rect.center(),
-    ];
-    poly.len() >= 4 && samples.iter().any(|sample| point_in_polygon(*sample, poly))
+    if rect_corners(rect)
+        .iter()
+        .any(|corner| point_in_polygon_or_on_edge(*corner, poly))
+    {
+        return true;
+    }
+
+    let edges = rect_edges(rect);
+    for (a, b) in polygon_edges(poly) {
+        for (c, d) in edges {
+            if segments_intersect_inclusive(a, b, c, d) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
-fn rects_overlap_or_touch(a: egui::Rect, b: egui::Rect) -> bool {
+fn polygon_edges(poly: &[egui::Pos2]) -> Vec<(egui::Pos2, egui::Pos2)> {
+    if poly.len() < 2 {
+        return Vec::new();
+    }
+    let mut edges = poly
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .collect::<Vec<_>>();
+    if poly.len() >= 3 && poly.first() != poly.last() {
+        edges.push((*poly.last().unwrap(), poly[0]));
+    }
+    edges
+}
+
+fn point_in_polygon_or_on_edge(point: egui::Pos2, poly: &[egui::Pos2]) -> bool {
+    polygon_edges(poly)
+        .iter()
+        .any(|(a, b)| point_on_segment_inclusive(point, *a, *b))
+        || point_in_polygon(point, poly)
+}
+
+fn rect_corners(rect: egui::Rect) -> [egui::Pos2; 4] {
+    [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ]
+}
+
+fn rect_edges(rect: egui::Rect) -> [(egui::Pos2, egui::Pos2); 4] {
+    let [lt, rt, rb, lb] = rect_corners(rect);
+    [(lt, rt), (rt, rb), (rb, lb), (lb, lt)]
+}
+
+fn rects_intersect_inclusive(a: egui::Rect, b: egui::Rect) -> bool {
     a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y
 }
 
+fn segments_intersect_inclusive(
+    a: egui::Pos2,
+    b: egui::Pos2,
+    c: egui::Pos2,
+    d: egui::Pos2,
+) -> bool {
+    let o1 = orient(a, b, c);
+    let o2 = orient(a, b, d);
+    let o3 = orient(c, d, a);
+    let o4 = orient(c, d, b);
+
+    if o1.abs() <= 1e-5 && point_on_segment_inclusive(c, a, b) {
+        return true;
+    }
+    if o2.abs() <= 1e-5 && point_on_segment_inclusive(d, a, b) {
+        return true;
+    }
+    if o3.abs() <= 1e-5 && point_on_segment_inclusive(a, c, d) {
+        return true;
+    }
+    if o4.abs() <= 1e-5 && point_on_segment_inclusive(b, c, d) {
+        return true;
+    }
+
+    ((o1 > 0.0 && o2 < 0.0) || (o1 < 0.0 && o2 > 0.0))
+        && ((o3 > 0.0 && o4 < 0.0) || (o3 < 0.0 && o4 > 0.0))
+}
+
+fn point_on_segment_inclusive(point: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> bool {
+    orient(a, b, point).abs() <= 1e-5
+        && point.x >= a.x.min(b.x) - 1e-5
+        && point.x <= a.x.max(b.x) + 1e-5
+        && point.y >= a.y.min(b.y) - 1e-5
+        && point.y <= a.y.max(b.y) + 1e-5
+}
+
+fn orient(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+fn rect_contains_point_inclusive(rect: egui::Rect, point: egui::Pos2) -> bool {
+    point.x >= rect.min.x && point.x <= rect.max.x && point.y >= rect.min.y && point.y <= rect.max.y
+}
+
 #[cfg(test)]
-mod selection_geometry_tests {
+mod rectangle_selection_tests {
     use super::*;
 
-    fn square(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Vec<egui::Pos2> {
-        vec![
-            egui::pos2(min_x, min_y),
-            egui::pos2(max_x, min_y),
-            egui::pos2(max_x, max_y),
-            egui::pos2(min_x, max_y),
-            egui::pos2(min_x, min_y),
-        ]
+    fn object_with_polygons(polygons_world: Vec<Vec<egui::Pos2>>) -> ObjectFeature {
+        let bbox_world = polygons_world
+            .iter()
+            .flat_map(|poly| poly.iter().copied())
+            .fold(None, |acc: Option<egui::Rect>, point| {
+                let rect = egui::Rect::from_min_max(point, point);
+                Some(acc.map_or(rect, |acc| acc.union(rect)))
+            })
+            .unwrap_or_else(|| {
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.0, 0.0))
+            });
+        ObjectFeature {
+            id: "test".to_string(),
+            polygons_world,
+            point_position_world: None,
+            bbox_world,
+            area_px: 0.0,
+            perimeter_px: 0.0,
+            centroid_world: egui::pos2(1000.0, 1000.0),
+            inline_properties: serde_json::Map::new(),
+            source_row_index: None,
+        }
+    }
+
+    fn point_object(point: egui::Pos2, centroid: egui::Pos2) -> ObjectFeature {
+        ObjectFeature {
+            id: "point".to_string(),
+            polygons_world: Vec::new(),
+            point_position_world: Some(point),
+            bbox_world: egui::Rect::from_min_max(point, point),
+            area_px: 0.0,
+            perimeter_px: 0.0,
+            centroid_world: centroid,
+            inline_properties: serde_json::Map::new(),
+            source_row_index: None,
+        }
     }
 
     #[test]
-    fn rectangle_selects_polygon_body_even_when_centroid_is_outside() {
-        let poly = square(0.0, 0.0, 20.0, 20.0);
-        let rect = egui::Rect::from_min_max(egui::pos2(18.0, 8.0), egui::pos2(22.0, 12.0));
+    fn rect_contains_point_inclusive_accepts_edges() {
+        let rect = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 40.0));
 
-        assert!(polygon_intersects_rect(&poly, rect));
-        assert!(!rect.contains(egui::pos2(10.0, 10.0)));
+        assert!(rect_contains_point_inclusive(rect, egui::pos2(10.0, 20.0)));
+        assert!(rect_contains_point_inclusive(rect, egui::pos2(30.0, 40.0)));
+        assert!(rect_contains_point_inclusive(rect, egui::pos2(20.0, 30.0)));
+        assert!(!rect_contains_point_inclusive(rect, egui::pos2(30.1, 30.0)));
+        assert!(!rect_contains_point_inclusive(rect, egui::pos2(20.0, 40.1)));
     }
 
     #[test]
-    fn rectangle_inside_polygon_counts_as_intersection() {
-        let poly = square(0.0, 0.0, 20.0, 20.0);
-        let rect = egui::Rect::from_min_max(egui::pos2(8.0, 8.0), egui::pos2(12.0, 12.0));
+    fn polygon_selection_uses_geometry_not_centroid() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0));
+        let object = object_with_polygons(vec![vec![
+            egui::pos2(2.0, 2.0),
+            egui::pos2(8.0, 2.0),
+            egui::pos2(8.0, 8.0),
+            egui::pos2(2.0, 8.0),
+            egui::pos2(2.0, 2.0),
+        ]]);
 
-        assert!(polygon_intersects_rect(&poly, rect));
+        assert!(object_intersects_rect_for_selection(&object, rect));
     }
 
     #[test]
-    fn disjoint_rectangle_does_not_intersect_polygon() {
-        let poly = square(0.0, 0.0, 20.0, 20.0);
-        let rect = egui::Rect::from_min_max(egui::pos2(30.0, 30.0), egui::pos2(35.0, 35.0));
+    fn polygon_selection_rejects_bbox_outside_even_when_centroid_inside() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0));
+        let mut object = object_with_polygons(vec![vec![
+            egui::pos2(20.0, 20.0),
+            egui::pos2(30.0, 20.0),
+            egui::pos2(30.0, 30.0),
+            egui::pos2(20.0, 30.0),
+            egui::pos2(20.0, 20.0),
+        ]]);
+        object.centroid_world = egui::pos2(5.0, 5.0);
 
-        assert!(!polygon_intersects_rect(&poly, rect));
+        assert!(!object_intersects_rect_for_selection(&object, rect));
     }
 
     #[test]
-    fn edge_crossing_without_interior_sample_does_not_select_polygon() {
-        let poly = square(0.0, 0.0, 20.0, 20.0);
-        let rect = egui::Rect::from_min_max(egui::pos2(19.0, 21.0), egui::pos2(21.0, 23.0));
+    fn polygon_selection_detects_rect_inside_polygon() {
+        let rect = egui::Rect::from_min_max(egui::pos2(4.0, 4.0), egui::pos2(6.0, 6.0));
+        let object = object_with_polygons(vec![vec![
+            egui::pos2(0.0, 0.0),
+            egui::pos2(10.0, 0.0),
+            egui::pos2(10.0, 10.0),
+            egui::pos2(0.0, 10.0),
+            egui::pos2(0.0, 0.0),
+        ]]);
 
-        assert!(!polygon_intersects_rect(&poly, rect));
+        assert!(object_intersects_rect_for_selection(&object, rect));
+    }
+
+    #[test]
+    fn polygon_selection_detects_edge_crossing() {
+        let rect = egui::Rect::from_min_max(egui::pos2(4.0, 4.0), egui::pos2(6.0, 6.0));
+        let object = object_with_polygons(vec![vec![
+            egui::pos2(2.0, 5.0),
+            egui::pos2(8.0, 5.0),
+            egui::pos2(8.0, 8.0),
+            egui::pos2(2.0, 8.0),
+            egui::pos2(2.0, 5.0),
+        ]]);
+
+        assert!(object_intersects_rect_for_selection(&object, rect));
+    }
+
+    #[test]
+    fn point_only_selection_uses_point_position_before_centroid() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0));
+        let object = point_object(egui::pos2(20.0, 20.0), egui::pos2(5.0, 5.0));
+
+        assert!(!object_intersects_rect_for_selection(&object, rect));
     }
 }
 
@@ -2441,6 +2740,17 @@ fn choose_lod_index(lods: &[ObjectRenderLod], dataset_long_side_screen_px: f32) 
         }
     }
     best_i
+}
+
+fn rect_json(rect: egui::Rect) -> serde_json::Value {
+    serde_json::json!({
+        "min_x": rect.min.x,
+        "min_y": rect.min.y,
+        "max_x": rect.max.x,
+        "max_y": rect.max.y,
+        "width": rect.width(),
+        "height": rect.height(),
+    })
 }
 
 fn choose_object_selection_lod_index(
