@@ -667,7 +667,12 @@ struct ObjectFillGlObjects {
 impl ObjectFillGlObjects {
     fn new(gl: &Arc<glow::Context>) -> anyhow::Result<Self> {
         let gl = gl.as_ref();
-        let program = compile_program(gl, OBJECT_FILL_VERT_330, OBJECT_FILL_FRAG_330)?;
+        let program = compile_program_with_attributes(
+            gl,
+            OBJECT_FILL_VERT_330,
+            OBJECT_FILL_FRAG_330,
+            &[(0, "a_pos"), (1, "a_object_id")],
+        )?;
         let vao = unsafe {
             gl.create_vertex_array()
                 .map_err(|e| anyhow!("create_vertex_array failed: {e}"))?
@@ -702,6 +707,15 @@ fn compile_program(
     vs_src: &str,
     fs_src: &str,
 ) -> anyhow::Result<glow::Program> {
+    compile_program_with_attributes(gl, vs_src, fs_src, &[(0, "a_pos")])
+}
+
+fn compile_program_with_attributes(
+    gl: &glow::Context,
+    vs_src: &str,
+    fs_src: &str,
+    attributes: &[(u32, &str)],
+) -> anyhow::Result<glow::Program> {
     unsafe {
         let vs = gl
             .create_shader(glow::VERTEX_SHADER)
@@ -731,7 +745,9 @@ fn compile_program(
             .map_err(|e| anyhow!("create_program failed: {e}"))?;
         gl.attach_shader(program, vs);
         gl.attach_shader(program, fs);
-        gl.bind_attrib_location(program, 0, "a_pos");
+        for (location, name) in attributes {
+            gl.bind_attrib_location(program, *location, name);
+        }
         gl.link_program(program);
         gl.detach_shader(program, vs);
         gl.detach_shader(program, fs);

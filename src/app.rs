@@ -7456,18 +7456,29 @@ impl OmeZarrViewerApp {
     }
 
     fn active_layer_supports_spatial_selection(&self) -> bool {
+        self.spatial_selection_target_layer().is_some()
+    }
+
+    fn spatial_selection_target_layer(&self) -> Option<LayerId> {
         if !self.view_plane_is_xy() {
-            return false;
+            return None;
         }
         match self.active_layer {
-            LayerId::SegmentationObjects => self.seg_objects.object_count() > 0,
+            LayerId::SegmentationObjects => {
+                (self.seg_objects.object_count() > 0).then_some(LayerId::SegmentationObjects)
+            }
             LayerId::SpatialShape(id) => self
                 .spatial_layers
                 .shapes
                 .iter()
                 .find(|layer| layer.id == id)
-                .is_some_and(|layer| layer.has_object_layer()),
-            _ => false,
+                .is_some_and(|layer| layer.has_object_layer())
+                .then_some(LayerId::SpatialShape(id)),
+            LayerId::Channel(_) | LayerId::SegmentationLabels | LayerId::SegmentationGeoJson => {
+                (self.seg_objects.visible && self.seg_objects.object_count() > 0)
+                    .then_some(LayerId::SegmentationObjects)
+            }
+            _ => None,
         }
     }
 
@@ -7476,13 +7487,13 @@ impl OmeZarrViewerApp {
         world_rect: egui::Rect,
         additive: bool,
     ) -> usize {
-        match self.active_layer {
-            LayerId::SegmentationObjects => self.seg_objects.select_in_world_rect(
+        match self.spatial_selection_target_layer() {
+            Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_rect(
                 world_rect,
                 self.seg_objects_offset_world,
                 additive,
             ),
-            LayerId::SpatialShape(id) => {
+            Some(LayerId::SpatialShape(id)) => {
                 let Some(layer) = self
                     .spatial_layers
                     .shapes
@@ -7505,13 +7516,13 @@ impl OmeZarrViewerApp {
         world_points: &[egui::Pos2],
         additive: bool,
     ) -> usize {
-        match self.active_layer {
-            LayerId::SegmentationObjects => self.seg_objects.select_in_world_lasso(
+        match self.spatial_selection_target_layer() {
+            Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_lasso(
                 world_points,
                 self.seg_objects_offset_world,
                 additive,
             ),
-            LayerId::SpatialShape(id) => {
+            Some(LayerId::SpatialShape(id)) => {
                 let Some(layer) = self
                     .spatial_layers
                     .shapes
@@ -7529,8 +7540,13 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn active_or_spatial_selection_layer(&self) -> LayerId {
+        self.spatial_selection_target_layer()
+            .unwrap_or(self.active_layer)
+    }
+
     fn active_object_selection_count(&self) -> usize {
-        match self.active_layer {
+        match self.active_or_spatial_selection_layer() {
             LayerId::SegmentationObjects => self.seg_objects.selection_count(),
             LayerId::SpatialShape(id) => self
                 .spatial_layers
@@ -7545,7 +7561,7 @@ impl OmeZarrViewerApp {
     }
 
     fn active_object_selection_elements_snapshot(&self) -> Vec<(usize, String, usize)> {
-        match self.active_layer {
+        match self.active_or_spatial_selection_layer() {
             LayerId::SegmentationObjects => self.seg_objects.selection_elements_snapshot(),
             LayerId::SpatialShape(id) => self
                 .spatial_layers
@@ -7560,7 +7576,7 @@ impl OmeZarrViewerApp {
     }
 
     fn create_selection_element_from_active_selection(&mut self) -> usize {
-        match self.active_layer {
+        match self.active_or_spatial_selection_layer() {
             LayerId::SegmentationObjects => self
                 .seg_objects
                 .create_selection_element_from_current_selection_with_name(None),
@@ -7579,7 +7595,7 @@ impl OmeZarrViewerApp {
     }
 
     fn add_active_selection_to_element(&mut self, element_idx: usize) -> usize {
-        match self.active_layer {
+        match self.active_or_spatial_selection_layer() {
             LayerId::SegmentationObjects => self
                 .seg_objects
                 .add_current_selection_to_element(element_idx),
@@ -11997,6 +12013,7 @@ impl OmeZarrViewerApp {
         // Spatial selection tools operate in world coordinates, but they are only valid for a
         // subset of active layers. The drag state is kept separate from the final selection so
         // Escape can cancel the gesture without mutating layer selections.
+        let mut spatial_selection_drag_consumed = false;
         let can_rect_select = self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
@@ -12017,6 +12034,12 @@ impl OmeZarrViewerApp {
             }
         }
         if can_rect_select && response.drag_stopped_by(egui::PointerButton::Primary) {
+            if let Some(pos) = response
+                .interact_pointer_pos()
+                .or_else(|| ui.input(|i| i.pointer.interact_pos()))
+            {
+                self.selection_rect_current_world = Some(self.camera.screen_to_world(pos, rect));
+            }
             if let (Some(start), Some(end)) = (
                 self.selection_rect_start_world,
                 self.selection_rect_current_world,
@@ -12030,6 +12053,7 @@ impl OmeZarrViewerApp {
                     >= min_drag_world
                 {
                     let additive = ctx.input(|i| i.modifiers.shift);
+                    spatial_selection_drag_consumed = true;
                     let _ = self.apply_rect_selection_to_active_layer(selection_rect, additive);
                 }
             }
@@ -12064,6 +12088,7 @@ impl OmeZarrViewerApp {
             if self.selection_lasso_world.len() >= 3 {
                 let additive = ctx.input(|i| i.modifiers.shift || i.modifiers.command);
                 let lasso_world = self.selection_lasso_world.clone();
+                spatial_selection_drag_consumed = true;
                 let _ = self.apply_lasso_selection_to_active_layer(&lasso_world, additive);
             }
             self.clear_spatial_selection_drag();
@@ -12072,6 +12097,7 @@ impl OmeZarrViewerApp {
         let can_edit_mask_polygon = self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
+            && !spatial_selection_drag_consumed
             && self.selection_rect_start_world.is_none()
             && matches!(self.active_layer, LayerId::Mask(_));
         if can_edit_mask_polygon
@@ -12142,13 +12168,14 @@ impl OmeZarrViewerApp {
         if self.tool_mode == ToolMode::Select
             && !space_down
             && !ctx.wants_keyboard_input()
+            && !spatial_selection_drag_consumed
             && self.selection_rect_start_world.is_none()
             && response.clicked_by(egui::PointerButton::Primary)
         {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world = self.camera.screen_to_world(pos, rect);
                 let mods = ctx.input(|i| i.modifiers);
-                match self.active_layer {
+                match self.active_or_spatial_selection_layer() {
                     LayerId::SegmentationObjects => {
                         let off = self.layer_offset_world(LayerId::SegmentationObjects);
                         self.seg_objects.select_at(
@@ -12185,7 +12212,7 @@ impl OmeZarrViewerApp {
             if matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect) {
                 self.clear_spatial_selection_drag();
             }
-            match self.active_layer {
+            match self.active_or_spatial_selection_layer() {
                 LayerId::SegmentationObjects => self.seg_objects.clear_selection(),
                 LayerId::SpatialShape(id) => {
                     if let Some(layer) = self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)

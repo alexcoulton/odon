@@ -89,8 +89,12 @@ impl ObjectsLayer {
             return;
         }
 
-        if !gpu_available && self.show_selection_overlay && !self.selected_object_indices.is_empty()
-        {
+        const SELECTED_FILL_MESH_LIMIT: usize = 4096;
+        let use_selected_only_fill_mesh = self.show_selection_overlay
+            && self.selected_fill_opacity > 0.0
+            && !self.selected_object_indices.is_empty()
+            && (!gpu_available || self.selected_object_indices.len() <= SELECTED_FILL_MESH_LIMIT);
+        if use_selected_only_fill_mesh {
             self.ensure_cpu_selection_fill_mesh();
         }
 
@@ -487,41 +491,6 @@ impl ObjectsLayer {
         }
 
         if self.show_selection_overlay
-            && gpu_available
-            && self.selected_fill_opacity > 0.0
-            && !self.selected_object_indices.is_empty()
-            && let Some(fill_mesh) = self.object_fill_mesh.as_ref()
-            && fill_mesh.bounds_local.intersects(visible_local)
-        {
-            let item = ObjectFillGlDrawItem {
-                data: ObjectFillGlDrawData {
-                    cache_id: 0x5345474f424a31u64,
-                    generation: self.generation,
-                    vertices_local: Arc::clone(&fill_mesh.vertices_local),
-                    object_count: fill_mesh.object_count,
-                    selection_generation: self.selection_generation,
-                    selection_state: Arc::clone(&self.selection_fill_state),
-                },
-                params: ObjectFillGlDrawParams {
-                    center_world: camera.center_world_lvl0,
-                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                    selected_color: selected_fill,
-                    primary_color: selected_fill,
-                    visible: self.visible,
-                    local_to_world_offset: display_offset,
-                    local_to_world_scale: display_scale,
-                },
-                visible_world: fill_mesh.bounds_local,
-            };
-            let renderer = self.gl_object_fill.clone();
-            let cb = egui_glow::CallbackFn::new(move |info, painter| {
-                renderer.paint_many(info, painter, &[item.clone()]);
-            });
-            ui.painter().add(egui::PaintCallback {
-                rect: viewport,
-                callback: Arc::new(cb),
-            });
-        } else if self.show_selection_overlay
             && self.selected_fill_opacity > 0.0
             && let Some(fill_mesh) = self.selected_fill_mesh.as_ref()
             && fill_mesh.bounds_local.intersects(visible_local)
@@ -572,6 +541,41 @@ impl ObjectsLayer {
                     ));
                 }
             }
+        } else if self.show_selection_overlay
+            && gpu_available
+            && self.selected_fill_opacity > 0.0
+            && !self.selected_object_indices.is_empty()
+            && let Some(fill_mesh) = self.object_fill_mesh.as_ref()
+            && fill_mesh.bounds_local.intersects(visible_local)
+        {
+            let item = ObjectFillGlDrawItem {
+                data: ObjectFillGlDrawData {
+                    cache_id: 0x5345474f424a31u64,
+                    generation: self.generation,
+                    vertices_local: Arc::clone(&fill_mesh.vertices_local),
+                    object_count: fill_mesh.object_count,
+                    selection_generation: self.selection_generation,
+                    selection_state: Arc::clone(&self.selection_fill_state),
+                },
+                params: ObjectFillGlDrawParams {
+                    center_world: camera.center_world_lvl0,
+                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                    selected_color: selected_fill,
+                    primary_color: selected_fill,
+                    visible: self.visible,
+                    local_to_world_offset: display_offset,
+                    local_to_world_scale: display_scale,
+                },
+                visible_world: fill_mesh.bounds_local,
+            };
+            let renderer = self.gl_object_fill.clone();
+            let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                renderer.paint_many(info, painter, &[item.clone()]);
+            });
+            ui.painter().add(egui::PaintCallback {
+                rect: viewport,
+                callback: Arc::new(cb),
+            });
         }
 
         if !gpu_available && self.show_selection_overlay && !self.selected_object_indices.is_empty()
@@ -815,7 +819,16 @@ impl ObjectsLayer {
     ) -> usize {
         let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
         self.apply_selection_indices(&indices, additive);
-        self.status = format!("Selected {} object(s) by rectangle.", indices.len());
+        let id_preview = self.selection_id_preview(&indices);
+        self.status = if id_preview.is_empty() {
+            format!("Selected {} object(s) by rectangle.", indices.len())
+        } else {
+            format!(
+                "Selected {} object(s) by rectangle: {}",
+                indices.len(),
+                id_preview
+            )
+        };
         indices.len()
     }
 
@@ -829,6 +842,26 @@ impl ObjectsLayer {
         self.apply_selection_indices(&indices, additive);
         self.status = format!("Selected {} object(s) by lasso.", indices.len());
         indices.len()
+    }
+
+    fn selection_id_preview(&self, indices: &[usize]) -> String {
+        let Some(objects) = self.objects.as_ref() else {
+            return String::new();
+        };
+        let labels = indices
+            .iter()
+            .take(8)
+            .filter_map(|idx| objects.get(*idx).map(|obj| obj.id.as_str()))
+            .collect::<Vec<_>>();
+        if labels.is_empty() {
+            return String::new();
+        }
+        let extra = indices.len().saturating_sub(labels.len());
+        let mut out = labels.join(", ");
+        if extra > 0 {
+            out.push_str(&format!(" +{extra}"));
+        }
+        out
     }
 
     fn query_indices_in_world_rect(
@@ -857,7 +890,10 @@ impl ObjectsLayer {
                     let Some(obj) = objects.get(idx) else {
                         continue;
                     };
-                    if local_rect.contains(obj.centroid_world) {
+                    if local_rect.contains(obj.centroid_world)
+                        || (self.display_mode == ObjectDisplayMode::Polygons
+                            && object_intersects_rect(obj, local_rect))
+                    {
                         out.push(idx);
                     }
                 }
@@ -1833,6 +1869,86 @@ fn point_in_polygon(p: egui::Pos2, poly: &[egui::Pos2]) -> bool {
         j = i;
     }
     inside
+}
+
+fn object_intersects_rect(obj: &GeoJsonObjectFeature, rect: egui::Rect) -> bool {
+    if !rects_overlap_or_touch(obj.bbox_world, rect) {
+        return false;
+    }
+    obj.polygons_world
+        .iter()
+        .any(|poly| polygon_intersects_rect(poly, rect))
+}
+
+fn polygon_intersects_rect(poly: &[egui::Pos2], rect: egui::Rect) -> bool {
+    if poly.len() < 2 {
+        return false;
+    }
+
+    if poly.iter().any(|point| rect.contains(*point)) {
+        return true;
+    }
+
+    let samples = [
+        egui::pos2(rect.min.x, rect.min.y),
+        egui::pos2(rect.max.x, rect.min.y),
+        egui::pos2(rect.max.x, rect.max.y),
+        egui::pos2(rect.min.x, rect.max.y),
+        rect.center(),
+    ];
+    poly.len() >= 4 && samples.iter().any(|sample| point_in_polygon(*sample, poly))
+}
+
+fn rects_overlap_or_touch(a: egui::Rect, b: egui::Rect) -> bool {
+    a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y
+}
+
+#[cfg(test)]
+mod selection_geometry_tests {
+    use super::*;
+
+    fn square(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Vec<egui::Pos2> {
+        vec![
+            egui::pos2(min_x, min_y),
+            egui::pos2(max_x, min_y),
+            egui::pos2(max_x, max_y),
+            egui::pos2(min_x, max_y),
+            egui::pos2(min_x, min_y),
+        ]
+    }
+
+    #[test]
+    fn rectangle_selects_polygon_body_even_when_centroid_is_outside() {
+        let poly = square(0.0, 0.0, 20.0, 20.0);
+        let rect = egui::Rect::from_min_max(egui::pos2(18.0, 8.0), egui::pos2(22.0, 12.0));
+
+        assert!(polygon_intersects_rect(&poly, rect));
+        assert!(!rect.contains(egui::pos2(10.0, 10.0)));
+    }
+
+    #[test]
+    fn rectangle_inside_polygon_counts_as_intersection() {
+        let poly = square(0.0, 0.0, 20.0, 20.0);
+        let rect = egui::Rect::from_min_max(egui::pos2(8.0, 8.0), egui::pos2(12.0, 12.0));
+
+        assert!(polygon_intersects_rect(&poly, rect));
+    }
+
+    #[test]
+    fn disjoint_rectangle_does_not_intersect_polygon() {
+        let poly = square(0.0, 0.0, 20.0, 20.0);
+        let rect = egui::Rect::from_min_max(egui::pos2(30.0, 30.0), egui::pos2(35.0, 35.0));
+
+        assert!(!polygon_intersects_rect(&poly, rect));
+    }
+
+    #[test]
+    fn edge_crossing_without_interior_sample_does_not_select_polygon() {
+        let poly = square(0.0, 0.0, 20.0, 20.0);
+        let rect = egui::Rect::from_min_max(egui::pos2(19.0, 21.0), egui::pos2(21.0, 23.0));
+
+        assert!(!polygon_intersects_rect(&poly, rect));
+    }
 }
 
 pub(super) fn build_render_lods(
