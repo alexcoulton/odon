@@ -1,11 +1,15 @@
-use super::core::build_object_point_payload;
+use super::core::{build_object_point_payload, object_proxy_position_world, rect_bins};
 use super::*;
 use anyhow::Context;
 use lyon_path::Path;
 use lyon_path::math::point;
 use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 impl ObjectsLayer {
+    pub(super) const SELECTED_RENDER_LOD_LIMIT: usize = 200_000;
+
     fn display_scale(&self) -> egui::Vec2 {
         egui::vec2(
             self.display_transform.scale[0].max(1e-6),
@@ -123,14 +127,15 @@ impl ObjectsLayer {
             })
             .unwrap_or_else(|| viewport.width().max(viewport.height()).max(1.0));
         let lod_idx = choose_lod_index(&render_lods, dataset_long_side_screen_px);
-        let (use_fill_proxy_points, lod_empty) = {
+        let (use_fast_proxy_points, use_fill_proxy_points, lod_empty) = {
             let lod = &render_lods[lod_idx];
             (
+                self.should_use_fast_proxy_points(dataset_long_side_screen_px),
                 self.should_use_fill_proxy_points(lod),
                 lod.bins.segments.is_empty(),
             )
         };
-        if !use_fill_proxy_points && lod_empty {
+        if !use_fast_proxy_points && !use_fill_proxy_points && lod_empty {
             return;
         }
 
@@ -144,12 +149,49 @@ impl ObjectsLayer {
             (self.selected_fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
         );
 
-        if use_fill_proxy_points {
-            self.draw_fill_proxy_points(
+        if use_fast_proxy_points || use_fill_proxy_points {
+            let proxy_alpha = if use_fill_proxy_points {
+                self.fill_opacity
+            } else {
+                self.opacity
+            };
+            self.draw_proxy_points(
                 ui,
                 camera,
                 viewport,
                 visible_world,
+                local_to_world_offset,
+                gpu_available,
+                proxy_alpha,
+                self.generation ^ 0x4641535450524f58,
+            );
+            if gpu_available {
+                let _ = self.draw_selected_outline_overlay_gpu(
+                    ui,
+                    camera,
+                    viewport,
+                    visible_local,
+                    dataset_long_side_screen_px,
+                    display_offset,
+                    display_scale,
+                    false,
+                );
+            }
+            if self.selected_point_positions_world.is_none() {
+                self.draw_visible_selected_outline_overlay(
+                    ui,
+                    camera,
+                    viewport,
+                    visible_local,
+                    local_to_world_offset,
+                    dataset_long_side_screen_px,
+                    gpu_available,
+                );
+            }
+            self.draw_point_selection_overlay(
+                ui,
+                camera,
+                viewport,
                 local_to_world_offset,
                 gpu_available,
             );
@@ -183,6 +225,7 @@ impl ObjectsLayer {
                             items.push(ObjectFillGlDrawItem {
                                 data: ObjectFillGlDrawData {
                                     cache_id: 0x5345474f424a20u64 | group_idx as u64,
+                                    state_cache_id: 0x5345474f424a20u64 | group_idx as u64,
                                     generation: self.generation,
                                     vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                     object_count: fill_mesh.object_count,
@@ -215,6 +258,7 @@ impl ObjectsLayer {
                         items.push(ObjectFillGlDrawItem {
                             data: ObjectFillGlDrawData {
                                 cache_id: 0x5345474f424a21u64,
+                                state_cache_id: 0x5345474f424a21u64,
                                 generation: self.generation,
                                 vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                 object_count: fill_mesh.object_count,
@@ -319,67 +363,8 @@ impl ObjectsLayer {
 
             if gpu_available {
                 let lod = &render_lods[lod_idx];
-                let mut items = Vec::new();
-                if let Some(color_groups) = active_color_groups {
-                    items.reserve(color_groups.groups.len());
-                    for (group_idx, group) in color_groups.groups.iter().enumerate() {
-                        let Some(c) =
-                            self.effective_color_group_rgb(&color_groups.property_key, group)
-                        else {
-                            continue;
-                        };
-                        let group_lod =
-                            &group.lods[choose_lod_index(&group.lods, dataset_long_side_screen_px)];
-                        items.push(LineBinsGlDrawItem {
-                            data: LineBinsGlDrawData {
-                                cache_id: 0x5345474f424a00u64
-                                    | ((lod.lod as u64) << 8)
-                                    | group_idx as u64,
-                                generation: self.generation,
-                                bins: Arc::clone(&group_lod.bins),
-                            },
-                            params: LineBinsGlDrawParams {
-                                center_world: camera.center_world_lvl0,
-                                zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                                width_points: self.width_screen_px.max(0.0),
-                                color: egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], a),
-                                visible: self.visible,
-                                local_to_world_offset: display_offset,
-                                local_to_world_scale: display_scale,
-                            },
-                            visible_world: visible_local,
-                        });
-                    }
-                } else {
-                    items.push(LineBinsGlDrawItem {
-                        data: LineBinsGlDrawData {
-                            cache_id: 0x5345474f424a00u64 | (lod.lod as u64),
-                            generation: self.generation,
-                            bins: Arc::clone(&lod.bins),
-                        },
-                        params: LineBinsGlDrawParams {
-                            center_world: camera.center_world_lvl0,
-                            zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                            width_points: self.width_screen_px.max(0.0),
-                            color,
-                            visible: self.visible,
-                            local_to_world_offset: display_offset,
-                            local_to_world_scale: display_scale,
-                        },
-                        visible_world: visible_local,
-                    });
-                }
-
-                let renderer = self.gl.clone();
-                let cb = egui_glow::CallbackFn::new(move |info, painter| {
-                    renderer.paint_many(info, painter, &items);
-                });
-                ui.painter().add(egui::PaintCallback {
-                    rect: viewport,
-                    callback: Arc::new(cb),
-                });
-
-                if self.show_selection_overlay
+                if active_color_groups.is_none()
+                    && self.show_selection_overlay
                     && !self.selected_object_indices.is_empty()
                     && let Some(selection_lods) = self.object_selection_lods.as_ref()
                     && let Some(selection_lod) =
@@ -389,9 +374,10 @@ impl ObjectsLayer {
                         ))
                     && let Some(object_count) = self.objects.as_ref().map(|objects| objects.len())
                 {
-                    let sel_items = [ObjectLineBinsGlDrawItem {
+                    let item = ObjectLineBinsGlDrawItem {
                         data: ObjectLineBinsGlDrawData {
-                            cache_id: 0x5345474f424a40u64 | (selection_lod.lod as u64),
+                            cache_id: 0x5345474f424a90u64 | (selection_lod.lod as u64),
+                            state_cache_id: 0x5345474f424a91u64,
                             generation: self.generation,
                             bins: Arc::clone(&selection_lod.bins),
                             selection_generation: self.selection_generation,
@@ -401,28 +387,115 @@ impl ObjectsLayer {
                         params: ObjectLineBinsGlDrawParams {
                             center_world: camera.center_world_lvl0,
                             zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                            base_width_points: self.width_screen_px.max(0.0),
                             selected_width_points: (self.width_screen_px + 1.0).max(1.25),
                             primary_width_points: (self.width_screen_px + 2.0).max(2.0),
+                            base_color: color,
                             selected_color: egui::Color32::from_rgba_unmultiplied(
                                 255, 245, 140, 210,
                             ),
                             primary_color: egui::Color32::from_rgba_unmultiplied(
                                 255, 255, 255, 235,
                             ),
+                            draw_unselected: true,
                             visible: self.visible,
                             local_to_world_offset: display_offset,
                             local_to_world_scale: display_scale,
                         },
                         visible_world: visible_local,
-                    }];
+                    };
                     let renderer = self.gl_object_selection.clone();
                     let cb = egui_glow::CallbackFn::new(move |info, painter| {
-                        renderer.paint_many(info, painter, &sel_items);
+                        renderer.paint_many(info, painter, &[item.clone()]);
                     });
                     ui.painter().add(egui::PaintCallback {
                         rect: viewport,
                         callback: Arc::new(cb),
                     });
+                } else {
+                    let mut items = Vec::new();
+                    if let Some(color_groups) = active_color_groups {
+                        items.reserve(color_groups.groups.len());
+                        for (group_idx, group) in color_groups.groups.iter().enumerate() {
+                            let Some(c) =
+                                self.effective_color_group_rgb(&color_groups.property_key, group)
+                            else {
+                                continue;
+                            };
+                            let group_lod = &group.lods
+                                [choose_lod_index(&group.lods, dataset_long_side_screen_px)];
+                            items.push(LineBinsGlDrawItem {
+                                data: LineBinsGlDrawData {
+                                    cache_id: 0x5345474f424a00u64
+                                        | ((lod.lod as u64) << 8)
+                                        | group_idx as u64,
+                                    generation: self.generation,
+                                    bins: Arc::clone(&group_lod.bins),
+                                },
+                                params: LineBinsGlDrawParams {
+                                    center_world: camera.center_world_lvl0,
+                                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                                    width_points: self.width_screen_px.max(0.0),
+                                    color: egui::Color32::from_rgba_unmultiplied(
+                                        c[0], c[1], c[2], a,
+                                    ),
+                                    visible: self.visible,
+                                    local_to_world_offset: display_offset,
+                                    local_to_world_scale: display_scale,
+                                },
+                                visible_world: visible_local,
+                            });
+                        }
+                    } else {
+                        items.push(LineBinsGlDrawItem {
+                            data: LineBinsGlDrawData {
+                                cache_id: 0x5345474f424a00u64 | (lod.lod as u64),
+                                generation: self.generation,
+                                bins: Arc::clone(&lod.bins),
+                            },
+                            params: LineBinsGlDrawParams {
+                                center_world: camera.center_world_lvl0,
+                                zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                                width_points: self.width_screen_px.max(0.0),
+                                color,
+                                visible: self.visible,
+                                local_to_world_offset: display_offset,
+                                local_to_world_scale: display_scale,
+                            },
+                            visible_world: visible_local,
+                        });
+                    }
+
+                    let renderer = self.gl.clone();
+                    let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                        renderer.paint_many(info, painter, &items);
+                    });
+                    ui.painter().add(egui::PaintCallback {
+                        rect: viewport,
+                        callback: Arc::new(cb),
+                    });
+
+                    let drew_selected_outline = self.draw_selected_outline_overlay_gpu(
+                        ui,
+                        camera,
+                        viewport,
+                        visible_local,
+                        dataset_long_side_screen_px,
+                        display_offset,
+                        display_scale,
+                        true,
+                    );
+                    if !drew_selected_outline {
+                        self.draw_visible_selected_outline_overlay(
+                            ui,
+                            camera,
+                            viewport,
+                            visible_local,
+                            local_to_world_offset,
+                            dataset_long_side_screen_px,
+                            gpu_available,
+                        );
+                    }
                 }
             } else if let Some(color_groups) = active_color_groups {
                 for group in &color_groups.groups {
@@ -490,7 +563,8 @@ impl ObjectsLayer {
             }
         }
 
-        if self.show_selection_overlay
+        if !use_fast_proxy_points
+            && self.show_selection_overlay
             && self.selected_fill_opacity > 0.0
             && let Some(fill_mesh) = self.selected_fill_mesh.as_ref()
             && fill_mesh.bounds_local.intersects(visible_local)
@@ -541,41 +615,23 @@ impl ObjectsLayer {
                     ));
                 }
             }
-        } else if self.show_selection_overlay
+        } else if !use_fast_proxy_points
+            && self.show_selection_overlay
             && gpu_available
             && self.selected_fill_opacity > 0.0
             && !self.selected_object_indices.is_empty()
             && let Some(fill_mesh) = self.object_fill_mesh.as_ref()
             && fill_mesh.bounds_local.intersects(visible_local)
         {
-            let item = ObjectFillGlDrawItem {
-                data: ObjectFillGlDrawData {
-                    cache_id: 0x5345474f424a31u64,
-                    generation: self.generation,
-                    vertices_local: Arc::clone(&fill_mesh.vertices_local),
-                    object_count: fill_mesh.object_count,
-                    selection_generation: self.selection_generation,
-                    selection_state: Arc::clone(&self.selection_fill_state),
-                },
-                params: ObjectFillGlDrawParams {
-                    center_world: camera.center_world_lvl0,
-                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                    selected_color: selected_fill,
-                    primary_color: selected_fill,
-                    visible: self.visible,
-                    local_to_world_offset: display_offset,
-                    local_to_world_scale: display_scale,
-                },
-                visible_world: fill_mesh.bounds_local,
-            };
-            let renderer = self.gl_object_fill.clone();
-            let cb = egui_glow::CallbackFn::new(move |info, painter| {
-                renderer.paint_many(info, painter, &[item.clone()]);
-            });
-            ui.painter().add(egui::PaintCallback {
-                rect: viewport,
-                callback: Arc::new(cb),
-            });
+            self.draw_object_selection_fill_overlay_gpu(
+                ui,
+                camera,
+                viewport,
+                visible_local,
+                display_offset,
+                display_scale,
+                selected_fill,
+            );
         }
 
         if !gpu_available && self.show_selection_overlay && !self.selected_object_indices.is_empty()
@@ -645,6 +701,378 @@ impl ObjectsLayer {
                 }
             }
         }
+    }
+
+    fn draw_object_selection_fill_overlay_gpu(
+        &self,
+        ui: &mut egui::Ui,
+        camera: &crate::camera::Camera,
+        viewport: egui::Rect,
+        visible_local: egui::Rect,
+        display_offset: egui::Vec2,
+        display_scale: egui::Vec2,
+        selected_fill: egui::Color32,
+    ) {
+        let Some(fill_mesh) = self.object_fill_mesh.as_ref() else {
+            return;
+        };
+        if fill_mesh.vertices_local.is_empty() {
+            return;
+        }
+
+        let params = ObjectFillGlDrawParams {
+            center_world: camera.center_world_lvl0,
+            zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+            selected_color: selected_fill,
+            primary_color: selected_fill,
+            visible: self.visible,
+            local_to_world_offset: display_offset,
+            local_to_world_scale: display_scale,
+        };
+
+        let mut items = Vec::new();
+        let state_cache_id = 0x5345474f424a31u64;
+        if fill_mesh.object_count <= Self::SELECTED_RENDER_LOD_LIMIT {
+            items.push(ObjectFillGlDrawItem {
+                data: ObjectFillGlDrawData {
+                    cache_id: 0x5345474f424a31u64,
+                    state_cache_id,
+                    generation: self.generation,
+                    vertices_local: Arc::clone(&fill_mesh.vertices_local),
+                    object_count: fill_mesh.object_count,
+                    selection_generation: self.selection_generation,
+                    selection_state: Arc::clone(&self.selection_fill_state),
+                },
+                params,
+                visible_world: fill_mesh.bounds_local,
+            });
+        } else {
+            let (bx0, by0, bx1, by1) = fill_mesh.bin_range_for_local_rect(visible_local);
+            for by in by0..=by1 {
+                for bx in bx0..=bx1 {
+                    let bin_index = by * fill_mesh.bins_w + bx;
+                    let Some(vertices) = fill_mesh.bin_vertices.get(bin_index) else {
+                        continue;
+                    };
+                    if vertices.is_empty() {
+                        continue;
+                    }
+                    items.push(ObjectFillGlDrawItem {
+                        data: ObjectFillGlDrawData {
+                            cache_id: 0x5345474f424a80u64 | bin_index as u64,
+                            state_cache_id,
+                            generation: self.generation,
+                            vertices_local: Arc::clone(vertices),
+                            object_count: fill_mesh.object_count,
+                            selection_generation: self.selection_generation,
+                            selection_state: Arc::clone(&self.selection_fill_state),
+                        },
+                        params: params.clone(),
+                        visible_world: visible_local,
+                    });
+                }
+            }
+        }
+
+        if items.is_empty() {
+            return;
+        }
+        let renderer = self.gl_object_fill.clone();
+        let cb = egui_glow::CallbackFn::new(move |info, painter| {
+            renderer.paint_many(info, painter, &items);
+        });
+        ui.painter().add(egui::PaintCallback {
+            rect: viewport,
+            callback: Arc::new(cb),
+        });
+    }
+
+    fn draw_selected_outline_overlay_gpu(
+        &self,
+        ui: &mut egui::Ui,
+        camera: &crate::camera::Camera,
+        viewport: egui::Rect,
+        visible_local: egui::Rect,
+        dataset_long_side_screen_px: f32,
+        display_offset: egui::Vec2,
+        display_scale: egui::Vec2,
+        allow_selection_state_fallback: bool,
+    ) -> bool {
+        if !self.show_selection_overlay || self.selected_object_indices.is_empty() {
+            return false;
+        }
+
+        if let Some(selected_lods) = self.selected_render_lods.as_ref()
+            && let Some(selected_lod) =
+                selected_lods.get(choose_lod_index(selected_lods, dataset_long_side_screen_px))
+        {
+            let mut items = vec![LineBinsGlDrawItem {
+                data: LineBinsGlDrawData {
+                    cache_id: 0x5345474f424a50u64 | (selected_lod.lod as u64),
+                    generation: self.selection_generation,
+                    bins: Arc::clone(&selected_lod.bins),
+                },
+                params: LineBinsGlDrawParams {
+                    center_world: camera.center_world_lvl0,
+                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                    width_points: (self.width_screen_px + 1.0).max(1.25),
+                    color: egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
+                    visible: self.visible,
+                    local_to_world_offset: display_offset,
+                    local_to_world_scale: display_scale,
+                },
+                visible_world: visible_local,
+            }];
+
+            if let Some(primary_lods) = self.primary_selected_render_lods.as_ref()
+                && let Some(primary_lod) =
+                    primary_lods.get(choose_lod_index(primary_lods, dataset_long_side_screen_px))
+            {
+                items.push(LineBinsGlDrawItem {
+                    data: LineBinsGlDrawData {
+                        cache_id: 0x5345474f424a60u64 | (primary_lod.lod as u64),
+                        generation: self.selection_generation,
+                        bins: Arc::clone(&primary_lod.bins),
+                    },
+                    params: LineBinsGlDrawParams {
+                        center_world: camera.center_world_lvl0,
+                        zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                        width_points: (self.width_screen_px + 2.0).max(2.0),
+                        color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+                        visible: self.visible,
+                        local_to_world_offset: display_offset,
+                        local_to_world_scale: display_scale,
+                    },
+                    visible_world: visible_local,
+                });
+            }
+
+            let renderer = self.gl.clone();
+            let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                renderer.paint_many(info, painter, &items);
+            });
+            ui.painter().add(egui::PaintCallback {
+                rect: viewport,
+                callback: Arc::new(cb),
+            });
+            return true;
+        }
+
+        if allow_selection_state_fallback
+            && let Some(selection_lods) = self.object_selection_lods.as_ref()
+            && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
+                selection_lods,
+                dataset_long_side_screen_px,
+            ))
+            && let Some(object_count) = self.objects.as_ref().map(|objects| objects.len())
+        {
+            let sel_items = [ObjectLineBinsGlDrawItem {
+                data: ObjectLineBinsGlDrawData {
+                    cache_id: 0x5345474f424a40u64 | (selection_lod.lod as u64),
+                    state_cache_id: 0x5345474f424a41u64,
+                    generation: self.generation,
+                    bins: Arc::clone(&selection_lod.bins),
+                    selection_generation: self.selection_generation,
+                    selection_state: Arc::clone(&self.selection_fill_state),
+                    object_count,
+                },
+                params: ObjectLineBinsGlDrawParams {
+                    center_world: camera.center_world_lvl0,
+                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                    base_width_points: self.width_screen_px.max(0.0),
+                    selected_width_points: (self.width_screen_px + 1.0).max(1.25),
+                    primary_width_points: (self.width_screen_px + 2.0).max(2.0),
+                    base_color: egui::Color32::TRANSPARENT,
+                    selected_color: egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
+                    primary_color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+                    draw_unselected: false,
+                    visible: self.visible,
+                    local_to_world_offset: display_offset,
+                    local_to_world_scale: display_scale,
+                },
+                visible_world: visible_local,
+            }];
+            let renderer = self.gl_object_selection.clone();
+            let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                renderer.paint_many(info, painter, &sel_items);
+            });
+            ui.painter().add(egui::PaintCallback {
+                rect: viewport,
+                callback: Arc::new(cb),
+            });
+            return true;
+        }
+        false
+    }
+
+    fn draw_visible_selected_outline_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        camera: &crate::camera::Camera,
+        viewport: egui::Rect,
+        visible_local: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        dataset_long_side_screen_px: f32,
+        gpu_available: bool,
+    ) {
+        if !self.show_selection_overlay
+            || self.display_mode != ObjectDisplayMode::Polygons
+            || self.selected_object_indices.len() <= Self::SELECTED_RENDER_LOD_LIMIT
+        {
+            return;
+        }
+        if gpu_available {
+            let Some((lods, generation)) = self
+                .visible_selected_render_lods(visible_local)
+                .map(|cache| (cache.lods.clone(), cache.generation))
+            else {
+                return;
+            };
+            let Some(lod) = lods.get(choose_lod_index(&lods, dataset_long_side_screen_px)) else {
+                return;
+            };
+            let item = LineBinsGlDrawItem {
+                data: LineBinsGlDrawData {
+                    cache_id: 0x5345474f424a70u64 | (lod.lod as u64),
+                    generation,
+                    bins: Arc::clone(&lod.bins),
+                },
+                params: LineBinsGlDrawParams {
+                    center_world: camera.center_world_lvl0,
+                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                    width_points: (self.width_screen_px + 1.0).max(1.25),
+                    color: egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
+                    visible: self.visible,
+                    local_to_world_offset: self.display_offset(local_to_world_offset),
+                    local_to_world_scale: self.display_scale(),
+                },
+                visible_world: visible_local,
+            };
+            let renderer = self.gl.clone();
+            let items = vec![item];
+            let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                renderer.paint_many(info, painter, &items);
+            });
+            ui.painter().add(egui::PaintCallback {
+                rect: viewport,
+                callback: Arc::new(cb),
+            });
+            return;
+        }
+
+        let visible_indices = self.visible_selected_object_indices(visible_local);
+        if visible_indices.is_empty() {
+            return;
+        }
+        let Some(objects) = self.objects.as_ref() else {
+            return;
+        };
+
+        let selected_stroke = egui::Stroke::new(
+            (self.width_screen_px + 1.0).max(1.25),
+            egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
+        );
+        let primary_stroke = egui::Stroke::new(
+            (self.width_screen_px + 2.0).max(2.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+        );
+        for idx in visible_indices {
+            let Some(obj) = objects.get(idx) else {
+                continue;
+            };
+            let stroke = if self.selected_object_index == Some(idx) {
+                primary_stroke
+            } else {
+                selected_stroke
+            };
+            for poly in &obj.polygons_world {
+                for seg in poly.windows(2) {
+                    let p0 = self.local_to_world_point(seg[0], local_to_world_offset);
+                    let p1 = self.local_to_world_point(seg[1], local_to_world_offset);
+                    if !visible_local.contains(seg[0]) && !visible_local.contains(seg[1]) {
+                        let seg_rect = egui::Rect::from_two_pos(seg[0], seg[1]);
+                        if !seg_rect.intersects(visible_local) {
+                            continue;
+                        }
+                    }
+                    ui.painter().line_segment(
+                        [
+                            camera.world_to_screen(p0, viewport),
+                            camera.world_to_screen(p1, viewport),
+                        ],
+                        stroke,
+                    );
+                }
+            }
+        }
+    }
+
+    fn visible_selected_render_lods(
+        &mut self,
+        visible_local: egui::Rect,
+    ) -> Option<&VisibleSelectedRenderCache> {
+        let visible_indices = self.visible_selected_object_indices(visible_local);
+        if visible_indices.is_empty() {
+            self.visible_selected_render_cache = None;
+            return None;
+        }
+        if self
+            .visible_selected_render_cache
+            .as_ref()
+            .is_some_and(|cache| {
+                cache.selection_generation == self.selection_generation
+                    && cache.visible_indices == visible_indices
+            })
+        {
+            return self.visible_selected_render_cache.as_ref();
+        }
+
+        let objects = self.objects.as_ref()?;
+        let selected = visible_indices
+            .iter()
+            .filter_map(|idx| objects.get(*idx).cloned())
+            .collect::<Vec<_>>();
+        let lods = build_render_lods(&selected).ok()?;
+        let generation =
+            visible_selected_cache_generation(self.selection_generation, &visible_indices);
+        self.visible_selected_render_cache = Some(VisibleSelectedRenderCache {
+            selection_generation: self.selection_generation,
+            visible_indices,
+            lods,
+            generation,
+        });
+        self.visible_selected_render_cache.as_ref()
+    }
+
+    fn visible_selected_object_indices(&self, visible_local: egui::Rect) -> Vec<usize> {
+        let (Some(objects), Some(bins)) = (self.objects.as_ref(), self.bins.as_ref()) else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        let (bx0, by0, bx1, by1) = bins.bin_range_for_world_rect(visible_local);
+        for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                let bi = by * bins.bins_w + bx;
+                for &idx_u32 in bins.bin_slice(bi) {
+                    let idx = idx_u32 as usize;
+                    if !seen.insert(idx) {
+                        continue;
+                    }
+                    if !self.selected_object_indices.contains(&idx) || !self.is_index_visible(idx) {
+                        continue;
+                    }
+                    let Some(obj) = objects.get(idx) else {
+                        continue;
+                    };
+                    if obj.bbox_world.intersects(visible_local) {
+                        out.push(idx);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     pub fn hover_tooltip(
@@ -1128,6 +1556,7 @@ impl ObjectsLayer {
     }
 
     pub(super) fn rebuild_selection_render_lods(&mut self) {
+        let selected_count = self.selected_object_indices.len();
         if self.display_mode == ObjectDisplayMode::Points {
             self.selected_render_lods = None;
             self.primary_selected_render_lods = None;
@@ -1143,16 +1572,16 @@ impl ObjectsLayer {
                 self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
                 return;
             };
-            let selected = self
-                .selected_object_indices
-                .iter()
-                .filter_map(|idx| objects.get(*idx).cloned())
-                .collect::<Vec<_>>();
-            if selected.is_empty() {
+            if selected_count == 0 || selected_count > Self::SELECTED_RENDER_LOD_LIMIT {
                 self.selected_point_positions_world = None;
                 self.selected_point_values = None;
                 self.selected_point_lods = None;
             } else {
+                let selected = self
+                    .selected_object_indices
+                    .iter()
+                    .filter_map(|idx| objects.get(*idx).cloned())
+                    .collect::<Vec<_>>();
                 let (positions, values, lods) =
                     build_object_point_payload(&selected, self.display_transform);
                 self.selected_point_positions_world = Some(positions);
@@ -1177,14 +1606,33 @@ impl ObjectsLayer {
             self.selected_render_lods = None;
             self.primary_selected_render_lods = None;
             self.selected_fill_mesh = None;
+            self.selected_point_positions_world = None;
+            self.selected_point_values = None;
+            self.selected_point_lods = None;
             self.selection_fill_state = Arc::new(Vec::new());
             self.selection_cpu_overlay_dirty = false;
             self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
             return;
         };
+        self.selected_point_positions_world = None;
+        self.selected_point_values = None;
+        self.selected_point_lods = None;
         let object_count = objects.len();
-        self.selected_render_lods = None;
-        self.primary_selected_render_lods = None;
+        self.selected_render_lods =
+            if selected_count == 0 || selected_count > Self::SELECTED_RENDER_LOD_LIMIT {
+                None
+            } else {
+                let selected = self
+                    .selected_object_indices
+                    .iter()
+                    .filter_map(|idx| objects.get(*idx).cloned())
+                    .collect::<Vec<_>>();
+                build_render_lods(&selected).ok()
+            };
+        self.primary_selected_render_lods = self
+            .selected_object_index
+            .and_then(|idx| objects.get(idx))
+            .and_then(|object| build_render_lods(std::slice::from_ref(object)).ok());
         self.selected_fill_mesh = None;
         self.rebuild_selection_fill_state(object_count);
         self.selection_cpu_overlay_dirty = true;
@@ -1311,14 +1759,23 @@ impl ObjectsLayer {
         self.fill_cells && self.fill_opacity > 0.0 && lod.lod >= 2
     }
 
-    fn fill_proxy_point_style(&self, color_rgb: [u8; 3]) -> PointsStyle {
+    fn should_use_fast_proxy_points(&self, dataset_long_side_screen_px: f32) -> bool {
+        const FAST_RENDER_MIN_OBJECTS: usize = 50_000;
+        const FAST_RENDER_OUTLINE_SCREEN_PX: f32 = 3_000.0;
+        self.fast_rendering
+            && self.display_mode == ObjectDisplayMode::Polygons
+            && self.filtered_count() >= FAST_RENDER_MIN_OBJECTS
+            && dataset_long_side_screen_px < FAST_RENDER_OUTLINE_SCREEN_PX
+    }
+
+    fn proxy_point_style(&self, color_rgb: [u8; 3], opacity: f32) -> PointsStyle {
         PointsStyle {
             radius_screen_px: self.fill_proxy_radius_screen_px(),
             fill_positive: egui::Color32::from_rgba_unmultiplied(
                 color_rgb[0],
                 color_rgb[1],
                 color_rgb[2],
-                (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
             ),
             fill_negative: egui::Color32::TRANSPARENT,
             stroke_positive: egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
@@ -1326,7 +1783,7 @@ impl ObjectsLayer {
         }
     }
 
-    fn draw_fill_proxy_points(
+    fn draw_proxy_points(
         &mut self,
         ui: &mut egui::Ui,
         camera: &crate::camera::Camera,
@@ -1334,6 +1791,8 @@ impl ObjectsLayer {
         visible_world: egui::Rect,
         local_to_world_offset: egui::Vec2,
         gpu_available: bool,
+        opacity: f32,
+        generation_seed: u64,
     ) {
         let color_groups_binding = self.active_color_groups().cloned();
         let active_color_groups = match self.color_mode {
@@ -1354,7 +1813,7 @@ impl ObjectsLayer {
                 else {
                     continue;
                 };
-                let style = self.fill_proxy_point_style(color_rgb);
+                let style = self.proxy_point_style(color_rgb, opacity);
                 self.draw_proxy_point_batch(
                     ui,
                     camera,
@@ -1365,7 +1824,7 @@ impl ObjectsLayer {
                     &group.point_positions_world,
                     &group.point_values,
                     style,
-                    group.fill_generation,
+                    group.fill_generation ^ generation_seed,
                     Some(&self.gl_proxy_group_points[group_idx]),
                 );
             }
@@ -1394,8 +1853,8 @@ impl ObjectsLayer {
             gpu_available,
             base_positions,
             base_values,
-            self.fill_proxy_point_style(self.color_rgb),
-            self.generation ^ 0x50524f585946494c,
+            self.proxy_point_style(self.color_rgb, opacity),
+            self.generation ^ generation_seed,
             Some(&self.gl_points),
         );
     }
@@ -1696,6 +2155,19 @@ impl ObjectsLayer {
     }
 }
 
+fn visible_selected_cache_generation(selection_generation: u64, indices: &[usize]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    selection_generation.hash(&mut hasher);
+    indices.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl ObjectFillMesh {
+    fn bin_range_for_local_rect(&self, rect: egui::Rect) -> (usize, usize, usize, usize) {
+        rect_bins(rect, self.origin, self.bin_size, self.bins_w, self.bins_h)
+    }
+}
+
 fn build_selection_fill_mesh(
     objects: &[GeoJsonObjectFeature],
 ) -> anyhow::Result<SelectionFillMesh> {
@@ -1804,10 +2276,44 @@ pub(super) fn build_object_fill_mesh(
         anyhow::bail!("no valid triangles for object fill rendering");
     }
 
+    const OBJECT_FILL_BIN_SIZE: f32 = 2048.0;
+    let w = bounds_local.width().max(1.0);
+    let h = bounds_local.height().max(1.0);
+    let bins_w = ((w / OBJECT_FILL_BIN_SIZE).ceil() as usize).max(1);
+    let bins_h = ((h / OBJECT_FILL_BIN_SIZE).ceil() as usize).max(1);
+    let origin = bounds_local.min;
+    let bins_len = bins_w.saturating_mul(bins_h);
+    let mut tmp_bins: Vec<Vec<[f32; 3]>> = vec![Vec::new(); bins_len];
+    for tri in triangles.chunks_exact(3) {
+        let min_x = tri.iter().map(|v| v[0]).fold(f32::INFINITY, f32::min);
+        let min_y = tri.iter().map(|v| v[1]).fold(f32::INFINITY, f32::min);
+        let max_x = tri.iter().map(|v| v[0]).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = tri.iter().map(|v| v[1]).fold(f32::NEG_INFINITY, f32::max);
+        if !(min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite()) {
+            continue;
+        }
+        let tri_rect = egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
+        let (bx0, by0, bx1, by1) =
+            rect_bins(tri_rect, origin, OBJECT_FILL_BIN_SIZE, bins_w, bins_h);
+        for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                let bin_index = by * bins_w + bx;
+                if let Some(bin) = tmp_bins.get_mut(bin_index) {
+                    bin.extend_from_slice(tri);
+                }
+            }
+        }
+    }
+
     Ok(ObjectFillMesh {
         vertices_local: Arc::new(triangles),
         bounds_local,
         object_count: objects.len(),
+        origin,
+        bin_size: OBJECT_FILL_BIN_SIZE,
+        bins_w,
+        bins_h,
+        bin_vertices: tmp_bins.into_iter().map(Arc::new).collect(),
     })
 }
 
@@ -2312,7 +2818,12 @@ fn build_object_selection_render_lods_from_polylines(
         anyhow::bail!("no valid object outlines available for selection rendering");
     }
 
-    let lod_specs: &[(u8, f32, f32)] = &[(0, 1.0, 65_536.0), (1, 8.0, 1_000_000.0)];
+    let lod_specs: &[(u8, f32, f32)] = &[
+        (0, 1.0, 2048.0),
+        (1, 4.0, 8192.0),
+        (2, 16.0, 32768.0),
+        (3, 64.0, 1_000_000.0),
+    ];
 
     let mut out = Vec::new();
     for (lod, step, bin_size) in lod_specs {
@@ -2418,7 +2929,7 @@ where
         grouped_points
             .entry(value.clone())
             .or_default()
-            .push(obj.point_position_world.unwrap_or(obj.centroid_world));
+            .push(object_proxy_position_world(obj));
         grouped_indices.entry(value).or_default().push(object_index);
     }
 
@@ -2760,7 +3271,12 @@ fn choose_object_selection_lod_index(
     if lods.len() <= 1 {
         return 0;
     }
-    let desired_lod = if dataset_long_side_screen_px.max(1e-3) < 1000.0 {
+    let s = dataset_long_side_screen_px.max(1e-3);
+    let desired_lod = if s < 160.0 {
+        3u8
+    } else if s < 420.0 {
+        2u8
+    } else if s < 1000.0 {
         1u8
     } else {
         0u8

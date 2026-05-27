@@ -228,6 +228,44 @@ impl ObjectsLayer {
                 }
             }
         }
+
+        if let Some(rx) = self.analysis_selection_rx.clone() {
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        if result.request_id != self.analysis_selection_request_id {
+                            continue;
+                        }
+                        if result.cache_key != self.threshold_selection_cache_key() {
+                            self.analysis_selection_rx = None;
+                            continue;
+                        }
+                        self.analysis_selection_rx = None;
+                        self.object_property_threshold_selection_cache_key = Some(result.cache_key);
+                        self.object_property_threshold_selection_cache =
+                            Arc::clone(&result.indices);
+                        self.apply_selection_indices(&result.indices, false);
+                        if self.display_mode == ObjectDisplayMode::Polygons
+                            && result.indices.len() > ObjectsLayer::SELECTED_RENDER_LOD_LIMIT
+                        {
+                            self.selected_point_positions_world =
+                                Some(Arc::clone(&result.proxy_positions_world));
+                            self.selected_point_values = Some(Arc::clone(&result.proxy_values));
+                            self.selected_point_lods = Some(Arc::new(Vec::new()));
+                        }
+                        self.status = format!(
+                            "Applied analysis selection to {} object(s).",
+                            result.indices.len()
+                        );
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.analysis_selection_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     fn install_load_result(&mut self, msg: LoadResult) {
@@ -293,6 +331,7 @@ impl ObjectsLayer {
         self.selected_point_lods = None;
         self.primary_selected_point_positions_world = None;
         self.primary_selected_point_values = None;
+        self.visible_selected_render_cache = None;
         self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
         self.clear_measurements();
         self.clear_bulk_measurements();
@@ -327,6 +366,7 @@ impl ObjectsLayer {
         self.visible = true;
         self.generation = self.generation.wrapping_add(1).max(1);
         let n = self.object_count();
+        self.reset_live_analysis_selection_default();
         self.status = format!("Loaded {n} object(s).");
     }
 
@@ -373,6 +413,7 @@ impl ObjectsLayer {
         self.selected_point_lods = None;
         self.primary_selected_point_positions_world = None;
         self.primary_selected_point_values = None;
+        self.visible_selected_render_cache = None;
         self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
         self.clear_measurements();
         self.clear_bulk_measurements();
@@ -392,6 +433,7 @@ impl ObjectsLayer {
         self.property_load_key = None;
         self.analysis_warm_rx = None;
         self.analysis_warm_started = false;
+        self.analysis_selection_rx = None;
         self.generation = self.generation.wrapping_add(1).max(1);
         self.status.clear();
     }
@@ -1177,6 +1219,9 @@ impl ObjectsLayer {
                 .clamping(egui::SliderClamping::Always),
         );
         ui.add_enabled_ui(self.display_mode == ObjectDisplayMode::Polygons, |ui| {
+            ui.checkbox(&mut self.fast_rendering, "Fast rendering");
+        });
+        ui.add_enabled_ui(self.display_mode == ObjectDisplayMode::Polygons, |ui| {
             ui.checkbox(&mut self.fill_cells, "Fill cells");
             ui.add_enabled(
                 self.fill_cells,
@@ -1897,6 +1942,7 @@ impl ObjectsLayer {
             fill_cells: self.fill_cells,
             fill_opacity: self.fill_opacity,
             selected_fill_opacity: self.selected_fill_opacity,
+            fast_rendering: self.fast_rendering,
         }
     }
 
@@ -1908,6 +1954,7 @@ impl ObjectsLayer {
         self.fill_cells = state.fill_cells;
         self.fill_opacity = state.fill_opacity.clamp(0.0, 1.0);
         self.selected_fill_opacity = state.selected_fill_opacity.clamp(0.0, 1.0);
+        self.fast_rendering = state.fast_rendering;
         self.color_groups = None;
         self.filtered_color_groups = None;
         self.color_legend_cache = None;
@@ -1952,6 +1999,7 @@ impl ObjectsLayer {
         self.fill_cells = false;
         self.fill_opacity = 0.30;
         self.selected_fill_opacity = 0.70;
+        self.fast_rendering = true;
         self.color_groups = None;
         self.filtered_color_groups = None;
         self.color_legend_cache = None;
@@ -2469,7 +2517,7 @@ impl ObjectsLayer {
     }
 
     pub fn is_analyzing(&self) -> bool {
-        false
+        self.analysis_selection_rx.is_some()
     }
 
     fn request_load(
@@ -4632,10 +4680,61 @@ pub(super) fn build_object_point_payload(
 ) {
     let positions = objects
         .iter()
-        .map(|obj| obj.point_position_world.unwrap_or(obj.centroid_world))
+        .map(object_proxy_position_world)
         .collect::<Vec<_>>();
     let values = vec![1.0f32; positions.len()];
     (Arc::new(positions), Arc::new(values), Arc::new(Vec::new()))
+}
+
+pub(super) fn object_proxy_position_world(obj: &GeoJsonObjectFeature) -> egui::Pos2 {
+    if obj.polygons_world.is_empty() {
+        obj.point_position_world.unwrap_or(obj.centroid_world)
+    } else {
+        obj.bbox_world.center()
+    }
+}
+
+#[cfg(test)]
+mod point_payload_tests {
+    use super::*;
+
+    fn object_with_geometry_and_bad_point() -> GeoJsonObjectFeature {
+        GeoJsonObjectFeature {
+            id: "cell".to_string(),
+            polygons_world: vec![vec![
+                egui::pos2(10.0, 20.0),
+                egui::pos2(30.0, 20.0),
+                egui::pos2(30.0, 40.0),
+                egui::pos2(10.0, 40.0),
+                egui::pos2(10.0, 20.0),
+            ]],
+            point_position_world: Some(egui::pos2(1000.0, 1000.0)),
+            bbox_world: egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 40.0)),
+            area_px: 0.0,
+            perimeter_px: 0.0,
+            centroid_world: egui::pos2(25.0, 35.0),
+            inline_properties: serde_json::Map::new(),
+            source_row_index: None,
+        }
+    }
+
+    #[test]
+    fn polygon_proxy_position_uses_rendered_geometry_bounds() {
+        let obj = object_with_geometry_and_bad_point();
+
+        assert_eq!(object_proxy_position_world(&obj), egui::pos2(20.0, 30.0));
+    }
+
+    #[test]
+    fn point_proxy_position_uses_point_position() {
+        let mut obj = object_with_geometry_and_bad_point();
+        obj.polygons_world.clear();
+
+        assert_eq!(
+            object_proxy_position_world(&obj),
+            egui::pos2(1000.0, 1000.0)
+        );
+    }
 }
 
 fn parse_feature_polygons(geom: &serde_json::Value, scale: f32) -> Vec<Vec<egui::Pos2>> {

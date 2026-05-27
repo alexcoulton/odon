@@ -1521,6 +1521,10 @@ impl MosaicViewerApp {
         self.screenshot_settings_open = true;
     }
 
+    pub fn set_fast_object_rendering(&mut self, enabled: bool) {
+        self.seg_geojson.set_fast_object_rendering(enabled);
+    }
+
     pub fn screenshot_output_dir(&self) -> Option<&Path> {
         self.screenshot_output_dir.as_deref()
     }

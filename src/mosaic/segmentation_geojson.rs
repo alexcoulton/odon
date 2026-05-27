@@ -25,6 +25,7 @@ struct SharedStyle {
     fill_cells: bool,
     fill_opacity: f32,
     selected_fill_opacity: f32,
+    fast_rendering: bool,
     downsample_factor: f32,
 }
 
@@ -37,6 +38,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     pub fill_cells: bool,
     pub fill_opacity: f32,
     pub selected_fill_opacity: f32,
+    pub fast_rendering: bool,
     pub downsample_factor: f32,
 
     samplesheet_dir: Option<PathBuf>,
@@ -58,6 +60,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             fill_cells: false,
             fill_opacity: 0.30,
             selected_fill_opacity: 0.70,
+            fast_rendering: true,
             downsample_factor: 1.0,
             samplesheet_dir: None,
             items: HashMap::new(),
@@ -136,6 +139,16 @@ impl MosaicGeoJsonSegmentationOverlay {
                     .as_ref()
                     .is_some_and(|layer| layer.is_loading() || layer.is_busy())
             })
+    }
+
+    pub fn set_fast_object_rendering(&mut self, enabled: bool) {
+        self.fast_rendering = enabled;
+        for st in self.items.values_mut() {
+            if let Some(layer) = st.layer.as_mut() {
+                layer.fast_rendering = enabled;
+            }
+        }
+        self.force_repaint_frames = self.force_repaint_frames.max(2);
     }
 
     pub fn ui_left_panel(&mut self, ui: &mut egui::Ui, have_any: bool) -> bool {
@@ -604,6 +617,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             fill_cells: self.fill_cells,
             fill_opacity: self.fill_opacity,
             selected_fill_opacity: self.selected_fill_opacity,
+            fast_rendering: self.fast_rendering,
             downsample_factor: self.downsample_factor,
         }
     }
@@ -665,6 +679,7 @@ fn apply_style(
     layer.fill_cells = style.fill_cells;
     layer.fill_opacity = style.fill_opacity;
     layer.selected_fill_opacity = style.selected_fill_opacity;
+    layer.fast_rendering = style.fast_rendering;
     layer.downsample_factor = style.downsample_factor;
     layer.set_color_by_property(color_property_key.map(str::to_owned));
     layer.set_color_level_overrides(color_property_key, color_level_overrides);

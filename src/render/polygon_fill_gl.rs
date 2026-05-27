@@ -297,6 +297,7 @@ pub struct ObjectFillGlDrawParams {
 #[derive(Debug, Clone)]
 pub struct ObjectFillGlDrawData {
     pub cache_id: u64,
+    pub state_cache_id: u64,
     pub generation: u64,
     pub vertices_local: Arc<Vec<[f32; 3]>>,
     pub object_count: usize,
@@ -414,7 +415,7 @@ impl ObjectFillGlRenderer {
             let Some((state_texture, state_width, state_height)) = inner
                 .ensure_state_uploaded(
                     gl,
-                    item.data.cache_id,
+                    item.data.state_cache_id,
                     item.data.selection_generation,
                     item.data.object_count,
                     item.data.selection_state.as_slice(),

@@ -132,7 +132,9 @@ impl SpatialDataLayers {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.is_loading_shapes() || self.is_loading_points()
+        self.is_loading_shapes()
+            || self.is_loading_points()
+            || self.shapes.iter().any(SpatialShapesLayer::is_busy)
     }
 
     pub fn select_positive_cells_by_ids(
@@ -366,6 +368,14 @@ impl SpatialShapesLayer {
                 .object_layer
                 .as_ref()
                 .is_some_and(|layer| layer.is_loading())
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.is_loading()
+            || self
+                .object_layer
+                .as_ref()
+                .is_some_and(|layer| layer.is_busy())
     }
 
     pub fn draw(

@@ -73,11 +73,27 @@ impl AutoContrastSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     pub auto_contrast: AutoContrastSettings,
+    #[serde(default = "default_true")]
+    pub fast_object_rendering: bool,
     pub recent_projects: Vec<RecentProject>,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            auto_contrast: AutoContrastSettings::default(),
+            fast_object_rendering: true,
+            recent_projects: Vec::new(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,6 +232,13 @@ fn current_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_object_rendering_defaults_on_for_old_settings() {
+        let settings: AppSettings = serde_json::from_str(r#"{"recent_projects":[]}"#).unwrap();
+        assert!(settings.fast_object_rendering);
+        assert!(AppSettings::default().fast_object_rendering);
+    }
 
     #[test]
     fn recent_projects_are_deduped_and_most_recent_first() {

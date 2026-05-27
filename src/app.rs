@@ -664,6 +664,7 @@ pub struct OmeZarrViewerApp {
     channels: Vec<ChannelInfo>,
     channel_window_overrides: HashMap<String, (f32, f32)>,
     auto_contrast_settings: AutoContrastSettings,
+    fast_object_rendering: bool,
     channel_list_search: String,
 
     active_layer: LayerId,
@@ -1779,6 +1780,7 @@ impl OmeZarrViewerApp {
             } else {
                 self.seg_objects.clear_project_display_state();
             }
+            self.seg_objects.fast_rendering = self.fast_object_rendering;
             if let Some(analysis) = view.analysis.as_ref() {
                 let active_channel_name = self
                     .channels
@@ -2297,6 +2299,7 @@ impl OmeZarrViewerApp {
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             auto_contrast_settings,
+            fast_object_rendering: true,
             channel_list_search: String::new(),
 
             active_layer: if dataset.channels.is_empty() {
@@ -2577,6 +2580,7 @@ impl OmeZarrViewerApp {
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             auto_contrast_settings,
+            fast_object_rendering: true,
             channel_list_search: String::new(),
 
             active_layer: if dataset.channels.is_empty() {
@@ -2929,6 +2933,7 @@ impl OmeZarrViewerApp {
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
             auto_contrast_settings,
+            fast_object_rendering: true,
             channel_list_search: String::new(),
             active_layer: if dataset.channels.is_empty() {
                 LayerId::Points
@@ -3273,8 +3278,10 @@ impl OmeZarrViewerApp {
                 } else {
                     self.seg_objects.clear_project_display_state();
                 }
+                self.seg_objects.fast_rendering = self.fast_object_rendering;
             } else {
                 self.seg_objects.clear_project_display_state();
+                self.seg_objects.fast_rendering = self.fast_object_rendering;
             }
             if !view.overlay_order.is_empty() {
                 self.overlay_layer_order = view
@@ -4376,7 +4383,12 @@ impl OmeZarrViewerApp {
                     );
                 }
             } else {
-                self.spatial_layers.load_shapes(&sh);
+                let id = self.spatial_layers.load_shapes(&sh);
+                if let Some(layer) = self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
+                    && let Some(objects) = layer.object_layer_mut()
+                {
+                    objects.fast_rendering = self.fast_object_rendering;
+                }
             }
         }
         if let Some((pt, max_points)) = points.as_ref() {
@@ -4652,6 +4664,21 @@ impl OmeZarrViewerApp {
 
     pub fn set_auto_contrast_settings(&mut self, settings: AutoContrastSettings) {
         self.auto_contrast_settings = settings.normalized();
+    }
+
+    pub fn set_fast_object_rendering(&mut self, enabled: bool) {
+        self.fast_object_rendering = enabled;
+        let mut changed = self.seg_objects.fast_rendering != enabled;
+        self.seg_objects.fast_rendering = enabled;
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut() {
+                changed |= objects.fast_rendering != enabled;
+                objects.fast_rendering = enabled;
+            }
+        }
+        if changed {
+            self.bump_render_id();
+        }
     }
 
     pub fn apply_auto_contrast_now(&mut self) {
@@ -5668,6 +5695,7 @@ impl eframe::App for OmeZarrViewerApp {
                         }
                     }
                     RightTab::Analysis => {
+                        self.switch_to_pan_if_analysis_interacted(ui);
                         self.ui_help_heading(
                             ui,
                             "Analysis",
@@ -6265,7 +6293,9 @@ impl OmeZarrViewerApp {
         } else if self.spatial_layers.is_loading_points() {
             Some("Loading SpatialData points...")
         } else if self.seg_objects.is_analyzing() {
-            Some("Measuring cell intensities...")
+            Some("Running object analysis...")
+        } else if self.spatial_layers.is_busy() {
+            Some("Running SpatialData layer analysis...")
         } else if self.seg_geojson.is_busy() {
             Some("Loading segmentation...")
         } else if self.pinned_levels.has_loading() {
@@ -7663,6 +7693,15 @@ impl OmeZarrViewerApp {
         self.selection_rect_start_world = None;
         self.selection_rect_current_world = None;
         self.selection_lasso_world.clear();
+    }
+
+    fn switch_to_pan_if_analysis_interacted(&mut self, ui: &egui::Ui) {
+        let interacted = ui.rect_contains_pointer(ui.max_rect())
+            && ui.input(|i| i.pointer.any_pressed() || i.pointer.any_down());
+        if interacted && matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect) {
+            self.tool_mode = ToolMode::Pan;
+            self.clear_spatial_selection_drag();
+        }
     }
 
     fn active_layer_supports_spatial_selection(&self) -> bool {

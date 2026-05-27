@@ -86,6 +86,10 @@ enum Mode {
     Transition,
 }
 
+fn settings_help_button(ui: &mut egui::Ui, text: &'static str) {
+    let _ = ui.small_button("?").on_hover_text(text);
+}
+
 struct ProjectObjectPreloadEvent {
     path: PathBuf,
     settings: ObjectPreloadSettings,
@@ -239,11 +243,23 @@ impl RootApp {
         app.set_show_scale_bar(self.view_show_scale_bar);
         app.set_label_prompt_preference(self.label_prompt_preference);
         app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+        app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
+    }
+
+    fn configure_mosaic_app(&self, mosaic: &mut MosaicViewerApp) {
+        mosaic.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
 
     fn apply_app_settings_to_mode(&mut self) {
-        if let Mode::Single(app) = &mut self.mode {
-            app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+        match &mut self.mode {
+            Mode::Single(app) => {
+                app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+                app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
+            }
+            Mode::Mosaic { mosaic, .. } => {
+                mosaic.set_fast_object_rendering(self.app_settings.fast_object_rendering);
+            }
+            Mode::Project { .. } | Mode::Transition => {}
         }
     }
 
@@ -983,22 +999,35 @@ impl RootApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.heading("Auto Contrast");
-                ui.checkbox(
-                    &mut self.app_settings.auto_contrast.enabled_on_open,
-                    "Apply auto contrast when opening a dataset",
-                );
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.app_settings.auto_contrast.enabled_on_open,
+                        "Apply auto contrast when opening a dataset",
+                    );
+                    settings_help_button(
+                        ui,
+                        "Automatically sets channel contrast limits after opening a dataset so the image is immediately visible.",
+                    );
+                });
 
-                egui::ComboBox::from_label("Method")
-                    .selected_text(self.app_settings.auto_contrast.method.label())
-                    .show_ui(ui, |ui| {
-                        for method in crate::app_support::settings::AutoContrastMethod::ALL {
-                            ui.selectable_value(
-                                &mut self.app_settings.auto_contrast.method,
-                                method,
-                                method.label(),
-                            );
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    ui.label("Method");
+                    settings_help_button(
+                        ui,
+                        "Controls how Odon chooses automatic contrast limits from the image intensity distribution.",
+                    );
+                    egui::ComboBox::from_id_salt("global_auto_contrast_method")
+                        .selected_text(self.app_settings.auto_contrast.method.label())
+                        .show_ui(ui, |ui| {
+                            for method in crate::app_support::settings::AutoContrastMethod::ALL {
+                                ui.selectable_value(
+                                    &mut self.app_settings.auto_contrast.method,
+                                    method,
+                                    method.label(),
+                                );
+                            }
+                        });
+                });
                 ui.label(self.app_settings.auto_contrast.method.description());
 
                 let settings = &mut self.app_settings.auto_contrast;
@@ -1006,6 +1035,10 @@ impl RootApp {
                     crate::app_support::settings::AutoContrastMethod::ZeroToP97 => {
                         ui.horizontal(|ui| {
                             ui.label("Upper percentile");
+                            settings_help_button(
+                                ui,
+                                "Pixels brighter than this percentile are clipped for display contrast.",
+                            );
                             ui.add(
                                 egui::DragValue::new(&mut settings.upper_percentile)
                                     .range(1..=100)
@@ -1017,6 +1050,10 @@ impl RootApp {
                     crate::app_support::settings::AutoContrastMethod::P1ToP99 => {
                         ui.horizontal(|ui| {
                             ui.label("Lower percentile");
+                            settings_help_button(
+                                ui,
+                                "Pixels darker than this percentile are clipped for display contrast.",
+                            );
                             ui.add(
                                 egui::DragValue::new(&mut settings.lower_percentile)
                                     .range(0..=99)
@@ -1026,6 +1063,10 @@ impl RootApp {
                         });
                         ui.horizontal(|ui| {
                             ui.label("Upper percentile");
+                            settings_help_button(
+                                ui,
+                                "Pixels brighter than this percentile are clipped for display contrast.",
+                            );
                             ui.add(
                                 egui::DragValue::new(&mut settings.upper_percentile)
                                     .range(1..=100)
@@ -1038,21 +1079,40 @@ impl RootApp {
                 }
                 self.app_settings.auto_contrast = self.app_settings.auto_contrast.normalized();
 
+                ui.separator();
+                ui.heading("Object Rendering");
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.app_settings.fast_object_rendering,
+                        "Fast object rendering",
+                    );
+                    settings_help_button(
+                        ui,
+                        "When viewing many polygon objects at low zoom, draws lightweight proxy points until zoomed in enough for full polygons.",
+                    );
+                });
+
                 ui.add_space(8.0);
                 let can_apply_now = matches!(self.mode, Mode::Single(_));
-                if ui
-                    .add_enabled(can_apply_now, egui::Button::new("Apply To Current Viewer"))
-                    .clicked()
-                {
-                    if let Mode::Single(app) = &mut self.mode {
-                        app.set_auto_contrast_settings(self.app_settings.auto_contrast);
-                        app.apply_auto_contrast_now();
-                        self.settings_status = format!(
-                            "Applied {} to the current viewer.",
-                            self.app_settings.auto_contrast.method.label()
-                        );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_apply_now, egui::Button::new("Apply To Current Viewer"))
+                        .clicked()
+                    {
+                        if let Mode::Single(app) = &mut self.mode {
+                            app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+                            app.apply_auto_contrast_now();
+                            self.settings_status = format!(
+                                "Applied {} to the current viewer.",
+                                self.app_settings.auto_contrast.method.label()
+                            );
+                        }
                     }
-                }
+                    settings_help_button(
+                        ui,
+                        "Applies the current auto-contrast method immediately to the open single-image viewer.",
+                    );
+                });
                 if !can_apply_now {
                     ui.label("Open a single dataset viewer to apply these settings immediately.");
                 }
@@ -1696,6 +1756,7 @@ impl RootApp {
         let control_bridge = Self::spawn_control_bridge(&cc.egui_ctx, &mut settings_status);
         let mut app = OmeZarrViewerApp::new(cc, dataset, store, app_settings.auto_contrast);
         app.set_show_scale_bar(true);
+        app.set_fast_object_rendering(app_settings.fast_object_rendering);
         if let Some(path) = project_path.as_deref() {
             let mut ps = ProjectSpace::default();
             if let Err(err) = ps.load_from_file(path) {
@@ -1754,6 +1815,7 @@ impl RootApp {
                 ps.set_status(format!("Load project failed: {err}"));
             }
         }
+        mosaic.set_fast_object_rendering(app_settings.fast_object_rendering);
         mosaic.set_layer_groups(ps.layer_groups().clone());
         Ok(Self {
             mode: Mode::Mosaic {
@@ -2282,6 +2344,7 @@ impl RootApp {
             MosaicViewerApp::from_project_rois(ctx, self.gpu_available, rois, project_dir, None);
         match mosaic_result {
             Ok(mut mosaic) => {
+                self.configure_mosaic_app(&mut mosaic);
                 if !cached_objects.is_empty() {
                     let installed = mosaic.install_preloaded_project_segmentations(&cached_objects);
                     log_warn!(
@@ -2328,6 +2391,7 @@ impl RootApp {
 
         match mosaic_result {
             Ok(mut mosaic) => {
+                self.configure_mosaic_app(&mut mosaic);
                 if !cached_objects.is_empty() {
                     let installed = mosaic.install_preloaded_project_segmentations(&cached_objects);
                     log_warn!(
@@ -3404,6 +3468,7 @@ impl eframe::App for RootApp {
             let ret = ReturnToSingleState { dataset_root: None };
             match MosaicViewerApp::from_remote_s3_sources(ctx, self.gpu_available, datasets, None) {
                 Ok(mut mosaic) => {
+                    self.configure_mosaic_app(&mut mosaic);
                     mosaic.set_project_space(project_space);
                     self.mode = Mode::Mosaic { mosaic, ret };
                 }

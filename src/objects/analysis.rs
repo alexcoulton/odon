@@ -1,3 +1,4 @@
+use super::core::object_proxy_position_world;
 use super::*;
 
 // Object-layer analysis UI and helpers.
@@ -7,6 +8,8 @@ use super::*;
 // support interactive brushing/selection. The key theme is that expensive analysis products are
 // lazily derived from the currently visible/filter-selected object set and invalidated whenever
 // that set changes.
+
+const LIVE_ANALYSIS_SELECTION_OBJECT_LIMIT: usize = 200_000;
 
 impl ObjectsLayer {
     pub(crate) fn project_analysis_state(&self) -> ObjectProjectAnalysisState {
@@ -302,6 +305,7 @@ impl ObjectsLayer {
             );
         });
         ui.checkbox(&mut self.show_selection_overlay, "Show selection overlay");
+        self.ui_live_analysis_selection_toggle(ui);
 
         match self.analysis_plot_mode {
             AnalysisPlotMode::Histogram => {
@@ -354,7 +358,7 @@ impl ObjectsLayer {
                     hist.median,
                     self.active_channel_name(channels, selected_channel),
                 );
-                self.ui_object_property_threshold_rules(
+                let threshold_rules_finished = self.ui_object_property_threshold_rules(
                     ui,
                     channels,
                     selected_channel,
@@ -362,12 +366,27 @@ impl ObjectsLayer {
                     column_name,
                 );
                 self.ui_object_property_histogram_levels(ui, column_name);
-                let _drag_finished = self.ui_object_property_histogram(ui, column_name, &hist);
-                let selected_ids = self.object_property_threshold_selected_indices();
-                let has_matches = !selected_ids.is_empty();
+                let histogram_drag_finished =
+                    self.ui_object_property_histogram(ui, column_name, &hist);
+                if !self.analysis_live_selection_enabled
+                    && !suspend_live_selection_sync
+                    && (threshold_rules_finished || histogram_drag_finished)
+                {
+                    self.request_threshold_selection_apply();
+                }
+                let selected_ids = if self.analysis_live_selection_enabled
+                    || self.threshold_selection_cache_is_current()
+                {
+                    Some(self.object_property_threshold_selected_indices())
+                } else {
+                    None
+                };
+                let has_matches = selected_ids.as_ref().is_some_and(|ids| !ids.is_empty());
                 let mut ordered_passing = None;
                 let mut current_focus_pos = None;
-                if let Some(idx) = self.analysis_hist_focus_object_index {
+                if selected_ids.is_some()
+                    && let Some(idx) = self.analysis_hist_focus_object_index
+                {
                     let ordered = self.object_property_threshold_ordered_indices(column_name);
                     current_focus_pos = ordered.iter().position(|candidate| *candidate == idx);
                     if current_focus_pos.is_some() {
@@ -377,7 +396,11 @@ impl ObjectsLayer {
                     }
                 }
                 ui.horizontal(|ui| {
-                    ui.label(format!("Matching cells: {}", selected_ids.len()));
+                    let matching_label = selected_ids
+                        .as_ref()
+                        .map(|ids| ids.len().to_string())
+                        .unwrap_or_else(|| "not calculated".to_string());
+                    ui.label(format!("Matching cells: {matching_label}"));
                     if ui.button("Clear thresholds").clicked() {
                         self.analysis_property_thresholds.clear();
                         self.sync_active_threshold_element_from_live_rules();
@@ -439,10 +462,14 @@ impl ObjectsLayer {
                         self.sync_live_analysis_selection(&[]);
                     }
                     ui.label("Add one or more thresholds to drive live selection.");
+                } else if !self.analysis_live_selection_enabled {
+                    ui.label("Live threshold selection is off.");
                 } else if suspend_live_selection_sync {
                     ui.label("Switch back to Pan to resume live threshold selection.");
                 } else if self.consume_live_analysis_selection_dirty() {
-                    self.sync_live_analysis_selection(&selected_ids);
+                    if let Some(selected_ids) = selected_ids.as_ref() {
+                        self.sync_live_analysis_selection(selected_ids);
+                    }
                 }
             }
             AnalysisPlotMode::Scatter => {
@@ -509,7 +536,15 @@ impl ObjectsLayer {
                     }
                 });
                 if self.analysis_scatter_brush.is_some() {
-                    if suspend_live_selection_sync {
+                    if !self.analysis_live_selection_enabled {
+                        if (drag_finished || self.analysis_scatter_drag_anchor.is_none())
+                            && self.consume_live_analysis_selection_dirty()
+                        {
+                            self.sync_live_analysis_selection(&selected_ids);
+                        } else {
+                            ui.label("Release to update selection.");
+                        }
+                    } else if suspend_live_selection_sync {
                         ui.label("Live analysis selection is paused while Rect/Lasso is active.");
                     } else if (drag_finished || self.analysis_scatter_drag_anchor.is_none())
                         && self.consume_live_analysis_selection_dirty()
@@ -519,7 +554,9 @@ impl ObjectsLayer {
                         ui.label("Release to update selection.");
                     }
                 } else {
-                    if !suspend_live_selection_sync && self.consume_live_analysis_selection_dirty()
+                    if self.analysis_live_selection_enabled
+                        && !suspend_live_selection_sync
+                        && self.consume_live_analysis_selection_dirty()
                     {
                         self.sync_live_analysis_selection(&[]);
                     }
@@ -2320,6 +2357,7 @@ impl ObjectsLayer {
         self.object_property_base_hist_levels_cache.clear();
         self.analysis_warm_started = false;
         self.analysis_warm_rx = None;
+        self.analysis_selection_rx = None;
         self.analysis_warm_total_columns = 0;
         self.analysis_warm_completed_columns = 0;
         self.invalidate_object_property_analysis_cache();
@@ -2329,12 +2367,92 @@ impl ObjectsLayer {
         self.apply_selection_indices(indices, false);
     }
 
+    fn request_threshold_selection_apply(&mut self) {
+        if self.analysis_property_thresholds.is_empty() {
+            self.sync_live_analysis_selection(&[]);
+            self.mark_live_analysis_selection_applied();
+            self.analysis_selection_rx = None;
+            return;
+        }
+
+        let cache_key = self.threshold_selection_cache_key();
+        if self.threshold_selection_cache_is_current() {
+            let selected_ids = Arc::clone(&self.object_property_threshold_selection_cache);
+            self.sync_live_analysis_selection(&selected_ids);
+            self.mark_live_analysis_selection_applied();
+            self.analysis_selection_rx = None;
+            return;
+        }
+
+        let Some(objects) = self.objects.as_ref().cloned() else {
+            self.analysis_selection_rx = None;
+            return;
+        };
+        let job_rules = self
+            .analysis_property_thresholds
+            .iter()
+            .cloned()
+            .map(|rule| AnalysisSelectionJobRule { rule })
+            .collect::<Vec<_>>();
+        let property_store = self.property_store.clone();
+        let filtered_mask = self.filtered_mask.clone();
+
+        self.analysis_selection_request_id =
+            self.analysis_selection_request_id.wrapping_add(1).max(1);
+        let request_id = self.analysis_selection_request_id;
+        let (tx, rx) = crossbeam_channel::bounded::<AnalysisSelectionResult>(1);
+        self.analysis_selection_rx = Some(rx);
+        self.mark_live_analysis_selection_applied();
+
+        std::thread::Builder::new()
+            .name("seg-objects-analysis-selection".to_string())
+            .spawn(move || {
+                let (indices, proxy_positions_world, proxy_values) =
+                    compute_threshold_selection_indices(
+                        &job_rules,
+                        objects.as_slice(),
+                        &property_store,
+                        filtered_mask.as_ref().map(|mask| mask.as_slice()),
+                    );
+                let _ = tx.send(AnalysisSelectionResult {
+                    request_id,
+                    cache_key,
+                    indices,
+                    proxy_positions_world,
+                    proxy_values,
+                });
+            })
+            .ok();
+    }
+
+    pub(super) fn reset_live_analysis_selection_default(&mut self) {
+        self.analysis_live_selection_enabled =
+            self.object_count() <= LIVE_ANALYSIS_SELECTION_OBJECT_LIMIT;
+        self.mark_live_analysis_selection_applied();
+    }
+
+    fn ui_live_analysis_selection_toggle(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(&mut self.analysis_live_selection_enabled, "Live")
+                .changed()
+                && self.analysis_live_selection_enabled
+            {
+                self.mark_live_analysis_selection_dirty();
+            }
+            let _ = ui.small_button("?").on_hover_text(format!(
+                "Updates the object selection automatically as analysis thresholds or brushes change. Disabled by default above {LIVE_ANALYSIS_SELECTION_OBJECT_LIMIT} cells."
+            ));
+        });
+    }
+
     pub(super) fn apply_selection_indices(&mut self, indices: &[usize], additive: bool) {
         if !additive {
-            self.selected_object_indices.clear();
-        }
-        for idx in indices {
-            self.selected_object_indices.insert(*idx);
+            self.selected_object_indices = indices.iter().copied().collect();
+        } else {
+            for idx in indices {
+                self.selected_object_indices.insert(*idx);
+            }
         }
         self.selected_object_index = self.selected_object_indices.iter().next().copied();
         self.rebuild_selection_render_lods();
@@ -2347,6 +2465,10 @@ impl ObjectsLayer {
             .analysis_live_selection_generation
             .wrapping_add(1)
             .max(1);
+    }
+
+    fn mark_live_analysis_selection_applied(&mut self) {
+        self.analysis_live_selection_applied_generation = self.analysis_live_selection_generation;
     }
 
     fn consume_live_analysis_selection_dirty(&mut self) -> bool {
@@ -2459,7 +2581,7 @@ impl ObjectsLayer {
         selected_channel: usize,
         numeric_columns: &[String],
         default_column: &str,
-    ) {
+    ) -> bool {
         ui.separator();
         ui.label("Thresholds");
         self.ensure_channel_mapping_suggestions_cache(channels, numeric_columns);
@@ -2480,6 +2602,7 @@ impl ObjectsLayer {
             .collect::<Vec<_>>();
         let mut remove_idx = None;
         let mut changed = false;
+        let mut finished = false;
         for (idx, rule) in self.analysis_property_thresholds.iter_mut().enumerate() {
             ui.horizontal(|ui| {
                 let prev_column = rule.column_key.clone();
@@ -2495,6 +2618,7 @@ impl ObjectsLayer {
                 );
                 if rule.column_key != prev_column {
                     changed = true;
+                    finished = true;
                 }
                 let prev_op = rule.op;
                 egui::ComboBox::from_id_salt(("seg_objects_threshold_op", idx))
@@ -2508,13 +2632,18 @@ impl ObjectsLayer {
                     });
                 if rule.op != prev_op {
                     changed = true;
+                    finished = true;
                 }
                 let response = ui.add(egui::DragValue::new(&mut rule.value).speed(0.1));
                 if response.changed() {
                     changed = true;
                 }
+                if response.drag_stopped() {
+                    finished = true;
+                }
                 if ui.button("Remove").clicked() {
                     remove_idx = Some(idx);
+                    finished = true;
                 }
             });
         }
@@ -2532,10 +2661,12 @@ impl ObjectsLayer {
                     value_transform: self.analysis_hist_value_transform,
                 });
             changed = true;
+            finished = true;
         }
         if changed {
             self.sync_active_threshold_element_from_live_rules();
         }
+        finished
     }
 
     fn ui_object_property_histogram_levels(&mut self, ui: &mut egui::Ui, column_name: &str) {
@@ -2713,12 +2844,8 @@ impl ObjectsLayer {
         }
     }
 
-    fn object_property_threshold_selected_indices(&mut self) -> Arc<Vec<usize>> {
-        if self.analysis_property_thresholds.is_empty() {
-            return Arc::new(Vec::new());
-        }
-        let cache_key = self
-            .analysis_property_thresholds
+    pub(super) fn threshold_selection_cache_key(&self) -> String {
+        self.analysis_property_thresholds
             .iter()
             .map(|rule| {
                 format!(
@@ -2732,7 +2859,24 @@ impl ObjectsLayer {
                 )
             })
             .collect::<Vec<_>>()
-            .join("||");
+            .join("||")
+    }
+
+    fn threshold_selection_cache_is_current(&self) -> bool {
+        if self.analysis_property_thresholds.is_empty() {
+            return false;
+        }
+        let cache_key = self.threshold_selection_cache_key();
+        self.object_property_threshold_selection_cache_key
+            .as_deref()
+            == Some(cache_key.as_str())
+    }
+
+    fn object_property_threshold_selected_indices(&mut self) -> Arc<Vec<usize>> {
+        if self.analysis_property_thresholds.is_empty() {
+            return Arc::new(Vec::new());
+        }
+        let cache_key = self.threshold_selection_cache_key();
         if self
             .object_property_threshold_selection_cache_key
             .as_deref()
@@ -2931,6 +3075,7 @@ impl ObjectsLayer {
     pub(super) fn clear_analysis(&mut self) {
         self.analysis_property_thresholds.clear();
         self.sync_active_threshold_element_from_live_rules();
+        self.analysis_selection_rx = None;
         self.analysis_hist_drag_rule = None;
         self.analysis_hist_brush = None;
         self.analysis_scatter_brush = None;
@@ -2948,6 +3093,108 @@ pub(super) struct SimpleHistogram {
     median: f32,
     bins: Vec<u32>,
     max_count: u32,
+}
+
+fn compute_threshold_selection_indices(
+    rules: &[AnalysisSelectionJobRule],
+    objects: &[GeoJsonObjectFeature],
+    property_store: &ObjectPropertyStore,
+    filtered_mask: Option<&[bool]>,
+) -> (Arc<Vec<usize>>, Arc<Vec<egui::Pos2>>, Arc<Vec<f32>>) {
+    if rules.is_empty() {
+        return (
+            Arc::new(Vec::new()),
+            Arc::new(Vec::new()),
+            Arc::new(Vec::new()),
+        );
+    }
+
+    let indices = if rules.len() == 1 {
+        let job = &rules[0];
+        let pairs = analysis_selection_column_pairs(
+            objects,
+            property_store,
+            filtered_mask,
+            &job.rule.column_key,
+        );
+        let out = pairs
+            .iter()
+            .filter_map(|(object_index, value)| {
+                threshold_rule_matches(&job.rule, *value).then_some(*object_index)
+            })
+            .collect::<Vec<_>>();
+        out
+    } else {
+        let mut selected: Option<HashSet<usize>> = None;
+        for job in rules {
+            let pairs = analysis_selection_column_pairs(
+                objects,
+                property_store,
+                filtered_mask,
+                &job.rule.column_key,
+            );
+            let rule_matches = pairs
+                .iter()
+                .filter_map(|(object_index, value)| {
+                    threshold_rule_matches(&job.rule, *value).then_some(*object_index)
+                })
+                .collect::<HashSet<_>>();
+            selected = Some(match selected {
+                Some(mut current) => {
+                    current.retain(|idx| rule_matches.contains(idx));
+                    current
+                }
+                None => rule_matches,
+            });
+        }
+        selected.unwrap_or_default().into_iter().collect()
+    };
+
+    let proxy_positions = indices
+        .iter()
+        .filter_map(|idx| objects.get(*idx).map(object_proxy_position_world))
+        .collect::<Vec<_>>();
+    let proxy_values = vec![1.0f32; proxy_positions.len()];
+    (
+        Arc::new(indices),
+        Arc::new(proxy_positions),
+        Arc::new(proxy_values),
+    )
+}
+
+fn analysis_selection_column_pairs(
+    objects: &[GeoJsonObjectFeature],
+    property_store: &ObjectPropertyStore,
+    filtered_mask: Option<&[bool]>,
+    key: &str,
+) -> Vec<(usize, f32)> {
+    if let Some(mut pairs) = property_store.numeric_pairs(key) {
+        if let Some(mask) = filtered_mask {
+            pairs.retain(|(idx, _)| mask.get(*idx).copied().unwrap_or(false));
+        }
+        return pairs;
+    }
+
+    let mut out = Vec::new();
+    for (idx, obj) in objects.iter().enumerate() {
+        if filtered_mask.is_some_and(|mask| !mask.get(idx).copied().unwrap_or(false)) {
+            continue;
+        }
+        let Some(value) = obj.inline_properties.get(key).and_then(numeric_json_value) else {
+            continue;
+        };
+        if value.is_finite() {
+            out.push((idx, value));
+        }
+    }
+    out
+}
+
+fn threshold_rule_matches(rule: &ObjectPropertyThresholdRule, value: f32) -> bool {
+    match rule.op {
+        AnalysisThresholdOp::GreaterEqual => value >= rule.value,
+        AnalysisThresholdOp::LessEqual => value <= rule.value,
+    }
 }
 
 pub(super) fn build_polygon_mask(

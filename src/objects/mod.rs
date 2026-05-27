@@ -165,6 +165,7 @@ pub struct ObjectsLayer {
     pub fill_opacity: f32,
     pub selected_fill_opacity: f32,
     pub show_selection_overlay: bool,
+    pub fast_rendering: bool,
 
     pub loaded_geojson: Option<PathBuf>,
     pub downsample_factor: f32,
@@ -215,6 +216,7 @@ pub struct ObjectsLayer {
     selected_point_lods: Option<Arc<Vec<FeaturePointLod>>>,
     primary_selected_point_positions_world: Option<Arc<Vec<egui::Pos2>>>,
     primary_selected_point_values: Option<Arc<Vec<f32>>>,
+    visible_selected_render_cache: Option<VisibleSelectedRenderCache>,
     selection_generation: u64,
     bulk_measurement_request_id: u64,
     bulk_measurement_rx: Option<Receiver<BulkMeasurementEvent>>,
@@ -232,6 +234,9 @@ pub struct ObjectsLayer {
     analysis_scatter_x_channel: usize,
     analysis_scatter_y_channel: usize,
     analysis_property_thresholds: Vec<ObjectPropertyThresholdRule>,
+    analysis_live_selection_enabled: bool,
+    analysis_selection_request_id: u64,
+    analysis_selection_rx: Option<Receiver<AnalysisSelectionResult>>,
     analysis_threshold_set_name: String,
     analysis_threshold_elements: Vec<ThresholdSetElement>,
     analysis_threshold_selected_element: Option<usize>,
@@ -820,6 +825,20 @@ struct ObjectExportDialog {
 }
 
 #[derive(Debug, Clone)]
+struct AnalysisSelectionJobRule {
+    rule: ObjectPropertyThresholdRule,
+}
+
+#[derive(Debug)]
+struct AnalysisSelectionResult {
+    request_id: u64,
+    cache_key: String,
+    indices: Arc<Vec<usize>>,
+    proxy_positions_world: Arc<Vec<egui::Pos2>>,
+    proxy_values: Arc<Vec<f32>>,
+}
+
+#[derive(Debug, Clone)]
 struct ObjectExportSnapshot {
     objects: Arc<Vec<ObjectFeature>>,
     property_keys: Vec<String>,
@@ -917,12 +936,25 @@ struct ObjectFillMesh {
     vertices_local: Arc<Vec<[f32; 3]>>,
     bounds_local: egui::Rect,
     object_count: usize,
+    origin: egui::Pos2,
+    bin_size: f32,
+    bins_w: usize,
+    bins_h: usize,
+    bin_vertices: Vec<Arc<Vec<[f32; 3]>>>,
 }
 
 #[derive(Debug, Clone)]
 struct ObjectSelectionRenderLod {
     lod: u8,
     bins: Arc<ObjectLineSegmentsBins>,
+}
+
+#[derive(Debug, Clone)]
+struct VisibleSelectedRenderCache {
+    selection_generation: u64,
+    visible_indices: Vec<usize>,
+    lods: Vec<ObjectRenderLod>,
+    generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1056,6 +1088,8 @@ pub(crate) struct ObjectProjectDisplayState {
     pub fill_opacity: f32,
     #[serde(default = "default_selected_fill_opacity")]
     pub selected_fill_opacity: f32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub fast_rendering: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1066,6 +1100,10 @@ struct ThresholdSetFile {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 fn default_fill_opacity() -> f32 {
@@ -1257,6 +1295,7 @@ impl Default for ObjectsLayer {
             fill_opacity: 0.30,
             selected_fill_opacity: 0.70,
             show_selection_overlay: true,
+            fast_rendering: true,
             loaded_geojson: None,
             downsample_factor: 1.0,
             display_transform: SpatialDataTransform2::default(),
@@ -1305,6 +1344,7 @@ impl Default for ObjectsLayer {
             selected_point_lods: None,
             primary_selected_point_positions_world: None,
             primary_selected_point_values: None,
+            visible_selected_render_cache: None,
             selection_generation: 1,
             bulk_measurement_request_id: 0,
             bulk_measurement_rx: None,
@@ -1324,6 +1364,9 @@ impl Default for ObjectsLayer {
             analysis_scatter_x_channel: 0,
             analysis_scatter_y_channel: 0,
             analysis_property_thresholds: Vec::new(),
+            analysis_live_selection_enabled: true,
+            analysis_selection_request_id: 0,
+            analysis_selection_rx: None,
             analysis_threshold_set_name: "Threshold Set".to_string(),
             analysis_threshold_elements: Vec::new(),
             analysis_threshold_selected_element: None,
@@ -1373,9 +1416,9 @@ impl Default for ObjectsLayer {
             bounds_local: None,
             generation: 1,
             gl: LineBinsGlRenderer::new(2048),
-            gl_object_selection: ObjectLineBinsGlRenderer::new(256, 4),
+            gl_object_selection: ObjectLineBinsGlRenderer::new(2048, 4),
             gl_fill: PolygonFillGlRenderer::new(8),
-            gl_object_fill: ObjectFillGlRenderer::new(4, 4),
+            gl_object_fill: ObjectFillGlRenderer::new(1024, 4),
             gl_points: PointsGlRenderer::default(),
             gl_proxy_group_points: Vec::new(),
             object_load_dialog: None,

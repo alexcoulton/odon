@@ -462,10 +462,13 @@ fn compile_program_with_attributes(
 pub struct ObjectLineBinsGlDrawParams {
     pub center_world: egui::Pos2,
     pub zoom_screen_per_world: f32,
+    pub base_width_points: f32,
     pub selected_width_points: f32,
     pub primary_width_points: f32,
+    pub base_color: egui::Color32,
     pub selected_color: egui::Color32,
     pub primary_color: egui::Color32,
+    pub draw_unselected: bool,
     pub visible: bool,
     pub local_to_world_offset: egui::Vec2,
     pub local_to_world_scale: egui::Vec2,
@@ -474,6 +477,7 @@ pub struct ObjectLineBinsGlDrawParams {
 #[derive(Debug, Clone)]
 pub struct ObjectLineBinsGlDrawData {
     pub cache_id: u64,
+    pub state_cache_id: u64,
     pub generation: u64,
     pub bins: Arc<ObjectLineSegmentsBins>,
     pub selection_generation: u64,
@@ -539,10 +543,13 @@ impl ObjectLineBinsGlRenderer {
         let u_zoom_px = objects.u_zoom_px.clone();
         let u_viewport_min_px = objects.u_viewport_min_px.clone();
         let u_viewport_size_px = objects.u_viewport_size_px.clone();
+        let u_base_width_px = objects.u_base_width_px.clone();
         let u_selected_width_px = objects.u_selected_width_px.clone();
         let u_primary_width_px = objects.u_primary_width_px.clone();
+        let u_base_color = objects.u_base_color.clone();
         let u_selected_color = objects.u_selected_color.clone();
         let u_primary_color = objects.u_primary_color.clone();
+        let u_draw_unselected = objects.u_draw_unselected.clone();
         let u_local_to_world_offset = objects.u_local_to_world_offset.clone();
         let u_local_to_world_scale = objects.u_local_to_world_scale.clone();
         let u_state_tex = objects.u_state_tex.clone();
@@ -584,8 +591,15 @@ impl ObjectLineBinsGlRenderer {
                 continue;
             }
 
+            let base = it.params.base_color;
             let selected = it.params.selected_color;
             let primary = it.params.primary_color;
+            let base_color = [
+                base.r() as f32 / 255.0,
+                base.g() as f32 / 255.0,
+                base.b() as f32 / 255.0,
+                base.a() as f32 / 255.0,
+            ];
             let selected_color = [
                 selected.r() as f32 / 255.0,
                 selected.g() as f32 / 255.0,
@@ -598,13 +612,14 @@ impl ObjectLineBinsGlRenderer {
                 primary.b() as f32 / 255.0,
                 primary.a() as f32 / 255.0,
             ];
+            let base_width_px = (it.params.base_width_points.max(0.0) * ppp).max(0.5);
             let selected_width_px = (it.params.selected_width_points.max(0.0) * ppp).max(0.5);
             let primary_width_px = (it.params.primary_width_points.max(0.0) * ppp).max(0.5);
 
             let Some((state_texture, state_width, state_height)) = inner
                 .ensure_state_uploaded(
                     gl,
-                    it.data.cache_id,
+                    it.data.state_cache_id,
                     it.data.selection_generation,
                     it.data.object_count,
                     it.data.selection_state.as_slice(),
@@ -625,10 +640,16 @@ impl ObjectLineBinsGlRenderer {
                     u_zoom_px.as_ref(),
                     (it.params.zoom_screen_per_world.max(1e-6) * ppp).max(1e-6),
                 );
+                gl.uniform_1_f32(u_base_width_px.as_ref(), base_width_px);
                 gl.uniform_1_f32(u_selected_width_px.as_ref(), selected_width_px);
                 gl.uniform_1_f32(u_primary_width_px.as_ref(), primary_width_px);
+                gl.uniform_4_f32_slice(u_base_color.as_ref(), &base_color);
                 gl.uniform_4_f32_slice(u_selected_color.as_ref(), &selected_color);
                 gl.uniform_4_f32_slice(u_primary_color.as_ref(), &primary_color);
+                gl.uniform_1_i32(
+                    u_draw_unselected.as_ref(),
+                    if it.params.draw_unselected { 1 } else { 0 },
+                );
                 gl.uniform_2_f32(
                     u_local_to_world_offset.as_ref(),
                     it.params.local_to_world_offset.x,
@@ -901,10 +922,13 @@ struct ObjectLineGlObjects {
     u_zoom_px: Option<glow::UniformLocation>,
     u_viewport_min_px: Option<glow::UniformLocation>,
     u_viewport_size_px: Option<glow::UniformLocation>,
+    u_base_width_px: Option<glow::UniformLocation>,
     u_selected_width_px: Option<glow::UniformLocation>,
     u_primary_width_px: Option<glow::UniformLocation>,
+    u_base_color: Option<glow::UniformLocation>,
     u_selected_color: Option<glow::UniformLocation>,
     u_primary_color: Option<glow::UniformLocation>,
+    u_draw_unselected: Option<glow::UniformLocation>,
     u_local_to_world_offset: Option<glow::UniformLocation>,
     u_local_to_world_scale: Option<glow::UniformLocation>,
     u_state_tex: Option<glow::UniformLocation>,
@@ -937,10 +961,13 @@ impl ObjectLineGlObjects {
             u_zoom_px: unsafe { gl.get_uniform_location(program, "u_zoom_px") },
             u_viewport_min_px: unsafe { gl.get_uniform_location(program, "u_viewport_min_px") },
             u_viewport_size_px: unsafe { gl.get_uniform_location(program, "u_viewport_size_px") },
+            u_base_width_px: unsafe { gl.get_uniform_location(program, "u_base_width_px") },
             u_selected_width_px: unsafe { gl.get_uniform_location(program, "u_selected_width_px") },
             u_primary_width_px: unsafe { gl.get_uniform_location(program, "u_primary_width_px") },
+            u_base_color: unsafe { gl.get_uniform_location(program, "u_base_color") },
             u_selected_color: unsafe { gl.get_uniform_location(program, "u_selected_color") },
             u_primary_color: unsafe { gl.get_uniform_location(program, "u_primary_color") },
+            u_draw_unselected: unsafe { gl.get_uniform_location(program, "u_draw_unselected") },
             u_local_to_world_offset: unsafe {
                 gl.get_uniform_location(program, "u_local_to_world_offset")
             },
@@ -1051,6 +1078,7 @@ uniform vec2 u_center_world;
 uniform float u_zoom_px;
 uniform vec2 u_viewport_min_px;
 uniform vec2 u_viewport_size_px;
+uniform float u_base_width_px;
 uniform float u_selected_width_px;
 uniform float u_primary_width_px;
 uniform vec2 u_local_to_world_offset;
@@ -1093,7 +1121,8 @@ void main() {
     vec2 dir = d * inversesqrt(len2);
     vec2 n = vec2(-dir.y, dir.x);
 
-    float width_px = state > 0.75 ? max(u_primary_width_px, 0.5) : max(u_selected_width_px, 0.5);
+    float width_px = state > 0.75 ? max(u_primary_width_px, 0.5) :
+        (state > 0.001 ? max(u_selected_width_px, 0.5) : max(u_base_width_px, 0.5));
     float half_w = 0.5 * width_px;
     vec2 a2 = a_px - dir * half_w;
     vec2 b2 = b_px + dir * half_w;
@@ -1130,8 +1159,10 @@ in vec2 v_b_px;
 in float v_half_w;
 flat in float v_state;
 
+uniform vec4 u_base_color;
 uniform vec4 u_selected_color;
 uniform vec4 u_primary_color;
+uniform bool u_draw_unselected;
 
 out vec4 out_color;
 
@@ -1143,13 +1174,14 @@ float segment_distance(vec2 p, vec2 a, vec2 b) {
 }
 
 void main() {
-    if (v_state < 0.001) {
+    if (v_state < 0.001 && !u_draw_unselected) {
         discard;
     }
     float dist = segment_distance(v_screen_px, v_a_px, v_b_px);
     float aa = 1.0;
     float alpha = 1.0 - smoothstep(v_half_w - aa, v_half_w + aa, dist);
-    vec4 color = v_state > 0.75 ? u_primary_color : u_selected_color;
+    vec4 color = v_state > 0.75 ? u_primary_color :
+        (v_state > 0.001 ? u_selected_color : u_base_color);
     out_color = vec4(color.rgb, color.a * alpha);
     if (out_color.a <= 0.0) {
         discard;
