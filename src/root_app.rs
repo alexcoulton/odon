@@ -157,12 +157,22 @@ fn project_object_cache_ui_state(
     }
 }
 
+fn expand_control_path(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    PathBuf::from(path)
+}
+
 pub struct RootApp {
     mode: Mode,
     gpu_available: bool,
     close_dialog_open: bool,
     spatial_open: Option<SpatialOpenDialog>,
     pending_open_root: Option<PathBuf>,
+    pending_control_open_root: Option<PathBuf>,
     pending_deep_link: Option<DeepLinkRequest>,
     deep_link_rx: Option<Receiver<DeepLinkRequest>>,
     object_preload_project: Option<PathBuf>,
@@ -310,9 +320,15 @@ impl RootApp {
             "list_project_rois" => self.control_project_rois(),
             "list_channels" => self.control_channels(),
             "list_visible_channels" => self.control_visible_channels(),
+            "get_side_panels" => self.control_get_side_panels(),
+            "set_side_panels" => self.control_set_side_panels(&request.params),
+            "get_smooth_pixels" => self.control_get_smooth_pixels(),
+            "set_smooth_pixels" => self.control_set_smooth_pixels(&request.params),
+            "get_loading_state" => self.control_get_loading_state(),
             "get_active_channel" => self.control_active_channel(),
             "set_active_channel" => self.control_set_active_channel(&request.params),
             "set_visible_channels" => self.control_set_visible_channels(&request.params),
+            "open_ome_zarr" => self.control_open_ome_zarr(&request.params),
             "open_roi" => self.control_open_roi(&request.params),
             "save_project" => self.control_save_project(),
             "get_channel_contrast" => self.control_get_channel_contrast(&request.params),
@@ -410,6 +426,105 @@ impl RootApp {
             Mode::Transition => serde_json::json!({
                 "mode": "transition",
                 "channels": [],
+            }),
+        }
+    }
+
+    fn control_get_side_panels(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "panels": app.control_side_panels_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "panels": mosaic.control_side_panels_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_side_panels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_side_panels(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_side_panels(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_smooth_pixels(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "smooth_pixels": app.control_smooth_pixels_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "smooth_pixels": mosaic.control_smooth_pixels_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_smooth_pixels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "result": app.control_set_smooth_pixels(params),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "result": mosaic.control_set_smooth_pixels(params),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_loading_state(&self) -> serde_json::Value {
+        match &self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "loading": app.control_loading_state_snapshot(),
+            }),
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "loading": mosaic.control_loading_state_snapshot(),
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "mode": "project",
+                "busy": false,
+                "note": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "mode": "transition",
+                "busy": true,
+                "reasons": ["transition"],
             }),
         }
     }
@@ -855,6 +970,39 @@ impl RootApp {
                 "error": "Odon is currently transitioning between views.",
             }),
         }
+    }
+
+    fn control_open_ome_zarr(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({"error": "open_ome_zarr requires path"});
+        };
+        let path = expand_control_path(path);
+        let Some(root) = normalize_local_dataset_path(&path) else {
+            return serde_json::json!({
+                "error": "path is not a local OME-Zarr dataset root or metadata file",
+                "path": path.to_string_lossy(),
+            });
+        };
+        if !matches!(
+            classify_local_dataset_path(&root),
+            Some(LocalDatasetKind::OmeZarr)
+        ) {
+            return serde_json::json!({
+                "error": "path is not an OME-Zarr dataset",
+                "path": root.to_string_lossy(),
+            });
+        }
+        self.pending_control_open_root = Some(root.clone());
+        serde_json::json!({
+            "queued": true,
+            "path": root.to_string_lossy(),
+            "note": "The OME-Zarr open request was queued and will replace the active viewer on the next UI update.",
+        })
     }
 
     fn control_open_roi(&mut self, params: &serde_json::Value) -> serde_json::Value {
@@ -1714,6 +1862,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
             object_preload_project: None,
@@ -1770,6 +1919,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
             object_preload_project: None,
@@ -1826,6 +1976,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             pending_open_root: None,
+            pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
             object_preload_project: None,
@@ -3418,6 +3569,27 @@ impl eframe::App for RootApp {
         }
         if clear_recent_projects {
             self.clear_recent_projects();
+        }
+        if let Some(root) = self.pending_control_open_root.take() {
+            let project_space = match &mut self.mode {
+                Mode::Project { project_space } => {
+                    let mut ps = std::mem::take(project_space);
+                    ps.handle_dropped_paths([root.clone()]);
+                    ps
+                }
+                Mode::Single(app) => {
+                    let mut ps = app.take_project_space();
+                    ps.handle_dropped_paths([root.clone()]);
+                    ps
+                }
+                Mode::Mosaic { mosaic, .. } => {
+                    let mut ps = mosaic.take_project_space();
+                    ps.handle_dropped_paths([root.clone()]);
+                    ps
+                }
+                Mode::Transition => ProjectSpace::default(),
+            };
+            open_single = Some((root, project_space));
         }
         if let Some(path) = open_project_path {
             self.load_project_into_current_mode(&path);

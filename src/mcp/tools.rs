@@ -71,6 +71,20 @@ fn tools_list() -> Value {
                 "list_visible_channels",
                 "List visible channels from the active single-image or mosaic viewer."
             ),
+            tool_schema(
+                "get_side_panels",
+                "Return whether the left and right side panels are visible."
+            ),
+            set_side_panels_tool_schema(),
+            tool_schema(
+                "get_smooth_pixels",
+                "Return whether smooth pixel interpolation is enabled."
+            ),
+            set_smooth_pixels_tool_schema(),
+            tool_schema(
+                "get_loading_state",
+                "Return diagnostic state explaining why the active viewer is showing loading or busy indicators."
+            ),
             channel_selector_tool_schema(
                 "get_active_channel",
                 "Return the active channel from the active single-image or mosaic viewer."
@@ -80,6 +94,7 @@ fn tools_list() -> Value {
                 "Set the active channel by index, exact channel name, or marker-like channel selector."
             ),
             set_visible_channels_tool_schema(),
+            open_ome_zarr_tool_schema(),
             open_roi_tool_schema(),
             tool_schema(
                 "save_project",
@@ -193,6 +208,54 @@ fn set_visible_channels_tool_schema() -> Value {
                 }
             },
             "required": ["channels"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_side_panels_tool_schema() -> Value {
+    json!({
+        "name": "set_side_panels",
+        "description": "Show or hide the left and/or right side panels in the active single-image or mosaic viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "left": {"type": "boolean"},
+                "right": {"type": "boolean"}
+            },
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_smooth_pixels_tool_schema() -> Value {
+    json!({
+        "name": "set_smooth_pixels",
+        "description": "Enable or disable smooth pixel interpolation in the active single-image or mosaic viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "smooth": {"type": "boolean"}
+            },
+            "required": ["smooth"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn open_ome_zarr_tool_schema() -> Value {
+    json!({
+        "name": "open_ome_zarr",
+        "description": "Open a local OME-Zarr dataset in the active Odon window, replacing the current viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to a local OME-Zarr directory, or to its .zattrs/zarr.json metadata file."
+                }
+            },
+            "required": ["path"],
             "additionalProperties": false
         }
     })
@@ -533,9 +596,15 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "list_project_rois"
         | "list_channels"
         | "list_visible_channels"
+        | "get_side_panels"
+        | "set_side_panels"
+        | "get_smooth_pixels"
+        | "set_smooth_pixels"
+        | "get_loading_state"
         | "get_active_channel"
         | "set_active_channel"
         | "set_visible_channels"
+        | "open_ome_zarr"
         | "open_roi"
         | "save_project"
         | "get_channel_contrast"

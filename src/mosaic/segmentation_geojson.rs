@@ -133,12 +133,13 @@ impl MosaicGeoJsonSegmentationOverlay {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.force_repaint_frames > 0
-            || self.items.values().any(|s| {
-                s.layer
-                    .as_ref()
-                    .is_some_and(|layer| layer.is_loading() || layer.is_busy())
-            })
+        self.visible
+            && (self.force_repaint_frames > 0
+                || self.items.values().any(|s| {
+                    s.layer
+                        .as_ref()
+                        .is_some_and(|layer| layer.is_loading() || layer.is_busy())
+                }))
     }
 
     pub fn set_fast_object_rendering(&mut self, enabled: bool) {
@@ -556,6 +557,58 @@ impl MosaicGeoJsonSegmentationOverlay {
             }
         }
         (loaded, loading, total)
+    }
+
+    pub fn control_loading_snapshot(&self) -> serde_json::Value {
+        let mut total = 0usize;
+        let mut loaded = 0usize;
+        let mut layer_allocated = 0usize;
+        let mut missing_layer = 0usize;
+        let mut loading_data = 0usize;
+        let mut loading_properties = 0usize;
+        let mut analyzing = 0usize;
+        let mut bulk_measuring = 0usize;
+        let mut busy_statuses = Vec::new();
+        for (item_id, st) in &self.items {
+            if st.seg_path.is_none() {
+                continue;
+            }
+            total += 1;
+            let Some(layer) = st.layer.as_ref() else {
+                missing_layer += 1;
+                continue;
+            };
+            layer_allocated += 1;
+            loaded += usize::from(layer.has_data());
+            loading_data += usize::from(layer.is_loading());
+            loading_properties += usize::from(layer.is_property_loading());
+            analyzing += usize::from(layer.is_analyzing());
+            bulk_measuring += usize::from(layer.is_bulk_measuring());
+            if layer.is_busy() && busy_statuses.len() < 12 {
+                busy_statuses.push(serde_json::json!({
+                    "item_id": item_id,
+                    "status": layer.status(),
+                    "loading_data": layer.is_loading(),
+                    "loading_properties": layer.is_property_loading(),
+                    "analyzing": layer.is_analyzing(),
+                    "bulk_measuring": layer.is_bulk_measuring(),
+                }));
+            }
+        }
+        serde_json::json!({
+            "visible": self.visible,
+            "busy": self.is_busy(),
+            "force_repaint_frames": self.force_repaint_frames,
+            "total_with_segmentation_path": total,
+            "layers_loaded": loaded,
+            "layers_allocated": layer_allocated,
+            "layers_without_loaded_instance": missing_layer,
+            "layers_loading_data": loading_data,
+            "layers_loading_properties": loading_properties,
+            "layers_analyzing": analyzing,
+            "layers_bulk_measuring": bulk_measuring,
+            "sample_busy_statuses": busy_statuses,
+        })
     }
 
     pub fn last_missing_bins(&self) -> usize {

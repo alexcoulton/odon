@@ -96,6 +96,10 @@ impl MosaicTilesGl {
         self.inner.lock().loading_count_for(keep)
     }
 
+    pub fn in_flight_len(&self) -> usize {
+        self.inner.lock().in_flight.len()
+    }
+
     pub fn paint(
         &self,
         info: egui::PaintCallbackInfo,

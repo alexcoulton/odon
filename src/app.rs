@@ -3411,6 +3411,103 @@ impl OmeZarrViewerApp {
             .unwrap_or(serde_json::Value::Null)
     }
 
+    pub fn control_side_panels_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "left": self.show_left_panel,
+            "right": self.show_right_panel,
+        })
+    }
+
+    pub fn control_set_side_panels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let mut changed = false;
+        let mut saw_panel = false;
+        if let Some(left) = params.get("left").and_then(serde_json::Value::as_bool) {
+            saw_panel = true;
+            if self.show_left_panel != left {
+                self.show_left_panel = left;
+                changed = true;
+            }
+        }
+        if let Some(right) = params.get("right").and_then(serde_json::Value::as_bool) {
+            saw_panel = true;
+            if self.show_right_panel != right {
+                self.show_right_panel = right;
+                changed = true;
+            }
+        }
+        if !saw_panel {
+            return serde_json::json!({"error": "set_side_panels requires left and/or right"});
+        }
+        serde_json::json!({
+            "changed": changed,
+            "panels": self.control_side_panels_snapshot(),
+        })
+    }
+
+    pub fn control_smooth_pixels_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "smooth": self.smooth_pixels,
+        })
+    }
+
+    pub fn control_set_smooth_pixels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(smooth) = params.get("smooth").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "set_smooth_pixels requires smooth"});
+        };
+        let changed = self.smooth_pixels != smooth;
+        if changed {
+            self.smooth_pixels = smooth;
+            if let Some(tiles_gl) = self.tiles_gl.as_ref() {
+                tiles_gl.set_smooth_pixels(self.smooth_pixels);
+            } else {
+                self.cache = TileCache::new(256);
+                self.pending.clear();
+            }
+            self.spatial_image_layers
+                .set_smooth_pixels(self.smooth_pixels);
+        }
+        serde_json::json!({
+            "changed": changed,
+            "smooth_pixels": self.control_smooth_pixels_snapshot(),
+        })
+    }
+
+    pub fn control_loading_state_snapshot(&self) -> serde_json::Value {
+        let scene_reasons = self.scene_busy_debug_reasons();
+        let async_reasons = self.async_ui_debug_reasons();
+        let busy = self.is_loading_scene()
+            || !async_reasons.is_empty()
+            || self.screenshot_pending.is_some()
+            || self.screenshot_in_flight.is_some();
+        serde_json::json!({
+            "busy": busy,
+            "indicator_text": self.loading_indicator_text(),
+            "scene_reasons": scene_reasons,
+            "async_reasons": async_reasons,
+            "image_tiles": {
+                "in_flight_or_pending": self.image_tile_request_count(),
+                "tiles_gl_busy": self.tiles_gl.as_ref().is_some_and(|tiles_gl| tiles_gl.is_busy()),
+                "cpu_cache_busy": self.cache.is_busy(),
+                "labels_gl_busy": self.labels_gl.as_ref().is_some_and(|labels_gl| labels_gl.is_busy()),
+            },
+            "segmentation": {
+                "geojson_busy": self.seg_geojson.is_busy(),
+                "objects_loading": self.seg_objects.is_loading(),
+                "objects_busy": self.seg_objects.is_busy(),
+                "objects_analyzing": self.seg_objects.is_analyzing(),
+            },
+            "spatial": {
+                "image_layers_busy": self.spatial_image_layers.is_busy(),
+                "shape_or_point_layers_busy": self.spatial_layers.is_busy(),
+            },
+            "pinned_levels_loading": self.pinned_levels.has_loading(),
+            "screenshot": {
+                "pending": self.screenshot_pending.is_some(),
+                "in_flight": self.screenshot_in_flight.is_some(),
+            },
+        })
+    }
+
     pub fn control_set_active_channel(&mut self, params: &serde_json::Value) -> serde_json::Value {
         match self.control_channel_index_from_params(params) {
             Ok(idx) => {
