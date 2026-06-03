@@ -7,6 +7,7 @@ use crate::app_support::settings::AutoContrastMethod;
 use crate::app_support::settings::AutoContrastSettings;
 use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
 use crate::imaging::view_plane::{ViewPlaneSelection, display_axes, image_subset_ranges_for_view};
+use crate::render::array_dims::squeeze_to_2d;
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
@@ -131,7 +132,10 @@ fn channel_max_loader_thread(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                for &v in data.iter() {
+                let Some(plane) = channel_max_plane(data, y_dim, x_dim) else {
+                    continue;
+                };
+                for &v in plane.iter() {
                     hist[v as usize] = hist[v as usize].saturating_add(1);
                     n = n.saturating_add(1);
                     if v > max_v {
@@ -152,6 +156,14 @@ fn channel_max_loader_thread(
     }
 
     Ok(())
+}
+
+fn channel_max_plane(
+    data: ndarray::ArrayD<u16>,
+    y_dim: usize,
+    x_dim: usize,
+) -> Option<ndarray::Array2<u16>> {
+    squeeze_to_2d(data, y_dim, x_dim)
 }
 
 pub fn auto_contrast_window_from_histogram(
@@ -188,4 +200,32 @@ fn percentile_from_histogram(hist: &[u64], sample_count: u64, percentile: u64) -
         }
     }
     hist.len().saturating_sub(1) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::channel_max_plane;
+    use ndarray::{Array, IxDyn};
+
+    #[test]
+    fn channel_max_plane_squeezes_singleton_tczyx() {
+        let data = Array::from_iter(0u16..12)
+            .into_shape_with_order(IxDyn(&[1, 1, 1, 3, 4]))
+            .expect("shape");
+
+        let plane = channel_max_plane(data, 3, 4).expect("plane");
+
+        assert_eq!(plane.shape(), &[3, 4]);
+        assert_eq!(plane[(0, 0)], 0);
+        assert_eq!(plane[(2, 3)], 11);
+    }
+
+    #[test]
+    fn channel_max_plane_rejects_non_singleton_non_display_axis() {
+        let data = Array::from_iter(0u16..24)
+            .into_shape_with_order(IxDyn(&[2, 1, 3, 4]))
+            .expect("shape");
+
+        assert!(channel_max_plane(data, 2, 3).is_none());
+    }
 }

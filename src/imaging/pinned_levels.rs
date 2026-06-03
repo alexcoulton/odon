@@ -7,6 +7,7 @@ use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
+use crate::render::array_dims::squeeze_to_2d;
 use crate::render::tiles::{RenderChannel, TileKey, TileResponse};
 use crate::render::tiles_raw::{RawTileKey, RawTileResponse};
 
@@ -353,10 +354,8 @@ fn load_full_level(
             }
             let subset = ArraySubset::new_with_ranges(&ranges);
             let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-            let data = data
-                .into_dimensionality::<ndarray::Ix3>()
+            let plane = pinned_level_plane(data, dims.y, dims.x)
                 .context("unexpected dimensionality for pinned level channel")?;
-            let plane = data.index_axis(ndarray::Axis(0), 0).to_owned();
             let (plane_raw, offset) = plane.into_raw_vec_and_offset();
             if offset.unwrap_or(0) != 0 {
                 anyhow::bail!("unexpected non-zero offset in pinned level channel buffer");
@@ -394,8 +393,7 @@ fn load_full_level(
         }
         let subset = ArraySubset::new_with_ranges(&ranges);
         let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-        let data = data
-            .into_dimensionality::<ndarray::Ix2>()
+        let data = pinned_level_plane(data, dims.y, dims.x)
             .context("unexpected dimensionality for pinned level")?;
         let height = data.shape()[0];
         let width = data.shape()[1];
@@ -415,6 +413,14 @@ fn load_full_level(
             data: Arc::new(raw),
         })
     }
+}
+
+fn pinned_level_plane(
+    data: ndarray::ArrayD<u16>,
+    y_dim: usize,
+    x_dim: usize,
+) -> Option<ndarray::Array2<u16>> {
+    squeeze_to_2d(data, y_dim, x_dim)
 }
 
 fn slice_tile_u16(
@@ -518,5 +524,33 @@ fn accumulate_channel(
         acc[idx * 3] += t * channel.color_rgb[0];
         acc[idx * 3 + 1] += t * channel.color_rgb[1];
         acc[idx * 3 + 2] += t * channel.color_rgb[2];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pinned_level_plane;
+    use ndarray::{Array, IxDyn};
+
+    #[test]
+    fn pinned_level_plane_squeezes_singleton_tczyx() {
+        let data = Array::from_iter(0u16..12)
+            .into_shape_with_order(IxDyn(&[1, 1, 1, 3, 4]))
+            .expect("shape");
+
+        let plane = pinned_level_plane(data, 3, 4).expect("plane");
+
+        assert_eq!(plane.shape(), &[3, 4]);
+        assert_eq!(plane[(0, 0)], 0);
+        assert_eq!(plane[(2, 3)], 11);
+    }
+
+    #[test]
+    fn pinned_level_plane_rejects_non_singleton_non_spatial_axis() {
+        let data = Array::from_iter(0u16..24)
+            .into_shape_with_order(IxDyn(&[2, 1, 3, 4]))
+            .expect("shape");
+
+        assert!(pinned_level_plane(data, 2, 3).is_none());
     }
 }
