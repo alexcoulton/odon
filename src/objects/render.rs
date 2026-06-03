@@ -224,8 +224,8 @@ impl ObjectsLayer {
                                 egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
                             items.push(ObjectFillGlDrawItem {
                                 data: ObjectFillGlDrawData {
-                                    cache_id: 0x5345474f424a20u64 | group_idx as u64,
-                                    state_cache_id: 0x5345474f424a20u64 | group_idx as u64,
+                                    cache_id: object_render_cache_id_usize(0x4a20, group_idx),
+                                    state_cache_id: object_render_cache_id_usize(0x4a21, group_idx),
                                     generation: self.generation,
                                     vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                     object_count: fill_mesh.object_count,
@@ -257,8 +257,8 @@ impl ObjectsLayer {
                         }
                         items.push(ObjectFillGlDrawItem {
                             data: ObjectFillGlDrawData {
-                                cache_id: 0x5345474f424a21u64,
-                                state_cache_id: 0x5345474f424a21u64,
+                                cache_id: object_render_cache_id(0x4a22, 0),
+                                state_cache_id: object_render_cache_id(0x4a23, 0),
                                 generation: self.generation,
                                 vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                 object_count: fill_mesh.object_count,
@@ -376,8 +376,8 @@ impl ObjectsLayer {
                 {
                     let item = ObjectLineBinsGlDrawItem {
                         data: ObjectLineBinsGlDrawData {
-                            cache_id: 0x5345474f424a90u64 | (selection_lod.lod as u64),
-                            state_cache_id: 0x5345474f424a91u64,
+                            cache_id: object_render_cache_id(0x4a90, selection_lod.lod as u64),
+                            state_cache_id: object_render_cache_id(0x4a91, 0),
                             generation: self.generation,
                             bins: Arc::clone(&selection_lod.bins),
                             selection_generation: self.selection_generation,
@@ -426,9 +426,10 @@ impl ObjectsLayer {
                                 [choose_lod_index(&group.lods, dataset_long_side_screen_px)];
                             items.push(LineBinsGlDrawItem {
                                 data: LineBinsGlDrawData {
-                                    cache_id: 0x5345474f424a00u64
-                                        | ((lod.lod as u64) << 8)
-                                        | group_idx as u64,
+                                    cache_id: object_render_cache_id(
+                                        0x4a00 | u32::from(lod.lod),
+                                        group_idx as u64,
+                                    ),
                                     generation: self.generation,
                                     bins: Arc::clone(&group_lod.bins),
                                 },
@@ -449,7 +450,7 @@ impl ObjectsLayer {
                     } else {
                         items.push(LineBinsGlDrawItem {
                             data: LineBinsGlDrawData {
-                                cache_id: 0x5345474f424a00u64 | (lod.lod as u64),
+                                cache_id: object_render_cache_id(0x4a08, lod.lod as u64),
                                 generation: self.generation,
                                 bins: Arc::clone(&lod.bins),
                             },
@@ -731,11 +732,11 @@ impl ObjectsLayer {
         };
 
         let mut items = Vec::new();
-        let state_cache_id = 0x5345474f424a31u64;
+        let state_cache_id = object_render_cache_id(0x4a31, 0);
         if fill_mesh.object_count <= Self::SELECTED_RENDER_LOD_LIMIT {
             items.push(ObjectFillGlDrawItem {
                 data: ObjectFillGlDrawData {
-                    cache_id: 0x5345474f424a31u64,
+                    cache_id: object_render_cache_id(0x4a32, 0),
                     state_cache_id,
                     generation: self.generation,
                     vertices_local: Arc::clone(&fill_mesh.vertices_local),
@@ -759,7 +760,7 @@ impl ObjectsLayer {
                     }
                     items.push(ObjectFillGlDrawItem {
                         data: ObjectFillGlDrawData {
-                            cache_id: 0x5345474f424a80u64 | bin_index as u64,
+                            cache_id: object_render_cache_id_usize(0x4a80, bin_index),
                             state_cache_id,
                             generation: self.generation,
                             vertices_local: Arc::clone(vertices),
@@ -808,7 +809,7 @@ impl ObjectsLayer {
         {
             let mut items = vec![LineBinsGlDrawItem {
                 data: LineBinsGlDrawData {
-                    cache_id: 0x5345474f424a50u64 | (selected_lod.lod as u64),
+                    cache_id: object_render_cache_id(0x4a50, selected_lod.lod as u64),
                     generation: self.selection_generation,
                     bins: Arc::clone(&selected_lod.bins),
                 },
@@ -830,7 +831,7 @@ impl ObjectsLayer {
             {
                 items.push(LineBinsGlDrawItem {
                     data: LineBinsGlDrawData {
-                        cache_id: 0x5345474f424a60u64 | (primary_lod.lod as u64),
+                        cache_id: object_render_cache_id(0x4a60, primary_lod.lod as u64),
                         generation: self.selection_generation,
                         bins: Arc::clone(&primary_lod.bins),
                     },
@@ -868,8 +869,8 @@ impl ObjectsLayer {
         {
             let sel_items = [ObjectLineBinsGlDrawItem {
                 data: ObjectLineBinsGlDrawData {
-                    cache_id: 0x5345474f424a40u64 | (selection_lod.lod as u64),
-                    state_cache_id: 0x5345474f424a41u64,
+                    cache_id: object_render_cache_id(0x4a40, selection_lod.lod as u64),
+                    state_cache_id: object_render_cache_id(0x4a41, 0),
                     generation: self.generation,
                     bins: Arc::clone(&selection_lod.bins),
                     selection_generation: self.selection_generation,
@@ -933,7 +934,7 @@ impl ObjectsLayer {
             };
             let item = LineBinsGlDrawItem {
                 data: LineBinsGlDrawData {
-                    cache_id: 0x5345474f424a70u64 | (lod.lod as u64),
+                    cache_id: object_render_cache_id(0x4a70, lod.lod as u64),
                     generation,
                     bins: Arc::clone(&lod.bins),
                 },
@@ -2162,6 +2163,14 @@ fn visible_selected_cache_generation(selection_generation: u64, indices: &[usize
     hasher.finish()
 }
 
+fn object_render_cache_id(namespace: u32, index: u64) -> u64 {
+    ((namespace as u64) << 32) | (index & 0xffff_ffff)
+}
+
+fn object_render_cache_id_usize(namespace: u32, index: usize) -> u64 {
+    object_render_cache_id(namespace, index.min(u32::MAX as usize) as u64)
+}
+
 impl ObjectFillMesh {
     fn bin_range_for_local_rect(&self, rect: egui::Rect) -> (usize, usize, usize, usize) {
         rect_bins(rect, self.origin, self.bin_size, self.bins_w, self.bins_h)
@@ -2688,6 +2697,17 @@ mod rectangle_selection_tests {
         assert!(rect_contains_point_inclusive(rect, egui::pos2(20.0, 30.0)));
         assert!(!rect_contains_point_inclusive(rect, egui::pos2(30.1, 30.0)));
         assert!(!rect_contains_point_inclusive(rect, egui::pos2(20.0, 40.1)));
+    }
+
+    #[test]
+    fn object_render_cache_ids_keep_namespace_and_index_separate() {
+        let old_bin_98 = 0x5345474f424a80u64 | 98;
+        let old_bin_226 = 0x5345474f424a80u64 | 226;
+        assert_eq!(old_bin_98, old_bin_226);
+
+        let new_bin_98 = object_render_cache_id(0x4a80, 98);
+        let new_bin_226 = object_render_cache_id(0x4a80, 226);
+        assert_ne!(new_bin_98, new_bin_226);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::data::ome::{ChannelInfo, OmeZarrDataset, retrieve_image_subset_u16};
+use crate::render::array_dims::squeeze_to_2d;
 
 use super::analysis::build_polygon_mask;
 use super::*;
@@ -670,7 +671,7 @@ fn measure_mean_for_channel(
             let subset = ArraySubset::new_with_ranges(&ranges);
             let data = retrieve_image_subset_u16(&array, &subset, &level_info.dtype)
                 .with_context(|| format!("read channel {} chunk", channel.index))?;
-            let plane = plane_from_channel_data(data, c_dim)?;
+            let plane = plane_from_channel_data(data, y_dim, x_dim)?;
 
             for yy in 0..chunk_height {
                 let global_row = (y0 as usize + yy).saturating_mul(level_w);
@@ -789,7 +790,7 @@ fn measure_median_for_channel(
             let subset = ArraySubset::new_with_ranges(&ranges);
             let data = retrieve_image_subset_u16(&array, &subset, &level_info.dtype)
                 .with_context(|| format!("read channel {} chunk", channel.index))?;
-            let plane = plane_from_channel_data(data, c_dim)?;
+            let plane = plane_from_channel_data(data, y_dim, x_dim)?;
 
             for yy in 0..chunk_height {
                 let global_row = (y0 as usize + yy).saturating_mul(level_w);
@@ -881,14 +882,37 @@ fn sanitize_property_token(name: &str) -> String {
 
 fn plane_from_channel_data(
     data: ndarray::ArrayD<u16>,
-    c_dim: Option<usize>,
+    y_dim: usize,
+    x_dim: usize,
 ) -> anyhow::Result<ndarray::Array2<u16>> {
-    if c_dim.is_some() {
-        data.into_dimensionality::<ndarray::Ix3>()
-            .ok()
-            .map(|a| a.index_axis(ndarray::Axis(0), 0).to_owned())
-    } else {
-        data.into_dimensionality::<ndarray::Ix2>().ok()
+    squeeze_to_2d(data, y_dim, x_dim)
+        .context("unexpected array dimensionality for bulk image measurements")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array, IxDyn};
+
+    #[test]
+    fn measurement_plane_squeezes_singleton_tczyx() {
+        let data = Array::from_iter(0u16..12)
+            .into_shape_with_order(IxDyn(&[1, 1, 1, 3, 4]))
+            .expect("shape");
+
+        let plane = plane_from_channel_data(data, 3, 4).expect("plane");
+
+        assert_eq!(plane.shape(), &[3, 4]);
+        assert_eq!(plane[(0, 0)], 0);
+        assert_eq!(plane[(2, 3)], 11);
     }
-    .context("unexpected array dimensionality for bulk mean measurements")
+
+    #[test]
+    fn measurement_plane_rejects_non_singleton_non_display_axis() {
+        let data = Array::from_iter(0u16..24)
+            .into_shape_with_order(IxDyn(&[2, 1, 1, 3, 4]))
+            .expect("shape");
+
+        assert!(plane_from_channel_data(data, 3, 4).is_err());
+    }
 }
