@@ -11,7 +11,8 @@ use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::data::dataset_source::DatasetSource;
-use crate::data::ome::{Dims, LevelInfo};
+use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
+use crate::render::array_dims::squeeze_to_2d;
 
 #[derive(Clone)]
 pub struct MosaicSource {
@@ -62,7 +63,13 @@ pub struct MosaicRawTileResponse {
 #[derive(Debug, Clone)]
 pub enum MosaicRawTileWorkerResponse {
     Tile(MosaicRawTileResponse),
-    Dropped { key: MosaicRawTileKey },
+    Dropped {
+        key: MosaicRawTileKey,
+    },
+    Failed {
+        key: MosaicRawTileKey,
+        error: String,
+    },
 }
 
 #[derive(Debug)]
@@ -431,23 +438,47 @@ fn mosaic_raw_tile_worker(
             }
         }
         if ranges.is_empty() {
+            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
+                key,
+                error: "requested channel is not present in this ROI".to_string(),
+            });
             continue;
         }
 
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let data: ndarray::ArrayD<u16> = array.retrieve_array_subset(&subset)?;
+        let data = match retrieve_image_subset_u16(array, &subset, &level.dtype) {
+            Ok(data) => data,
+            Err(err) => {
+                let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
+                    key,
+                    error: err.to_string(),
+                });
+                continue;
+            }
+        };
 
-        let data = if c_dim.is_some() {
-            data.into_dimensionality::<ndarray::Ix3>()
-                .ok()
-                .map(|a| a.index_axis(ndarray::Axis(0), 0).to_owned())
-        } else {
-            data.into_dimensionality::<ndarray::Ix2>().ok()
-        }
-        .context("unexpected array dimensionality for raw tile")?;
+        let data = match squeeze_to_2d(data, y_dim, x_dim) {
+            Some(data) => data,
+            None => {
+                let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
+                    key,
+                    error: "unexpected array dimensionality for raw tile (expected displayed axes plus singleton dims)".to_string(),
+                });
+                continue;
+            }
+        };
 
         let data_u16 = data.iter().copied().collect::<Vec<_>>();
         if data_u16.len() != width * height {
+            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
+                key,
+                error: format!(
+                    "raw tile size mismatch: got {} samples for {}x{} tile",
+                    data_u16.len(),
+                    width,
+                    height
+                ),
+            });
             continue;
         }
         if req.generation != latest_generation.load(Ordering::Relaxed) {
@@ -503,11 +534,9 @@ fn load_full_level(
                 }
             }
             let subset = ArraySubset::new_with_ranges(&ranges);
-            let data: ndarray::ArrayD<u16> = array.retrieve_array_subset(&subset)?;
-            let data = data
-                .into_dimensionality::<ndarray::Ix3>()
+            let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
+            let plane = squeeze_to_2d(data, source.dims.y, source.dims.x)
                 .context("unexpected dimensionality for pinned mosaic level")?;
-            let plane = data.index_axis(ndarray::Axis(0), 0).to_owned();
             let (plane_raw, offset) = plane.into_raw_vec_and_offset();
             if offset.unwrap_or(0) != 0 {
                 anyhow::bail!("unexpected non-zero offset in pinned mosaic level channel buffer");
@@ -560,9 +589,8 @@ fn load_full_level(
             }
         }
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let data: ndarray::ArrayD<u16> = array.retrieve_array_subset(&subset)?;
-        let data = data
-            .into_dimensionality::<ndarray::Ix2>()
+        let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
+        let data = squeeze_to_2d(data, source.dims.y, source.dims.x)
             .context("unexpected dimensionality for pinned mosaic level")?;
         let height = data.shape()[0];
         let width = data.shape()[1];

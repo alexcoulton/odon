@@ -29,6 +29,7 @@ use crate::app_support::settings::AutoContrastSettings;
 use crate::camera::Camera;
 use crate::custom::cell_thresholds::CellThresholdsPanel;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
+use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
 use crate::data::project_config::{
@@ -1426,9 +1427,12 @@ fn build_tiff_runtime_assets(
     );
     let dims_yx = (dataset.dims.y, dataset.dims.x);
     let store = dummy_local_store_for_path(&dataset_root)?;
-    let loader = crate::xenium::spawn_tiff_tile_loader(pyramid.clone(), dims_yx)?;
+    let tile_loader_threads = recommended_tile_loader_threads();
+    let loader =
+        crate::xenium::spawn_tiff_tile_loader(pyramid.clone(), dims_yx, tile_loader_threads)?;
     let raw_loader = if gpu_available {
-        crate::xenium::spawn_tiff_raw_tile_loader(pyramid.clone(), dims_yx).ok()
+        crate::xenium::spawn_tiff_raw_tile_loader(pyramid.clone(), dims_yx, tile_loader_threads)
+            .ok()
     } else {
         None
     };
@@ -1873,6 +1877,9 @@ impl OmeZarrViewerApp {
 
     fn supports_runtime_tile_loader_tuning(&self) -> bool {
         self.tiff_plane_state.is_none()
+            && !self.dataset.source.local_path().is_some_and(|path| {
+                classify_local_dataset_path(path) == Some(LocalDatasetKind::Tiff)
+            })
     }
 
     fn respawn_tile_loaders(&mut self) -> anyhow::Result<()> {
@@ -13231,6 +13238,62 @@ impl OmeZarrViewerApp {
                 );
             }
 
+            let keep_levels: Vec<usize> = if adaptive_raw_request_mode {
+                request_levels.clone()
+            } else {
+                needed_per_level
+                    .iter()
+                    .map(|(level, _, _)| *level)
+                    .collect()
+            };
+            let mut raw_active_keys: HashSet<RawTileKey> = HashSet::new();
+            for (level, _level_info, needed) in needed_per_level.iter() {
+                if !keep_levels.contains(level) {
+                    continue;
+                }
+                for key in needed {
+                    for ch in &render_channels {
+                        raw_active_keys.insert(RawTileKey {
+                            view: active_view,
+                            level: *level,
+                            tile_y: key.tile_y,
+                            tile_x: key.tile_x,
+                            channel: ch.index,
+                        });
+                    }
+                }
+            }
+            for (level, needed) in &prefetch_needed_per_level {
+                if !keep_levels.contains(level) {
+                    continue;
+                }
+                for key in needed {
+                    for ch in &render_channels {
+                        raw_active_keys.insert(RawTileKey {
+                            view: active_view,
+                            level: *level,
+                            tile_y: key.tile_y,
+                            tile_x: key.tile_x,
+                            channel: ch.index,
+                        });
+                    }
+                }
+            }
+            if let Some((level, _level_info, needed)) = fallback_floor.as_ref() {
+                for key in needed {
+                    for ch in &render_channels {
+                        raw_active_keys.insert(RawTileKey {
+                            view: active_view,
+                            level: *level,
+                            tile_y: key.tile_y,
+                            tile_x: key.tile_x,
+                            channel: ch.index,
+                        });
+                    }
+                }
+            }
+            raw_loader.set_active_keys(raw_active_keys.clone());
+
             for level in &request_levels {
                 let Some((_, _, needed)) = needed_per_level.iter().find(|(l, _, _)| l == level)
                 else {
@@ -13274,64 +13337,9 @@ impl OmeZarrViewerApp {
                 }
             }
 
-            let keep_levels: Vec<usize> = if adaptive_raw_request_mode {
-                request_levels.clone()
-            } else {
-                needed_per_level
-                    .iter()
-                    .map(|(level, _, _)| *level)
-                    .collect()
-            };
-
             // Prune stale in-flight requests so the app can go idle immediately after a fast pan/zoom.
             if let Some(tiles_gl_ref) = self.tiles_gl.as_ref() {
-                let mut keep: HashSet<RawTileKey> = HashSet::new();
-                for (level, _level_info, needed) in needed_per_level.iter() {
-                    if !keep_levels.contains(level) {
-                        continue;
-                    }
-                    for key in needed {
-                        for ch in &render_channels {
-                            keep.insert(RawTileKey {
-                                view: active_view,
-                                level: *level,
-                                tile_y: key.tile_y,
-                                tile_x: key.tile_x,
-                                channel: ch.index,
-                            });
-                        }
-                    }
-                }
-                for (level, needed) in &prefetch_needed_per_level {
-                    if !keep_levels.contains(level) {
-                        continue;
-                    }
-                    for key in needed {
-                        for ch in &render_channels {
-                            keep.insert(RawTileKey {
-                                view: active_view,
-                                level: *level,
-                                tile_y: key.tile_y,
-                                tile_x: key.tile_x,
-                                channel: ch.index,
-                            });
-                        }
-                    }
-                }
-                if let Some((level, _level_info, needed)) = fallback_floor.as_ref() {
-                    for key in needed {
-                        for ch in &render_channels {
-                            keep.insert(RawTileKey {
-                                view: active_view,
-                                level: *level,
-                                tile_y: key.tile_y,
-                                tile_x: key.tile_x,
-                                channel: ch.index,
-                            });
-                        }
-                    }
-                }
-                tiles_gl_ref.prune_in_flight(&keep);
+                tiles_gl_ref.prune_in_flight(&raw_active_keys);
             }
 
             // Build draw list coarse -> fine.
@@ -13470,6 +13478,19 @@ impl OmeZarrViewerApp {
             });
         } else {
             // CPU (RGBA) path.
+            let mut keep: HashSet<TileKey> = HashSet::new();
+            for (_level, _level_info, needed) in needed_per_level.iter() {
+                for key in needed {
+                    keep.insert(*key);
+                }
+            }
+            for (_level, needed) in &prefetch_needed_per_level {
+                for key in needed {
+                    keep.insert(*key);
+                }
+            }
+            self.loader.set_active_keys(keep.clone());
+
             // Request tiles fine -> coarse so zoom-in upgrades quickly.
             let mut requested_this_frame = 0usize;
             let max_requests_per_frame = 64usize;
@@ -13498,17 +13519,6 @@ impl OmeZarrViewerApp {
 
             // Prune stale in-flight requests so we don't keep repainting while the loader finishes
             // work that is no longer visible.
-            let mut keep: HashSet<TileKey> = HashSet::new();
-            for (_level, _level_info, needed) in needed_per_level.iter() {
-                for key in needed {
-                    keep.insert(*key);
-                }
-            }
-            for (_level, needed) in &prefetch_needed_per_level {
-                for key in needed {
-                    keep.insert(*key);
-                }
-            }
             self.cache.prune_in_flight(&keep);
 
             // Draw tiles coarse -> fine (fallback first, then refine).
@@ -15059,6 +15069,7 @@ impl OmeZarrViewerApp {
             return;
         }
 
+        self.loader.set_latest_render_id(self.active_render_id);
         let channels = self.render_channels_for_request(level);
         for key in needed {
             if *sent >= max_per_frame {

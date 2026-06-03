@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -47,6 +48,15 @@ pub enum RawTileWorkerResponse {
 pub struct RawTileLoaderHandle {
     pub tx: Sender<RawTileRequest>,
     pub rx: Receiver<RawTileWorkerResponse>,
+    pub(crate) active_keys: Arc<Mutex<HashSet<RawTileKey>>>,
+}
+
+impl RawTileLoaderHandle {
+    pub fn set_active_keys(&self, keys: HashSet<RawTileKey>) {
+        if let Ok(mut active) = self.active_keys.lock() {
+            *active = keys;
+        }
+    }
 }
 
 pub struct RawTileCache<T> {
@@ -132,17 +142,21 @@ pub fn spawn_raw_tile_loader(
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<RawTileWorkerResponse>();
     let threads = worker_threads.max(1);
     let levels = Arc::new(levels);
+    let active_keys = Arc::new(Mutex::new(HashSet::new()));
 
     for worker_idx in 0..threads {
         let rx_req = rx_req.clone();
         let tx_rsp = tx_rsp.clone();
         let store = store.clone();
         let levels = Arc::clone(&levels);
+        let active_keys = Arc::clone(&active_keys);
         let dims = dims.clone();
         std::thread::Builder::new()
             .name(format!("raw-tile-loader-{worker_idx}"))
             .spawn(move || {
-                if let Err(err) = raw_tile_loader_thread(store, levels, dims, rx_req, tx_rsp) {
+                if let Err(err) =
+                    raw_tile_loader_thread(store, levels, dims, rx_req, tx_rsp, active_keys)
+                {
                     eprintln!("raw tile loader worker exited: {err:?}");
                 }
             })
@@ -152,6 +166,7 @@ pub fn spawn_raw_tile_loader(
     Ok(RawTileLoaderHandle {
         tx: tx_req,
         rx: rx_rsp,
+        active_keys,
     })
 }
 
@@ -161,6 +176,7 @@ fn raw_tile_loader_thread(
     dims: Dims,
     rx_req: Receiver<RawTileRequest>,
     tx_rsp: Sender<RawTileWorkerResponse>,
+    active_keys: Arc<Mutex<HashSet<RawTileKey>>>,
 ) -> anyhow::Result<()> {
     let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
     for info in levels.iter() {
@@ -173,6 +189,12 @@ fn raw_tile_loader_thread(
     };
 
     for req in rx_req.iter() {
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
+        }
         let debug_io = crate::debug_log::debug_io_enabled();
         let start = Instant::now();
         let worker_name = std::thread::current()

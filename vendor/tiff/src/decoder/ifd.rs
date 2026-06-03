@@ -144,6 +144,7 @@ impl Value {
     pub fn into_ifd_pointer(self) -> TiffResult<IfdPointer> {
         match self {
             Unsigned(val) | Ifd(val) => Ok(IfdPointer(val.into())),
+            UnsignedBig(val) => Ok(IfdPointer(val)),
             IfdBig(val) => Ok(IfdPointer(val)),
             _ => Err(TiffError::FormatError(TiffFormatError::InvalidTypeForTag)),
         }
@@ -323,6 +324,7 @@ impl Value {
     pub fn into_ifd_vec(self) -> TiffResult<Vec<IfdPointer>> {
         let vec = match self {
             Unsigned(val) | Ifd(val) => return Ok(vec![IfdPointer(val.into())]),
+            UnsignedBig(val) => return Ok(vec![IfdPointer(val)]),
             IfdBig(val) => return Ok(vec![IfdPointer(val)]),
             List(vec) => vec,
             _ => return Err(TiffError::FormatError(TiffFormatError::InvalidTypeForTag)),

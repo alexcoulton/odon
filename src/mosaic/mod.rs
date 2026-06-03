@@ -3283,6 +3283,10 @@ impl MosaicViewerApp {
                 MosaicRawTileWorkerResponse::Dropped { key, .. } => {
                     self.tiles_gl.cancel_in_flight(&key);
                 }
+                MosaicRawTileWorkerResponse::Failed { key, error } => {
+                    self.tiles_gl.cancel_in_flight(&key);
+                    crate::log_warn!("mosaic raw tile load failed for {:?}: {}", key, error);
+                }
             }
         }
     }

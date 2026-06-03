@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender};
@@ -53,6 +55,20 @@ pub enum TileWorkerResponse {
 pub struct TileLoaderHandle {
     pub tx: Sender<TileRequest>,
     pub rx: Receiver<TileWorkerResponse>,
+    pub(crate) latest_render_id: Arc<AtomicU64>,
+    pub(crate) active_keys: Arc<Mutex<HashSet<TileKey>>>,
+}
+
+impl TileLoaderHandle {
+    pub fn set_latest_render_id(&self, render_id: u64) {
+        self.latest_render_id.store(render_id, Ordering::Relaxed);
+    }
+
+    pub fn set_active_keys(&self, keys: HashSet<TileKey>) {
+        if let Ok(mut active) = self.active_keys.lock() {
+            *active = keys;
+        }
+    }
 }
 
 pub struct TileCache<T> {
@@ -127,17 +143,29 @@ pub fn spawn_tile_loader(
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<TileWorkerResponse>();
     let threads = worker_threads.max(1);
     let levels = Arc::new(levels);
+    let latest_render_id = Arc::new(AtomicU64::new(0));
+    let active_keys = Arc::new(Mutex::new(HashSet::new()));
 
     for worker_idx in 0..threads {
         let rx_req = rx_req.clone();
         let tx_rsp = tx_rsp.clone();
         let store = store.clone();
         let levels = Arc::clone(&levels);
+        let latest_render_id = Arc::clone(&latest_render_id);
+        let active_keys = Arc::clone(&active_keys);
         let dims = dims.clone();
         std::thread::Builder::new()
             .name(format!("tile-loader-{worker_idx}"))
             .spawn(move || {
-                if let Err(err) = tile_loader_thread(store, levels, dims, rx_req, tx_rsp) {
+                if let Err(err) = tile_loader_thread(
+                    store,
+                    levels,
+                    dims,
+                    rx_req,
+                    tx_rsp,
+                    latest_render_id,
+                    active_keys,
+                ) {
                     eprintln!("tile loader worker exited: {err:?}");
                 }
             })
@@ -147,6 +175,8 @@ pub fn spawn_tile_loader(
     Ok(TileLoaderHandle {
         tx: tx_req,
         rx: rx_rsp,
+        latest_render_id,
+        active_keys,
     })
 }
 
@@ -156,6 +186,8 @@ fn tile_loader_thread(
     dims: Dims,
     rx_req: Receiver<TileRequest>,
     tx_rsp: Sender<TileWorkerResponse>,
+    latest_render_id: Arc<AtomicU64>,
+    active_keys: Arc<Mutex<HashSet<TileKey>>>,
 ) -> anyhow::Result<()> {
     let mut arrays: Vec<Array<dyn ReadableStorageTraits>> = Vec::with_capacity(levels.len());
     for info in levels.iter() {
@@ -168,6 +200,16 @@ fn tile_loader_thread(
     };
 
     for req in rx_req.iter() {
+        let latest = latest_render_id.load(Ordering::Relaxed);
+        if latest != 0 && req.key.render_id != latest {
+            continue;
+        }
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
+        }
         let level = req.key.level;
         if level >= arrays.len() {
             continue;

@@ -95,6 +95,7 @@ fn tools_list() -> Value {
             ),
             set_visible_channels_tool_schema(),
             open_ome_zarr_tool_schema(),
+            open_tiff_tool_schema(),
             open_roi_tool_schema(),
             tool_schema(
                 "save_project",
@@ -253,6 +254,24 @@ fn open_ome_zarr_tool_schema() -> Value {
                 "path": {
                     "type": "string",
                     "description": "Path to a local OME-Zarr directory, or to its .zattrs/zarr.json metadata file."
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn open_tiff_tool_schema() -> Value {
+    json!({
+        "name": "open_tiff",
+        "description": "Open a local TIFF / OME-TIFF image in the active Odon window, replacing the current viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to a local .tif, .tiff, .ome.tif, or .ome.tiff file."
                 }
             },
             "required": ["path"],
@@ -605,6 +624,7 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "set_active_channel"
         | "set_visible_channels"
         | "open_ome_zarr"
+        | "open_tiff"
         | "open_roi"
         | "save_project"
         | "get_channel_contrast"

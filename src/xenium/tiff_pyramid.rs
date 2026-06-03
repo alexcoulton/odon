@@ -1,7 +1,10 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, anyhow};
 use crossbeam_channel::{Receiver, Sender};
@@ -20,7 +23,7 @@ use crate::render::tiles::{
     RenderChannel, TileKey, TileLoaderHandle, TileRequest, TileResponse, TileWorkerResponse,
 };
 use crate::render::tiles_raw::{
-    RawTileLoaderHandle, RawTileRequest, RawTileResponse, RawTileWorkerResponse,
+    RawTileKey, RawTileLoaderHandle, RawTileRequest, RawTileResponse, RawTileWorkerResponse,
 };
 use crate::{log_debug, log_warn};
 
@@ -1289,6 +1292,7 @@ fn local_name(name: &[u8]) -> &[u8] {
 
 fn decode_tiff_channel_chunk(
     dec: &mut Decoder<BufReader<File>>,
+    current_ifd: &mut Option<IfdPointer>,
     lvl: &TiffLevel,
     tile_y: u64,
     tile_x: u64,
@@ -1314,8 +1318,11 @@ fn decode_tiff_channel_chunk(
         TiffChannelLayout::SeparateIfds => (lvl.ifd_pointers[channel], base_index),
     };
 
-    dec.seek_to_ifd_pointer(ifd_pointer)
-        .with_context(|| format!("seek to TIFF IFD pointer {}", ifd_pointer.0))?;
+    if *current_ifd != Some(ifd_pointer) {
+        dec.seek_to_ifd_pointer(ifd_pointer)
+            .with_context(|| format!("seek to TIFF IFD pointer {}", ifd_pointer.0))?;
+        *current_ifd = Some(ifd_pointer);
+    }
     let (w, h) = dec.chunk_data_dimensions(chunk_index);
     let decoded = dec.read_chunk(chunk_index)?;
     let data = decode_result_u16(decoded).ok_or_else(|| anyhow!("unsupported TIFF chunk dtype"))?;
@@ -1357,22 +1364,34 @@ fn decode_tiff_channel_chunk(
 pub fn spawn_tiff_raw_tile_loader(
     pyramid: Arc<TiffPyramid>,
     dims_yx: (usize, usize),
+    worker_threads: usize,
 ) -> anyhow::Result<RawTileLoaderHandle> {
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<RawTileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<RawTileWorkerResponse>();
+    let threads = worker_threads.max(1);
+    let active_keys = Arc::new(Mutex::new(HashSet::new()));
 
-    std::thread::Builder::new()
-        .name("tiff-raw-tile-loader".to_string())
-        .spawn(move || {
-            if let Err(err) = tiff_raw_tile_loader_thread(pyramid, dims_yx, rx_req, tx_rsp) {
-                eprintln!("tiff raw tile loader exited: {err:?}");
-            }
-        })
-        .context("spawn tiff raw tile loader")?;
+    for worker_idx in 0..threads {
+        let pyramid = Arc::clone(&pyramid);
+        let rx_req = rx_req.clone();
+        let tx_rsp = tx_rsp.clone();
+        let active_keys = Arc::clone(&active_keys);
+        std::thread::Builder::new()
+            .name(format!("tiff-raw-tile-loader-{worker_idx}"))
+            .spawn(move || {
+                if let Err(err) =
+                    tiff_raw_tile_loader_thread(pyramid, dims_yx, rx_req, tx_rsp, active_keys)
+                {
+                    eprintln!("tiff raw tile loader worker {worker_idx} exited: {err:?}");
+                }
+            })
+            .context("spawn tiff raw tile loader")?;
+    }
 
     Ok(RawTileLoaderHandle {
         tx: tx_req,
         rx: rx_rsp,
+        active_keys,
     })
 }
 
@@ -1381,14 +1400,22 @@ fn tiff_raw_tile_loader_thread(
     _dims_yx: (usize, usize),
     rx_req: Receiver<RawTileRequest>,
     tx_rsp: Sender<RawTileWorkerResponse>,
+    active_keys: Arc<Mutex<HashSet<RawTileKey>>>,
 ) -> anyhow::Result<()> {
     let f = File::open(&pyramid.path)?;
     let mut dec = Decoder::new(BufReader::new(f))?;
+    let mut current_ifd: Option<IfdPointer> = None;
 
     let mut err_count: u64 = 0;
     let mut ok_count: u64 = 0;
     let mut saw_req = false;
     for req in rx_req.iter() {
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
+        }
         if crate::debug_log::debug_io_enabled() && !saw_req {
             saw_req = true;
             log_debug!(
@@ -1406,6 +1433,7 @@ fn tiff_raw_tile_loader_thread(
 
         let decoded = decode_tiff_channel_chunk(
             &mut dec,
+            &mut current_ifd,
             lvl,
             req.key.tile_y,
             req.key.tile_x,
@@ -1454,24 +1482,45 @@ fn tiff_raw_tile_loader_thread(
 pub fn spawn_tiff_tile_loader(
     pyramid: Arc<TiffPyramid>,
     dims_yx: (usize, usize),
+    worker_threads: usize,
 ) -> anyhow::Result<TileLoaderHandle> {
-    // TIFF decoding is isolated in a dedicated worker so frame rendering never
-    // blocks on chunk IO or format conversion.
+    // TIFF decoding is isolated in workers so frame rendering never blocks on
+    // chunk IO or format conversion. Each worker owns a file handle and decoder
+    // because TIFF decoders are stateful around the current IFD.
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<TileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<TileWorkerResponse>();
+    let threads = worker_threads.max(1);
+    let latest_render_id = Arc::new(AtomicU64::new(0));
+    let active_keys = Arc::new(Mutex::new(HashSet::new()));
 
-    std::thread::Builder::new()
-        .name("tiff-tile-loader".to_string())
-        .spawn(move || {
-            if let Err(err) = tiff_tile_loader_thread(pyramid, dims_yx, rx_req, tx_rsp) {
-                eprintln!("tiff tile loader exited: {err:?}");
-            }
-        })
-        .context("spawn tiff tile loader")?;
+    for worker_idx in 0..threads {
+        let pyramid = Arc::clone(&pyramid);
+        let rx_req = rx_req.clone();
+        let tx_rsp = tx_rsp.clone();
+        let latest_render_id = Arc::clone(&latest_render_id);
+        let active_keys = Arc::clone(&active_keys);
+        std::thread::Builder::new()
+            .name(format!("tiff-tile-loader-{worker_idx}"))
+            .spawn(move || {
+                if let Err(err) = tiff_tile_loader_thread(
+                    pyramid,
+                    dims_yx,
+                    rx_req,
+                    tx_rsp,
+                    latest_render_id,
+                    active_keys,
+                ) {
+                    eprintln!("tiff tile loader worker {worker_idx} exited: {err:?}");
+                }
+            })
+            .context("spawn tiff tile loader")?;
+    }
 
     Ok(TileLoaderHandle {
         tx: tx_req,
         rx: rx_rsp,
+        latest_render_id,
+        active_keys,
     })
 }
 
@@ -1480,17 +1529,30 @@ fn tiff_tile_loader_thread(
     _dims_yx: (usize, usize),
     rx_req: Receiver<TileRequest>,
     tx_rsp: Sender<TileWorkerResponse>,
+    latest_render_id: Arc<AtomicU64>,
+    active_keys: Arc<Mutex<HashSet<TileKey>>>,
 ) -> anyhow::Result<()> {
     // Each request may need several channel chunks, which are decoded separately
     // and then composited into one RGBA tile. Failures are reported per tile so a
     // bad chunk does not tear down the entire worker thread.
     let f = File::open(&pyramid.path)?;
     let mut dec = Decoder::new(BufReader::new(f))?;
+    let mut current_ifd: Option<IfdPointer> = None;
 
     let mut err_count: u64 = 0;
     let mut ok_count: u64 = 0;
     let mut saw_req = false;
     for req in rx_req.iter() {
+        let latest = latest_render_id.load(Ordering::Relaxed);
+        if latest != 0 && req.key.render_id != latest {
+            continue;
+        }
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
+        }
         if crate::debug_log::debug_io_enabled() && !saw_req {
             saw_req = true;
             log_debug!(
@@ -1526,8 +1588,14 @@ fn tiff_tile_loader_thread(
         let mut failed = false;
 
         for ch in &channels {
-            let decoded =
-                decode_tiff_channel_chunk(&mut dec, lvl, tile_y, tile_x, ch.index as usize);
+            let decoded = decode_tiff_channel_chunk(
+                &mut dec,
+                &mut current_ifd,
+                lvl,
+                tile_y,
+                tile_x,
+                ch.index as usize,
+            );
             let (w, h, data_u16) = match decoded {
                 Ok(v) => v,
                 Err(err) => {
@@ -1628,6 +1696,7 @@ fn tiff_histogram_loader_thread(
 ) -> anyhow::Result<()> {
     let f = File::open(&pyramid.path)?;
     let mut dec = Decoder::new(BufReader::new(f))?;
+    let mut current_ifd: Option<IfdPointer> = None;
 
     for req in rx_req.iter() {
         let Some(lvl) = pyramid.levels.get(req.level) else {
@@ -1663,6 +1732,7 @@ fn tiff_histogram_loader_thread(
             for tile_x in tile_x0..=tile_x1 {
                 let Ok((width, height, data_u16)) = decode_tiff_channel_chunk(
                     &mut dec,
+                    &mut current_ifd,
                     lvl,
                     tile_y as u64,
                     tile_x as u64,
@@ -1728,6 +1798,7 @@ fn tiff_channel_max_loader_thread(
 ) -> anyhow::Result<()> {
     let f = File::open(&pyramid.path)?;
     let mut dec = Decoder::new(BufReader::new(f))?;
+    let mut current_ifd: Option<IfdPointer> = None;
 
     for req in rx_req.iter() {
         let Some(lvl) = pyramid.levels.get(req.level) else {
@@ -1741,6 +1812,7 @@ fn tiff_channel_max_loader_thread(
             for tile_x in 0..lvl.tiles_x {
                 let Ok((_width, _height, data_u16)) = decode_tiff_channel_chunk(
                     &mut dec,
+                    &mut current_ifd,
                     lvl,
                     tile_y as u64,
                     tile_x as u64,

@@ -329,6 +329,7 @@ impl RootApp {
             "set_active_channel" => self.control_set_active_channel(&request.params),
             "set_visible_channels" => self.control_set_visible_channels(&request.params),
             "open_ome_zarr" => self.control_open_ome_zarr(&request.params),
+            "open_tiff" => self.control_open_tiff(&request.params),
             "open_roi" => self.control_open_roi(&request.params),
             "save_project" => self.control_save_project(),
             "get_channel_contrast" => self.control_get_channel_contrast(&request.params),
@@ -973,27 +974,51 @@ impl RootApp {
     }
 
     fn control_open_ome_zarr(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_open_local_dataset(
+            params,
+            "open_ome_zarr",
+            LocalDatasetKind::OmeZarr,
+            "local OME-Zarr dataset root or metadata file",
+            "OME-Zarr",
+        )
+    }
+
+    fn control_open_tiff(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_open_local_dataset(
+            params,
+            "open_tiff",
+            LocalDatasetKind::Tiff,
+            "local TIFF / OME-TIFF file",
+            "TIFF / OME-TIFF",
+        )
+    }
+
+    fn control_open_local_dataset(
+        &mut self,
+        params: &serde_json::Value,
+        tool_name: &str,
+        expected_kind: LocalDatasetKind,
+        input_label: &str,
+        output_label: &str,
+    ) -> serde_json::Value {
         let Some(path) = params
             .get("path")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
         else {
-            return serde_json::json!({"error": "open_ome_zarr requires path"});
+            return serde_json::json!({"error": format!("{tool_name} requires path")});
         };
         let path = expand_control_path(path);
         let Some(root) = normalize_local_dataset_path(&path) else {
             return serde_json::json!({
-                "error": "path is not a local OME-Zarr dataset root or metadata file",
+                "error": format!("path is not a {input_label}"),
                 "path": path.to_string_lossy(),
             });
         };
-        if !matches!(
-            classify_local_dataset_path(&root),
-            Some(LocalDatasetKind::OmeZarr)
-        ) {
+        if classify_local_dataset_path(&root) != Some(expected_kind) {
             return serde_json::json!({
-                "error": "path is not an OME-Zarr dataset",
+                "error": format!("path is not a {output_label} dataset"),
                 "path": root.to_string_lossy(),
             });
         }
@@ -1001,7 +1026,7 @@ impl RootApp {
         serde_json::json!({
             "queued": true,
             "path": root.to_string_lossy(),
-            "note": "The OME-Zarr open request was queued and will replace the active viewer on the next UI update.",
+            "note": format!("The {output_label} open request was queued and will replace the active viewer on the next UI update."),
         })
     }
 
