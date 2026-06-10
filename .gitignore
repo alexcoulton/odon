@@ -19,6 +19,9 @@ __pycache__/
 # Generated documentation
 /site/
 
+# Local/internal documentation notes that should not be built by MkDocs
+/docs-internal/
+
 # Local data / fixtures
 /test_data/
 /img/
