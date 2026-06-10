@@ -47,5 +47,7 @@ nav:
   - Reference:
       - Controls: reference/controls.md
       - CLI: reference/cli.md
+      - Deep Links: reference/deep-links.md
+      - Odon MCP: reference/codex-mcp-odon.md
   - Advanced:
       - Current Limitations: advanced/current-limitations.md
