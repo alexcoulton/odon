@@ -30,6 +30,12 @@ cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2"
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
 ```
 
+Set the initial number of columns for a samplesheet mosaic:
+
+```bash
+cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv" --mosaic-cols 10
+```
+
 ## Set Mosaic Columns
 
 ```bash

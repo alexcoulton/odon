@@ -24,12 +24,15 @@ When the transform tool is active for a supported channel layer:
 ## Mosaic Navigation
 
 - `F`: fit the mosaic
+- double click an ROI: fit that ROI to the viewport
 - `Prev. Core`: jump to the previous ROI
 - `Next. Core`: jump to the next ROI
+- right panel `Layout`: group and sort ROIs by samplesheet/project metadata
+- right panel `Memory`: optionally pin selected channels and levels in RAM
 
 ## Panels
 
 - Left panel: layers and project actions
-- Right panel: properties, threshold controls, and ROI-related tools
+- Right panel: properties, layout, views, memory, threshold controls, and ROI-related tools
 - Top bar: quick actions and compact contrast controls when panels are hidden
 - `Ctrl+M`: open the Analysis mapping settings dialog for segmentation objects or the active object-backed SpatialData shape layer
