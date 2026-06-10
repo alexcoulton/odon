@@ -1,58 +1,95 @@
 # Getting Started
 
-This guide is for users who want to open Odon and load data as quickly as
-possible.
+This guide is for users who want to open Odon from the desktop application and
+load image data quickly.
 
 ## Open Odon
 
-For normal use, open the Odon desktop application from your operating system's
-application launcher.
+Open the Odon desktop application from your operating system's application
+launcher.
 
-For development builds, start the app from the repository root:
+Odon opens to the project/start screen. The Project panel is the main place to
+load data, create a workspace, and open single-ROI or mosaic views.
 
-```bash
-cargo run
-```
+## Choose How To Load Data
 
-This opens the app landing screen.
+Use the Project panel for normal data loading.
 
-## Common Opening Paths
+| What you have | What to click | Result |
+| --- | --- | --- |
+| A saved Odon project | `Load Project...` | Restores a saved workspace with ROIs, paths, and project metadata. |
+| A samplesheet CSV | `Import Samplesheet CSV...` | Creates a multi-ROI project from tabular metadata and image paths. |
+| A folder containing OME-Zarr datasets | `Add OME-Zarr Root...` | Scans the folder and lists compatible image datasets as project ROIs. |
 
-Use the Project panel as the primary way to open data:
+After data appears in the Project panel:
 
-1. Open Odon.
-2. Click `Load Project...`, `Import Samplesheet CSV...`, or
-   `Add OME-Zarr Root...`.
-3. Select one ROI and click `Open`, or select multiple OME-Zarr ROIs and click
-   `Open mosaic (N)`.
+1. Select one ROI and click `Open` for single-image viewing.
+2. Select multiple compatible ROIs and click `Open mosaic (N)` for mosaic
+   viewing.
+3. Use `Select all` before `Open mosaic (N)` when you want to review every
+   listed ROI.
 
-Command-line opening is available for scripted demos, debugging, and automated
-checks, but it is not the primary user workflow. See [CLI](reference/cli.md) for
-those commands.
+For samplesheet details, see
+[Projects and Samplesheets](data-sources/projects-and-samplesheets.md). For
+multi-ROI review, see [Mosaic Mode](workflows/mosaic.md).
 
-## First Session Checklist
+## First Single-Image Session
 
-1. Launch the app.
-2. Use the Project panel to open a local OME-Zarr dataset, samplesheet, or saved
-   project.
-3. In the left panel, inspect the layer list and select the active layer.
-4. In the right panel, adjust channel contrast, color, and overlay settings.
-5. Use `F` to fit the current view.
+After opening one ROI:
+
+1. Use the left panel to inspect image, object, mask, and annotation layers.
+2. Select an image layer or channel group.
+3. Use the right panel to adjust channel visibility, colour, and contrast.
+4. Pan with left-drag and zoom with the mouse wheel or trackpad.
+5. Press `F` to fit the image to the current view.
+
+The viewer streams pyramid tiles as needed. On large images, Odon should show a
+coarse view first and refine visible tiles as they arrive.
+
+## First Mosaic Session
+
+After opening a mosaic:
+
+1. Use the shared channel controls to choose the channels shown across all ROIs.
+2. Open the right-panel `Layout` tab.
+3. Group, sort, or label ROIs using samplesheet/project metadata.
+4. Use `Fit Mosaic (F)` to fit the full mosaic.
+5. Use `Fit Cells` when reviewing regular TMA-like layouts.
+
+Mosaic mode is designed for comparing many ROIs with the same channel settings.
+Detailed object measurement and editing workflows are usually better in
+single-image mode.
 
 ## Interface Layout
 
-- Left panel: layers, tools, and project actions
-- Right panel: properties for the active layer and analysis-oriented tabs
-- Center canvas: imagery and overlays
-- Top bar: quick controls, including compact contrast controls when side panels are hidden
+| Area | Purpose |
+| --- | --- |
+| Left panel | Layers, project actions, object layers, masks, and tools. |
+| Center canvas | Image data, overlays, masks, object outlines, and mosaic tiles. |
+| Right panel | Properties for the active layer, channel controls, layout tools, analysis tabs, and memory controls. |
+| Top bar | Compact viewer controls and quick access actions. |
 
 ## Recommended First Data Types
 
 For the smoothest first experience, start with:
 
 - a local OME-Zarr image pyramid
-- an optional GeoJSON segmentation or mask overlay
-- a project JSON if you already have a workspace prepared
+- a samplesheet CSV if you have multiple ROIs
+- optional GeoParquet, Parquet, or GeoJSON object data linked with `segpath`
+- a saved Odon project JSON if you already have one
+
+## Development And CLI Startup
+
+Command-line startup is available for development builds, scripted demos,
+debugging, and automated checks. It is not the primary user workflow.
+
+From the repository root:
+
+```bash
+cargo run
+```
+
+See [CLI](reference/cli.md) for command-line options.
 
 ## What To Read Next
 
@@ -61,3 +98,4 @@ For the smoothest first experience, start with:
 - [Objects and Overlays](workflows/objects-and-overlays.md)
 - [Mask Polygons](workflows/mask-polygons.md)
 - [Projects and Samplesheets](data-sources/projects-and-samplesheets.md)
+- [Object And Overlay Data](data-sources/object-and-overlay-data.md)
