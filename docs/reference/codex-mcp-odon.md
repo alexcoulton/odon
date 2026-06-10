@@ -35,6 +35,9 @@ mosaic loaded.
 
 ## Installation
 
+For normal use, install or open the Odon desktop application first. The MCP
+server controls that running GUI over the local bridge.
+
 ### Development Checkout
 
 Build the project in the usual way:
@@ -43,7 +46,7 @@ Build the project in the usual way:
 cargo build
 ```
 
-Start the GUI:
+For development builds, start the GUI from the checkout:
 
 ```bash
 cargo run --bin odon
@@ -78,8 +81,9 @@ command: /path/to/odon_mcp
 args: []
 ```
 
-The GUI still needs to be running. The MCP server connects to the GUI bridge on
-`127.0.0.1:17870`; it should not start a second Odon GUI process.
+The GUI still needs to be running. Open the packaged Odon application first, then
+let the MCP client launch `odon_mcp`. The MCP server connects to the GUI bridge
+on `127.0.0.1:17870`; it should not start a second Odon GUI process.
 
 ## Smoke Tests
 
@@ -240,7 +244,8 @@ screenshot output location.
 
 The MCP server could not connect to `127.0.0.1:17870`.
 
-Fix: start the Odon GUI first:
+Fix: open the Odon desktop application first. For a development checkout, start
+the GUI with:
 
 ```bash
 cargo run --bin odon

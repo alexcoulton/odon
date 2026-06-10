@@ -23,11 +23,20 @@ In practice, that means:
 
 ## Opening Local OME-Zarr
 
-```bash
-cargo run -- "/path/to/ROI1.ome.zarr"
-```
+Use the GUI for normal opening:
 
-You can also open OME-Zarr through a project file or as part of a mosaic.
+1. Open Odon.
+2. In the Project panel, click `Add OME-Zarr Root...`.
+3. Choose either one OME-Zarr dataset folder or a parent folder containing
+   multiple OME-Zarr ROI folders.
+4. Select one ROI and click `Open`, or select multiple OME-Zarr ROIs and click
+   `Open mosaic (N)`.
+
+You can also drag a supported local OME-Zarr dataset into the Odon window to add
+it to the current project list.
+
+Command-line opening is available for scripting and debugging; see
+[CLI](../reference/cli.md).
 
 ## Rendering Behavior
 

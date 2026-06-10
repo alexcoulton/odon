@@ -17,28 +17,31 @@ visibility, and camera position.
 
 ## Quick Start
 
-Open a project ROI:
+In reports and dashboards, use normal links whose `href` is an `odon://open`
+URL:
 
-```bash
-cargo run -- 'odon://open?project=file:///path/to/odon.project.json&roi=ROI_001'
+```html
+<a href="odon://open?project=file:///path/to/odon.project.json&roi=ROI_001">
+  Open ROI_001 in Odon
+</a>
 ```
 
 Open a project ROI, activate CD45, and show only CD45 and DAPI:
 
-```bash
-cargo run -- 'odon://open?project=file:///path/to/odon.project.json&roi=ROI_001&channel=CD45&visible_channels=CD45%7CDAPI'
+```text
+odon://open?project=file:///path/to/odon.project.json&roi=ROI_001&channel=CD45&visible_channels=CD45%7CDAPI
 ```
 
 Open a project ROI, load project object segmentation, colour cells by an
 annotation column, and fill cells:
 
-```bash
-cargo run -- 'odon://open?project=file:///path/to/odon.project.json&roi=ROI_001&segmentation_source=geoparquet&load_labels=0&cell_color_by=broad_cell_type&fill_cells=1'
+```text
+odon://open?project=file:///path/to/odon.project.json&roi=ROI_001&segmentation_source=geoparquet&load_labels=0&cell_color_by=broad_cell_type&fill_cells=1
 ```
 
-The examples above pass the deep link as a command-line argument. Clickable
-`odon://` links require operating-system URL scheme registration; see
-[Clickable Links](#clickable-links).
+Clickable `odon://` links require operating-system URL scheme registration; see
+[Clickable Links](#clickable-links). Command-line deep links are useful for
+testing and development, but they are not the primary report workflow.
 
 ## Link Format
 
@@ -72,21 +75,11 @@ visible_channels=CD45%7CCD3%7CDAPI
 
 ## Opening Methods
 
-### Command Line
-
-Command-line deep links work anywhere Odon can be launched:
-
-```bash
-cargo run -- 'odon://open?project=file:///path/to/project.json&roi=ROI_001'
-```
-
-If Odon is already running, the new process attempts to forward the deep link to
-the existing Odon window through local single-instance IPC.
-
 ### Clickable Links
 
-Clickable `odon://` links require the operating system to know which application
-handles the `odon` URL scheme.
+Clickable `odon://` links are the intended user-facing workflow for reports and
+dashboards. They require the operating system to know which application handles
+the `odon` URL scheme.
 
 For packaged macOS builds, the app bundle declares the `odon://` scheme in its
 `Info.plist`. Open the app once to let LaunchServices register it. If needed,
@@ -114,6 +107,18 @@ open 'odon://open?project=file:///path/to/odon.project.json&roi=ROI_001'
 Windows and Linux can still use deep links as startup arguments. Clickable URL
 scheme registration for those platforms depends on packaging or desktop
 integration and is not currently covered by the development helper script.
+
+### Command Line Testing
+
+Command-line deep links are useful for development, automated tests, and
+debugging:
+
+```bash
+cargo run -- 'odon://open?project=file:///path/to/project.json&roi=ROI_001'
+```
+
+If Odon is already running, the new process attempts to forward the deep link to
+the existing Odon window through local single-instance IPC.
 
 ## Project And ROI Parameters
 
@@ -297,8 +302,9 @@ URL-encode reserved characters.
 ### A Clicked `odon://` Link Does Nothing
 
 The operating system probably has no URL handler registered for the `odon`
-scheme. Use command-line deep links, open the packaged macOS app once, or run
-the macOS development handler registration script.
+scheme. Open the packaged macOS app once, register the intended app bundle, or
+run the macOS development handler registration script. Command-line deep links
+remain available for testing.
 
 ### The Wrong Odon Build Handles The Link
 

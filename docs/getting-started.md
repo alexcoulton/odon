@@ -1,10 +1,14 @@
 # Getting Started
 
-This guide is for users who want to run the viewer locally and open data as quickly as possible.
+This guide is for users who want to open Odon and load data as quickly as
+possible.
 
-## Build And Launch
+## Open Odon
 
-From the repository root:
+For normal use, open the Odon desktop application from your operating system's
+application launcher.
+
+For development builds, start the app from the repository root:
 
 ```bash
 cargo run
@@ -14,45 +18,23 @@ This opens the app landing screen.
 
 ## Common Opening Paths
 
-Most users should start from the app landing screen:
+Use the Project panel as the primary way to open data:
 
-1. Run `cargo run`.
-2. Use the Project panel to load a project, import a samplesheet, or click
+1. Open Odon.
+2. Click `Load Project...`, `Import Samplesheet CSV...`, or
    `Add OME-Zarr Root...`.
-3. Select one ROI and click `Open`, or select multiple ROIs and click
+3. Select one ROI and click `Open`, or select multiple OME-Zarr ROIs and click
    `Open mosaic (N)`.
 
-You can also launch common views directly from the command line.
-
-Open a saved project:
-
-```bash
-cargo run -- --project "/path/to/project.json"
-```
-
-Open a single local dataset directly:
-
-```bash
-cargo run -- "/path/to/ROI1.ome.zarr"
-```
-
-Open a mosaic directly from a samplesheet:
-
-```bash
-cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
-```
-
-Open a mosaic directly from a project and optionally fix the initial column
-count:
-
-```bash
-cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2" --mosaic-cols 10
-```
+Command-line opening is available for scripted demos, debugging, and automated
+checks, but it is not the primary user workflow. See [CLI](reference/cli.md) for
+those commands.
 
 ## First Session Checklist
 
 1. Launch the app.
-2. Open a local OME-Zarr dataset or a saved project.
+2. Use the Project panel to open a local OME-Zarr dataset, samplesheet, or saved
+   project.
 3. In the left panel, inspect the layer list and select the active layer.
 4. In the right panel, adjust channel contrast, color, and overlay settings.
 5. Use `F` to fit the current view.

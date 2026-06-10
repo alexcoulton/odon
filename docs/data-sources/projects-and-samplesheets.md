@@ -12,11 +12,11 @@ Project files are useful when you want to save:
 - embedded masks
 - layer grouping and related viewer state
 
-Open a project with:
+Open a project in the GUI:
 
-```bash
-cargo run -- --project "/path/to/project.json"
-```
+1. Open Odon.
+2. In the Project panel, click `Load Project...`.
+3. Choose the project JSON file.
 
 In the GUI, a project that contains more than one OME-Zarr ROI can be opened as a
 mosaic directly:
@@ -60,6 +60,9 @@ You can also set the initial mosaic column count:
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv" --mosaic-cols 10
 ```
+
+Command-line samplesheet opening is intended for scripted demos and debugging.
+For normal use, import the samplesheet from the Project panel.
 
 ### CSV format
 

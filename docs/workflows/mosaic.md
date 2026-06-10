@@ -95,10 +95,10 @@ Use these selection controls in the ROI list:
 If `Open mosaic (N)` is disabled, check that at least two ROIs are selected and
 that the selected datasets can be opened in mosaic mode.
 
-## Command-Line Opening
+## Advanced Command-Line Opening
 
-Command-line opening is optional. It is useful for scripted demos, testing, and
-sharing exact launch commands.
+Command-line opening is optional and secondary to the GUI workflow. Use it for
+scripted demos, testing, and sharing exact launch commands.
 
 Open a mosaic directly from a samplesheet:
 

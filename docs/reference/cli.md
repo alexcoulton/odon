@@ -1,30 +1,34 @@
 # CLI
 
-## Launch The App
+The CLI is a secondary interface for development, scripted demos, debugging, and
+automated checks. For routine use, open Odon as a desktop application and use the
+Project panel to load projects, samplesheets, OME-Zarr roots, and mosaics.
+
+## Launch A Development Build
 
 ```bash
 cargo run
 ```
 
-## Open A Project
+## Open A Project Directly
 
 ```bash
 cargo run -- --project "/path/to/project.json"
 ```
 
-## Open A Single Dataset
+## Open A Single Dataset Directly
 
 ```bash
 cargo run -- "/path/to/ROI1.ome.zarr"
 ```
 
-## Open A Mosaic From A Project
+## Open A Mosaic From A Project Directly
 
 ```bash
 cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2"
 ```
 
-## Open A Mosaic From A Samplesheet
+## Open A Mosaic From A Samplesheet Directly
 
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
