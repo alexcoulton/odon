@@ -59,4 +59,5 @@ For the smoothest first experience, start with:
 - [Viewing Channels](workflows/viewing.md)
 - [Mosaic Mode](workflows/mosaic.md)
 - [Objects and Overlays](workflows/objects-and-overlays.md)
+- [Mask Polygons](workflows/mask-polygons.md)
 - [Projects and Samplesheets](data-sources/projects-and-samplesheets.md)

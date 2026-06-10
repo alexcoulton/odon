@@ -36,8 +36,11 @@ The viewer supports exclusion or artefact masks saved as GeoJSON.
 Current workflow:
 
 - load masks from the `ROI Selector` tab
-- draw or edit masks using the `Draw mask` tool
+- draw masks using the polygon tool
+- select, edit, delete, and undo mask polygon edits on the active mask layer
 - export masks to GeoJSON when needed
+
+For detailed controls, see [Mask Polygons](mask-polygons.md).
 
 ## Points
 

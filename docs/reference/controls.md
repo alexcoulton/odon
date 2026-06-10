@@ -13,6 +13,18 @@
 - use visibility toggles to hide or show layers
 - drag layer rows to reorder them
 
+## Mask Polygons
+
+- Add vertices: select the polygon tool, then click on the canvas
+- Close polygon: double-click, press `Enter`, or click the highlighted first vertex
+- Cancel in-progress polygon: `Esc`
+- Remove last in-progress point: `Backspace`
+- Select polygon: make a mask layer active, switch to pan, then click a polygon edge or interior
+- Edit polygon: drag a selected polygon vertex handle
+- Move polygon: make a mask layer active, switch to move, then drag inside a polygon
+- Delete selected polygon: `Delete`, `Backspace`, or right-click and choose `Delete polygon`
+- Undo mask edit: `Ctrl+Z` on Windows/Linux or `Cmd+Z` on macOS
+
 ## Transform Tool
 
 When the transform tool is active for a supported channel layer:

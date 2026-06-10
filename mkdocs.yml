@@ -38,6 +38,7 @@ nav:
       - Viewing Channels: workflows/viewing.md
       - Mosaic Mode: workflows/mosaic.md
       - Objects and Overlays: workflows/objects-and-overlays.md
+      - Mask Polygons: workflows/mask-polygons.md
       - Thresholding: workflows/thresholding.md
   - Data Sources:
       - Overview: data-sources/overview.md

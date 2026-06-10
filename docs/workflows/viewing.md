@@ -21,6 +21,8 @@ You can:
 - adjust per-channel colors
 - choose tools such as pan, move-layer, transform, and mask drawing
 
+Mask polygon creation and editing are covered in [Mask Polygons](mask-polygons.md).
+
 ## Contrast And Color
 
 For image channels, the active layer exposes contrast and color controls in the right panel.
@@ -50,5 +52,6 @@ This is useful when channels need manual alignment adjustments.
 ## Related Pages
 
 - [OME-Zarr](../data-sources/ome-zarr.md)
+- [Mask Polygons](mask-polygons.md)
 - [Controls](../reference/controls.md)
 - [Current Limitations](../advanced/current-limitations.md)
