@@ -22,7 +22,7 @@ These are supported, but should be approached as compatibility workflows rather 
 ## Choosing The Right Entry Point
 
 - start with [OME-Zarr](ome-zarr.md) for image-first spatial proteomics review
-- use [Object And Overlay Data](object-and-overlay-data.md) when you need
+- use [Object and Overlay Data](object-and-overlay-data.md) when you need
   segmentation objects, masks, point overlays, or object measurements
 - use [Projects and Samplesheets](projects-and-samplesheets.md) when you need saved workspace state or multi-ROI workflows
 - use [SpatialData and Xenium](spatialdata-and-xenium.md) for those specific ecosystem formats

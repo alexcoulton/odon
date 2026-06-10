@@ -120,7 +120,7 @@ cargo run -- 'odon://open?project=file:///path/to/project.json&roi=ROI_001'
 If Odon is already running, the new process attempts to forward the deep link to
 the existing Odon window through local single-instance IPC.
 
-## Project And ROI Parameters
+## Project and ROI Parameters
 
 | Parameter | Meaning |
 | --- | --- |
@@ -182,7 +182,7 @@ channel_contrast=CD45:0:1200%7CCD3:20:900
 Contrast limits are applied as manual contrast windows, equivalent to editing
 contrast in the UI.
 
-## Segmentation And Object Parameters
+## Segmentation and Object Parameters
 
 | Parameter | Meaning |
 | --- | --- |
@@ -205,7 +205,7 @@ segmentation from the ROI's `segpath`, avoids loading bundled OME-Zarr labels,
 and applies the requested object colouring.
 
 For supported object formats and `segpath` conventions, see
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Legend Visibility And Colours
 
@@ -231,8 +231,8 @@ whitespace-like differences.
 ## Object Filters
 
 Object filters control the same filter rows shown in the segmentation-object
-Properties panel. Filters change the active object subset used for rendering,
-counts, analysis, and export.
+right-panel `Properties` tab. Filters change the active object subset used for
+rendering, counts, analysis, and export.
 
 | Parameter | Meaning |
 | --- | --- |

@@ -98,4 +98,4 @@ See [CLI](reference/cli.md) for command-line options.
 - [Objects and Overlays](workflows/objects-and-overlays.md)
 - [Mask Polygons](workflows/mask-polygons.md)
 - [Projects and Samplesheets](data-sources/projects-and-samplesheets.md)
-- [Object And Overlay Data](data-sources/object-and-overlay-data.md)
+- [Object and Overlay Data](data-sources/object-and-overlay-data.md)

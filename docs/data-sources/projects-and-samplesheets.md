@@ -1,4 +1,4 @@
-# Projects And Samplesheets
+# Projects and Samplesheets
 
 Projects and samplesheets are the main way to scale from a single ROI to a repeatable workspace.
 
@@ -99,7 +99,7 @@ Common optional columns include:
 | `condition`, `batch`, `patient`, `region` | Example metadata columns for filtering, sorting, grouping, or review context. |
 
 For more detail about `segpath` and supported object formats, see
-[Object And Overlay Data](object-and-overlay-data.md).
+[Object and Overlay Data](object-and-overlay-data.md).
 
 Example with metadata:
 

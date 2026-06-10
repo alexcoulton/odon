@@ -37,7 +37,7 @@ cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
 The samplesheet CSV must have a header row. The first two columns are `id` and
 `path`; any later columns are imported as metadata for sorting, grouping, and
 labels. See
-[Projects And Samplesheets](../data-sources/projects-and-samplesheets.md#csv-format)
+[Projects and Samplesheets](../data-sources/projects-and-samplesheets.md#csv-format)
 for the full CSV layout.
 
 Set the initial number of columns for a samplesheet mosaic:

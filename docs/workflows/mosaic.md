@@ -163,7 +163,7 @@ Common metadata columns for TMA review include:
 | `segpath` | Optional object/segmentation file for each ROI. |
 
 For the full CSV contract, see
-[Projects And Samplesheets](../data-sources/projects-and-samplesheets.md).
+[Projects and Samplesheets](../data-sources/projects-and-samplesheets.md).
 
 ## What You See In Mosaic Mode
 
@@ -284,7 +284,7 @@ marker patterns under a consistent display setup.
 The top bar also provides quick channel stepping and compact contrast controls
 for rapid review.
 
-## Segmentation And Object Paths
+## Segmentation and Object Paths
 
 Samplesheets can include a `segpath` column. In mosaic mode, Odon uses that
 column to discover per-ROI segmentation/object files.
@@ -301,7 +301,7 @@ When the `Segmentation` layer is available, select it in the left panel to see
 loading and display controls in the `Properties` tab. Mosaic object workflows are
 intended for broad review across ROIs; detailed object measurement and editing
 workflows are still better in single-view mode. For object-file conventions, see
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Memory Tab
 

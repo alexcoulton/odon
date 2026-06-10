@@ -1,4 +1,4 @@
-# SpatialData And Xenium
+# SpatialData and Xenium
 
 `odon` includes support for SpatialData and selected Xenium Explorer workflows, but these should be treated as format adapters around the core viewer rather than the primary product center.
 

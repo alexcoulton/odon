@@ -184,7 +184,7 @@ The exact tool list is provided by the `odon_mcp` binary through MCP
 | `fit_to_view` | Fit the current image or mosaic to the viewport. |
 | `capture_screenshot` | Queue a canvas screenshot. |
 
-### Objects And Overlays
+### Objects and Overlays
 
 | Tool | Purpose |
 | --- | --- |

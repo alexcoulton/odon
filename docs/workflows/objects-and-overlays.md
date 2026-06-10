@@ -1,4 +1,4 @@
-# Objects And Overlays
+# Objects and Overlays
 
 Odon can draw more than image channels. You can layer segmentation labels,
 polygon objects, point objects, masks, and annotation data over the image canvas.
@@ -18,7 +18,7 @@ measurement, and downstream export.
 For spatial proteomics review, the most useful object workflow is usually
 GeoParquet or Parquet segmentation objects linked to each ROI through a project
 or samplesheet `segpath`. For file-format details, see
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Open Objects From The GUI
 
@@ -26,7 +26,7 @@ Start from a single image or project ROI:
 
 1. Open Odon and open one ROI.
 2. In the left layer list, select `Segmentation Objects`.
-3. In the right `Properties` tab, click `Load Seg Objects...`.
+3. In the right-panel `Properties` tab, click `Load Seg Objects...`.
 4. Choose a GeoParquet or Parquet object file.
 5. In the load dialog, choose whether to load polygon geometry or point-like
    objects when that choice is available.
@@ -62,16 +62,16 @@ Useful project tools:
   faster review across many ROIs.
 
 For the samplesheet format, see
-[Projects And Samplesheets](../data-sources/projects-and-samplesheets.md). For
+[Projects and Samplesheets](../data-sources/projects-and-samplesheets.md). For
 object-file conventions, see
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Segmentation GeoJSON
 
 Use `Load Seg GeoJSON...` for simpler GeoJSON or JSON segmentation outlines:
 
 1. Select the segmentation GeoJSON layer in the layer list.
-2. In the right `Properties` tab, click `Load Seg GeoJSON...`.
+2. In the right-panel `Properties` tab, click `Load Seg GeoJSON...`.
 3. Choose the GeoJSON file.
 4. Adjust `Visible`, `Opacity`, and `Width`.
 
@@ -95,7 +95,7 @@ Useful notes:
 
 ## Display Controls
 
-Select the object or overlay layer in the left panel, then use the right
+Select the object or overlay layer in the left panel, then use the right-panel
 `Properties` tab.
 
 For `Segmentation Objects`, common controls include:
@@ -128,7 +128,7 @@ object subset.
 Typical workflow:
 
 1. Select `Segmentation Objects`.
-2. Open the right `Properties` tab.
+2. Open the right-panel `Properties` tab.
 3. In `Filter`, choose a property column.
 4. Choose or type a query value.
 5. Enable the filter row.
@@ -225,7 +225,7 @@ Mask polygon creation and editing are covered in
 ### Object Controls Are Missing
 
 Click `Segmentation Objects` or another object-backed layer in the left layer
-list. The right panel changes based on the active layer.
+list. The right-panel `Properties` tab changes based on the active layer.
 
 ### No Objects Load
 
@@ -252,7 +252,7 @@ whether the object file belongs to the current ROI.
 ## Related Pages
 
 - [Projects and Samplesheets](../data-sources/projects-and-samplesheets.md)
-- [Object And Overlay Data](../data-sources/object-and-overlay-data.md)
+- [Object and Overlay Data](../data-sources/object-and-overlay-data.md)
 - [Mask Polygons](mask-polygons.md)
 - [Deep Links](../reference/deep-links.md)
 - [Odon MCP](../reference/codex-mcp-odon.md)

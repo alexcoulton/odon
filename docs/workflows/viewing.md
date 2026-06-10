@@ -157,7 +157,7 @@ right-panel `Properties` tab. If expected overlay controls are missing, the most
 common cause is that a different layer is active.
 
 For details, see [Objects and Overlays](objects-and-overlays.md),
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md), and
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md), and
 [Mask Polygons](mask-polygons.md).
 
 ## Large-Image Behaviour
@@ -217,7 +217,7 @@ wait for visible tiles to finish loading after large zoom or pan changes.
 - [Getting Started](../getting-started.md)
 - [OME-Zarr](../data-sources/ome-zarr.md)
 - [Objects and Overlays](objects-and-overlays.md)
-- [Object And Overlay Data](../data-sources/object-and-overlay-data.md)
+- [Object and Overlay Data](../data-sources/object-and-overlay-data.md)
 - [Mask Polygons](mask-polygons.md)
 - [Controls](../reference/controls.md)
 - [Current Limitations](../advanced/current-limitations.md)

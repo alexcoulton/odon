@@ -25,7 +25,7 @@ The current viewer is best suited to workflows where you need to:
 ## Core Capabilities
 
 - GPU-backed image compositing for multi-channel data
-- per-channel color and contrast controls
+- per-channel colour and contrast controls
 - mosaic viewing for many ROIs on one canvas
 - overlays for points, labels, masks, and segmentation objects
 - object loading from GeoParquet, Parquet, GeoJSON, and CSV

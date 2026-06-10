@@ -1,4 +1,4 @@
-# Object And Overlay Data
+# Object and Overlay Data
 
 Odon can display object and overlay data alongside image channels. This page
 describes the file types, path conventions, and coordinate assumptions used by
@@ -22,7 +22,7 @@ For spatial proteomics projects, prefer GeoParquet or Parquet object files when
 you need object properties, cell categories, object filtering, measurements, or
 enriched export.
 
-## Project And Samplesheet Linking
+## Project and Samplesheet Linking
 
 The most scalable way to connect object files to ROIs is the samplesheet
 `segpath` column:
@@ -79,7 +79,7 @@ Practical expectations:
 If object geometry was created from a downsampled image, convert it back to
 level-0 coordinates before using it as the canonical object file.
 
-## GeoParquet And Parquet Objects
+## GeoParquet and Parquet Objects
 
 Use GeoParquet or Parquet when object tables contain many cells or rich
 properties.
@@ -110,7 +110,7 @@ Wide object tables can be loaded lazily. In that case, some property names may
 appear with `(load)` in `Color by` or filter controls. Selecting them loads the
 column when needed.
 
-## GeoJSON Objects And Masks
+## GeoJSON Objects and Masks
 
 GeoJSON is useful for smaller polygon overlays, simple interchange, and masks.
 

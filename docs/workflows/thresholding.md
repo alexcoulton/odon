@@ -19,7 +19,7 @@ statistics or phenotype logic environment.
 | Export measured marker values or call columns | `Measurements` export workflows | Loaded polygon objects and selected image channels. |
 
 For object formats and `segpath` conventions, see
-[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+[Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Object-Property Thresholds
 
@@ -223,7 +223,7 @@ the generated polygons.
 
 - [Viewing Channels](viewing.md)
 - [Objects and Overlays](objects-and-overlays.md)
-- [Object And Overlay Data](../data-sources/object-and-overlay-data.md)
+- [Object and Overlay Data](../data-sources/object-and-overlay-data.md)
 - [Mask Polygons](mask-polygons.md)
 - [Projects and Samplesheets](../data-sources/projects-and-samplesheets.md)
 - [Current Limitations](../advanced/current-limitations.md)
