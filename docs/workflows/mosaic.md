@@ -21,40 +21,87 @@ Use mosaic mode when you want to:
 Mosaic mode is strongest for multi-ROI image review. Some object, mask, and
 analysis workflows are still more complete in single-view mode.
 
-## Launching A Mosaic
+## Opening A Mosaic In The GUI
 
-### From A Samplesheet
+The normal way to open a mosaic is through the Project panel. Use the command
+line only when you want to script a launch or share a reproducible invocation.
 
-Samplesheets are the easiest way to build a mosaic from a folder of ROIs and
-tabular metadata:
+### From A Samplesheet CSV
+
+Use this workflow when you have one CSV row per ROI, with image paths and
+metadata columns:
+
+1. Launch Odon.
+2. In the Project panel, click `Import Samplesheet CSV...`.
+3. Choose the samplesheet CSV file.
+4. Confirm that the ROI list has populated.
+5. Click `Select all`, or select a subset of ROIs.
+6. Click `Open mosaic (N)`, where `N` is the number of selected ROIs.
+
+After the mosaic opens, use the right-panel `Layout` tab to group, sort, label,
+and arrange the ROIs.
+
+### From A Saved Project
+
+Use this workflow when you already have a project JSON containing saved ROIs:
+
+1. Launch Odon.
+2. In the Project panel, click `Load Project...`, or choose a project from
+   `Recent Projects`.
+3. Select at least two ROIs in the ROI list.
+4. Click `Open mosaic (N)`.
+
+Project-based mosaics are useful when you already have a curated project with
+saved ROIs, masks, annotation layers, or view state. Samplesheet-based mosaics
+are useful when you want a lightweight, tabular way to define a multi-ROI
+workspace.
+
+### Selecting ROIs
+
+The `Open mosaic (N)` button is enabled only when at least two compatible ROIs
+are selected.
+
+Use these selection controls in the ROI list:
+
+| Action | Control |
+| --- | --- |
+| Select one ROI | Click the ROI. |
+| Add or remove one ROI from the selection | `Cmd`-click on macOS, or `Ctrl`-click on Windows/Linux. |
+| Select a range | Click one ROI, then `Shift`-click another ROI. |
+| Select all visible ROIs | Click `Select all` or `Select visible`. |
+| Open one ROI instead of a mosaic | Select or double-click one ROI, or click `Open`. |
+
+If `Open mosaic (N)` is disabled, check that at least two ROIs are selected and
+that the selected datasets can be opened in mosaic mode.
+
+## Command-Line Opening
+
+Command-line opening is optional. It is useful for scripted demos, testing, and
+sharing exact launch commands.
+
+Open a mosaic directly from a samplesheet:
 
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
 ```
 
-To set the initial number of mosaic columns:
+Set the initial number of mosaic columns:
 
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv" --mosaic-cols 10
 ```
 
-### From A Project
-
-Project-based mosaics open ROIs that already belong to a saved project dataset:
+Open a mosaic directly from a project:
 
 ```bash
 cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2"
 ```
 
-To set the initial number of columns:
+Set the initial number of columns for a project mosaic:
 
 ```bash
 cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2" --mosaic-cols 10
 ```
-
-Use project-based mosaics when you already have a curated project with saved
-ROIs, masks, annotation layers, or view state. Use samplesheet-based mosaics
-when you want a lightweight, tabular way to define a multi-ROI workspace.
 
 ## Samplesheet Basics
 
@@ -263,15 +310,17 @@ For a TMA-style demonstration:
 3. Include layout columns such as `tma_row`, `tma_col`, and `well`.
 4. Include review columns such as `cohort`, `response`, `batch`, and
    `core_quality`.
-5. Launch with `--mosaic-samplesheet`.
-6. Open the `Layout` tab.
-7. Start with `Fit Cells`.
-8. Group by `cohort` or `response`.
-9. Sort by `patient_id`, then by `core_replicate`.
-10. Select the `Text Labels` layer and add labels such as `id`, `patient_id`, and
+5. Launch Odon and click `Import Samplesheet CSV...`.
+6. Choose the samplesheet, then click `Select all`.
+7. Click `Open mosaic (N)`.
+8. Open the `Layout` tab.
+9. Start with `Fit Cells`.
+10. Group by `cohort` or `response`.
+11. Sort by `patient_id`, then by `core_replicate`.
+12. Select the `Text Labels` layer and add labels such as `id`, `patient_id`, and
     `response`.
-11. Use channel visibility and contrast to compare marker patterns.
-12. Double-click interesting ROIs for closer review.
+13. Use channel visibility and contrast to compare marker patterns.
+14. Double-click interesting ROIs for closer review.
 
 ## Troubleshooting
 

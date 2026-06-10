@@ -29,7 +29,15 @@ Typical uses:
 - include metadata columns for labels
 - provide optional segmentation paths
 
-Open a mosaic from a samplesheet with:
+To use a samplesheet in the GUI:
+
+1. Launch Odon.
+2. In the Project panel, click `Import Samplesheet CSV...`.
+3. Choose the CSV file.
+4. Select the ROIs you want to view, or click `Select all`.
+5. Click `Open mosaic (N)`.
+
+The command-line equivalent is:
 
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"

@@ -12,7 +12,16 @@ cargo run
 
 This opens the app landing screen.
 
-## Common Launch Paths
+## Common Opening Paths
+
+Most users should start from the app landing screen:
+
+1. Run `cargo run`.
+2. Use the Project panel to open a project, import a samplesheet, or add data.
+3. Select one ROI and click `Open`, or select multiple ROIs and click
+   `Open mosaic (N)`.
+
+You can also launch common views directly from the command line.
 
 Open a saved project:
 
@@ -26,19 +35,14 @@ Open a single local dataset directly:
 cargo run -- "/path/to/ROI1.ome.zarr"
 ```
 
-Open a mosaic from a project:
-
-```bash
-cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2"
-```
-
-Open a mosaic from a samplesheet:
+Open a mosaic directly from a samplesheet:
 
 ```bash
 cargo run -- --mosaic-samplesheet "/path/to/samplesheet.csv"
 ```
 
-Optionally fix the mosaic column count:
+Open a mosaic directly from a project and optionally fix the initial column
+count:
 
 ```bash
 cargo run -- --project "/path/to/project.json" --mosaic "TMA1v3,TMA2" --mosaic-cols 10
