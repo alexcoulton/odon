@@ -43,6 +43,7 @@ nav:
   - Data Sources:
       - Overview: data-sources/overview.md
       - OME-Zarr: data-sources/ome-zarr.md
+      - Object And Overlay Data: data-sources/object-and-overlay-data.md
       - SpatialData and Xenium: data-sources/spatialdata-and-xenium.md
       - Projects and Samplesheets: data-sources/projects-and-samplesheets.md
   - Reference:

@@ -204,6 +204,9 @@ This opens the image, loads the project GeoParquet or Parquet object
 segmentation from the ROI's `segpath`, avoids loading bundled OME-Zarr labels,
 and applies the requested object colouring.
 
+For supported object formats and `segpath` conventions, see
+[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
+
 ## Legend Visibility And Colours
 
 These parameters apply after `cell_color_by` has selected an object property.

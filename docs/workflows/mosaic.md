@@ -300,7 +300,8 @@ core_0002,cores/core_0002/image.ome.zarr,cores/core_0002/objects/cells.parquet
 When the `Segmentation` layer is available, select it in the left panel to see
 loading and display controls in the `Properties` tab. Mosaic object workflows are
 intended for broad review across ROIs; detailed object measurement and editing
-workflows are still better in single-view mode.
+workflows are still better in single-view mode. For object-file conventions, see
+[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Memory Tab
 

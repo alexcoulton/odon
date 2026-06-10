@@ -98,6 +98,9 @@ Common optional columns include:
 | `segpath` | Optional segmentation/object path for the ROI. Relative `segpath` values are resolved relative to the samplesheet CSV file. |
 | `condition`, `batch`, `patient`, `region` | Example metadata columns for filtering, sorting, grouping, or review context. |
 
+For more detail about `segpath` and supported object formats, see
+[Object And Overlay Data](object-and-overlay-data.md).
+
 Example with metadata:
 
 ```csv

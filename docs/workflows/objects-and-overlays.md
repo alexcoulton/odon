@@ -17,7 +17,8 @@ measurement, and downstream export.
 
 For spatial proteomics review, the most useful object workflow is usually
 GeoParquet or Parquet segmentation objects linked to each ROI through a project
-or samplesheet `segpath`.
+or samplesheet `segpath`. For file-format details, see
+[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Open Objects From The GUI
 
@@ -61,7 +62,9 @@ Useful project tools:
   faster review across many ROIs.
 
 For the samplesheet format, see
-[Projects And Samplesheets](../data-sources/projects-and-samplesheets.md).
+[Projects And Samplesheets](../data-sources/projects-and-samplesheets.md). For
+object-file conventions, see
+[Object And Overlay Data](../data-sources/object-and-overlay-data.md).
 
 ## Segmentation GeoJSON
 
@@ -249,6 +252,7 @@ whether the object file belongs to the current ROI.
 ## Related Pages
 
 - [Projects and Samplesheets](../data-sources/projects-and-samplesheets.md)
+- [Object And Overlay Data](../data-sources/object-and-overlay-data.md)
 - [Mask Polygons](mask-polygons.md)
 - [Deep Links](../reference/deep-links.md)
 - [Odon MCP](../reference/codex-mcp-odon.md)
