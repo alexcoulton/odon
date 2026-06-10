@@ -17,7 +17,8 @@ This opens the app landing screen.
 Most users should start from the app landing screen:
 
 1. Run `cargo run`.
-2. Use the Project panel to open a project, import a samplesheet, or add data.
+2. Use the Project panel to load a project, import a samplesheet, or click
+   `Add OME-Zarr Root...`.
 3. Select one ROI and click `Open`, or select multiple ROIs and click
    `Open mosaic (N)`.
 

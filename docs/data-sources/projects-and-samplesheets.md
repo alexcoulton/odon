@@ -18,6 +18,18 @@ Open a project with:
 cargo run -- --project "/path/to/project.json"
 ```
 
+In the GUI, a project that contains more than one OME-Zarr ROI can be opened as a
+mosaic directly:
+
+1. Load the project.
+2. In the ROI list, click `Select all`, or select the ROIs you want to compare.
+3. Click `Open mosaic (N)`.
+
+You can also build a multi-ROI project without a samplesheet by clicking
+`Add OME-Zarr Root...`. Odon scans the selected folder tree for OME-Zarr roots
+and adds each discovered dataset as an ROI. After the ROI list is populated, use
+`Select all` and `Open mosaic (N)`.
+
 ## Samplesheet CSV
 
 Samplesheets are useful when you want to drive a mosaic from tabular metadata.

@@ -51,10 +51,31 @@ Use this workflow when you already have a project JSON containing saved ROIs:
 3. Select at least two ROIs in the ROI list.
 4. Click `Open mosaic (N)`.
 
+The same steps work for any project that already contains more than one
+OME-Zarr ROI. You do not need a samplesheet or a command-line launch. If the ROI
+list already shows the OME-Zarr datasets you want to compare, click `Select all`
+or select a subset, then click `Open mosaic (N)`.
+
 Project-based mosaics are useful when you already have a curated project with
 saved ROIs, masks, annotation layers, or view state. Samplesheet-based mosaics
 are useful when you want a lightweight, tabular way to define a multi-ROI
 workspace.
+
+### From An OME-Zarr Folder Tree
+
+Use this workflow when your ROIs are individual OME-Zarr datasets somewhere
+under one parent folder:
+
+1. Launch Odon.
+2. In the Project panel, click `Add OME-Zarr Root...`.
+3. Choose the parent folder that contains the OME-Zarr ROI folders.
+4. Confirm that the ROI list has populated.
+5. Click `Select all`, or select a subset of ROIs.
+6. Click `Open mosaic (N)`.
+
+`Add OME-Zarr Root...` scans the selected directory tree for OME-Zarr roots and
+adds each discovered root as a project ROI. Choose the folder above the ROI
+datasets, not an internal array folder inside one dataset.
 
 ### Selecting ROIs
 
