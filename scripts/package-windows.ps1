@@ -6,7 +6,6 @@ $McpName = if ($env:MCP_NAME) { $env:MCP_NAME } else { "odon_mcp" }
 $Version = (Select-String -Path (Join-Path $RootDir "Cargo.toml") -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
 $BundleDir = Join-Path $RootDir "target\release\bundle\windows"
 $StageDir = Join-Path $BundleDir "$AppName-windows-x86_64"
-$ArchivePath = Join-Path $BundleDir "$AppName-windows-x86_64.zip"
 $InstallerDir = Join-Path $BundleDir "installer"
 $InstallerPath = Join-Path $InstallerDir "OdonSetup-$Version-windows-x86_64.exe"
 
@@ -34,12 +33,6 @@ Copy-Item (Join-Path $RootDir "fixtures\odon-deep-link-test.html") (Join-Path $E
 Copy-Item (Join-Path $RootDir "README.md") (Join-Path $StageDir "README.md")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE")
 
-if (Test-Path $ArchivePath) {
-    Remove-Item -Force $ArchivePath
-}
-
-Compress-Archive -Path "$StageDir\*" -DestinationPath $ArchivePath
-
 $IsccCommand = Get-Command "iscc" -ErrorAction SilentlyContinue
 $IsccPath = if ($IsccCommand) { $IsccCommand.Source } else { $null }
 if (-not $IsccPath) {
@@ -51,12 +44,7 @@ if (-not $IsccPath) {
 }
 
 if (-not $IsccPath) {
-    if ($env:ODON_SKIP_WINDOWS_INSTALLER) {
-        Write-Warning "Inno Setup compiler not found; skipping installer because ODON_SKIP_WINDOWS_INSTALLER is set."
-        Write-Output $ArchivePath
-        exit 0
-    }
-    throw "Inno Setup compiler not found. Install Inno Setup 6 or set ODON_SKIP_WINDOWS_INSTALLER=1 to build only the zip artifact."
+    throw "Inno Setup compiler not found. Install Inno Setup 6 to build the Windows installer."
 }
 
 New-Item -ItemType Directory -Force -Path $InstallerDir | Out-Null
@@ -70,5 +58,4 @@ if (-not (Test-Path $InstallerPath)) {
     throw "Expected installer was not produced at $InstallerPath"
 }
 
-Write-Output $ArchivePath
 Write-Output $InstallerPath
