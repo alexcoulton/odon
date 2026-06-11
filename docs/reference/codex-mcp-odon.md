@@ -8,6 +8,9 @@ capture screenshots.
 The MCP server is a control layer for an already-running Odon window. It is not
 a replacement for the GUI and it does not render images by itself.
 
+Users normally open only the Odon desktop app. The MCP helper is launched by the
+MCP client, not by the user.
+
 ## Architecture
 
 ```text
@@ -17,33 +20,71 @@ MCP client
       running Odon GUI control bridge on 127.0.0.1:17870
 ```
 
-There are two Odon-side processes:
+There are two Odon-side executables:
 
 | Process | Role |
 | --- | --- |
 | `odon` | The GUI application. It owns projects, image data, object data, GPU rendering, and screenshots. |
 | `odon_mcp` | The MCP server. It speaks JSON-RPC/MCP over stdin/stdout and forwards tool calls to the GUI. |
 
-When the GUI starts successfully, the terminal should show:
-
-```text
-odon control bridge listening on 127.0.0.1:17870
-```
-
 Most MCP tools require that Odon is already open and has a project, image, or
 mosaic loaded.
 
 ## Installation
 
-For normal use, install or open the Odon desktop application first. The MCP
-server controls that running GUI over the local bridge.
+For normal use, install or open the Odon desktop application first. Packaged
+releases include the `odon_mcp` helper alongside the GUI. The user does not
+manually launch `odon_mcp`; the MCP client launches it when needed.
+
+### Packaged Releases
+
+Install Odon from the release artifact for your platform, then configure your
+MCP client to launch the bundled `odon_mcp` binary.
+
+Typical paths are:
+
+| Platform | MCP command path |
+| --- | --- |
+| macOS DMG/app install | `/Applications/odon.app/Contents/MacOS/odon_mcp` |
+| Windows installer | `C:\Program Files\Odon\odon_mcp.exe` |
+| Linux `.deb` | `/usr/lib/odon/odon_mcp` |
+| Linux tarball | `/path/to/odon-linux-x86_64/odon_mcp` |
+
+Example MCP client configuration:
+
+```text
+command: /Applications/odon.app/Contents/MacOS/odon_mcp
+args: []
+```
+
+For clients that use TOML-style MCP configuration:
+
+```toml
+[mcp_servers.odon]
+command = "/Applications/odon.app/Contents/MacOS/odon_mcp"
+args = []
+```
+
+On Windows, use the installed `.exe` path:
+
+```toml
+[mcp_servers.odon]
+command = "C:\\Program Files\\Odon\\odon_mcp.exe"
+args = []
+```
+
+Restart the MCP client after changing its configuration.
+
+The GUI still needs to be running. Open Odon normally from the desktop launcher,
+then let the MCP client launch `odon_mcp`. The MCP helper connects to the GUI
+bridge on `127.0.0.1:17870`; it should not start a second Odon GUI process.
 
 ### Development Checkout
 
-Build the project in the usual way:
+Build the GUI and MCP helper from the checkout:
 
 ```bash
-cargo build
+cargo build --bin odon --bin odon_mcp
 ```
 
 For development builds, start the GUI from the checkout:
@@ -71,19 +112,15 @@ cwd = "/path/to/odon.pub"
 
 Restart the MCP client after changing its configuration.
 
-### Packaged Builds
-
-For a packaged release, ship `odon_mcp` alongside the Odon GUI application and
-configure the MCP client to launch that binary directly:
+When the development GUI starts successfully from a terminal, it prints:
 
 ```text
-command: /path/to/odon_mcp
-args: []
+odon control bridge listening on 127.0.0.1:17870
 ```
 
-The GUI still needs to be running. Open the packaged Odon application first, then
-let the MCP client launch `odon_mcp`. The MCP server connects to the GUI bridge
-on `127.0.0.1:17870`; it should not start a second Odon GUI process.
+Packaged desktop launches do not require a terminal. On Windows release builds,
+the GUI is built as a Windows desktop subsystem executable so double-clicking
+`odon.exe` should not open a cmd window.
 
 ## Smoke Tests
 

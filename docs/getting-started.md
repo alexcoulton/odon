@@ -6,7 +6,9 @@ load image data quickly.
 ## Open Odon
 
 Open the Odon desktop application from your operating system's application
-launcher.
+launcher. Normal packaged launches do not require a terminal. On Windows,
+release builds are packaged so opening the GUI app should not create a separate
+cmd window.
 
 Odon opens to the project/start screen. The Project panel is the main place to
 load data, create a workspace, and open single-ROI or mosaic views.

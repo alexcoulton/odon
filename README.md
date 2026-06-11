@@ -22,6 +22,20 @@ Release builds are intended to be the main distribution path for:
 - Windows
 - Linux
 
+Release artifacts include the Odon GUI and, where supported, installer-style
+packages:
+
+| Platform | Primary artifact | Notes |
+| --- | --- | --- |
+| macOS | `odon-macos.dmg` | Drag `odon.app` to Applications. |
+| Windows | `OdonSetup-*-windows-x86_64.exe` | Installs Odon without a cmd window for normal GUI launch. |
+| Linux | `.deb` and `.tar.gz` | The `.deb` installs desktop metadata; the tarball is portable. |
+
+The optional MCP helper, `odon_mcp`, is bundled with release artifacts. Users
+launch only the Odon desktop app; MCP clients launch `odon_mcp` automatically
+from the installed location. See
+[Odon MCP](docs/reference/codex-mcp-odon.md) for configuration paths.
+
 ## What odon is for
 
 `odon` is intended for rapid visual exploration of spatial omics data, especially when you need to:

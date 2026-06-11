@@ -15,6 +15,7 @@ Options:
 
 Environment overrides:
   APP_NAME   Bundle name / executable name (default: odon)
+  MCP_NAME   MCP helper executable name (default: odon_mcp)
   BUNDLE_ID  macOS bundle identifier (default: org.odon.odon)
   URL_SCHEME URL scheme handled by the app bundle (default: odon)
 EOF
@@ -49,24 +50,31 @@ done
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_name="${APP_NAME:-odon}"
+mcp_name="${MCP_NAME:-odon_mcp}"
 bundle_id="${BUNDLE_ID:-org.odon.odon}"
 url_scheme="${URL_SCHEME:-odon}"
 version="$(awk -F '"' '/^version = / { print $2; exit }' "$root_dir/Cargo.toml")"
 target_dir="$root_dir/target/$profile"
 binary_path="$target_dir/$app_name"
+mcp_binary_path="$target_dir/$mcp_name"
 app_dir="$target_dir/bundle/osx/${app_name}.app"
 contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
 
 if [[ "$profile" == "release" ]]; then
-  cargo build --release
+  cargo build --release --bin "$app_name" --bin "$mcp_name"
 else
-  cargo build
+  cargo build --bin "$app_name" --bin "$mcp_name"
 fi
 
 if [[ ! -x "$binary_path" ]]; then
   echo "Built binary not found at $binary_path" >&2
+  exit 1
+fi
+
+if [[ ! -x "$mcp_binary_path" ]]; then
+  echo "Built MCP helper not found at $mcp_binary_path" >&2
   exit 1
 fi
 
@@ -75,6 +83,8 @@ mkdir -p "$macos_dir" "$resources_dir"
 
 cp "$binary_path" "$macos_dir/$app_name"
 chmod +x "$macos_dir/$app_name"
+cp "$mcp_binary_path" "$macos_dir/$mcp_name"
+chmod +x "$macos_dir/$mcp_name"
 
 if [[ -d "$root_dir/assets" ]]; then
   mkdir -p "$resources_dir/assets"
