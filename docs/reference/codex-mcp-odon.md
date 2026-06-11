@@ -48,16 +48,34 @@ Typical paths are:
 | macOS DMG/app install | `/Applications/odon.app/Contents/MacOS/odon_mcp` |
 | Windows installer | `C:\Program Files\Odon\odon_mcp.exe` |
 | Linux `.deb` | `/usr/lib/odon/odon_mcp` |
-| Linux tarball | `/path/to/odon-linux-x86_64/odon_mcp` |
 
-Example MCP client configuration:
+Restart the MCP client after changing its configuration.
 
-```text
-command: /Applications/odon.app/Contents/MacOS/odon_mcp
-args: []
+The GUI still needs to be running. Open Odon normally from the desktop launcher,
+then let the MCP client launch `odon_mcp`. The MCP helper connects to the GUI
+bridge on `127.0.0.1:17870`; it should not start a second Odon GUI process.
+
+### Client Configuration Examples
+
+The examples below all configure a local stdio MCP server. Use the command path
+for your platform from the table above.
+
+#### Codex
+
+Codex can add stdio MCP servers from the CLI:
+
+```bash
+codex mcp add odon -- /Applications/odon.app/Contents/MacOS/odon_mcp
 ```
 
-For clients that use TOML-style MCP configuration:
+On Windows:
+
+```powershell
+codex mcp add odon -- "C:\Program Files\Odon\odon_mcp.exe"
+```
+
+For manual configuration, edit `~/.codex/config.toml` or a project-scoped
+`.codex/config.toml`:
 
 ```toml
 [mcp_servers.odon]
@@ -65,7 +83,7 @@ command = "/Applications/odon.app/Contents/MacOS/odon_mcp"
 args = []
 ```
 
-On Windows, use the installed `.exe` path:
+Windows TOML strings need escaped backslashes:
 
 ```toml
 [mcp_servers.odon]
@@ -73,11 +91,200 @@ command = "C:\\Program Files\\Odon\\odon_mcp.exe"
 args = []
 ```
 
-Restart the MCP client after changing its configuration.
+In Codex, use `/mcp` to confirm that the server is connected.
 
-The GUI still needs to be running. Open Odon normally from the desktop launcher,
-then let the MCP client launch `odon_mcp`. The MCP helper connects to the GUI
-bridge on `127.0.0.1:17870`; it should not start a second Odon GUI process.
+#### Claude Code
+
+Claude Code can add a local stdio server with `claude mcp add`. The `--`
+separator is important; everything after it is the command that launches the MCP
+server.
+
+```bash
+claude mcp add odon -- /Applications/odon.app/Contents/MacOS/odon_mcp
+```
+
+On Linux:
+
+```bash
+claude mcp add odon -- /usr/lib/odon/odon_mcp
+```
+
+On Windows PowerShell:
+
+```powershell
+claude mcp add odon -- "C:\Program Files\Odon\odon_mcp.exe"
+```
+
+Use `claude mcp list` from a terminal or `/mcp` inside Claude Code to check the
+server status. If you use project-scoped MCP configuration, Claude Code may ask
+you to approve the server before it is active.
+
+#### Claude JSON Configuration
+
+Claude Code and Claude Desktop-style configurations use an `mcpServers` JSON
+object. Depending on the client and scope, this may live in a project
+`.mcp.json` file or in the client's user settings. Claude Desktop commonly uses
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows.
+
+macOS:
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/Applications/odon.app/Contents/MacOS/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Windows:
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "C:\\Program Files\\Odon\\odon_mcp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+Linux:
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/usr/lib/odon/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+#### Gemini CLI
+
+Gemini CLI can add local stdio servers with `gemini mcp add`:
+
+```bash
+gemini mcp add odon /Applications/odon.app/Contents/MacOS/odon_mcp
+```
+
+On Linux:
+
+```bash
+gemini mcp add odon /usr/lib/odon/odon_mcp
+```
+
+On Windows PowerShell:
+
+```powershell
+gemini mcp add odon "C:\Program Files\Odon\odon_mcp.exe"
+```
+
+Gemini CLI also supports JSON configuration in `settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/Applications/odon.app/Contents/MacOS/odon_mcp",
+      "args": [],
+      "timeout": 30000,
+      "trust": false
+    }
+  }
+}
+```
+
+Use `gemini mcp list` or `/mcp list` to check connection status. Stdio MCP
+servers may show as disconnected when the current folder is not trusted; trust
+the folder if Gemini CLI prompts you to do so.
+
+#### Cursor
+
+Cursor uses the `mcpServers` JSON shape. For a global setup, edit
+`~/.cursor/mcp.json`. For a project-scoped setup, create `.cursor/mcp.json` in
+the project directory.
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/Applications/odon.app/Contents/MacOS/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Use the Windows or Linux command path from the table above on those platforms.
+After editing the file, reload Cursor or refresh MCP servers from Cursor's MCP
+settings.
+
+#### Windsurf / Cascade
+
+Windsurf Cascade reads MCP servers from
+`~/.codeium/windsurf/mcp_config.json`.
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/Applications/odon.app/Contents/MacOS/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Use the Windows or Linux command path from the table above on those platforms.
+After editing `mcp_config.json`, restart Windsurf or reload MCP servers from the
+Cascade MCP settings page.
+
+#### VS Code / GitHub Copilot
+
+VS Code's MCP configuration uses a `servers` object rather than `mcpServers`.
+For a workspace-scoped setup, create or edit `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "odon": {
+      "type": "stdio",
+      "command": "/Applications/odon.app/Contents/MacOS/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Use the Windows or Linux command path from the table above on those platforms.
+After saving the file, start the server from the MCP view or use the MCP server
+actions shown by VS Code.
+
+#### Other JSON MCP Clients
+
+Many MCP-capable coding clients use the same `mcpServers` JSON shape:
+
+```json
+{
+  "mcpServers": {
+    "odon": {
+      "command": "/path/to/odon_mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Use the installed `odon_mcp` path for your operating system. If the client has a
+trust or approval flow for local stdio servers, approve Odon after reviewing the
+path.
 
 ### Development Checkout
 
