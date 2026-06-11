@@ -91,6 +91,11 @@ if [[ -d "$root_dir/assets" ]]; then
   cp -R "$root_dir/assets/." "$resources_dir/assets/"
 fi
 
+mkdir -p "$resources_dir/examples"
+cp -R "$root_dir/fixtures/synthetic_5ch.ome.zarr" "$resources_dir/examples/synthetic_5ch.ome.zarr"
+cp "$root_dir/fixtures/synthetic_5ch.project.json" "$resources_dir/examples/synthetic_5ch.project.json"
+cp "$root_dir/fixtures/odon-deep-link-test.html" "$resources_dir/examples/odon-deep-link-test.html"
+
 icon_src=""
 for candidate in \
   "$root_dir/assets/${app_name}.icns" \

@@ -25,6 +25,12 @@ if (Test-Path (Join-Path $RootDir "assets")) {
     Copy-Item (Join-Path $RootDir "assets") (Join-Path $StageDir "assets") -Recurse
 }
 
+$ExamplesDir = Join-Path $StageDir "examples"
+New-Item -ItemType Directory -Force -Path $ExamplesDir | Out-Null
+Copy-Item (Join-Path $RootDir "fixtures\synthetic_5ch.ome.zarr") (Join-Path $ExamplesDir "synthetic_5ch.ome.zarr") -Recurse
+Copy-Item (Join-Path $RootDir "fixtures\synthetic_5ch.project.json") (Join-Path $ExamplesDir "synthetic_5ch.project.json")
+Copy-Item (Join-Path $RootDir "fixtures\odon-deep-link-test.html") (Join-Path $ExamplesDir "odon-deep-link-test.html")
+
 Copy-Item (Join-Path $RootDir "README.md") (Join-Path $StageDir "README.md")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE")
 

@@ -117,6 +117,65 @@ fn project_roi_segmentation_path(
     }
 }
 
+fn resolve_example_project_path(example: &str) -> Option<PathBuf> {
+    let normalized = normalize_example_name(example);
+    let project_name = match normalized.as_str() {
+        "synthetic5ch" | "synthetic" | "demo" => "synthetic_5ch.project.json",
+        _ => return None,
+    };
+
+    example_dirs()
+        .into_iter()
+        .map(|dir| dir.join(project_name))
+        .find(|path| path.is_file())
+}
+
+fn apply_example_defaults(req: &mut DeepLinkRequest, example: &str) {
+    let normalized = normalize_example_name(example);
+    if !matches!(normalized.as_str(), "synthetic5ch" | "synthetic" | "demo") {
+        return;
+    }
+    if req.roi.is_none() {
+        req.roi = Some("synthetic_5ch.ome.zarr".to_string());
+    }
+    if req.channel.is_none() {
+        req.channel = Some("DAPI".to_string());
+    }
+    if req.visible_channels.is_empty() {
+        req.visible_channels = vec!["DAPI".to_string(), "CD3".to_string(), "PanCK".to_string()];
+    }
+    if req.visible_channel_group.is_none() {
+        req.visible_channel_group = Some("Synthetic example".to_string());
+    }
+    if req.channel_order.is_none() {
+        req.channel_order = Some(crate::deep_link::DeepLinkChannelOrder::Listed);
+    }
+}
+
+fn normalize_example_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn example_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(bin_dir) = exe.parent()
+    {
+        dirs.push(bin_dir.join("examples"));
+        dirs.push(bin_dir.join("../Resources/examples"));
+        dirs.push(bin_dir.join("../../Resources/examples"));
+    }
+    dirs.push(PathBuf::from("/usr/share/odon/examples"));
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.join("fixtures"));
+    }
+    dirs
+}
+
 fn project_object_segmentation_paths(project_space: &ProjectSpace) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut paths = Vec::new();
@@ -3159,7 +3218,17 @@ impl eframe::App for RootApp {
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
 
         if let Some(req) = self.pending_deep_link.take() {
+            let mut req = req;
             let deep_link_started = Instant::now();
+            if let Some(example) = req.example.clone() {
+                apply_example_defaults(&mut req, &example);
+                if req.project_path.is_none() {
+                    req.project_path = resolve_example_project_path(&example);
+                }
+                if req.project_path.is_none() {
+                    log_warn!("deep_link: unknown or unavailable example '{example}'");
+                }
+            }
             log_warn!("deep_link: handling {:?}", req);
             let previous_mode = std::mem::replace(&mut self.mode, Mode::Transition);
             let (mut project_space, single_restore, mosaic_restore) = match previous_mode {

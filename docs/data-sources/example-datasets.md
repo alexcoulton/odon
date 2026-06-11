@@ -11,6 +11,19 @@ Use this dataset for a quick single-image test.
 Repository path:
 [`fixtures/synthetic_5ch.ome.zarr`](https://github.com/alexcoulton/odon/tree/main/fixtures/synthetic_5ch.ome.zarr)
 
+Packaged Odon builds also install this example with:
+
+- `synthetic_5ch.ome.zarr`
+- `synthetic_5ch.project.json`
+- `odon-deep-link-test.html`
+
+The installed test page opens the sibling project file directly. You can also
+open the installed example from any browser link with:
+
+```text
+odon://open?example=synthetic_5ch
+```
+
 It is a small OME-Zarr pyramid with:
 
 - 5 channels: `DAPI`, `CD3`, `PanCK`, `Ki67`, and `Collagen`

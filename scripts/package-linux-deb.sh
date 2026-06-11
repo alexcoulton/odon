@@ -31,6 +31,7 @@ mkdir -p \
   "$package_root/usr/lib/$app_name" \
   "$package_root/usr/share/applications" \
   "$package_root/usr/share/doc/$app_name" \
+  "$package_root/usr/share/$app_name/examples" \
   "$package_root/usr/share/icons/hicolor/256x256/apps"
 
 cp "$root_dir/target/release/$app_name" "$package_root/usr/lib/$app_name/$app_name"
@@ -45,6 +46,9 @@ fi
 cp "$root_dir/README.md" "$package_root/usr/share/doc/$app_name/README.md"
 cp "$root_dir/LICENSE" "$package_root/usr/share/doc/$app_name/copyright"
 cp "$root_dir/assets/odon.png" "$package_root/usr/share/icons/hicolor/256x256/apps/odon.png"
+cp -R "$root_dir/fixtures/synthetic_5ch.ome.zarr" "$package_root/usr/share/$app_name/examples/synthetic_5ch.ome.zarr"
+cp "$root_dir/fixtures/synthetic_5ch.project.json" "$package_root/usr/share/$app_name/examples/synthetic_5ch.project.json"
+cp "$root_dir/fixtures/odon-deep-link-test.html" "$package_root/usr/share/$app_name/examples/odon-deep-link-test.html"
 
 ln -s "../lib/$app_name/$app_name" "$package_root/usr/bin/$app_name"
 

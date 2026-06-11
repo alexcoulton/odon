@@ -32,6 +32,7 @@ pub struct DeepLinkObjectFilterClause {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepLinkRequest {
+    pub example: Option<String>,
     pub project_path: Option<PathBuf>,
     pub roi: Option<String>,
     pub sample: Option<String>,
@@ -75,6 +76,7 @@ impl DeepLinkRequest {
 impl Default for DeepLinkRequest {
     fn default() -> Self {
         Self {
+            example: None,
             project_path: None,
             roi: None,
             sample: None,
@@ -133,6 +135,7 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
     }
 
     let mut req = DeepLinkRequest {
+        example: None,
         project_path: None,
         roi: None,
         sample: None,
@@ -168,6 +171,7 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
 
     for (key, value) in query_pairs(query) {
         match key.as_str() {
+            "example" | "demo" | "example_dataset" => req.example = non_empty(value),
             "project" | "project_path" => req.project_path = Some(path_from_link_value(&value)?),
             "roi" | "roi_id" => req.roi = non_empty(value),
             "sample" | "case" | "dataset_id" => req.sample = non_empty(value),
@@ -538,6 +542,14 @@ mod tests {
     #[test]
     fn ignores_non_odon_args() {
         assert!(DeepLinkRequest::parse_arg("--project").unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_example_alias() {
+        let req = DeepLinkRequest::parse_arg("odon://open?example=synthetic_5ch")
+            .unwrap()
+            .unwrap();
+        assert_eq!(req.example.as_deref(), Some("synthetic_5ch"));
     }
 
     #[test]

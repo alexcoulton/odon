@@ -25,6 +25,11 @@ if [[ -d "$root_dir/assets" ]]; then
   cp -R "$root_dir/assets/." "$stage_dir/assets/"
 fi
 
+mkdir -p "$stage_dir/examples"
+cp -R "$root_dir/fixtures/synthetic_5ch.ome.zarr" "$stage_dir/examples/synthetic_5ch.ome.zarr"
+cp "$root_dir/fixtures/synthetic_5ch.project.json" "$stage_dir/examples/synthetic_5ch.project.json"
+cp "$root_dir/fixtures/odon-deep-link-test.html" "$stage_dir/examples/odon-deep-link-test.html"
+
 cp "$root_dir/README.md" "$stage_dir/README.md"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE"
 

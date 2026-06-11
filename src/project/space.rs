@@ -344,6 +344,7 @@ impl ProjectViewSpec {
             .filter(|terms| !terms.is_empty())
             .collect::<Vec<_>>();
         DeepLinkRequest {
+            example: None,
             project_path: None,
             roi,
             sample: None,
@@ -2859,6 +2860,7 @@ impl ProjectSpace {
         self.project_file_path = Some(path.clone());
         self.save_path = path.to_string_lossy().to_string();
         self.load_path = path.to_string_lossy().to_string();
+        let project_dir = path.parent().map(Path::to_path_buf);
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut cleaned: Vec<ProjectRoi> = Vec::new();
@@ -2871,14 +2873,21 @@ impl ProjectSpace {
             let Some(source) = roi.dataset_source() else {
                 continue;
             };
-            let dedupe_key = source.source_key();
-            if !seen.insert(dedupe_key) {
-                continue;
-            }
             match source {
                 DatasetSource::Local(path) => {
-                    let p = path.canonicalize().unwrap_or(path);
+                    let resolved_path = resolve_project_relative_path(project_dir.as_deref(), path);
+                    let p = resolved_path.canonicalize().unwrap_or(resolved_path);
+                    let dedupe_key = DatasetSource::Local(p.clone()).source_key();
+                    if !seen.insert(dedupe_key) {
+                        continue;
+                    }
                     let kind = classify_local_dataset_path(&p);
+                    if let Some(segpath) = roi.segpath.take() {
+                        let resolved_segpath =
+                            resolve_project_relative_path(project_dir.as_deref(), segpath);
+                        roi.segpath =
+                            Some(resolved_segpath.canonicalize().unwrap_or(resolved_segpath));
+                    }
                     if roi.display_name.is_none() {
                         roi.display_name = p
                             .file_name()
@@ -2903,6 +2912,10 @@ impl ProjectSpace {
                     roi.set_dataset_source(DatasetSource::Local(p));
                 }
                 other => {
+                    let dedupe_key = other.source_key();
+                    if !seen.insert(dedupe_key) {
+                        continue;
+                    }
                     if roi.display_name.is_none() {
                         roi.display_name = Some(other.display_name());
                     }
@@ -3151,6 +3164,13 @@ fn normalize_link_match_text(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn resolve_project_relative_path(project_dir: Option<&Path>, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    project_dir.map_or(path.clone(), |dir| dir.join(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3232,6 +3252,48 @@ mod tests {
 
         assert!(roi.source_display().contains("18S1746/ROI2"));
         let _ = fs::remove_file(project_path);
+    }
+
+    #[test]
+    fn load_resolves_relative_roi_paths_against_project_file() {
+        let unique = format!(
+            "odon-project-relative-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let project_dir = std::env::temp_dir().join(unique);
+        let project_path = project_dir.join("synthetic_5ch.project.json");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let mut roi = local_roi("synthetic_5ch.ome.zarr", "Synthetic 5-channel");
+        roi.segpath = Some(PathBuf::from("objects/cells.parquet"));
+        let file = ProjectFileV6 {
+            version: 6,
+            config: ProjectConfig {
+                rois: vec![roi],
+                ..Default::default()
+            },
+            state: ProjectState::default(),
+        };
+        fs::write(&project_path, serde_json::to_string(&file).unwrap()).unwrap();
+
+        let mut ps = ProjectSpace::default();
+        ps.load_from_file(&project_path).unwrap();
+        let roi = ps.roi_for_link_target(Some("synthetic_5ch"), None).unwrap();
+
+        assert_eq!(
+            roi.local_path(),
+            Some(project_dir.join("synthetic_5ch.ome.zarr").as_path())
+        );
+        assert_eq!(
+            roi.segpath.as_deref(),
+            Some(project_dir.join("objects/cells.parquet").as_path())
+        );
+
+        let _ = fs::remove_dir_all(project_dir);
     }
 
     #[test]

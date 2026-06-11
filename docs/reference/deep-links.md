@@ -48,6 +48,13 @@ For installation checks and demonstrations, download the
 smoke-test `odon://open` link and generates project-specific links after you
 enter a local project JSON path and ROI identifier.
 
+Packaged builds also include an installed synthetic example. To open it without
+knowing the install path, use:
+
+```text
+odon://open?example=synthetic_5ch
+```
+
 ## Link Format
 
 Use the `odon://open` action with URL query parameters:
@@ -134,9 +141,15 @@ the existing Odon window through local single-instance IPC.
 
 | Parameter | Meaning |
 | --- | --- |
+| `example`, `demo`, `example_dataset` | Installed example dataset alias. Use `synthetic_5ch` to open the packaged synthetic 5-channel example. |
 | `project`, `project_path` | Project JSON path. `file:///...` URLs and plain local paths are accepted. |
 | `roi`, `roi_id` | ROI id, display name, path fragment, or source-key fragment. |
 | `sample`, `case`, `dataset_id` | Optional disambiguation value when multiple ROIs match the same `roi`. |
+
+When `example=synthetic_5ch` is used without a `project` value, Odon searches
+its installed examples folder and applies sensible defaults: ROI
+`synthetic_5ch.ome.zarr`, active channel `DAPI`, and visible channels `DAPI`,
+`CD3`, and `PanCK`.
 
 If the requested project is not already loaded, Odon loads it before resolving
 the ROI. If the project is already open, Odon reuses it.

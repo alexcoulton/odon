@@ -1,0 +1,18 @@
+{
+  "version": 6,
+  "config": {
+    "default_dataset": "Synthetic examples",
+    "rois": [
+      {
+        "id": "synthetic_5ch.ome.zarr",
+        "path": "synthetic_5ch.ome.zarr",
+        "dataset": "Synthetic examples",
+        "display_name": "Synthetic 5-channel OME-Zarr",
+        "meta": {
+          "example": "synthetic_5ch",
+          "synthetic": "true"
+        }
+      }
+    ]
+  }
+}

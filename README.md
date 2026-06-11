@@ -83,6 +83,13 @@ OME-Zarr pyramid for first-load checks and single-image viewer testing. It has 5
 channels (`DAPI`, `CD3`, `PanCK`, `Ki67`, and `Collagen`), 4 pyramid levels, and
 a level 0 shape of `5 x 512 x 512`.
 
+Release packages include this example with a project file and a local deep-link
+test page. The installed example can also be opened with:
+
+```text
+odon://open?example=synthetic_5ch
+```
+
 To open it in the GUI, launch Odon, click `Add OME-Zarr Root...`, choose the
 `fixtures/` folder or the dataset folder directly, select the discovered ROI,
 and click `Open`.
