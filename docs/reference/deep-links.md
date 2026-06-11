@@ -43,6 +43,11 @@ Clickable `odon://` links require operating-system URL scheme registration; see
 [Clickable Links](#clickable-links). Command-line deep links are useful for
 testing and development, but they are not the primary report workflow.
 
+For installation checks and demonstrations, download the
+[Odon deep-link test page](../assets/odon-deep-link-test.html). It provides a
+smoke-test `odon://open` link and generates project-specific links after you
+enter a local project JSON path and ROI identifier.
+
 ## Link Format
 
 Use the `odon://open` action with URL query parameters:

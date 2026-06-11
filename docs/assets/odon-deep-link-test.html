@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Odon Deep Link Test</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --accent: #0f766e;
+      --border: #cbd5e1;
+      --muted: #64748b;
+      --panel: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --accent: #2dd4bf;
+        --border: #334155;
+        --muted: #94a3b8;
+        --panel: #0f172a;
+      }
+    }
+    body {
+      margin: 0;
+      padding: 28px;
+      max-width: 1160px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+    }
+    h2 {
+      margin: 28px 0 10px;
+      font-size: 20px;
+    }
+    p {
+      max-width: 860px;
+    }
+    a {
+      color: var(--accent);
+      font-weight: 650;
+    }
+    code {
+      font-size: 0.92em;
+      overflow-wrap: anywhere;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+    label {
+      display: block;
+      font-weight: 650;
+      margin-bottom: 5px;
+    }
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font: inherit;
+      background: Canvas;
+      color: CanvasText;
+    }
+    .hint {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 13px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--accent);
+      background: transparent;
+      font: inherit;
+      font-weight: 650;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .button.primary {
+      background: var(--accent);
+      color: white;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+    .url {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <h1>Odon Deep Link Test</h1>
+  <p>
+    Use this page to test whether your operating system has registered
+    <code>odon://</code> links and whether Odon can open a saved project ROI from
+    a clicked report link. This page does not upload or inspect local files; it
+    only uses the paths and labels typed into the form to generate links.
+  </p>
+
+  <div class="panel">
+    <h2>1. Test URL Registration</h2>
+    <p>
+      Click the smoke-test link first. It should launch Odon or focus an already
+      running Odon window. This only tests the operating-system URL handler; it
+      does not open a project ROI.
+    </p>
+    <div class="actions">
+      <a class="button primary" href="odon://open">Open <code>odon://open</code></a>
+    </div>
+    <p class="muted">
+      If nothing happens, the app is not registered as the handler for the
+      <code>odon://</code> scheme. Reinstall the packaged app or open the
+      packaged macOS app once so the OS can register it.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>2. Build Project Links</h2>
+    <p>
+      Save or load an Odon project, then enter the local project JSON path and
+      an ROI identifier. ROI matching accepts the ROI id, display name, path
+      fragment, or source-key fragment shown in the Project panel.
+    </p>
+
+    <div class="grid">
+      <div>
+        <label for="projectPath">Project JSON path</label>
+        <input id="projectPath" value="" placeholder="C:\Users\you\odon.project.json">
+        <span class="hint">Use a local path or a <code>file:///...</code> URL.</span>
+      </div>
+      <div>
+        <label for="roi">ROI</label>
+        <input id="roi" value="synthetic_5ch.ome.zarr" placeholder="ROI_001">
+        <span class="hint">For the synthetic 5-channel fixture, try <code>synthetic_5ch.ome.zarr</code>.</span>
+      </div>
+      <div>
+        <label for="sample">Sample disambiguation</label>
+        <input id="sample" value="" placeholder="Optional">
+        <span class="hint">Use this only when the ROI value matches more than one entry.</span>
+      </div>
+      <div>
+        <label for="activeChannel">Active channel</label>
+        <input id="activeChannel" value="DAPI" placeholder="DAPI">
+      </div>
+      <div>
+        <label for="visibleChannels">Visible channels</label>
+        <input id="visibleChannels" value="DAPI, CD3, PanCK" placeholder="DAPI, CD3, CD45">
+        <span class="hint">Comma-separated. The generated link encodes this as a pipe list.</span>
+      </div>
+      <div>
+        <label for="hiddenChannels">Hidden channels</label>
+        <input id="hiddenChannels" value="" placeholder="Autofluorescence">
+      </div>
+      <div>
+        <label for="contrastMin">Active contrast minimum</label>
+        <input id="contrastMin" value="0" placeholder="0">
+      </div>
+      <div>
+        <label for="contrastMax">Active contrast maximum</label>
+        <input id="contrastMax" value="60000" placeholder="60000">
+      </div>
+      <div>
+        <label for="channelGroup">Visible channel group</label>
+        <input id="channelGroup" value="Deep link test" placeholder="Immune panel">
+      </div>
+      <div>
+        <label for="cellColorBy">Object color by</label>
+        <input id="cellColorBy" value="" placeholder="broad_cell_type">
+        <span class="hint">Leave blank for image-only fixture tests.</span>
+      </div>
+      <div>
+        <label for="visibleCellTypes">Visible object categories</label>
+        <input id="visibleCellTypes" value="" placeholder="immune_myeloid, immune_lymphoid">
+      </div>
+      <div>
+        <label for="objectFilter">Object filter</label>
+        <input id="objectFilter" value="" placeholder="broad_cell_type:immune">
+      </div>
+    </div>
+
+    <div class="actions">
+      <a id="openBasic" class="button primary" href="#">Open ROI</a>
+      <a id="openChannels" class="button" href="#">Open With Channels</a>
+      <a id="openObjects" class="button" href="#">Open With Objects</a>
+      <button id="copyFull" class="button" type="button">Copy Full Link</button>
+    </div>
+    <p id="status" class="muted"></p>
+  </div>
+
+  <h2>Generated Links</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Purpose</th>
+        <th>URL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Basic ROI</td>
+        <td id="basicUrl" class="url"></td>
+      </tr>
+      <tr>
+        <td>Channels and contrast</td>
+        <td id="channelsUrl" class="url"></td>
+      </tr>
+      <tr>
+        <td>Objects, categories, and filters</td>
+        <td id="objectsUrl" class="url"></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Suggested Fixture Test</h2>
+  <p>
+    To test with the repository fixture, open Odon, add
+    <code>fixtures/synthetic_5ch.ome.zarr</code> from the Project panel, save the
+    project, then use that saved project JSON path here. The ROI value is usually
+    <code>synthetic_5ch.ome.zarr</code>, and useful channel names are
+    <code>DAPI</code>, <code>CD3</code>, <code>PanCK</code>, <code>Ki67</code>,
+    and <code>Collagen</code>.
+  </p>
+
+  <script>
+    const ids = [
+      "projectPath",
+      "roi",
+      "sample",
+      "activeChannel",
+      "visibleChannels",
+      "hiddenChannels",
+      "contrastMin",
+      "contrastMax",
+      "channelGroup",
+      "cellColorBy",
+      "visibleCellTypes",
+      "objectFilter"
+    ];
+
+    const storageKey = "odonDeepLinkTest.v1";
+
+    function value(id) {
+      return document.getElementById(id).value.trim();
+    }
+
+    function splitList(text) {
+      return text
+        .split(/[|,;]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function encodeList(items) {
+      return items.map(encodeURIComponent).join("%7C");
+    }
+
+    function toFileUrl(path) {
+      const trimmed = path.trim();
+      if (!trimmed || /^file:\/\//i.test(trimmed)) {
+        return trimmed;
+      }
+      let normalized = trimmed.replaceAll("\\", "/");
+      if (/^[A-Za-z]:\//.test(normalized)) {
+        return "file:///" + encodeURI(normalized);
+      }
+      if (normalized.startsWith("/")) {
+        return "file://" + encodeURI(normalized);
+      }
+      return encodeURI(normalized);
+    }
+
+    function addParam(parts, key, rawValue) {
+      const text = String(rawValue || "").trim();
+      if (text) {
+        parts.push(key + "=" + encodeURIComponent(text));
+      }
+    }
+
+    function addListParam(parts, key, rawValue) {
+      const items = splitList(rawValue);
+      if (items.length) {
+        parts.push(key + "=" + encodeList(items));
+      }
+    }
+
+    function buildUrl(kind) {
+      const parts = ["v=1"];
+      const project = toFileUrl(value("projectPath"));
+      addParam(parts, "project", project);
+      addParam(parts, "roi", value("roi"));
+      addParam(parts, "sample", value("sample"));
+
+      if (kind === "channels" || kind === "objects") {
+        addParam(parts, "channel", value("activeChannel"));
+        addListParam(parts, "visible_channels", value("visibleChannels"));
+        addListParam(parts, "hidden_channels", value("hiddenChannels"));
+        addParam(parts, "contrast_min", value("contrastMin"));
+        addParam(parts, "contrast_max", value("contrastMax"));
+        addParam(parts, "visible_channel_group", value("channelGroup"));
+        parts.push("channel_order=listed");
+      }
+
+      if (kind === "objects") {
+        parts.push("segmentation_source=geoparquet");
+        parts.push("load_labels=0");
+        parts.push("fill_cells=1");
+        addParam(parts, "cell_color_by", value("cellColorBy"));
+        addListParam(parts, "visible_cell_types", value("visibleCellTypes"));
+        addParam(parts, "filter", value("objectFilter"));
+      }
+
+      return "odon://open?" + parts.join("&");
+    }
+
+    function saveState() {
+      const data = {};
+      for (const id of ids) {
+        data[id] = value(id);
+      }
+      localStorage.setItem(storageKey, JSON.stringify(data));
+    }
+
+    function loadState() {
+      try {
+        const data = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        for (const id of ids) {
+          if (typeof data[id] === "string") {
+            document.getElementById(id).value = data[id];
+          }
+        }
+      } catch {
+        localStorage.removeItem(storageKey);
+      }
+    }
+
+    function render() {
+      const basic = buildUrl("basic");
+      const channels = buildUrl("channels");
+      const objects = buildUrl("objects");
+
+      document.getElementById("openBasic").href = basic;
+      document.getElementById("openChannels").href = channels;
+      document.getElementById("openObjects").href = objects;
+      document.getElementById("basicUrl").textContent = basic;
+      document.getElementById("channelsUrl").textContent = channels;
+      document.getElementById("objectsUrl").textContent = objects;
+      saveState();
+    }
+
+    for (const id of ids) {
+      document.getElementById(id).addEventListener("input", render);
+    }
+
+    document.getElementById("copyFull").addEventListener("click", async () => {
+      const url = buildUrl("objects");
+      const status = document.getElementById("status");
+      try {
+        await navigator.clipboard.writeText(url);
+        status.textContent = "Copied the full object/channel test link.";
+      } catch {
+        status.textContent = url;
+      }
+    });
+
+    loadState();
+    render();
+  </script>
+</body>
+</html>
