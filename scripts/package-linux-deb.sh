@@ -66,9 +66,9 @@ if command -v dpkg-shlibdeps >/dev/null 2>&1; then
     dpkg-shlibdeps -O \
       "$package_root/usr/lib/$app_name/$app_name" \
       "$package_root/usr/lib/$app_name/$mcp_name" \
-      2>/dev/null \
-      | sed -n 's/^shlibs:Depends=//p'
+      2>/dev/null || true
   )"
+  generated_depends="$(printf '%s\n' "$generated_depends" | sed -n 's/^shlibs:Depends=//p')"
   if [[ -n "$generated_depends" ]]; then
     depends="$generated_depends"
   fi
