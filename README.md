@@ -57,6 +57,45 @@ Detailed user documentation is available at:
 
 The documentation source lives in [`docs/`](docs/), with MkDocs configured by [`mkdocs.yml`](mkdocs.yml).
 
+## Example Datasets
+
+The repository includes synthetic example data for learning the GUI workflows,
+running local checks, and preparing demonstrations.
+
+### Synthetic 5-Channel OME-Zarr
+
+[`fixtures/synthetic_5ch.ome.zarr`](fixtures/synthetic_5ch.ome.zarr) is a small
+OME-Zarr pyramid for first-load checks and single-image viewer testing. It has 5
+channels (`DAPI`, `CD3`, `PanCK`, `Ki67`, and `Collagen`), 4 pyramid levels, and
+a level 0 shape of `5 x 512 x 512`.
+
+To open it in the GUI, launch Odon, click `Add OME-Zarr Root...`, choose the
+`fixtures/` folder or the dataset folder directly, select the discovered ROI,
+and click `Open`.
+
+### Synthetic TMA With Samplesheet
+
+[`fixtures/tma_100x1mb.zip`](fixtures/tma_100x1mb.zip) is a portable synthetic
+TMA example for mosaic mode. After unzipping, the `tma_100x1mb/` folder contains
+`synthetic_tma_samplesheet.csv`, `manifest.json`, and 100 core folders. Each core
+has an `image.ome.zarr`, `objects/cells.parquet`, `objects/cells.geojson`, and
+`preview.png`.
+
+The samplesheet uses relative paths such as
+`cores/core_0001/image.ome.zarr` and
+`cores/core_0001/objects/cells.parquet`, so the unzipped folder can be moved as a
+unit without editing the CSV.
+
+To open it in the GUI, launch Odon, click `Import Samplesheet CSV...`, choose
+`tma_100x1mb/synthetic_tma_samplesheet.csv`, click `Select all`, and click
+`Open mosaic (100)`. Use the right-panel `Layout` tab to group, sort, and label
+cores by metadata columns such as `cohort`, `response`, `patient_id`, and
+`core_quality`.
+
+See the
+[Example Datasets documentation](docs/data-sources/example-datasets.md) for the
+full walkthrough.
+
 ## General Conversion With bioformats2raw
 
 For broader conversion from existing microscopy formats into pyramidal OME-Zarr, we recommend [`bioformats2raw`](https://github.com/glencoesoftware/bioformats2raw).
@@ -141,16 +180,14 @@ uv pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
-## Synthetic OME-Zarr Fixture
+## Regenerating The Synthetic OME-Zarr Fixture
 
-The repository includes a small checked-in 5-channel OME-Zarr fixture at [`fixtures/synthetic_5ch.ome.zarr`](fixtures/synthetic_5ch.ome.zarr) for loader tests and manual viewer checks.
-
-Regenerate it with:
+Regenerate [`fixtures/synthetic_5ch.ome.zarr`](fixtures/synthetic_5ch.ome.zarr)
+with:
 
 ```bash
 python3 scripts/generate_ome_zarr_fixture.py --overwrite
 ```
-
 
 ## TIFF To OME-Zarr Conversion
 

@@ -42,6 +42,7 @@ nav:
       - Thresholding: workflows/thresholding.md
   - Data Sources:
       - Overview: data-sources/overview.md
+      - Example Datasets: data-sources/example-datasets.md
       - OME-Zarr: data-sources/ome-zarr.md
       - Object and Overlay Data: data-sources/object-and-overlay-data.md
       - SpatialData and Xenium: data-sources/spatialdata-and-xenium.md

@@ -123,6 +123,11 @@ In mosaic mode, columns such as `cohort`, `response`, `batch`, `tma_row`,
 for grouping, sorting, secondary sorting, and labels. See
 [Mosaic Mode](../workflows/mosaic.md) for the full layout workflow.
 
+The repository's
+[synthetic TMA example](example-datasets.md#synthetic-tma-100x1mb) includes a
+complete samplesheet with relative image paths, relative `segpath` values, and
+synthetic clinical metadata for practicing this workflow.
+
 ### Import behavior
 
 When importing a samplesheet from the Project panel:

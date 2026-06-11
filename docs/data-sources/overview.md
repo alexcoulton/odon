@@ -21,6 +21,8 @@ These are supported, but should be approached as compatibility workflows rather 
 
 ## Choosing The Right Entry Point
 
+- use [Example Datasets](example-datasets.md) when you want a known synthetic
+  OME-Zarr or TMA samplesheet for learning, demos, or bug reproduction
 - start with [OME-Zarr](ome-zarr.md) for image-first spatial proteomics review
 - use [Object and Overlay Data](object-and-overlay-data.md) when you need
   segmentation objects, masks, point overlays, or object measurements

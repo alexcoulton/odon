@@ -33,6 +33,11 @@ For samplesheet details, see
 [Projects and Samplesheets](data-sources/projects-and-samplesheets.md). For
 multi-ROI review, see [Mosaic Mode](workflows/mosaic.md).
 
+If you do not yet have local data, start with the checked-in
+[Example Datasets](data-sources/example-datasets.md): the 5-channel OME-Zarr is
+useful for a first single-image session, and the synthetic TMA archive is useful
+for a first mosaic session.
+
 ## First Single-Image Session
 
 After opening one ROI:
@@ -97,5 +102,6 @@ See [CLI](reference/cli.md) for command-line options.
 - [Mosaic Mode](workflows/mosaic.md)
 - [Objects and Overlays](workflows/objects-and-overlays.md)
 - [Mask Polygons](workflows/mask-polygons.md)
+- [Example Datasets](data-sources/example-datasets.md)
 - [Projects and Samplesheets](data-sources/projects-and-samplesheets.md)
 - [Object and Overlay Data](data-sources/object-and-overlay-data.md)

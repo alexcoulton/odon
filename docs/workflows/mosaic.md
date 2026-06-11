@@ -41,6 +41,10 @@ metadata columns:
 After the mosaic opens, use the right-panel `Layout` tab to group, sort, label,
 and arrange the ROIs.
 
+For a ready-made demonstration dataset, use the
+[synthetic TMA example](../data-sources/example-datasets.md#synthetic-tma-100x1mb),
+which includes 100 OME-Zarr cores and a samplesheet with relative paths.
+
 ### From A Saved Project
 
 Use this workflow when you already have a project JSON containing saved ROIs:
@@ -343,6 +347,10 @@ For a TMA-style demonstration:
     `response`.
 13. Use channel visibility and contrast to compare marker patterns.
 14. Double-click interesting ROIs for closer review.
+
+The checked-in
+[synthetic TMA example](../data-sources/example-datasets.md#synthetic-tma-100x1mb)
+already follows this pattern and is the fastest way to try these controls.
 
 ## Troubleshooting
 
