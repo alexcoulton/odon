@@ -86,9 +86,15 @@ Clickable `odon://` links are the intended user-facing workflow for reports and
 dashboards. They require the operating system to know which application handles
 the `odon` URL scheme.
 
-For packaged macOS builds, the app bundle declares the `odon://` scheme in its
-`Info.plist`. Open the app once to let LaunchServices register it. If needed,
-register the bundle explicitly with `lsregister`.
+For packaged macOS and Windows builds, the installer or app bundle registers
+the `odon://` scheme with the operating system. Open the app once after
+installation if the operating system has not yet associated the scheme with
+Odon.
+
+When Odon is already running, a clicked deep link starts a short-lived Odon
+process that forwards the URL to the existing window over a local loopback
+listener on `127.0.0.1:17871`, then exits. This listener is separate from the
+MCP control bridge on `127.0.0.1:17870`.
 
 For macOS development builds, register the helper app:
 
@@ -109,9 +115,8 @@ Test a clicked link on macOS with:
 open 'odon://open?project=file:///path/to/odon.project.json&roi=ROI_001'
 ```
 
-Windows and Linux can still use deep links as startup arguments. Clickable URL
-scheme registration for those platforms depends on packaging or desktop
-integration and is not currently covered by the development helper script.
+Linux can use deep links as startup arguments. Clickable URL scheme
+registration on Linux depends on desktop integration for the target environment.
 
 ### Command Line Testing
 
