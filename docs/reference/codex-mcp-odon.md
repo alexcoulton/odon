@@ -146,16 +146,27 @@ The exact tool list is provided by the `odon_mcp` binary through MCP
 | `set_side_panels` | Show or hide side panels. |
 | `get_smooth_pixels` | Report smooth pixel interpolation state. |
 | `set_smooth_pixels` | Enable or disable smooth pixel interpolation. |
+| `set_right_tab` | Set the active right-panel tab in single-image mode. |
 
 ### Opening Data And ROIs
 
 | Tool | Purpose |
 | --- | --- |
+| `open_project` | Open a local Odon project JSON in the active window. |
 | `open_ome_zarr` | Open a local OME-Zarr dataset in the active window. |
 | `open_tiff` | Open a local TIFF or OME-TIFF file in the active window. |
+| `open_mosaic_samplesheet` | Open a mosaic from a local samplesheet CSV. |
 | `list_project_rois` | List ROIs from the current project. |
 | `open_roi` | Open a project ROI by id, display name, path fragment, or sample. |
+| `show_project_page` | Return to the Project page from the active single-image or mosaic viewer. |
 | `save_project` | Save the current project to its existing project JSON path. |
+
+### Mosaic Layout
+
+| Tool | Purpose |
+| --- | --- |
+| `set_mosaic_right_tab` | Set the active right-panel tab in mosaic mode. |
+| `configure_mosaic_layout` | Configure grouping, sorting, labels, layout mode, and column count in mosaic mode. |
 
 ### Channels And Contrast
 
@@ -183,6 +194,8 @@ The exact tool list is provided by the `odon_mcp` binary through MCP
 | `zoom_out` | Zoom out around the current viewport center. |
 | `fit_to_view` | Fit the current image or mosaic to the viewport. |
 | `capture_screenshot` | Queue a canvas screenshot. |
+| `capture_window_screenshot` | Queue a full Odon viewport screenshot, including panels and Project-page UI. |
+| `capture_project_screenshot` | Return to the Project page, then queue a full Odon viewport screenshot. |
 
 ### Objects and Overlays
 
@@ -201,6 +214,45 @@ layer. They return an error if the current mode or layer does not support the
 requested operation.
 
 ## Common Tool Arguments
+
+Open a project:
+
+```json
+{"path": "/path/to/project.json"}
+```
+
+Open a mosaic from a samplesheet:
+
+```json
+{"path": "/path/to/samplesheet.csv", "columns": 10}
+```
+
+Set the active right-panel tab in single-image mode:
+
+```json
+{"tab": "analysis"}
+```
+
+Set the active right-panel tab in mosaic mode:
+
+```json
+{"tab": "layout"}
+```
+
+Configure mosaic layout:
+
+```json
+{
+  "group_by": "response",
+  "sort_by": "patient_id",
+  "sort_by_secondary": "core_replicate",
+  "layout": "fit_cells",
+  "columns": 10,
+  "show_group_labels": true,
+  "show_text_labels": true,
+  "label_columns": ["id", "response"]
+}
+```
 
 Channel tools accept one of several selectors:
 
@@ -229,7 +281,7 @@ Set camera:
 {"center_world_lvl0": [1200, 2400], "zoom": 0.35}
 ```
 
-Capture a screenshot:
+Capture a canvas screenshot:
 
 ```json
 {"path": "/path/to/screenshot.png"}
@@ -237,6 +289,25 @@ Capture a screenshot:
 
 If `capture_screenshot` is called without `path`, Odon uses the configured quick
 screenshot output location.
+
+Capture the full Odon window content, including panels:
+
+```json
+{"path": "/path/to/window-screenshot.png"}
+```
+
+Use `capture_project_screenshot` when you want a Project page screenshot in one
+step:
+
+```json
+{"path": "/path/to/project-page.png"}
+```
+
+Alternatively, use `show_project_page` followed by `capture_window_screenshot`
+when you want to inspect or adjust the Project page before capturing it.
+Full-window screenshots require an explicit `path` and are written after egui
+returns the next viewport screenshot event, so the tool response reports that
+the screenshot was queued.
 
 ## Common Problems
 
