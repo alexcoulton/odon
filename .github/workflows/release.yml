@@ -3,6 +3,8 @@ name: Build Artifacts
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "test/installers-mcp-packaging"
     tags:
       - "v*"
 
