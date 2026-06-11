@@ -654,8 +654,6 @@ pub struct OmeZarrViewerApp {
     zoom_out_floor_until: Option<Instant>,
     zoom_out_floor_visible_world_tiles: Option<egui::Rect>,
 
-    auto_level: bool,
-    manual_level: usize,
     selected_channel: usize,
     view_plane_mode: ViewPlaneMode,
     draft_view_slice_level0: Option<u64>,
@@ -2295,8 +2293,6 @@ impl OmeZarrViewerApp {
             zoom_out_floor_level: None,
             zoom_out_floor_until: None,
             zoom_out_floor_visible_world_tiles: None,
-            auto_level: true,
-            manual_level: 0,
             selected_channel: 0,
             view_plane_mode: ViewPlaneMode::Xy,
             draft_view_slice_level0: None,
@@ -2576,8 +2572,6 @@ impl OmeZarrViewerApp {
             zoom_out_floor_level: None,
             zoom_out_floor_until: None,
             zoom_out_floor_visible_world_tiles: None,
-            auto_level: true,
-            manual_level: 0,
             selected_channel: 0,
             view_plane_mode: ViewPlaneMode::Xy,
             draft_view_slice_level0: None,
@@ -2929,8 +2923,6 @@ impl OmeZarrViewerApp {
             zoom_out_floor_level: None,
             zoom_out_floor_until: None,
             zoom_out_floor_visible_world_tiles: None,
-            auto_level: true,
-            manual_level: 0,
             selected_channel: 0,
             view_plane_mode: ViewPlaneMode::Xy,
             draft_view_slice_level0: None,
@@ -3476,6 +3468,27 @@ impl OmeZarrViewerApp {
         serde_json::json!({
             "changed": changed,
             "smooth_pixels": self.control_smooth_pixels_snapshot(),
+        })
+    }
+
+    pub fn control_set_right_tab(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(tab) = params
+            .get("tab")
+            .or_else(|| params.get("right_tab"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({"error": "set_right_tab requires tab"});
+        };
+        let Some(tab) = RightTab::from_storage_key(tab) else {
+            return serde_json::json!({
+                "error": "unknown right tab; expected properties, views, analysis, measurements, memory, or roi_selector"
+            });
+        };
+        self.right_tab = tab;
+        serde_json::json!({
+            "right_tab": self.right_tab.storage_key(),
         })
     }
 
@@ -5620,16 +5633,6 @@ impl eframe::App for OmeZarrViewerApp {
                 ui.separator();
                 if top_bar::ui_fit(ui, "Fit (F)") {
                     self.fit_to_last_canvas();
-                }
-                ui.separator();
-                top_bar::ui_auto_level(
-                    ui,
-                    &mut self.auto_level,
-                    &mut self.manual_level,
-                    self.dataset.levels.len().saturating_sub(1),
-                );
-                if crate::ui::help::help_button(ui, crate::ui::help::HelpTopic::AutoLevel) {
-                    self.active_help_topic = Some(crate::ui::help::HelpTopic::AutoLevel);
                 }
                 let supported_view_planes = self.view_plane_modes();
                 if supported_view_planes.len() > 1 {
@@ -9783,8 +9786,6 @@ impl OmeZarrViewerApp {
                         PinnedLevelStatus::Unloaded => {
                             if self.last_target_level == Some(level_idx) {
                                 ui.label("Streaming (current)");
-                            } else if !self.auto_level && self.manual_level == level_idx {
-                                ui.label("Streaming (manual)");
                             } else {
                                 ui.label("Streaming");
                             }
@@ -10667,8 +10668,8 @@ impl OmeZarrViewerApp {
             smooth_pixels: Some(self.smooth_pixels),
             show_tile_debug: Some(self.show_tile_debug),
             show_scale_bar: Some(self.show_scale_bar),
-            auto_level: Some(self.auto_level),
-            manual_level: Some(self.manual_level),
+            auto_level: None,
+            manual_level: None,
         }
     }
 
@@ -10835,12 +10836,7 @@ impl OmeZarrViewerApp {
         if let Some(show_scale_bar) = state.show_scale_bar {
             self.show_scale_bar = show_scale_bar;
         }
-        if let Some(auto_level) = state.auto_level {
-            self.auto_level = auto_level;
-        }
-        if let Some(manual_level) = state.manual_level {
-            self.manual_level = manual_level;
-        }
+        let _ = (state.auto_level, state.manual_level);
     }
 
     fn set_active_layer(&mut self, id: LayerId) {
@@ -14956,11 +14952,6 @@ impl OmeZarrViewerApp {
     }
 
     fn choose_level(&self) -> usize {
-        if !self.auto_level {
-            return self
-                .manual_level
-                .min(self.dataset.levels.len().saturating_sub(1));
-        }
         let Some(level0) = self.dataset.levels.first() else {
             return 0;
         };

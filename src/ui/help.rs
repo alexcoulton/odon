@@ -186,18 +186,17 @@ impl HelpTopic {
             ],
             HelpTopic::AutoLevel => &[
                 HelpSection {
-                    heading: "When to use it",
+                    heading: "How it works",
                     bullets: &[
-                        "Keep Auto level enabled for normal navigation and review.",
-                        "The viewer chooses a coarse or fine image pyramid level based on the current zoom and visible area.",
-                        "Disable Auto level only when you need to inspect a specific stored resolution level or compare how a level was generated.",
+                        "Odon chooses a coarse or fine image pyramid level automatically based on the current zoom and visible area.",
+                        "Lower-resolution levels are used for overview navigation, then finer tiles are requested as you zoom in.",
+                        "The current draw level is shown in the Memory tab for diagnostics.",
                     ],
                 },
                 HelpSection {
                     heading: "Notes",
                     bullets: &[
-                        "Manual level selection changes display resolution only; it does not modify the source dataset.",
-                        "High-resolution levels can take longer to load and can use more memory, especially for remote storage or many visible channels.",
+                        "High-resolution levels can take longer to load, especially for remote storage or many visible channels.",
                         "If the image looks blocky while zooming, wait for refinement tiles or fit/zoom again after loading catches up.",
                     ],
                 },

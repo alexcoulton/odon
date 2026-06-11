@@ -1370,6 +1370,130 @@ impl MosaicViewerApp {
         self.control_camera_snapshot()
     }
 
+    pub fn control_set_right_tab(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(tab) = params
+            .get("tab")
+            .or_else(|| params.get("right_tab"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({"error": "set_mosaic_right_tab requires tab"});
+        };
+        let Some(tab) = RightTab::from_storage_key(tab) else {
+            return serde_json::json!({
+                "error": "unknown right tab; expected properties, views, layout, or memory"
+            });
+        };
+        self.right_tab = tab;
+        serde_json::json!({
+            "right_tab": self.right_tab.storage_key(),
+        })
+    }
+
+    pub fn control_configure_layout(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        if let Some(group_by) = params
+            .get("group_by")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+        {
+            self.group_by = group_by.to_string();
+        }
+        if let Some(sort_by) = params
+            .get("sort_by")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.sort_by = sort_by.to_string();
+        }
+        if let Some(sort_by_secondary) = params
+            .get("sort_by_secondary")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.sort_by_secondary = sort_by_secondary.to_string();
+            self.sort_secondary_enabled = true;
+        }
+        if let Some(enabled) = params
+            .get("sort_secondary_enabled")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.sort_secondary_enabled = enabled;
+        }
+        if let Some(show) = params
+            .get("show_group_labels")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.show_group_labels = show;
+        }
+        if let Some(show) = params
+            .get("show_text_labels")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.show_text_labels = show;
+        }
+        if let Some(gap) = params.get("group_gap").and_then(serde_json::Value::as_f64)
+            && gap.is_finite()
+        {
+            self.group_gap = gap.max(0.0) as f32;
+        }
+        if let Some(cols) = params.get("columns").and_then(serde_json::Value::as_u64) {
+            self.grid_cols = (cols as usize).max(1);
+        }
+        if let Some(layout) = params
+            .get("layout")
+            .or_else(|| params.get("layout_mode"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let Some(mode) = MosaicLayoutMode::from_storage_key(layout) else {
+                return serde_json::json!({
+                    "error": "unknown layout; expected fit_cells or native_pixels"
+                });
+            };
+            self.layout_mode = mode;
+        }
+        if let Some(values) = params
+            .get("label_columns")
+            .and_then(serde_json::Value::as_array)
+        {
+            let columns = values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if !columns.is_empty() {
+                self.label_columns = columns;
+            }
+        }
+        self.apply_sort_and_layout();
+        if params
+            .get("fit")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+            && self.last_canvas_rect.is_some()
+        {
+            self.fit_mosaic();
+        }
+        serde_json::json!({
+            "right_tab": self.right_tab.storage_key(),
+            "group_by": self.group_by,
+            "sort_by": self.sort_by,
+            "sort_secondary_enabled": self.sort_secondary_enabled,
+            "sort_by_secondary": self.sort_by_secondary,
+            "layout": self.layout_mode.storage_key(),
+            "columns": self.grid_cols,
+            "show_group_labels": self.show_group_labels,
+            "show_text_labels": self.show_text_labels,
+            "label_columns": self.label_columns,
+        })
+    }
+
     pub fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
         if let Some(path) = params
             .get("path")
@@ -1689,9 +1813,29 @@ impl MosaicViewerApp {
         args: MosaicCliArgs,
     ) -> anyhow::Result<Self> {
         if let Some(sheet) = args.samplesheet_csv.as_deref() {
-            return Self::from_samplesheet(cc, sheet, args.columns);
+            apply_napari_like_dark(&cc.egui_ctx);
+
+            let _gl = cc
+                .gl
+                .as_ref()
+                .context("mosaic mode requires GPU (OpenGL) backend")?;
+
+            return Self::from_samplesheet_context(&cc.egui_ctx, sheet, args.columns);
         }
         Self::from_config(cc, args)
+    }
+
+    pub fn from_samplesheet_runtime(
+        ctx: &egui::Context,
+        gpu_available: bool,
+        samplesheet_csv: &Path,
+        columns: Option<usize>,
+    ) -> anyhow::Result<Self> {
+        if !gpu_available {
+            anyhow::bail!("mosaic mode requires GPU (OpenGL) backend");
+        }
+
+        Self::from_samplesheet_context(ctx, samplesheet_csv, columns)
     }
 
     pub fn from_local_paths(
@@ -2665,18 +2809,11 @@ impl MosaicViewerApp {
         })
     }
 
-    fn from_samplesheet(
-        cc: &eframe::CreationContext<'_>,
+    fn from_samplesheet_context(
+        ctx: &egui::Context,
         samplesheet_csv: &Path,
         columns: Option<usize>,
     ) -> anyhow::Result<Self> {
-        apply_napari_like_dark(&cc.egui_ctx);
-
-        let _gl = cc
-            .gl
-            .as_ref()
-            .context("mosaic mode requires GPU (OpenGL) backend")?;
-
         let sheet = load_samplesheet_csv(samplesheet_csv)?;
         let samplesheet_dir = samplesheet_csv.parent().map(|p| p.to_path_buf());
         let mut items: Vec<MosaicItem> = Vec::with_capacity(sheet.rows.len());
@@ -2779,7 +2916,7 @@ impl MosaicViewerApp {
         )?;
 
         let mut camera = Camera::default();
-        if let Some(viewport) = cc.egui_ctx.input(|i| i.viewport().inner_rect) {
+        if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
             camera.fit_to_world_rect(viewport, mosaic_bounds);
         } else {
             camera.center_world_lvl0 = mosaic_bounds.center();

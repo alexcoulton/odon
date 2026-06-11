@@ -24,6 +24,7 @@ const ICONS_FAMILY: &str = "icons";
 struct FontAwesomeState {
     loaded: bool,
     glyphs: HashMap<Icon, char>,
+    ttf_bytes: Option<Vec<u8>>,
 }
 
 fn fa_state_id() -> egui::Id {
@@ -31,9 +32,14 @@ fn fa_state_id() -> egui::Id {
 }
 
 pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
-    // Avoid re-reading files if `apply_napari_like_dark` is called multiple times.
+    // Avoid re-reading CSS if `apply_napari_like_dark` is called multiple times, but still
+    // reassert the egui font-family binding. Some runtime view transitions can rebuild egui's
+    // font definitions while Odon's temporary glyph cache remains alive.
     if let Some(state) = ctx.data(|d| d.get_temp::<FontAwesomeState>(fa_state_id())) {
         if state.loaded {
+            if let Some(ttf_bytes) = state.ttf_bytes {
+                install_fontawesome_font(ctx, ttf_bytes);
+            }
             return true;
         }
         // Allow a retry if the user added the font files after the app started.
@@ -61,6 +67,7 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
                 FontAwesomeState {
                     loaded: false,
                     glyphs: HashMap::new(),
+                    ttf_bytes: None,
                 },
             )
         });
@@ -101,6 +108,23 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
         );
     }
 
+    install_fontawesome_font(ctx, ttf_bytes.clone());
+
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            fa_state_id(),
+            FontAwesomeState {
+                loaded: true,
+                glyphs,
+                ttf_bytes: Some(ttf_bytes),
+            },
+        )
+    });
+
+    true
+}
+
+fn install_fontawesome_font(ctx: &egui::Context, ttf_bytes: Vec<u8>) {
     // Install fonts without clobbering other font definitions.
     ctx.add_font(egui::epaint::text::FontInsert::new(
         "fa-solid",
@@ -110,18 +134,6 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
             priority: egui::epaint::text::FontPriority::Highest,
         }],
     ));
-
-    ctx.data_mut(|d| {
-        d.insert_temp(
-            fa_state_id(),
-            FontAwesomeState {
-                loaded: true,
-                glyphs,
-            },
-        )
-    });
-
-    true
 }
 
 pub fn fontawesome_loaded(ctx: &egui::Context) -> bool {
@@ -135,6 +147,11 @@ pub fn fontawesome_loaded(ctx: &egui::Context) -> bool {
 fn fontawesome_glyph(ctx: &egui::Context, icon: Icon) -> Option<char> {
     ctx.data(|d| d.get_temp::<FontAwesomeState>(fa_state_id()))
         .and_then(|s| s.glyphs.get(&icon).copied())
+}
+
+fn fontawesome_family_bound(ctx: &egui::Context) -> bool {
+    let family = egui::FontFamily::Name(ICONS_FAMILY.into());
+    ctx.fonts(|fonts| fonts.families().contains(&family))
 }
 
 fn fontawesome_ttf_search_paths() -> Vec<PathBuf> {
@@ -348,7 +365,7 @@ pub fn paint_icon_in_rect(
     icon: Icon,
     stroke: egui::Stroke,
 ) {
-    if fontawesome_loaded(ctx) {
+    if fontawesome_loaded(ctx) && fontawesome_family_bound(ctx) {
         if let Some(ch) = fontawesome_glyph(ctx, icon) {
             let family = egui::FontFamily::Name(ICONS_FAMILY.into());
             let size = rect.height().min(rect.width()) * 1.05;

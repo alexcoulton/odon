@@ -97,6 +97,11 @@ struct ProjectObjectPreloadEvent {
     finished: bool,
 }
 
+#[derive(Debug)]
+struct ViewportScreenshotRequest {
+    path: PathBuf,
+}
+
 fn project_roi_segmentation_path(
     project_space: &ProjectSpace,
     roi: &ProjectRoi,
@@ -302,7 +307,7 @@ impl RootApp {
         }
     }
 
-    fn process_control_requests(&mut self) {
+    fn process_control_requests(&mut self, ctx: &egui::Context) {
         let mut requests = Vec::new();
         if let Some(bridge) = self.control_bridge.as_ref() {
             while let Ok(request) = bridge.try_recv() {
@@ -310,11 +315,11 @@ impl RootApp {
             }
         }
         for request in requests {
-            self.reply_to_control_request(request);
+            self.reply_to_control_request(ctx, request);
         }
     }
 
-    fn reply_to_control_request(&mut self, request: OdonControlRequest) {
+    fn reply_to_control_request(&mut self, ctx: &egui::Context, request: OdonControlRequest) {
         let response = match request.method.as_str() {
             "get_current_view" => self.control_current_view(),
             "list_project_rois" => self.control_project_rois(),
@@ -328,8 +333,10 @@ impl RootApp {
             "get_active_channel" => self.control_active_channel(),
             "set_active_channel" => self.control_set_active_channel(&request.params),
             "set_visible_channels" => self.control_set_visible_channels(&request.params),
+            "open_project" => self.control_open_project(&request.params),
             "open_ome_zarr" => self.control_open_ome_zarr(&request.params),
             "open_tiff" => self.control_open_tiff(&request.params),
+            "open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, &request.params),
             "open_roi" => self.control_open_roi(&request.params),
             "save_project" => self.control_save_project(),
             "get_channel_contrast" => self.control_get_channel_contrast(&request.params),
@@ -356,7 +363,17 @@ impl RootApp {
             "zoom_in" => self.control_zoom(&request.params, true),
             "zoom_out" => self.control_zoom(&request.params, false),
             "fit_to_view" => self.control_fit_to_view(),
+            "set_right_tab" => self.control_set_right_tab(&request.params),
+            "set_mosaic_right_tab" => self.control_set_mosaic_right_tab(&request.params),
+            "configure_mosaic_layout" => self.control_configure_mosaic_layout(&request.params),
             "capture_screenshot" => self.control_capture_screenshot(&request.params),
+            "capture_window_screenshot" => {
+                self.control_capture_window_screenshot(ctx, &request.params)
+            }
+            "capture_project_screenshot" => {
+                self.control_capture_project_screenshot(ctx, &request.params)
+            }
+            "show_project_page" => self.control_show_project_page(),
             method => serde_json::json!({
                 "error": format!("unknown Odon control method '{method}'"),
             }),
@@ -872,6 +889,60 @@ impl RootApp {
         }
     }
 
+    fn control_set_mosaic_right_tab(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "tab": mosaic.control_set_right_tab(params),
+            }),
+            Mode::Single(_) => serde_json::json!({
+                "error": "set_mosaic_right_tab requires mosaic mode.",
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No mosaic viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_configure_mosaic_layout(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Mosaic { mosaic, .. } => serde_json::json!({
+                "mode": "mosaic",
+                "layout": mosaic.control_configure_layout(params),
+            }),
+            Mode::Single(_) => serde_json::json!({
+                "error": "configure_mosaic_layout requires mosaic mode.",
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No mosaic viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_right_tab(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "tab": app.control_set_right_tab(params),
+            }),
+            Mode::Mosaic { .. } => serde_json::json!({
+                "error": "set_right_tab is for single-image mode; use set_mosaic_right_tab in mosaic mode.",
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No single-image viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
     fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
         match &mut self.mode {
             Mode::Single(app) => serde_json::json!({
@@ -888,6 +959,97 @@ impl RootApp {
             Mode::Transition => serde_json::json!({
                 "error": "Odon is currently transitioning between views.",
             }),
+        }
+    }
+
+    fn control_capture_window_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({
+                "error": "capture_window_screenshot requires path",
+            });
+        };
+        let path = expand_control_path(path);
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            return serde_json::json!({
+                "error": format!("Failed to create screenshot directory: {err}"),
+                "path": path.to_string_lossy(),
+            });
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
+            ViewportScreenshotRequest { path: path.clone() },
+        )));
+        serde_json::json!({
+            "queued": true,
+            "path": path.to_string_lossy(),
+        })
+    }
+
+    fn control_capture_project_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let project = self.control_show_project_page();
+        if project.get("error").is_some() {
+            return serde_json::json!({
+                "project": project,
+            });
+        }
+        let screenshot = self.control_capture_window_screenshot(ctx, params);
+        serde_json::json!({
+            "project": project,
+            "screenshot": screenshot,
+        })
+    }
+
+    fn handle_viewport_screenshot_events(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            let egui::Event::Screenshot {
+                user_data, image, ..
+            } = event
+            else {
+                continue;
+            };
+            let Some(data) = user_data.data else {
+                continue;
+            };
+            let Ok(request) = Arc::downcast::<ViewportScreenshotRequest>(data) else {
+                continue;
+            };
+            let [width, height] = image.size;
+            let mut rgba = Vec::with_capacity(width.saturating_mul(height).saturating_mul(4));
+            for pixel in &image.pixels {
+                rgba.extend_from_slice(&pixel.to_array());
+            }
+            let result = image::save_buffer(
+                &request.path,
+                &rgba,
+                width as u32,
+                height as u32,
+                image::ColorType::Rgba8,
+            );
+            match result {
+                Ok(()) => {
+                    self.settings_status =
+                        format!("Saved window screenshot to {}.", request.path.display());
+                }
+                Err(err) => {
+                    self.settings_status = format!("Window screenshot failed: {err}");
+                }
+            }
         }
     }
 
@@ -991,6 +1153,76 @@ impl RootApp {
             "local TIFF / OME-TIFF file",
             "TIFF / OME-TIFF",
         )
+    }
+
+    fn control_open_project(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({"error": "open_project requires path"});
+        };
+        let path = expand_control_path(path);
+        if !path.exists() {
+            return serde_json::json!({
+                "error": "Project file does not exist.",
+                "path": path.to_string_lossy(),
+            });
+        }
+        self.load_project_into_current_mode(&path);
+        serde_json::json!({
+            "opened": true,
+            "path": path.to_string_lossy(),
+            "project": self.control_project_rois(),
+        })
+    }
+
+    fn control_open_mosaic_samplesheet(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return serde_json::json!({"error": "open_mosaic_samplesheet requires path"});
+        };
+        let path = expand_control_path(path);
+        let columns = params
+            .get("columns")
+            .or_else(|| params.get("cols"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value as usize)
+            .filter(|value| *value > 0);
+
+        let prev = std::mem::replace(&mut self.mode, Mode::Transition);
+        match MosaicViewerApp::from_samplesheet_runtime(ctx, self.gpu_available, &path, columns) {
+            Ok(mut mosaic) => {
+                self.configure_mosaic_app(&mut mosaic);
+                let roi_count = mosaic.control_view_snapshot()["roi_count"].clone();
+                self.mode = Mode::Mosaic {
+                    mosaic,
+                    ret: ReturnToSingleState { dataset_root: None },
+                };
+                serde_json::json!({
+                    "mode": "mosaic",
+                    "path": path.to_string_lossy(),
+                    "roi_count": roi_count,
+                })
+            }
+            Err(err) => {
+                self.mode = prev;
+                serde_json::json!({
+                    "error": format!("Open mosaic samplesheet failed: {err}"),
+                    "path": path.to_string_lossy(),
+                })
+            }
+        }
     }
 
     fn control_open_local_dataset(
@@ -1105,6 +1337,41 @@ impl RootApp {
             Mode::Transition => serde_json::json!({
                 "error": "Odon is currently transitioning between views.",
             }),
+        }
+    }
+
+    fn control_show_project_page(&mut self) -> serde_json::Value {
+        let prev = std::mem::replace(&mut self.mode, Mode::Transition);
+        match prev {
+            Mode::Project { project_space } => {
+                self.mode = Mode::Project { project_space };
+                serde_json::json!({
+                    "mode": "project",
+                    "changed": false,
+                })
+            }
+            Mode::Single(mut app) => {
+                let project_space = app.take_project_space();
+                self.mode = Mode::Project { project_space };
+                serde_json::json!({
+                    "mode": "project",
+                    "changed": true,
+                })
+            }
+            Mode::Mosaic { mut mosaic, .. } => {
+                let project_space = mosaic.take_project_space();
+                self.mode = Mode::Project { project_space };
+                serde_json::json!({
+                    "mode": "project",
+                    "changed": true,
+                })
+            }
+            Mode::Transition => {
+                self.mode = Mode::Transition;
+                serde_json::json!({
+                    "error": "Odon is currently transitioning between views.",
+                })
+            }
         }
     }
 
@@ -2844,7 +3111,8 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.process_control_requests();
+        self.handle_viewport_screenshot_events(ctx);
+        self.process_control_requests(ctx);
         if let Some(rx) = self.deep_link_rx.as_ref() {
             ctx.request_repaint_after(Duration::from_millis(100));
             let mut received_deep_link = false;

@@ -20,21 +20,6 @@ pub fn ui_status(ui: &mut egui::Ui, status: &str) {
     ui.label(status);
 }
 
-pub fn ui_auto_level(
-    ui: &mut egui::Ui,
-    auto_level: &mut bool,
-    manual_level: &mut usize,
-    max_level: usize,
-) -> bool {
-    let mut changed = ui.checkbox(auto_level, "Auto level").changed();
-    if !*auto_level {
-        changed |= ui
-            .add(egui::Slider::new(manual_level, 0..=max_level).text("Level"))
-            .changed();
-    }
-    changed
-}
-
 pub fn ui_view_plane_mode(
     ui: &mut egui::Ui,
     mode: &mut ViewPlaneMode,

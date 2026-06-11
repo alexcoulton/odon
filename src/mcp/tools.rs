@@ -94,8 +94,10 @@ fn tools_list() -> Value {
                 "Set the active channel by index, exact channel name, or marker-like channel selector."
             ),
             set_visible_channels_tool_schema(),
+            open_project_tool_schema(),
             open_ome_zarr_tool_schema(),
             open_tiff_tool_schema(),
+            open_mosaic_samplesheet_tool_schema(),
             open_roi_tool_schema(),
             tool_schema(
                 "save_project",
@@ -152,7 +154,16 @@ fn tools_list() -> Value {
                 "fit_to_view",
                 "Fit the current image or mosaic to the viewport."
             ),
-            capture_screenshot_tool_schema()
+            set_right_tab_tool_schema(),
+            set_mosaic_right_tab_tool_schema(),
+            configure_mosaic_layout_tool_schema(),
+            tool_schema(
+                "show_project_page",
+                "Return to the Project page from the active single-image or mosaic viewer."
+            ),
+            capture_screenshot_tool_schema(),
+            capture_window_screenshot_tool_schema(),
+            capture_project_screenshot_tool_schema()
         ]
     })
 }
@@ -272,6 +283,47 @@ fn open_tiff_tool_schema() -> Value {
                 "path": {
                     "type": "string",
                     "description": "Path to a local .tif, .tiff, .ome.tif, or .ome.tiff file."
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn open_mosaic_samplesheet_tool_schema() -> Value {
+    json!({
+        "name": "open_mosaic_samplesheet",
+        "description": "Open a mosaic from a local samplesheet CSV in the active Odon window.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to a local samplesheet CSV."
+                },
+                "columns": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional initial mosaic column count."
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn open_project_tool_schema() -> Value {
+    json!({
+        "name": "open_project",
+        "description": "Open a local Odon project JSON in the active Odon window.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to a local Odon project JSON file."
                 }
             },
             "required": ["path"],
@@ -571,6 +623,69 @@ fn set_camera_tool_schema() -> Value {
     })
 }
 
+fn set_right_tab_tool_schema() -> Value {
+    json!({
+        "name": "set_right_tab",
+        "description": "Set the active right-panel tab in the current single-image viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "enum": ["properties", "views", "analysis", "measurements", "memory", "roi_selector"]
+                }
+            },
+            "required": ["tab"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_mosaic_right_tab_tool_schema() -> Value {
+    json!({
+        "name": "set_mosaic_right_tab",
+        "description": "Set the active right-panel tab in mosaic mode.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "enum": ["properties", "views", "layout", "memory"]
+                }
+            },
+            "required": ["tab"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn configure_mosaic_layout_tool_schema() -> Value {
+    json!({
+        "name": "configure_mosaic_layout",
+        "description": "Configure mosaic layout fields such as grouping, sorting, labels, and column count.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group_by": {"type": "string"},
+                "sort_by": {"type": "string"},
+                "sort_by_secondary": {"type": "string"},
+                "sort_secondary_enabled": {"type": "boolean"},
+                "layout": {"type": "string", "enum": ["fit_cells", "native_pixels"]},
+                "columns": {"type": "integer", "minimum": 1},
+                "show_group_labels": {"type": "boolean"},
+                "show_text_labels": {"type": "boolean"},
+                "label_columns": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "group_gap": {"type": "number"},
+                "fit": {"type": "boolean", "default": true}
+            },
+            "additionalProperties": false
+        }
+    })
+}
+
 fn zoom_tool_schema(name: &str, description: &str) -> Value {
     json!({
         "name": name,
@@ -602,6 +717,36 @@ fn capture_screenshot_tool_schema() -> Value {
     })
 }
 
+fn capture_window_screenshot_tool_schema() -> Value {
+    json!({
+        "name": "capture_window_screenshot",
+        "description": "Queue a full Odon viewport screenshot, including panels and Project-page UI, and save it to a PNG path.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn capture_project_screenshot_tool_schema() -> Value {
+    json!({
+        "name": "capture_project_screenshot",
+        "description": "Return to the Project page, then queue a full Odon viewport screenshot and save it to a PNG path.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        }
+    })
+}
+
 fn handle_tool_call(id: Value, params: Value) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return json_rpc_error(id, -32602, "tools/call requires params.name");
@@ -623,8 +768,10 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "get_active_channel"
         | "set_active_channel"
         | "set_visible_channels"
+        | "open_project"
         | "open_ome_zarr"
         | "open_tiff"
+        | "open_mosaic_samplesheet"
         | "open_roi"
         | "save_project"
         | "get_channel_contrast"
@@ -645,7 +792,13 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "zoom_in"
         | "zoom_out"
         | "fit_to_view"
-        | "capture_screenshot" => name,
+        | "set_right_tab"
+        | "set_mosaic_right_tab"
+        | "configure_mosaic_layout"
+        | "show_project_page"
+        | "capture_screenshot"
+        | "capture_window_screenshot"
+        | "capture_project_screenshot" => name,
         _ => {
             return json_rpc_error(id, -32602, format!("Unknown tool: {name}"));
         }

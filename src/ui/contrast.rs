@@ -76,15 +76,6 @@ pub fn ui_contrast_window(
         .add(egui::Slider::new(&mut hi, 0.0..=abs_max).text("Max"))
         .changed();
 
-    ui.horizontal(|ui| {
-        limits_touched |= ui
-            .add(egui::DragValue::new(&mut lo).speed(10.0).prefix("min "))
-            .changed();
-        limits_touched |= ui
-            .add(egui::DragValue::new(&mut hi).speed(10.0).prefix("max "))
-            .changed();
-    });
-
     lo = lo.clamp(0.0, abs_max);
     hi = hi.clamp(0.0, abs_max);
     if hi <= lo {
