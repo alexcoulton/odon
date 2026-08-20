@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odon-cellpose"
+version = "0.1.0"
+description = "Cellpose reference extension for the Odon viewer"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+dependencies = [
+  "odon-client[arrays]>=0.1.0",
+  "cellpose>=3",
+]
+
+[project.scripts]
+odon-cellpose = "odon_cellpose:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/odon_cellpose"]

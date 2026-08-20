@@ -37,8 +37,34 @@ impl SpatialImageLayers {
         self.next_id = id.wrapping_add(1).max(1);
         let layer = SpatialImageLayer::open(
             id,
+            None,
+            None,
             format!("Image: {}", element.name),
             root.join(&element.rel_group),
+            gpu_available,
+            smooth_pixels,
+        )?;
+        self.images.push(layer);
+        Ok(id)
+    }
+
+    pub fn load_external_image(
+        &mut self,
+        external_id: String,
+        external_resource_id: String,
+        name: String,
+        path: PathBuf,
+        gpu_available: bool,
+        smooth_pixels: bool,
+    ) -> anyhow::Result<u64> {
+        let id = self.next_id.max(1);
+        self.next_id = id.wrapping_add(1).max(1);
+        let layer = SpatialImageLayer::open(
+            id,
+            Some(external_id),
+            Some(external_resource_id),
+            name,
+            path,
             gpu_available,
             smooth_pixels,
         )?;
@@ -66,10 +92,13 @@ impl SpatialImageLayers {
 #[derive(Debug)]
 pub struct SpatialImageLayer {
     pub id: u64,
+    pub external_id: Option<String>,
+    pub external_resource_id: Option<String>,
     pub name: String,
     pub visible: bool,
     pub opacity: f32,
     pub offset_world: egui::Vec2,
+    pub scale_world: egui::Vec2,
     pub current_z_level0: u64,
 
     pub dataset: OmeZarrDataset,
@@ -83,6 +112,8 @@ pub struct SpatialImageLayer {
 impl SpatialImageLayer {
     pub fn open(
         id: u64,
+        external_id: Option<String>,
+        external_resource_id: Option<String>,
         name: String,
         path: PathBuf,
         gpu_available: bool,
@@ -107,10 +138,13 @@ impl SpatialImageLayer {
 
         Ok(Self {
             id,
+            external_id,
+            external_resource_id,
             name,
             visible: true,
             opacity: 1.0,
             offset_world: egui::Vec2::ZERO,
+            scale_world: egui::Vec2::ONE,
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             dataset,
@@ -242,9 +276,22 @@ impl SpatialImageLayer {
             return;
         }
 
-        let visible_world = visible_world.translate(-self.offset_world);
-        let target_level =
-            choose_level_auto(&self.dataset.levels, camera.zoom_screen_per_lvl0_px, 1.0);
+        let inverse_point = |point: egui::Pos2| {
+            egui::pos2(
+                (point.x - self.offset_world.x) / self.scale_world.x.max(f32::EPSILON),
+                (point.y - self.offset_world.y) / self.scale_world.y.max(f32::EPSILON),
+            )
+        };
+        let visible_world = egui::Rect::from_min_max(
+            inverse_point(visible_world.min),
+            inverse_point(visible_world.max),
+        );
+        let effective_scale = self.scale_world.x.abs().max(self.scale_world.y.abs());
+        let target_level = choose_level_auto(
+            &self.dataset.levels,
+            camera.zoom_screen_per_lvl0_px * effective_scale,
+            1.0,
+        );
         let level_info = self.dataset.levels[target_level].clone();
         let coords: Vec<TileCoord> =
             tiles_needed_lvl0_rect(visible_world, &level_info, &self.dataset.dims, 1);
@@ -356,8 +403,14 @@ impl SpatialImageLayer {
         let y1 = (y0 + chunk_y).min(level_info.shape[y_dim] as f32);
         let x1 = (x0 + chunk_x).min(level_info.shape[x_dim] as f32);
         let downsample = level_info.downsample;
-        let world_min = egui::pos2(x0 * downsample, y0 * downsample) + self.offset_world;
-        let world_max = egui::pos2(x1 * downsample, y1 * downsample) + self.offset_world;
+        let world_min = egui::pos2(
+            x0 * downsample * self.scale_world.x,
+            y0 * downsample * self.scale_world.y,
+        ) + self.offset_world;
+        let world_max = egui::pos2(
+            x1 * downsample * self.scale_world.x,
+            y1 * downsample * self.scale_world.y,
+        ) + self.offset_world;
         let screen_min = camera.world_to_screen(world_min, viewport);
         let screen_max = camera.world_to_screen(world_max, viewport);
         egui::Rect::from_min_max(screen_min, screen_max)

@@ -29,8 +29,80 @@ use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::discover_xenium_explorer;
 use crate::{log_debug, log_info, log_warn};
+use odon::control::{ControlError, ControlErrorKind, TaskState};
 use odon::mcp::{OdonControlBridge, OdonControlRequest};
 use rfd::FileDialog;
+
+fn control_event_name(method: &str) -> &'static str {
+    match method {
+        "set_camera" | "zoom_in" | "zoom_out" | "fit_to_view" => "viewer.camera.changed",
+        "set_active_channel"
+        | "set_visible_channels"
+        | "set_channel_contrast"
+        | "set_channel_order"
+        | "set_channel_group" => "viewer.channels.changed",
+        "select_object_ids_in_rect" | "clear_object_selection" => "viewer.selection.changed",
+        "set_object_overlay_visibility" | "set_object_filter_query" | "clear_object_filter" => {
+            "viewer.layers.changed"
+        }
+        "open_project"
+        | "open_ome_zarr"
+        | "open_tiff"
+        | "open_mosaic_samplesheet"
+        | "show_project_page" => "application.mode.changed",
+        "open_roi" => "project.active_roi.changed",
+        "capture_screenshot" | "capture_window_screenshot" | "capture_project_screenshot" => {
+            "viewer.screenshot.completed"
+        }
+        _ => "application.state.changed",
+    }
+}
+
+fn control_event_source(method: &str) -> &'static str {
+    if method.starts_with("open_project") || method == "open_roi" || method == "save_project" {
+        "project:active"
+    } else if method.starts_with("show_project") {
+        "application"
+    } else {
+        "viewer:active"
+    }
+}
+
+fn control_application_error(method: &str, response: &serde_json::Value) -> Option<ControlError> {
+    let message = response.get("error")?.as_str()?;
+    let kind = if message.contains("transitioning") {
+        ControlErrorKind::NotReady
+    } else if message.contains("No dataset viewer")
+        || message.contains("No mosaic viewer")
+        || message.contains("No single-image viewer")
+        || message.contains("requires mosaic mode")
+        || message.contains("requires single-image mode")
+        || message.contains("available in single-image mode")
+        || message.contains("for single-image mode")
+    {
+        ControlErrorKind::WrongMode
+    } else if message.contains("does not exist")
+        || message.contains("not found")
+        || message.contains("no channel matches")
+        || message.contains("out of range")
+    {
+        ControlErrorKind::ResourceNotFound
+    } else if message.contains("requires ")
+        || message.contains("provide ")
+        || message.contains("invalid ")
+        || message.contains("must ")
+    {
+        ControlErrorKind::InvalidParams
+    } else {
+        ControlErrorKind::Application
+    };
+    Some(
+        ControlError::new(kind, message).with_data(serde_json::json!({
+            "method": method,
+            "application_response": response,
+        })),
+    )
+}
 
 #[derive(Debug, Clone)]
 struct SpatialOpenDialog {
@@ -264,6 +336,11 @@ pub struct RootApp {
     settings_status: String,
     active_help_topic: Option<crate::ui::help::HelpTopic>,
     control_bridge: Option<OdonControlBridge>,
+    control_external_revision: u64,
+    control_project_revision: u64,
+    control_observed_state: Option<serde_json::Value>,
+    control_mutated_this_frame: bool,
+    control_last_observed_at: Instant,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
@@ -276,7 +353,7 @@ impl RootApp {
         match OdonControlBridge::spawn_default(ctx.clone()) {
             Ok(bridge) => Some(bridge),
             Err(err) => {
-                let msg = format!("MCP control bridge unavailable: {err}");
+                let msg = format!("Odon control server unavailable: {err}");
                 if settings_status.trim().is_empty() {
                     *settings_status = msg;
                 } else {
@@ -367,10 +444,17 @@ impl RootApp {
     }
 
     fn process_control_requests(&mut self, ctx: &egui::Context) {
+        const MAX_REQUESTS_PER_FRAME: usize = 32;
         let mut requests = Vec::new();
         if let Some(bridge) = self.control_bridge.as_ref() {
-            while let Ok(request) = bridge.try_recv() {
-                requests.push(request);
+            for _ in 0..MAX_REQUESTS_PER_FRAME {
+                match bridge.try_recv() {
+                    Ok(request) => requests.push(request),
+                    Err(_) => break,
+                }
+            }
+            if bridge.pending_len() > 0 {
+                ctx.request_repaint();
             }
         }
         for request in requests {
@@ -378,69 +462,175 @@ impl RootApp {
         }
     }
 
+    fn control_observed_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "view": self.control_current_view(),
+            "camera": self.control_get_camera(),
+            "channels": self.control_channels(),
+            "smooth": self.control_get_smooth_pixels(),
+            "loading": self.control_get_loading_state(),
+            "selection": match &self.mode {
+                Mode::Single(app) => app.control_object_selection_signature(),
+                _ => serde_json::Value::Null,
+            },
+        })
+    }
+
+    fn publish_observed_control_changes(&mut self) {
+        if !self.control_mutated_this_frame
+            && self.control_last_observed_at.elapsed() < Duration::from_millis(33)
+        {
+            return;
+        }
+        self.control_last_observed_at = Instant::now();
+        let snapshot = self.control_observed_snapshot();
+        let Some(previous) = self.control_observed_state.replace(snapshot.clone()) else {
+            return;
+        };
+        if self.control_mutated_this_frame {
+            return;
+        }
+        let Some(bridge) = self.control_bridge.as_ref() else {
+            return;
+        };
+        for (field, event, source) in [
+            ("view", "application.mode.changed", "application"),
+            ("camera", "viewer.camera.changed", "viewer:active"),
+            ("channels", "viewer.channels.changed", "viewer:active"),
+            ("smooth", "viewer.rendering.changed", "viewer:active"),
+            ("loading", "viewer.readiness.changed", "viewer:active"),
+            ("selection", "viewer.selection.changed", "viewer:active"),
+        ] {
+            if previous.get(field) != snapshot.get(field) {
+                bridge.publish_native_event(
+                    event,
+                    source,
+                    snapshot
+                        .get(field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+    }
+
     fn reply_to_control_request(&mut self, ctx: &egui::Context, request: OdonControlRequest) {
-        let response = match request.method.as_str() {
+        if let Some(task_id) = request.task_id.as_deref() {
+            match request.task_registry.get(task_id) {
+                Ok(task) if task.state == TaskState::Cancelled => {
+                    let _ = request.reply.send(Err(ControlError::new(
+                        ControlErrorKind::Cancelled,
+                        "task was cancelled",
+                    )
+                    .with_data(serde_json::json!({"task_id": task_id}))));
+                    return;
+                }
+                Ok(_) => {
+                    let _ = request.task_registry.mark_running(task_id);
+                }
+                Err(error) => {
+                    let _ = request.reply.send(Err(error));
+                    return;
+                }
+            }
+        }
+        let method = request.command.method();
+        let mutates = request.command.mutates();
+        let current_revision = request.event_hub.revision();
+        if let Some(expected) = request.command.if_revision()
+            && expected != current_revision
+        {
+            let _ = request.reply.send(Err(ControlError::new(
+                ControlErrorKind::Conflict,
+                format!(
+                    "state revision conflict: expected {expected}, current revision is {current_revision}"
+                ),
+            )
+            .with_data(serde_json::json!({
+                "method": method,
+                "expected_revision": expected,
+                "current_revision": current_revision,
+            }))));
+            return;
+        }
+        let params = request.command.params();
+        let mut response = match method {
             "get_current_view" => self.control_current_view(),
             "list_project_rois" => self.control_project_rois(),
             "list_channels" => self.control_channels(),
             "list_visible_channels" => self.control_visible_channels(),
             "get_side_panels" => self.control_get_side_panels(),
-            "set_side_panels" => self.control_set_side_panels(&request.params),
+            "set_side_panels" => self.control_set_side_panels(params),
             "get_smooth_pixels" => self.control_get_smooth_pixels(),
-            "set_smooth_pixels" => self.control_set_smooth_pixels(&request.params),
+            "set_smooth_pixels" => self.control_set_smooth_pixels(params),
             "get_loading_state" => self.control_get_loading_state(),
             "get_active_channel" => self.control_active_channel(),
-            "set_active_channel" => self.control_set_active_channel(&request.params),
-            "set_visible_channels" => self.control_set_visible_channels(&request.params),
-            "open_project" => self.control_open_project(&request.params),
-            "open_ome_zarr" => self.control_open_ome_zarr(&request.params),
-            "open_tiff" => self.control_open_tiff(&request.params),
-            "open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, &request.params),
-            "open_roi" => self.control_open_roi(&request.params),
+            "set_active_channel" => self.control_set_active_channel(params),
+            "set_visible_channels" => self.control_set_visible_channels(params),
+            "open_project" => self.control_open_project(params),
+            "open_ome_zarr" => self.control_open_ome_zarr(params),
+            "open_tiff" => self.control_open_tiff(params),
+            "open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, params),
+            "open_roi" => self.control_open_roi(params),
             "save_project" => self.control_save_project(),
-            "get_channel_contrast" => self.control_get_channel_contrast(&request.params),
-            "set_channel_contrast" => self.control_set_channel_contrast(&request.params),
-            "get_object_overlay_visibility" => {
-                self.control_get_object_overlay_visibility(&request.params)
-            }
-            "set_object_overlay_visibility" => {
-                self.control_set_object_overlay_visibility(&request.params)
-            }
-            "get_object_selection" => self.control_get_object_selection(&request.params),
-            "query_object_ids_in_rect" => self.control_query_object_ids_in_rect(&request.params),
-            "query_object_ids_in_view" => self.control_query_object_ids_in_view(&request.params),
-            "select_object_ids_in_rect" => self.control_select_object_ids_in_rect(&request.params),
-            "clear_object_selection" => self.control_clear_object_selection(&request.params),
-            "get_object_filter" => self.control_get_object_filter(&request.params),
-            "set_object_filter_query" => self.control_set_object_filter_query(&request.params),
-            "clear_object_filter" => self.control_clear_object_filter(&request.params),
-            "get_channel_intensity_stats" => {
-                self.control_get_channel_intensity_stats(&request.params)
-            }
-            "set_channel_order" => self.control_set_channel_order(&request.params),
+            "get_channel_contrast" => self.control_get_channel_contrast(params),
+            "set_channel_contrast" => self.control_set_channel_contrast(params),
+            "get_object_overlay_visibility" => self.control_get_object_overlay_visibility(params),
+            "set_object_overlay_visibility" => self.control_set_object_overlay_visibility(params),
+            "get_object_selection" => self.control_get_object_selection(params),
+            "query_object_ids_in_rect" => self.control_query_object_ids_in_rect(params),
+            "query_object_ids_in_view" => self.control_query_object_ids_in_view(params),
+            "select_object_ids_in_rect" => self.control_select_object_ids_in_rect(params),
+            "clear_object_selection" => self.control_clear_object_selection(params),
+            "get_object_filter" => self.control_get_object_filter(params),
+            "set_object_filter_query" => self.control_set_object_filter_query(params),
+            "clear_object_filter" => self.control_clear_object_filter(params),
+            "get_channel_intensity_stats" => self.control_get_channel_intensity_stats(params),
+            "set_channel_order" => self.control_set_channel_order(params),
             "list_channel_groups" => self.control_list_channel_groups(),
-            "set_channel_group" => self.control_set_channel_group(&request.params),
+            "set_channel_group" => self.control_set_channel_group(params),
             "get_camera" => self.control_get_camera(),
-            "set_camera" => self.control_set_camera(&request.params),
-            "zoom_in" => self.control_zoom(&request.params, true),
-            "zoom_out" => self.control_zoom(&request.params, false),
+            "set_camera" => self.control_set_camera(params),
+            "zoom_in" => self.control_zoom(params, true),
+            "zoom_out" => self.control_zoom(params, false),
             "fit_to_view" => self.control_fit_to_view(),
-            "set_right_tab" => self.control_set_right_tab(&request.params),
-            "set_mosaic_right_tab" => self.control_set_mosaic_right_tab(&request.params),
-            "configure_mosaic_layout" => self.control_configure_mosaic_layout(&request.params),
-            "capture_screenshot" => self.control_capture_screenshot(&request.params),
-            "capture_window_screenshot" => {
-                self.control_capture_window_screenshot(ctx, &request.params)
-            }
-            "capture_project_screenshot" => {
-                self.control_capture_project_screenshot(ctx, &request.params)
-            }
+            "set_right_tab" => self.control_set_right_tab(params),
+            "set_mosaic_right_tab" => self.control_set_mosaic_right_tab(params),
+            "configure_mosaic_layout" => self.control_configure_mosaic_layout(params),
+            "capture_screenshot" => self.control_capture_screenshot(params),
+            "capture_window_screenshot" => self.control_capture_window_screenshot(ctx, params),
+            "capture_project_screenshot" => self.control_capture_project_screenshot(ctx, params),
             "show_project_page" => self.control_show_project_page(),
-            method => serde_json::json!({
-                "error": format!("unknown Odon control method '{method}'"),
-            }),
+            method => unreachable!("control registry admitted unknown method {method}"),
         };
-        let _ = request.reply.send(response);
+        if let Some(error) = control_application_error(method, &response) {
+            let _ = request.reply.send(Err(error));
+            return;
+        }
+        let revision = if mutates {
+            self.control_mutated_this_frame = true;
+            request.event_hub.next_revision()
+        } else {
+            request.event_hub.revision()
+        };
+        if let Some(object) = response.as_object_mut() {
+            object.insert(
+                "_control".to_string(),
+                serde_json::json!({"revision": revision}),
+            );
+        }
+        let event_data = response.clone();
+        let _ = request.reply.send(Ok(response));
+        if mutates {
+            request.event_hub.publish(
+                control_event_name(method),
+                control_event_source(method),
+                revision,
+                serde_json::json!({"method": method, "result": event_data}),
+                Some(request.session_id),
+                request.request_id,
+            );
+        }
     }
 
     fn current_project_space(&self) -> Option<&ProjectSpace> {
@@ -449,6 +639,52 @@ impl RootApp {
             Mode::Single(app) => Some(app.project_space()),
             Mode::Mosaic { mosaic, .. } => Some(mosaic.project_space()),
             Mode::Transition => None,
+        }
+    }
+
+    fn current_project_space_mut(&mut self) -> Option<&mut ProjectSpace> {
+        match &mut self.mode {
+            Mode::Project { project_space } => Some(project_space),
+            Mode::Single(app) => Some(app.project_space_mut()),
+            Mode::Mosaic { mosaic, .. } => Some(mosaic.project_space_mut()),
+            Mode::Transition => None,
+        }
+    }
+
+    fn sync_control_manifest_to_project(&mut self) {
+        let Some((revision, resources, layers)) = self.control_bridge.as_ref().map(|bridge| {
+            let (resources, layers) = bridge.project_control_manifest();
+            (bridge.revision(), resources, layers)
+        }) else {
+            return;
+        };
+        if revision == self.control_project_revision {
+            return;
+        }
+        if let Some(project_space) = self.current_project_space_mut() {
+            project_space.config_mut().control_resources = resources;
+            project_space.config_mut().control_layers = layers;
+            self.control_project_revision = revision;
+        }
+    }
+
+    fn load_control_manifest_from_project(&mut self) {
+        let Some((resources, layers)) = self.current_project_space().map(|project_space| {
+            (
+                project_space.config().control_resources.clone(),
+                project_space.config().control_layers.clone(),
+            )
+        }) else {
+            return;
+        };
+        let result = self
+            .control_bridge
+            .as_ref()
+            .map(|bridge| bridge.replace_project_control_manifest(&resources, &layers));
+        if let Some(Err(error)) = result
+            && let Some(project_space) = self.current_project_space_mut()
+        {
+            project_space.set_status(format!("Project external layer restore failed: {error}"));
         }
     }
 
@@ -1119,11 +1355,12 @@ impl RootApp {
     ) -> serde_json::Value {
         let project = self.control_show_project_page();
         if project.get("error").is_some() {
-            return serde_json::json!({
-                "project": project,
-            });
+            return project;
         }
         let screenshot = self.control_capture_window_screenshot(ctx, params);
+        if screenshot.get("error").is_some() {
+            return screenshot;
+        }
         serde_json::json!({
             "project": project,
             "screenshot": screenshot,
@@ -1414,6 +1651,7 @@ impl RootApp {
     }
 
     fn control_save_project(&mut self) -> serde_json::Value {
+        self.sync_control_manifest_to_project();
         match &mut self.mode {
             Mode::Project { project_space } => {
                 let Some(path) = project_space.saved_project_path() else {
@@ -1538,6 +1776,7 @@ impl RootApp {
             Mode::Transition => false,
         };
         if loaded {
+            self.load_control_manifest_from_project();
             self.record_recent_project(path);
         }
     }
@@ -2264,7 +2503,7 @@ impl RootApp {
                 ps.set_status(format!("Load project failed: {err}"));
             }
         }
-        Ok(Self {
+        let mut root = Self {
             mode: Mode::Project { project_space: ps },
             gpu_available: cc.gl.is_some(),
             close_dialog_open: false,
@@ -2298,9 +2537,16 @@ impl RootApp {
             settings_status,
             active_help_topic: None,
             control_bridge,
+            control_external_revision: 0,
+            control_project_revision: 0,
+            control_observed_state: None,
+            control_mutated_this_frame: false,
+            control_last_observed_at: Instant::now() - Duration::from_millis(34),
             #[cfg(target_os = "macos")]
             native_menu: None,
-        })
+        };
+        root.load_control_manifest_from_project();
+        Ok(root)
     }
 
     pub fn new_single(
@@ -2321,7 +2567,7 @@ impl RootApp {
             }
             app.set_project_space(ps);
         }
-        Ok(Self {
+        let mut root = Self {
             mode: Mode::Single(app),
             gpu_available: cc.gl.is_some(),
             close_dialog_open: false,
@@ -2355,9 +2601,16 @@ impl RootApp {
             settings_status,
             active_help_topic: None,
             control_bridge,
+            control_external_revision: 0,
+            control_project_revision: 0,
+            control_observed_state: None,
+            control_mutated_this_frame: false,
+            control_last_observed_at: Instant::now() - Duration::from_millis(34),
             #[cfg(target_os = "macos")]
             native_menu: None,
-        })
+        };
+        root.load_control_manifest_from_project();
+        Ok(root)
     }
 
     pub fn new_mosaic(
@@ -2375,7 +2628,7 @@ impl RootApp {
         }
         mosaic.set_fast_object_rendering(app_settings.fast_object_rendering);
         mosaic.set_layer_groups(ps.layer_groups().clone());
-        Ok(Self {
+        let mut root = Self {
             mode: Mode::Mosaic {
                 mosaic,
                 ret: ReturnToSingleState { dataset_root: None },
@@ -2412,9 +2665,16 @@ impl RootApp {
             settings_status,
             active_help_topic: None,
             control_bridge,
+            control_external_revision: 0,
+            control_project_revision: 0,
+            control_observed_state: None,
+            control_mutated_this_frame: false,
+            control_last_observed_at: Instant::now() - Duration::from_millis(34),
             #[cfg(target_os = "macos")]
             native_menu: None,
-        })
+        };
+        root.load_control_manifest_from_project();
+        Ok(root)
     }
 
     pub fn queue_open_root(&mut self, root: PathBuf) {
@@ -3228,6 +3488,7 @@ impl RootApp {
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.handle_viewport_screenshot_events(ctx);
+        self.control_mutated_this_frame = false;
         self.process_control_requests(ctx);
         if let Some(rx) = self.deep_link_rx.as_ref() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -3655,6 +3916,15 @@ impl eframe::App for RootApp {
         let object_preload_settings = self.object_preload_settings;
         let mut object_preload_start = None;
         let mut object_preload_clear = false;
+        let external_layers = self
+            .control_bridge
+            .as_ref()
+            .map(OdonControlBridge::external_layers)
+            .filter(|(revision, _, _)| *revision != self.control_external_revision);
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            bridge.render_extension_ui(ctx, &self.control_observed_snapshot());
+        }
+        self.sync_control_manifest_to_project();
 
         match &mut self.mode {
             Mode::Project { project_space } => {
@@ -3798,6 +4068,10 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Single(app) => {
+                if let Some((revision, layers, resources)) = external_layers.as_ref() {
+                    app.sync_control_external_layers(layers, resources);
+                    self.control_external_revision = *revision;
+                }
                 app.project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
                 app.set_project_object_cache_ui_state(project_object_cache_ui_state(
@@ -4076,6 +4350,31 @@ impl eframe::App for RootApp {
         if back_to_single {
             self.switch_mosaic_to_single(ctx);
         }
+        self.publish_observed_control_changes();
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
+    }
+}
+
+#[cfg(test)]
+mod control_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn application_errors_become_structured_control_errors() {
+        let missing = control_application_error(
+            "open_project",
+            &serde_json::json!({"error": "Project file does not exist."}),
+        )
+        .expect("structured error");
+        assert_eq!(missing.kind, ControlErrorKind::ResourceNotFound);
+
+        let wrong_mode = control_application_error(
+            "get_camera",
+            &serde_json::json!({"error": "No dataset viewer is currently open."}),
+        )
+        .expect("structured error");
+        assert_eq!(wrong_mode.kind, ControlErrorKind::WrongMode);
+
+        assert!(control_application_error("get_camera", &serde_json::json!({})).is_none());
     }
 }

@@ -106,7 +106,8 @@ Odon.
 When Odon is already running, a clicked deep link starts a short-lived Odon
 process that forwards the URL to the existing window over a local loopback
 listener on `127.0.0.1:17871`, then exits. This listener is separate from the
-MCP control bridge on `127.0.0.1:17870`.
+authenticated Odon control server, which uses a dynamically allocated loopback
+port advertised through a private runtime manifest.
 
 For macOS development builds, register the helper app:
 

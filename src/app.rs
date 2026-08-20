@@ -105,6 +105,7 @@ use crate::ui::right_panel;
 use crate::ui::style::apply_napari_like_dark;
 use crate::ui::top_bar;
 use crate::xenium::XeniumLayers;
+use odon::control::{DataResourceSnapshot, LayerSnapshot};
 
 // Single-dataset viewer shell.
 //
@@ -4081,6 +4082,29 @@ impl OmeZarrViewerApp {
         }
     }
 
+    pub fn control_object_selection_signature(&self) -> serde_json::Value {
+        match self.control_object_selection_target(&serde_json::json!({})) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "selection": self.seg_objects.selection_signature_json(),
+            }),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer())
+                .map(|objects| {
+                    serde_json::json!({
+                        "target": "spatial_shape", "layer_id": id,
+                        "selection": objects.selection_signature_json(),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            _ => serde_json::Value::Null,
+        }
+    }
+
     pub fn control_query_object_ids_in_rect(
         &self,
         params: &serde_json::Value,
@@ -4592,12 +4616,20 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_camera_snapshot(&self) -> serde_json::Value {
+        let viewport = self.last_canvas_rect.map(|rect| {
+            let visible = self.visible_world_rect(rect);
+            serde_json::json!({
+                "screen_rect": [rect.min.x, rect.min.y, rect.max.x, rect.max.y],
+                "visible_world_lvl0": [visible.min.x, visible.min.y, visible.max.x, visible.max.y],
+            })
+        });
         serde_json::json!({
             "center_world_lvl0": [
                 self.camera.center_world_lvl0.x,
                 self.camera.center_world_lvl0.y,
             ],
             "zoom_screen_per_lvl0_px": self.camera.zoom_screen_per_lvl0_px,
+            "viewport": viewport,
         })
     }
 
@@ -4732,8 +4764,26 @@ impl OmeZarrViewerApp {
                 "name": ch.name,
             })
         });
+        let level0 = self.dataset.levels.first();
+        let dataset = serde_json::json!({
+            "source": self.dataset.source.source_key(),
+            "axes": self.dataset.multiscale.axes.iter().map(|axis| serde_json::json!({
+                "name": axis.name, "unit": axis.unit,
+            })).collect::<Vec<_>>(),
+            "shape": level0.map(|level| level.shape.clone()),
+            "chunks": level0.map(|level| level.chunks.clone()),
+            "dtype": level0.map(|level| level.dtype.clone()),
+            "scale": level0.map(|level| level.scale.clone()),
+            "translation": level0.map(|level| level.translation.clone()),
+            "pyramid_levels": self.dataset.levels.len(),
+            "render_kind": match self.dataset.render_kind {
+                crate::data::ome::DatasetRenderKind::Image => "image",
+                crate::data::ome::DatasetRenderKind::LabelMask => "labels",
+            },
+        });
         serde_json::json!({
             "dataset": self.dataset.source.source_key(),
+            "dataset_descriptor": dataset,
             "active_channel": active_channel,
             "channel_count": self.channels.len(),
             "visible_channels": self.channels
@@ -4994,6 +5044,294 @@ impl OmeZarrViewerApp {
 
         self.rebuild_layer_orders();
         self.bump_render_id();
+    }
+
+    pub fn sync_control_external_layers(
+        &mut self,
+        layers: &[LayerSnapshot],
+        resources: &[DataResourceSnapshot],
+    ) {
+        let transform_for = |layer: &LayerSnapshot| {
+            let Some(resource) = resources
+                .iter()
+                .find(|resource| resource.resource_id == layer.data_resource_id)
+            else {
+                return (egui::Vec2::ONE, egui::Vec2::ZERO);
+            };
+            let coordinate = &resource.coordinate_space;
+            let axis_value = |values: &[f64], axis: &str, default: f32| {
+                coordinate
+                    .axes
+                    .iter()
+                    .position(|name| name.eq_ignore_ascii_case(axis))
+                    .and_then(|index| values.get(index))
+                    .copied()
+                    .map(|value| value as f32)
+                    .unwrap_or(default)
+            };
+            (
+                egui::vec2(
+                    axis_value(&coordinate.scale, "x", 1.0),
+                    axis_value(&coordinate.scale, "y", 1.0),
+                ),
+                egui::vec2(
+                    axis_value(&coordinate.translation, "x", 0.0),
+                    axis_value(&coordinate.translation, "y", 0.0),
+                ),
+            )
+        };
+        let apply_style = |loaded: &mut crate::spatialdata::SpatialImageLayer,
+                           layer: &LayerSnapshot,
+                           resource: &DataResourceSnapshot| {
+            let default_color = if layer.kind == "labels" {
+                Some([255, 190, 40])
+            } else {
+                None
+            };
+            let style_color = layer
+                .style
+                .get("color_rgb")
+                .and_then(serde_json::Value::as_array)
+                .filter(|values| values.len() == 3)
+                .and_then(|values| {
+                    Some([
+                        u8::try_from(values[0].as_u64()?).ok()?,
+                        u8::try_from(values[1].as_u64()?).ok()?,
+                        u8::try_from(values[2].as_u64()?).ok()?,
+                    ])
+                })
+                .or(default_color);
+            let style_window = layer.style.get("contrast").and_then(|value| {
+                Some((
+                    value.get("min")?.as_f64()? as f32,
+                    value.get("max")?.as_f64()? as f32,
+                ))
+            });
+            let resource_window = resource
+                .metadata
+                .get("value_max")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|maximum| (0.0, maximum as f32));
+            for channel in &mut loaded.channels {
+                if let Some(color) = style_color {
+                    channel.color_rgb = color;
+                }
+                if let Some(window) = style_window.or(resource_window) {
+                    channel.window = Some(window);
+                }
+            }
+        };
+        let wanted = layers
+            .iter()
+            .filter(|layer| matches!(layer.kind.as_str(), "image" | "labels"))
+            .map(|layer| layer.layer_id.as_str())
+            .collect::<HashSet<_>>();
+        self.spatial_image_layers.images.retain(|layer| {
+            layer
+                .external_id
+                .as_deref()
+                .is_none_or(|external_id| wanted.contains(external_id))
+        });
+
+        for layer in layers
+            .iter()
+            .filter(|layer| matches!(layer.kind.as_str(), "image" | "labels"))
+        {
+            let Some(resource) = resources
+                .iter()
+                .find(|resource| resource.resource_id == layer.data_resource_id)
+            else {
+                continue;
+            };
+            if let Some(existing_index) = self
+                .spatial_image_layers
+                .images
+                .iter()
+                .position(|existing| existing.external_id.as_deref() == Some(&layer.layer_id))
+            {
+                let existing = &mut self.spatial_image_layers.images[existing_index];
+                if existing.external_resource_id.as_deref() == Some(&layer.data_resource_id) {
+                    existing.name = layer.name.clone();
+                    existing.visible = layer.visible;
+                    existing.opacity = layer.opacity as f32;
+                    (existing.scale_world, existing.offset_world) = transform_for(layer);
+                    apply_style(existing, layer, resource);
+                    continue;
+                }
+                self.spatial_image_layers.images.remove(existing_index);
+            }
+            let Ok(url) = url::Url::parse(&resource.uri) else {
+                continue;
+            };
+            let Ok(path) = url.to_file_path() else {
+                continue;
+            };
+            match self.spatial_image_layers.load_external_image(
+                layer.layer_id.clone(),
+                layer.data_resource_id.clone(),
+                layer.name.clone(),
+                path,
+                self.tiles_gl.is_some(),
+                self.smooth_pixels,
+            ) {
+                Ok(id) => {
+                    if let Some(loaded) = self
+                        .spatial_image_layers
+                        .images
+                        .iter_mut()
+                        .find(|loaded| loaded.id == id)
+                    {
+                        loaded.visible = layer.visible;
+                        loaded.opacity = layer.opacity as f32;
+                        (loaded.scale_world, loaded.offset_world) = transform_for(layer);
+                        apply_style(loaded, layer, resource);
+                    }
+                }
+                Err(error) => {
+                    crate::log_warn!(
+                        "failed to attach external Odon layer {}: {}",
+                        layer.layer_id,
+                        error
+                    );
+                }
+            }
+        }
+
+        let spatial_transform_for = |resource: &DataResourceSnapshot| {
+            let coordinate = &resource.coordinate_space;
+            let axis_value = |values: &[f64], axis: &str, default: f32| {
+                coordinate
+                    .axes
+                    .iter()
+                    .position(|name| name.eq_ignore_ascii_case(axis))
+                    .and_then(|index| values.get(index))
+                    .copied()
+                    .map(|value| value as f32)
+                    .unwrap_or(default)
+            };
+            crate::spatialdata::SpatialDataTransform2 {
+                scale: [
+                    axis_value(&coordinate.scale, "x", 1.0),
+                    axis_value(&coordinate.scale, "y", 1.0),
+                ],
+                translation: [
+                    axis_value(&coordinate.translation, "x", 0.0),
+                    axis_value(&coordinate.translation, "y", 0.0),
+                ],
+            }
+        };
+        let apply_shape_style = |loaded: &mut crate::spatialdata::SpatialShapesLayer,
+                                 layer: &LayerSnapshot| {
+            loaded.name = layer.name.clone();
+            *loaded.visible_mut() = layer.visible;
+            loaded.opacity = layer.opacity as f32;
+            if let Some(objects) = loaded.object_layer_mut() {
+                objects.opacity = layer.opacity as f32;
+            }
+            if let Some(width) = layer
+                .style
+                .get("width")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+            {
+                loaded.width_screen_px = width as f32;
+                if let Some(objects) = loaded.object_layer_mut() {
+                    objects.width_screen_px = width as f32;
+                }
+            }
+            if let Some(color) = layer
+                .style
+                .get("color_rgb")
+                .and_then(serde_json::Value::as_array)
+                .filter(|values| values.len() == 3)
+                .and_then(|values| {
+                    Some([
+                        u8::try_from(values[0].as_u64()?).ok()?,
+                        u8::try_from(values[1].as_u64()?).ok()?,
+                        u8::try_from(values[2].as_u64()?).ok()?,
+                    ])
+                })
+            {
+                loaded.color_rgb = color;
+                if let Some(objects) = loaded.object_layer_mut() {
+                    objects.color_rgb = color;
+                }
+            }
+        };
+        let wanted_shapes = layers
+            .iter()
+            .filter(|layer| {
+                matches!(
+                    layer.kind.as_str(),
+                    "objects" | "points" | "shapes" | "mask" | "annotations"
+                )
+            })
+            .filter_map(|layer| {
+                resources
+                    .iter()
+                    .find(|resource| resource.resource_id == layer.data_resource_id)
+                    .filter(|resource| matches!(resource.format.as_str(), "parquet" | "geoparquet"))
+                    .map(|_| layer.layer_id.as_str())
+            })
+            .collect::<HashSet<_>>();
+        self.spatial_layers.shapes.retain(|layer| {
+            layer
+                .external_id
+                .as_deref()
+                .is_none_or(|external_id| wanted_shapes.contains(external_id))
+        });
+        for layer in layers.iter().filter(|layer| {
+            matches!(
+                layer.kind.as_str(),
+                "objects" | "points" | "shapes" | "mask" | "annotations"
+            )
+        }) {
+            let Some(resource) = resources.iter().find(|resource| {
+                resource.resource_id == layer.data_resource_id
+                    && matches!(resource.format.as_str(), "parquet" | "geoparquet")
+            }) else {
+                continue;
+            };
+            let transform = spatial_transform_for(resource);
+            if let Some(existing_index) = self
+                .spatial_layers
+                .shapes
+                .iter()
+                .position(|existing| existing.external_id.as_deref() == Some(&layer.layer_id))
+            {
+                let existing = &mut self.spatial_layers.shapes[existing_index];
+                if existing.external_resource_id.as_deref() == Some(&layer.data_resource_id)
+                    && existing.transform == transform
+                {
+                    apply_shape_style(existing, layer);
+                    continue;
+                }
+                self.spatial_layers.shapes.remove(existing_index);
+            }
+            let Ok(url) = url::Url::parse(&resource.uri) else {
+                continue;
+            };
+            let Ok(path) = url.to_file_path() else {
+                continue;
+            };
+            let id = self.spatial_layers.load_external_shapes(
+                layer.layer_id.clone(),
+                layer.data_resource_id.clone(),
+                layer.name.clone(),
+                path,
+                transform,
+            );
+            if let Some(loaded) = self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|loaded| loaded.id == id)
+            {
+                apply_shape_style(loaded, layer);
+            }
+        }
+        self.rebuild_layer_orders();
     }
 
     pub fn attach_xenium_layers(

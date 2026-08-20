@@ -16,8 +16,8 @@ MCP client, not by the user.
 ```text
 MCP client
   launches odon_mcp over stdio
-    odon_mcp forwards tool calls to
-      running Odon GUI control bridge on 127.0.0.1:17870
+    odon_mcp discovers and authenticates to
+      a running Odon GUI control server on a dynamic loopback port
 ```
 
 There are two Odon-side executables:
@@ -52,8 +52,10 @@ Typical paths are:
 Restart the MCP client after changing its configuration.
 
 The GUI still needs to be running. Open Odon normally from the desktop launcher,
-then let the MCP client launch `odon_mcp`. The MCP helper connects to the GUI
-bridge on `127.0.0.1:17870`; it should not start a second Odon GUI process.
+then let the MCP client launch `odon_mcp`. The helper discovers the GUI through
+its private runtime manifest and authenticates with that manifest's token; it
+does not start a second Odon GUI process. If several instances are running, set
+`ODON_INSTANCE_ID` for the MCP helper.
 
 ### Client Configuration Examples
 
@@ -322,7 +324,7 @@ Restart the MCP client after changing its configuration.
 When the development GUI starts successfully from a terminal, it prints:
 
 ```text
-odon control bridge listening on 127.0.0.1:17870
+odon control server listening on 127.0.0.1:<dynamic-port>
 ```
 
 Packaged desktop launches do not require a terminal. On Windows release builds,
@@ -557,7 +559,7 @@ the screenshot was queued.
 
 ### Odon Bridge Unavailable
 
-The MCP server could not connect to `127.0.0.1:17870`.
+The MCP helper could not discover or connect to a running Odon control server.
 
 Fix: open the Odon desktop application first. For a development checkout, start
 the GUI with:
@@ -565,6 +567,9 @@ the GUI with:
 ```bash
 cargo run --bin odon
 ```
+
+If multiple Odon windows are open, choose one by setting `ODON_INSTANCE_ID` to
+the instance ID reported by the Python SDK or runtime manifest.
 
 ### Tool List Works But Tool Calls Fail
 
@@ -597,8 +602,9 @@ the operation.
 
 ## Security Notes
 
-The control bridge binds to `127.0.0.1:17870`, so it is intended for local
-desktop control. Do not expose it to a network.
+The control server binds only to loopback on a dynamic port and requires a
+random bearer token stored in a user-private runtime manifest. It is intended
+for local desktop control; do not proxy or expose it to a network.
 
 MCP clients can ask Odon to open local files, capture screenshots, and save the
 current project. Use trusted MCP clients and review automation instructions

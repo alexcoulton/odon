@@ -1,6 +1,6 @@
 # Odon Python API and Extension Platform Plan
 
-Status: Draft design and implementation plan
+Status: Core experimental implementation complete; stabilization work remains
 Date: 2026-08-20
 Target: Odon 0.x, with a stable control API designed before Odon 1.0
 
@@ -34,10 +34,35 @@ Odon state, invoke native Odon commands, or emit events to Python callbacks.
 This provides extensive customization without executing Python on Odon's render
 thread.
 
-A Cellpose extension is the recommended end-to-end reference implementation. It
-would exercise data discovery, region selection, custom native UI, Python-side
-computation, progress and cancellation, temporary previews, persistent label
-layers, and provenance.
+A Cellpose extension is the end-to-end reference implementation. It exercises
+data discovery, custom native UI, Python-side computation, cooperative
+cancellation, temporary previews, rendered label layers, and provenance.
+
+## Implementation Snapshot
+
+As of 2026-08-20, the first experimental implementation is present in this
+repository:
+
+- `src/control/` provides the central registry, command validation, structured
+  errors, discovery/authentication, events, retained tasks, data/layer
+  registries, revisions, ownership, and declarative UI registry.
+- Both the published protocol server and MCP adapter admit application commands
+  through that shared registry and `ControlCommand` path. MCP keeps only its
+  adapter-specific tool descriptions and result formatting.
+- `odon-client` is a separately buildable, pure-Python sync/async SDK with
+  discovery, launch helpers, resource wrappers, callbacks/iterators, awaitable
+  tasks, NumPy/Zarr exchange, optimistic revision guards, and native UI classes.
+- Rust renders extension UI in bounded native hosts and can execute validated
+  Odon commands and supported state bindings without a Python round trip.
+- Session cleanup, disconnect policies, extension reconnection, project-owned
+  resource/layer descriptor persistence, local raster/shape rendering, and a
+  separately packaged Cellpose reference extension are implemented.
+
+This is not yet a stable-v1 declaration. Snapshot shapes and method aliases are
+provisional; UI manifests remain session-owned; live referenced rendering is
+local-file and single-view focused; Arrow IPC and GeoJSON descriptors do not yet
+have live renderer adapters; and Cellpose still uses an in-memory extent plus a
+temporary preview rather than tiled inference and durable output selection.
 
 ## Goals
 
@@ -155,22 +180,27 @@ store.
 Automated tests launch or connect to Odon, load fixtures, assert state, exercise
 commands, wait for rendering readiness, and compare screenshots.
 
-## Current Foundation
+## Implemented Foundation
 
-Odon already contains the main architectural seam:
+Odon now contains the intended architectural seam:
 
-- The GUI owns a loopback TCP listener in `src/mcp/bridge.rs`.
+- The GUI owns a dynamic authenticated loopback TCP listener in
+  `src/mcp/bridge.rs`.
 - Bridge requests are queued through `crossbeam_channel`.
 - `RootApp` drains the queue and executes operations on the egui/UI thread.
 - `odon_mcp` speaks MCP over stdio and forwards tools through the bridge.
-- Existing control operations cover projects, ROIs, channels, contrast, camera,
+- Shared control operations cover projects, ROIs, channels, contrast, camera,
   panels, object visibility and selection, filters, mosaics, screenshots, and
   loading state.
+- `src/control/` owns method admission, request validation, revisions, errors,
+  events, tasks, resources, layers, UI extensions, and discovery manifests.
+- The Python SDK and MCP adapter connect independently through the same protocol
+  boundary.
 
-The current implementation should be treated as a prototype because it has a
-fixed port, a fixed five-second request timeout, no instance discovery, no
-authentication, no events, untyped `serde_json::Value` parameters, and duplicated
-method definitions across MCP schemas, MCP dispatch, and GUI dispatch.
+The implementation remains experimental because several legacy application
+operations still expose provisional JSON snapshot shapes and MCP maintains
+client-specific input-schema presentation. These are stabilization concerns,
+not separate execution paths.
 
 ## Target Architecture
 
@@ -1557,7 +1587,7 @@ Provide templates for:
 
 ## Delivery Roadmap
 
-### Phase 0: Decisions, inventory, and spike
+### Phase 0: Decisions, inventory, and spike — implemented
 
 Deliverables:
 
@@ -1577,7 +1607,7 @@ Exit criteria:
   and capture a screenshot.
 - Open architectural decisions are explicitly recorded.
 
-### Phase 1: Typed control core and protocol server
+### Phase 1: Typed control core and protocol server — implemented provisionally
 
 Deliverables:
 
@@ -1595,7 +1625,7 @@ Exit criteria:
 - No control failure needs a successful `{"error": ...}` result.
 - Protocol and schema tests cover the migrated methods.
 
-### Phase 2: Discovery, security, and Python SDK foundation
+### Phase 2: Discovery, security, and Python SDK foundation — implemented
 
 Deliverables:
 
@@ -1614,7 +1644,7 @@ Exit criteria:
 - Odon does not require Python to be installed.
 - Windows, macOS, and Linux connection behavior is tested.
 
-### Phase 3: Events, revisions, and tasks
+### Phase 3: Events, revisions, and tasks — implemented
 
 Deliverables:
 
@@ -1631,7 +1661,7 @@ Exit criteria:
 - Opening and screenshot operations can be awaited to actual completion.
 - A slow client cannot block Odon or grow queues without bound.
 
-### Phase 4: General layer and data-resource API
+### Phase 4: General layer and data-resource API — implemented for local v1 resources
 
 Deliverables:
 
@@ -1650,7 +1680,7 @@ Exit criteria:
 - Session cleanup cannot remove user-owned data.
 - Coordinate conformance fixtures pass in Rust and Python.
 
-### Phase 5: Declarative UI version 1
+### Phase 5: Declarative UI version 1 — implemented experimentally
 
 Deliverables:
 
@@ -1670,7 +1700,7 @@ Exit criteria:
 - Invalid or abusive manifests are rejected without destabilizing the viewer.
 - Disconnecting the extension produces the declared, visible behavior.
 
-### Phase 6: Cellpose reference extension
+### Phase 6: Cellpose reference extension — vertical slice implemented
 
 Deliverables:
 
@@ -1690,7 +1720,12 @@ Exit criteria:
 - Preview and final output lifecycles are predictable.
 - Cellpose failure does not interrupt native Odon viewing.
 
-### Phase 7: Stabilization and extension ecosystem
+The reference extension covers the connection, native panel, event, inference,
+temporary Zarr, replacement, rendering, provenance, reconnect, and cooperative
+cancellation path. Tiled inference and user-selected durable output remain part
+of stabilization rather than the initial proof of architecture.
+
+### Phase 7: Stabilization and extension ecosystem — pending
 
 Deliverables:
 
@@ -1731,9 +1766,9 @@ This slice is more informative than implementing many additional control
 methods first. It validates protocol, events, UI, data exchange, coordinates,
 ownership, and failure behavior in one bounded experiment.
 
-## Version 1 Acceptance Criteria
+## Stable Version 1 Acceptance Criteria
 
-The Python API can be called version 1-ready when:
+The experimental API should only be declared stable version 1 when:
 
 - Odon ships without Python and works normally when no client is connected.
 - A separately installed Python wheel discovers and authenticates to Odon on all
@@ -1802,45 +1837,32 @@ inside Odon.
 Mitigation: validate the primitives with a small vertical slice and Cellpose,
 mark early APIs provisional, and stabilize only demonstrated abstractions.
 
-## Open Decisions
+## Resolved and Remaining Decisions
 
-The following decisions should be resolved during Phase 0:
+The initial implementation selected private platform runtime manifests,
+loopback TCP, Python 3.10+, UUID-like stable IDs, session-only UI manifests,
+Python-owned managed temporary Zarr stores, and OME-Zarr labels for the Cellpose
+preview. Launch helpers require an explicit executable and then use ordinary
+manifest discovery. Extension capabilities are validated against a conservative
+local permission policy; a future trust/consent dialog is not implemented.
 
-1. Runtime manifest location and permission behavior on macOS, Windows, and
-   Linux.
-2. Whether version 1 uses only loopback TCP or also supports Unix domain sockets
-   where available.
-3. Exact base dependencies and minimum Python version for `odon-client`.
-4. Schema generation library and how generated schemas are reviewed.
-5. Stable ID format and persistence rules for project-owned layers.
-6. Which current control responses need redesigned shapes before stabilization.
-7. Whether a client may launch Odon automatically and how executable discovery
-   works per platform.
-8. Initial extension permission and user-consent UX.
-9. Which UI locations and components form the minimum useful version 1 set.
-10. Whether UI manifests can be persisted in projects in version 1 or remain
-    session-only until the trust model matures.
-11. Temporary resource ownership split between Odon and Python.
-12. The first durable Cellpose output representation: OME-Zarr labels, object
-    polygons, or both.
-
-Recommended defaults are loopback TCP, session-only UI, OME-Zarr label output,
-Python-owned temporary writes registered with Odon, and explicit executable
-paths before adding automatic Odon discovery and launching heuristics.
+Before stabilization, the project still needs to decide which provisional
+snapshot shapes and aliases become permanent, whether to generate richer schemas
+from fully typed request/result models, whether project UI manifests are safe to
+persist, and what durable/tiled Cellpose output workflow to support.
 
 ## Immediate Next Actions
 
-1. Review this plan and agree on the definition of the first vertical slice.
-2. Create a control-method inventory from the existing MCP tools and
-   `RootApp::reply_to_control_request` dispatch.
-3. Draft the version 1 `system.hello`, error, capability, event, task, and resource
-   schemas as checked-in examples.
-4. Draft typed contracts for current view, channel visibility, camera, loading
-   state, screenshot, and layer registration.
-5. Build an explicitly experimental Python client against the current bridge to
-   test naming and ergonomics.
-6. Use the findings to implement the typed control registry and new protocol
-   server.
+1. Exercise the experimental wheel and Cellpose extension against packaged Odon
+   on macOS, Windows, and Linux.
+2. Gather real extension feedback before freezing method aliases, snapshots,
+   component vocabulary, and permission UX.
+3. Add a second independently structured extension and cross-version protocol
+   compatibility tests.
+4. Implement tiled/durable analysis output and the remaining live resource
+   render adapters demanded by real workflows.
+5. Publish a compatibility/deprecation policy, then declare only the proven
+   subset stable.
 
-The architecture should be reviewed again after the first vertical slice and
-before declaring any Python or declarative UI surface stable.
+The architecture should be reviewed after real extension use and before
+declaring any Python or declarative UI surface stable.

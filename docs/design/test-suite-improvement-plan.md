@@ -135,16 +135,25 @@ Latest local verification on 2026-08-20:
 
 | Measure | Result |
 | --- | ---: |
-| Unique Rust `#[test]` functions | 136 |
-| Test executions under `cargo test --all-targets` | 141 |
-| Passing test executions | 138 |
+| Unique Rust `#[test]` functions | 158 |
+| Test executions under `cargo test --all-targets` | 163 |
+| Passing test executions | 160 |
 | Explicitly ignored extended tests | 3 |
+| Python SDK test executions | 15 |
 | Failing test executions | 0 |
 
 Five data-module tests execute through both the library and application targets,
 accounting for executions beyond the unique function count. The coverage job is
 configured, but its numeric baseline will be established by the first CI run
 because the local toolchain does not include `llvm-tools-preview`.
+
+Since the gate snapshot, the Python API implementation added six unique Rust
+tests and expanded the Python suite to 15 executions. These additions cover
+discovery and token authentication, event backpressure and close wakeups,
+optimistic revisions, task lifecycle, resource ownership and coordinates,
+project descriptor persistence, declarative UI reconciliation and native
+bindings, concurrent protocol requests, and end-to-end registry round trips
+without weakening the original pre-refactor gate.
 
 ## Objectives
 
@@ -801,7 +810,7 @@ The plan is succeeding when:
 - Coverage reports point reviewers toward meaningful untested code.
 - MCP adapter changes require few test changes when semantic behavior remains
   stable.
-- Tests written now move naturally onto the future typed control core.
+- Tests written before the refactor now exercise the shared typed control core.
 - The central API refactor can simplify internal architecture while preserving
   demonstrated Odon behavior.
 

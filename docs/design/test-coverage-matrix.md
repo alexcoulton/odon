@@ -119,20 +119,27 @@ Priorities:
 
 ## Current Automated Evidence
 
-The completed pre-refactor gate includes:
+The completed gate and current control/API regression suite include:
 
-- 136 unique Rust tests and 141 executions under `cargo test --all-targets`.
-- 138 passing executions, three explicit ignored extended fixtures, and no
+- 158 unique Rust tests and 163 executions under `cargo test --all-targets`.
+- 160 passing executions, three explicit ignored extended fixtures, and no
   failures on the final local run.
+- Fifteen passing Python SDK tests cover sync/async connections and disconnect
+  cleanup, authenticated discovery, pushed events and iterator shutdown,
+  awaitable tasks, revision forwarding, referenced layers, coordinate
+  transforms, and declarative UI resources.
 - Required CI tests on Linux, macOS, and Windows plus Linux LCOV generation.
 - Checked-in and generated OME-Zarr/OME-TIFF data with pixel, plane, histogram,
   measurement, compositing, and failure assertions.
 - Project, preset, ROI, samplesheet, mosaic, camera, layer, mask, screenshot,
   SpatialData, object, filter, selection, measurement, and export workflows.
-- Single-viewer and mosaic semantic control characterization designed to move
-  behind the future typed control core.
+- Single-viewer and mosaic semantic control characterization now exercised
+  through the shared typed control core.
 - Thin MCP JSON-RPC/schema tests and a parallel-safe ephemeral TCP bridge
   round-trip test.
+- Control-protocol conformance tests for authentication, concurrent requests,
+  bounded events, revisions, tasks, coordinate descriptors, ownership, project
+  persistence, layer lifecycle, and UI tree validation/native bindings.
 
 `Partial` does not mean that most of a capability is covered. It only means some
 meaningful automated evidence exists.

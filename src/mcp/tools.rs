@@ -786,57 +786,12 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let method = match name {
-        "get_current_view"
-        | "list_project_rois"
-        | "list_channels"
-        | "list_visible_channels"
-        | "get_side_panels"
-        | "set_side_panels"
-        | "get_smooth_pixels"
-        | "set_smooth_pixels"
-        | "get_loading_state"
-        | "get_active_channel"
-        | "set_active_channel"
-        | "set_visible_channels"
-        | "open_project"
-        | "open_ome_zarr"
-        | "open_tiff"
-        | "open_mosaic_samplesheet"
-        | "open_roi"
-        | "save_project"
-        | "get_channel_contrast"
-        | "set_channel_contrast"
-        | "get_object_overlay_visibility"
-        | "set_object_overlay_visibility"
-        | "get_object_selection"
-        | "query_object_ids_in_rect"
-        | "query_object_ids_in_view"
-        | "select_object_ids_in_rect"
-        | "clear_object_selection"
-        | "get_object_filter"
-        | "set_object_filter_query"
-        | "clear_object_filter"
-        | "get_channel_intensity_stats"
-        | "set_channel_order"
-        | "list_channel_groups"
-        | "set_channel_group"
-        | "get_camera"
-        | "set_camera"
-        | "zoom_in"
-        | "zoom_out"
-        | "fit_to_view"
-        | "set_right_tab"
-        | "set_mosaic_right_tab"
-        | "configure_mosaic_layout"
-        | "show_project_page"
-        | "capture_screenshot"
-        | "capture_window_screenshot"
-        | "capture_project_screenshot" => name,
-        _ => {
-            return json_rpc_error(id, -32602, format!("Unknown tool: {name}"));
-        }
+    let Some(descriptor) =
+        crate::control::registry::method(name).filter(|descriptor| descriptor.mcp_exposed)
+    else {
+        return json_rpc_error(id, -32602, format!("Unknown tool: {name}"));
     };
+    let method = descriptor.name;
     match crate::mcp::client::call_running_odon(method, arguments) {
         Ok(result) => json_rpc_result(
             id,
@@ -935,6 +890,11 @@ mod tests {
             let name = tool["name"].as_str().expect("tool name");
             assert!(names.insert(name), "duplicate MCP tool name: {name}");
             assert!(
+                crate::control::registry::method(name)
+                    .is_some_and(|descriptor| descriptor.mcp_exposed),
+                "MCP tool is missing from the control registry: {name}"
+            );
+            assert!(
                 tool["description"]
                     .as_str()
                     .is_some_and(|text| !text.is_empty()),
@@ -944,6 +904,17 @@ mod tests {
             assert!(
                 tool["inputSchema"]["properties"].is_object(),
                 "missing object properties schema for {name}"
+            );
+        }
+
+        for descriptor in crate::control::registry::METHODS
+            .iter()
+            .filter(|descriptor| descriptor.mcp_exposed)
+        {
+            assert!(
+                names.contains(descriptor.name),
+                "control method marked for MCP has no tool schema: {}",
+                descriptor.name
             );
         }
 

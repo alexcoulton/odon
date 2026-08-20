@@ -79,11 +79,34 @@ impl SpatialDataLayers {
         self.next_shape_layer_id = id.wrapping_add(1).max(1);
         let layer = SpatialShapesLayer::new(
             id,
+            None,
+            None,
             format!("Shapes: {}", element.name),
             path,
             element.transform,
         );
         self.shapes.push(layer);
+        id
+    }
+
+    pub fn load_external_shapes(
+        &mut self,
+        external_id: String,
+        external_resource_id: String,
+        name: String,
+        parquet_path: PathBuf,
+        transform: SpatialDataTransform2,
+    ) -> u64 {
+        let id = self.next_shape_layer_id.max(1);
+        self.next_shape_layer_id = id.wrapping_add(1).max(1);
+        self.shapes.push(SpatialShapesLayer::new(
+            id,
+            Some(external_id),
+            Some(external_resource_id),
+            name,
+            parquet_path,
+            transform,
+        ));
         id
     }
 
@@ -190,6 +213,8 @@ impl SpatialDataLayers {
 #[derive(Debug)]
 pub struct SpatialShapesLayer {
     pub id: u64,
+    pub external_id: Option<String>,
+    pub external_resource_id: Option<String>,
     pub name: String,
     pub visible: bool,
     pub opacity: f32,
@@ -198,7 +223,7 @@ pub struct SpatialShapesLayer {
     pub offset_world: egui::Vec2,
 
     parquet_path: PathBuf,
-    transform: SpatialDataTransform2,
+    pub transform: SpatialDataTransform2,
     object_layer: Option<ObjectsLayer>,
 
     data: Option<SpatialShapesData>,
@@ -221,6 +246,8 @@ enum SpatialShapesData {
 impl SpatialShapesLayer {
     pub fn new(
         id: u64,
+        external_id: Option<String>,
+        external_resource_id: Option<String>,
         name: String,
         parquet_path: PathBuf,
         transform: SpatialDataTransform2,
@@ -243,6 +270,8 @@ impl SpatialShapesLayer {
         }
         let mut s = Self {
             id,
+            external_id,
+            external_resource_id,
             name,
             visible: true,
             opacity: 0.75,

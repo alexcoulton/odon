@@ -4,7 +4,7 @@ use anyhow::Context;
 
 use crate::data::zarr_attrs::read_node_attributes;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpatialDataTransform2 {
     pub scale: [f32; 2],
     pub translation: [f32; 2],

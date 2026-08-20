@@ -53,6 +53,14 @@ pub struct ProjectConfig {
     /// Persistent UI groupings for channels/annotations (Napari-like layer groups).
     #[serde(default)]
     pub layer_groups: ProjectLayerGroups,
+
+    /// Referenced data resources registered by the control API with project ownership.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control_resources: Vec<serde_json::Value>,
+
+    /// External viewer layers registered by the control API with project ownership.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control_layers: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

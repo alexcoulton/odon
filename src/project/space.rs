@@ -529,6 +529,10 @@ impl ProjectSpace {
         &self.config
     }
 
+    pub fn config_mut(&mut self) -> &mut ProjectConfig {
+        &mut self.config
+    }
+
     pub fn layer_groups(&self) -> &ProjectLayerGroups {
         &self.config.layer_groups
     }

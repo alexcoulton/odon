@@ -1204,6 +1204,20 @@ impl ObjectsLayer {
         })
     }
 
+    pub fn selection_signature_json(&self) -> serde_json::Value {
+        let signature = self
+            .selected_object_indices
+            .iter()
+            .fold(0u64, |hash, index| {
+                hash ^ (*index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            });
+        serde_json::json!({
+            "selection_count": self.selected_object_indices.len(),
+            "primary_index": self.selected_object_index,
+            "signature": signature,
+        })
+    }
+
     pub fn filtered_count(&self) -> usize {
         self.filtered_ordered_indices
             .as_ref()
