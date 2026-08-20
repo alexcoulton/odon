@@ -368,10 +368,13 @@ impl ProjectViewSpec {
             cell_color_by: self.cell_color_by.clone(),
             fill_cells: self.fill_cells,
             show_selection_overlay: self.show_selection_overlay,
+            fast_object_rendering: None,
             visible_cell_types: self.visible_cell_types.clone(),
             hidden_cell_types: self.hidden_cell_types.clone(),
             object_level_colors: Vec::new(),
             object_filters: Vec::new(),
+            object_filter_logic: None,
+            object_query: None,
             center_world: self.camera.as_ref().map(|camera| camera.center_world_lvl0),
             zoom: self
                 .camera
@@ -2644,10 +2647,6 @@ impl ProjectSpace {
             .and_then(|v| v.get("version").and_then(|x| x.as_u64()))
             .unwrap_or(1);
 
-        self.config = ProjectConfig::default();
-        self.state = ProjectState::default();
-        self.roi_browse.clear();
-
         let (mut config, mut state): (ProjectConfig, ProjectState) = match version {
             1 => {
                 let file: ProjectFileV1 = match serde_json::from_str(&text) {
@@ -3175,6 +3174,34 @@ fn resolve_project_relative_path(project_dir: Option<&Path>, path: PathBuf) -> P
 mod tests {
     use super::*;
 
+    struct TestProjectDir(PathBuf);
+
+    impl TestProjectDir {
+        fn new(label: &str) -> Self {
+            let unique = format!(
+                "odon-{label}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system clock is before Unix epoch")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("create test project directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestProjectDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn local_roi(path: &str, id: &str) -> ProjectRoi {
         let mut roi = ProjectRoi {
             id: id.to_string(),
@@ -3306,6 +3333,276 @@ mod tests {
 
         let err = ps.roi_for_link_target(Some("ROI2"), None).unwrap_err();
         assert!(err.contains("matches 2 project ROIs"));
+    }
+
+    #[test]
+    fn save_then_load_preserves_roi_view_masks_groups_and_browser_state() {
+        let dir = TestProjectDir::new("project-roundtrip");
+        let project_path = dir.path().join("roundtrip.project.json");
+        let roi_path = dir.path().join("roi-1.ome.zarr");
+        let source = DatasetSource::Local(roi_path.clone());
+
+        let groups = ProjectLayerGroups {
+            channel_groups: vec![crate::data::project_config::ProjectChannelGroup {
+                id: 12,
+                name: "Immune".to_string(),
+                expanded: false,
+                color_rgb: [0, 255, 255],
+            }],
+            ..Default::default()
+        };
+        let masks = vec![ProjectMaskLayer {
+            id: 4,
+            name: "Exclusion".to_string(),
+            visible: true,
+            opacity: 0.5,
+            width_screen_px: 2.0,
+            display_mode: Some("outline".to_string()),
+            color_rgb: [255, 0, 0],
+            offset_world: [2.0, -3.0],
+            editable: true,
+            polygons_world: vec![vec![[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 0.0]]],
+            source_geojson: Some(PathBuf::from("masks/exclusion.geojson")),
+        }];
+        let view = ProjectRoiViewState {
+            channel_order: vec![2, 0, 1],
+            active_channel: Some(2),
+            active_layer: Some("objects".to_string()),
+            ..Default::default()
+        };
+        let preset_spec = ProjectViewSpec {
+            channel: Some("CD3".to_string()),
+            visible_channels: vec!["DAPI".to_string(), "CD3".to_string()],
+            cell_color_by: Some("cell_type".to_string()),
+            camera: Some(ProjectCameraState {
+                center_world_lvl0: [125.0, 250.0],
+                zoom_screen_per_lvl0_px: 1.5,
+            }),
+            ..Default::default()
+        };
+        let mosaic = ProjectMosaicViewState {
+            channel_order: vec![2, 0, 1],
+            active_channel: Some(2),
+            sort_by: Some("cohort".to_string()),
+            group_by: Some("response".to_string()),
+            layout_mode: Some("fit_cells".to_string()),
+            label_columns: vec!["sample".to_string(), "cohort".to_string()],
+            ..Default::default()
+        };
+
+        let mut project = ProjectSpace::default();
+        project.add_roi_source(source.clone());
+        project.update_layer_groups(|current| *current = groups.clone());
+        project.set_roi_mask_layers(&roi_path, masks.clone());
+        project.set_roi_view_state(&source, view.clone());
+        project.save_view_preset("Review".to_string(), preset_spec.clone());
+        project.set_mosaic_view_state(mosaic.clone());
+        project
+            .save_to_file(&project_path)
+            .expect("save project round-trip fixture");
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&project_path).expect("read saved project"))
+                .expect("saved project is valid JSON");
+        assert_eq!(saved["version"], 6);
+
+        let mut loaded = ProjectSpace::default();
+        loaded
+            .load_from_file(&project_path)
+            .expect("load saved project");
+
+        assert_eq!(loaded.rois().len(), 1);
+        assert_eq!(loaded.rois()[0].local_path(), Some(roi_path.as_path()));
+        assert_eq!(loaded.layer_groups(), &groups);
+        assert_eq!(loaded.roi_mask_layers(&roi_path), Some(masks.as_slice()));
+        assert_eq!(loaded.roi_view_state(&source), Some(&view));
+        assert_eq!(loaded.state.view_presets.len(), 1);
+        assert_eq!(loaded.state.view_presets[0].name, "Review");
+        assert_eq!(loaded.state.view_presets[0].spec, preset_spec);
+        assert_eq!(loaded.mosaic_view_state(), Some(&mosaic));
+        assert_eq!(
+            loaded.focused_roi().and_then(ProjectRoi::source_key),
+            Some(source.source_key())
+        );
+        assert_eq!(loaded.selected_rois().len(), 1);
+        assert_eq!(loaded.saved_project_path(), Some(project_path));
+    }
+
+    #[test]
+    fn project_load_rejects_malformed_json_and_unsupported_versions_without_replacing_state() {
+        let dir = TestProjectDir::new("project-errors");
+        let malformed = dir.path().join("malformed.project.json");
+        let unsupported = dir.path().join("unsupported.project.json");
+        fs::write(&malformed, "{not valid JSON").expect("write malformed project");
+        fs::write(
+            &unsupported,
+            r#"{"version":99,"config":{"rois":[]},"state":{}}"#,
+        )
+        .expect("write unsupported project");
+
+        let mut project = ProjectSpace::default();
+        project.add_roi_source(DatasetSource::Http {
+            base_url: "https://example.test/original.ome.zarr".to_string(),
+        });
+        let original = project
+            .rois()
+            .iter()
+            .map(|roi| (roi.id.clone(), roi.source_key()))
+            .collect::<Vec<_>>();
+
+        let malformed_error = project
+            .load_from_file(&malformed)
+            .expect_err("malformed project must fail");
+        assert!(malformed_error.to_string().contains("Load failed"));
+        assert_eq!(
+            project
+                .rois()
+                .iter()
+                .map(|roi| (roi.id.clone(), roi.source_key()))
+                .collect::<Vec<_>>(),
+            original
+        );
+
+        let version_error = project
+            .load_from_file(&unsupported)
+            .expect_err("unsupported project version must fail");
+        assert!(
+            version_error
+                .to_string()
+                .contains("Unsupported project version: 99")
+        );
+        assert_eq!(
+            project
+                .rois()
+                .iter()
+                .map(|roi| (roi.id.clone(), roi.source_key()))
+                .collect::<Vec<_>>(),
+            original
+        );
+    }
+
+    #[test]
+    fn view_presets_validate_replace_and_keep_active_alias_consistent() {
+        let mut project = ProjectSpace::default();
+        project.save_view_preset("  ".to_string(), ProjectViewSpec::default());
+        assert!(project.state.view_presets.is_empty());
+        assert_eq!(project.status, "View preset name is empty.");
+
+        let first = ProjectViewSpec {
+            channel_ref: Some(ProjectViewChannelRef {
+                label: "C002 - CD3 (FITC)".to_string(),
+                alias: "stale".to_string(),
+            }),
+            visible_channel_refs: vec![ProjectViewChannelRef {
+                label: "C002 - CD3 (FITC)".to_string(),
+                alias: "cd3".to_string(),
+            }],
+            camera: Some(ProjectCameraState {
+                center_world_lvl0: [10.0, 20.0],
+                zoom_screen_per_lvl0_px: 0.5,
+            }),
+            ..Default::default()
+        };
+        project.save_view_preset(" Review ".to_string(), first);
+        assert_eq!(project.state.view_presets.len(), 1);
+        assert_eq!(project.state.view_presets[0].name, "Review");
+        assert_eq!(
+            project.state.view_presets[0]
+                .spec
+                .channel_ref
+                .as_ref()
+                .map(|channel| channel.alias.as_str()),
+            Some("cd3")
+        );
+
+        let replacement = ProjectViewSpec {
+            channel: Some("DAPI".to_string()),
+            visible_channels: vec!["DAPI".to_string()],
+            ..Default::default()
+        };
+        project.save_view_preset("Review".to_string(), replacement.clone());
+        assert_eq!(project.state.view_presets.len(), 1);
+        assert_eq!(project.state.view_presets[0].spec, replacement);
+        assert_eq!(project.status, "Updated view preset 'Review'.");
+
+        let request = project.state.view_presets[0]
+            .spec
+            .to_deep_link_request(Some("ROI-1".to_string()));
+        assert_eq!(request.roi.as_deref(), Some("ROI-1"));
+        assert_eq!(request.channel.as_deref(), Some("DAPI"));
+        assert_eq!(request.visible_channels, vec!["DAPI"]);
+    }
+
+    #[test]
+    fn samplesheet_import_builds_project_and_export_round_trips_local_rois() {
+        let dir = TestProjectDir::new("samplesheet-project");
+        let image_a = dir.path().join("images/a.ome.zarr");
+        let image_b = dir.path().join("images/b.ome.zarr");
+        let objects_a = dir.path().join("objects/a.parquet");
+        fs::create_dir_all(&image_a).expect("create image A");
+        fs::create_dir_all(&image_b).expect("create image B");
+        fs::create_dir_all(objects_a.parent().expect("objects parent"))
+            .expect("create objects directory");
+        fs::write(&objects_a, []).expect("create segmentation placeholder");
+        let input = dir.path().join("input.samplesheet.csv");
+        fs::write(
+            &input,
+            "id,path,dataset,segpath,cohort\n\
+             ROI-A,images/a.ome.zarr,Study A,objects/a.parquet,treated\n\
+             ROI-B,images/b.ome.zarr,Study B,,control\n",
+        )
+        .expect("write project samplesheet");
+
+        let mut project = ProjectSpace::default();
+        project
+            .import_rois_from_csv(&input)
+            .expect("import samplesheet into project");
+        assert_eq!(project.rois().len(), 2);
+        assert_eq!(project.rois()[0].id, "ROI-A");
+        assert_eq!(project.rois()[0].dataset.as_deref(), Some("Study A"));
+        let canonical_image_a = image_a.canonicalize().expect("canonical image A");
+        let canonical_objects_a = objects_a.canonicalize().expect("canonical objects A");
+        assert_eq!(
+            project.rois()[0].local_path(),
+            Some(canonical_image_a.as_path())
+        );
+        assert_eq!(
+            project.rois()[0].segpath.as_deref(),
+            Some(canonical_objects_a.as_path())
+        );
+        assert_eq!(project.rois()[0].meta["cohort"], "treated");
+        assert_eq!(
+            project.focused_roi().map(|roi| roi.id.as_str()),
+            Some("ROI-A")
+        );
+        assert_eq!(project.selected_rois().len(), 1);
+
+        project.config.rois.push({
+            let mut remote = ProjectRoi {
+                id: "remote".to_string(),
+                ..Default::default()
+            };
+            remote.set_dataset_source(DatasetSource::Http {
+                base_url: "https://example.test/remote.ome.zarr".to_string(),
+            });
+            remote
+        });
+        let output = dir.path().join("exported.samplesheet.csv");
+        project
+            .export_samplesheet_csv(&output)
+            .expect("export project samplesheet");
+        assert!(project.status.contains("skipped 1 non-local ROI"));
+
+        let exported = load_samplesheet_csv(&output).expect("reload exported samplesheet");
+        assert_eq!(exported.rows.len(), 2);
+        assert_eq!(exported.rows[0].id, "ROI-A");
+        assert_eq!(exported.rows[0].path, canonical_image_a);
+        assert_eq!(exported.rows[0].meta["dataset"], "Study A");
+        assert_eq!(
+            exported.rows[0].meta["segpath"],
+            canonical_objects_a.to_string_lossy()
+        );
+        assert_eq!(exported.rows[1].meta["cohort"], "control");
     }
 }
 

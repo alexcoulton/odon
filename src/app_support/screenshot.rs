@@ -153,3 +153,117 @@ fn save_png_rgba_bottom_up(
     img.save(path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::GenericImageView;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    struct TestScreenshotDir(PathBuf);
+
+    impl TestScreenshotDir {
+        fn new() -> Self {
+            static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+            let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "odon-screenshot-tests-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create screenshot test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestScreenshotDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_rgba_bottom_up() -> Vec<u8> {
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 128, // bottom: red, green
+            0, 0, 255, 255, 255, 255, 255, 0, // top: blue, white
+        ]
+    }
+
+    #[test]
+    fn screenshot_worker_writes_top_down_rgb_png_and_reports_completion() {
+        let dir = TestScreenshotDir::new();
+        let path = dir.0.join("capture.png");
+        let worker = ScreenshotWorkerHandle::spawn();
+        worker
+            .tx
+            .send(ScreenshotWorkerMsg::SavePng {
+                id: 42,
+                path: path.clone(),
+                width: 2,
+                height: 2,
+                rgba_bottom_up: test_rgba_bottom_up(),
+            })
+            .expect("queue screenshot");
+
+        let response = worker
+            .rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("screenshot completion");
+        match response {
+            ScreenshotWorkerResp::Saved {
+                id,
+                path: saved_path,
+                result,
+            } => {
+                assert_eq!(id, 42);
+                assert_eq!(saved_path, path);
+                result.expect("screenshot save result");
+            }
+        }
+
+        let image = image::open(&path).expect("open saved PNG");
+        assert_eq!(image.dimensions(), (2, 2));
+        let rgb = image.to_rgb8();
+        assert_eq!(rgb.get_pixel(0, 0).0, [0, 0, 255]);
+        assert_eq!(rgb.get_pixel(1, 0).0, [255, 255, 255]);
+        assert_eq!(rgb.get_pixel(0, 1).0, [255, 0, 0]);
+        assert_eq!(rgb.get_pixel(1, 1).0, [0, 255, 0]);
+    }
+
+    #[test]
+    fn numbered_screenshot_paths_skip_existing_files_and_validate_directory() {
+        let dir = TestScreenshotDir::new();
+        let first = next_numbered_screenshot_path(&dir.0, "sample.screenshot.png")
+            .expect("first screenshot path");
+        assert_eq!(
+            first.file_name().and_then(|name| name.to_str()),
+            Some("sample.screenshot.0001.png")
+        );
+        std::fs::write(&first, []).expect("reserve first screenshot path");
+        let second = next_numbered_screenshot_path(&dir.0, "nested/ignored.png")
+            .expect("second screenshot path with isolated base");
+        assert_eq!(
+            second.file_name().and_then(|name| name.to_str()),
+            Some("ignored.0001.png")
+        );
+        let next_sample = next_numbered_screenshot_path(&dir.0, "sample.screenshot.png")
+            .expect("next sample screenshot path");
+        assert_eq!(
+            next_sample.file_name().and_then(|name| name.to_str()),
+            Some("sample.screenshot.0002.png")
+        );
+
+        let error = next_numbered_screenshot_path(&dir.0.join("missing"), "capture.png")
+            .expect_err("missing screenshot directory must fail");
+        assert!(error.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn screenshot_encoding_rejects_empty_dimensions_and_wrong_buffer_size() {
+        let dir = TestScreenshotDir::new();
+        let path = dir.0.join("invalid.png");
+        assert!(save_png_rgba_bottom_up(&path, 0, 2, &[]).is_err());
+        assert!(save_png_rgba_bottom_up(&path, 2, 2, &[0; 15]).is_err());
+        assert!(!path.exists());
+    }
+}

@@ -1323,98 +1323,170 @@ impl ObjectsLayer {
         ui.separator();
         ui.label("Filter");
         let mut filter_changed = false;
-        self.ensure_filter_clause_row();
-        let filter_candidates = self.filter_property_candidates();
-        let filter_value_options = self.filter_value_options_by_key(64);
-        let mut remove_filter_clause = None;
-        let mut add_filter_clause = false;
-        for idx in 0..self.filter_clauses.len() {
-            let is_last = idx == self.filter_clauses.len().saturating_sub(1);
-            ui.horizontal(|ui| {
-                let clause = &mut self.filter_clauses[idx];
-                filter_changed |= ui.checkbox(&mut clause.enabled, "").changed();
-                let previous_property_key = clause.property_key.clone();
-                egui::ComboBox::from_id_salt(format!("seg_objects_filter_key_{idx}"))
-                    .selected_text(clause.property_key.clone())
-                    .show_ui(ui, |ui| {
-                        filter_changed |= ui
-                            .selectable_value(&mut clause.property_key, "id".to_string(), "id")
-                            .changed();
-                        for (key, needs_load) in &filter_candidates {
-                            let label = if *needs_load {
-                                format!("{key} (load)")
-                            } else {
-                                key.clone()
-                            };
-                            filter_changed |= ui
-                                .selectable_value(&mut clause.property_key, key.clone(), label)
-                                .changed();
-                        }
-                    });
-                if clause.property_key != previous_property_key {
-                    clause.query.clear();
-                }
 
-                if let Some(options) = filter_value_options.get(&clause.property_key) {
-                    let selected_text = if clause.query.trim().is_empty() {
-                        "(select value)".to_string()
-                    } else {
-                        clause.query.clone()
-                    };
-                    ui.add_enabled_ui(clause.enabled, |ui| {
-                        egui::ComboBox::from_id_salt(format!("seg_objects_filter_value_{idx}"))
-                            .selected_text(selected_text)
+        ui.horizontal(|ui| {
+            for mode in [ObjectFilterMode::Simple, ObjectFilterMode::Query] {
+                filter_changed |= ui
+                    .selectable_value(&mut self.filter_mode, mode, mode.label())
+                    .on_hover_text(match mode {
+                        ObjectFilterMode::Simple => "Use row-based object filters",
+                        ObjectFilterMode::Query => "Use a boolean expression query",
+                    })
+                    .changed();
+            }
+        });
+
+        match self.filter_mode {
+            ObjectFilterMode::Simple => {
+                ui.horizontal(|ui| {
+                    ui.label("Match");
+                    for logic in [ObjectFilterLogic::All, ObjectFilterLogic::Any] {
+                        filter_changed |= ui
+                            .selectable_value(&mut self.filter_logic, logic, logic.label())
+                            .on_hover_text(match logic {
+                                ObjectFilterLogic::All => {
+                                    "Show objects matching every enabled filter"
+                                }
+                                ObjectFilterLogic::Any => {
+                                    "Show objects matching at least one enabled filter"
+                                }
+                            })
+                            .changed();
+                    }
+                });
+                self.ensure_filter_clause_row();
+                let filter_candidates = self.filter_property_candidates();
+                let filter_value_options = self.filter_value_options_by_key(64);
+                let mut remove_filter_clause = None;
+                let mut add_filter_clause = false;
+                for idx in 0..self.filter_clauses.len() {
+                    let is_last = idx == self.filter_clauses.len().saturating_sub(1);
+                    ui.horizontal(|ui| {
+                        let clause = &mut self.filter_clauses[idx];
+                        filter_changed |= ui.checkbox(&mut clause.enabled, "").changed();
+                        let previous_property_key = clause.property_key.clone();
+                        egui::ComboBox::from_id_salt(format!("seg_objects_filter_key_{idx}"))
+                            .selected_text(clause.property_key.clone())
                             .show_ui(ui, |ui| {
-                                for value in options {
+                                filter_changed |= ui
+                                    .selectable_value(
+                                        &mut clause.property_key,
+                                        "id".to_string(),
+                                        "id",
+                                    )
+                                    .changed();
+                                for (key, needs_load) in &filter_candidates {
+                                    let label = if *needs_load {
+                                        format!("{key} (load)")
+                                    } else {
+                                        key.clone()
+                                    };
                                     filter_changed |= ui
                                         .selectable_value(
-                                            &mut clause.query,
-                                            value.clone(),
-                                            value.as_str(),
+                                            &mut clause.property_key,
+                                            key.clone(),
+                                            label,
                                         )
                                         .changed();
                                 }
                             });
+                        if clause.property_key != previous_property_key {
+                            clause.query.clear();
+                        }
+
+                        if let Some(options) = filter_value_options.get(&clause.property_key) {
+                            let selected_text = if clause.query.trim().is_empty() {
+                                "(select value)".to_string()
+                            } else {
+                                clause.query.clone()
+                            };
+                            ui.add_enabled_ui(clause.enabled, |ui| {
+                                egui::ComboBox::from_id_salt(format!(
+                                    "seg_objects_filter_value_{idx}"
+                                ))
+                                .selected_text(selected_text)
+                                .show_ui(ui, |ui| {
+                                    for value in options {
+                                        filter_changed |= ui
+                                            .selectable_value(
+                                                &mut clause.query,
+                                                value.clone(),
+                                                value.as_str(),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                            });
+                        } else {
+                            filter_changed |= ui
+                                .add_enabled(
+                                    clause.enabled,
+                                    egui::TextEdit::singleline(&mut clause.query)
+                                        .hint_text("contains...")
+                                        .desired_width(180.0),
+                                )
+                                .changed();
+                        }
+                        if ui
+                            .small_button("-")
+                            .on_hover_text("Remove filter")
+                            .clicked()
+                        {
+                            remove_filter_clause = Some(idx);
+                        }
+                        if is_last && ui.small_button("+").on_hover_text("Add filter").clicked() {
+                            add_filter_clause = true;
+                        }
                     });
-                } else {
-                    filter_changed |= ui
-                        .add_enabled(
-                            clause.enabled,
-                            egui::TextEdit::singleline(&mut clause.query)
-                                .hint_text("contains...")
-                                .desired_width(180.0),
+                }
+                if add_filter_clause {
+                    self.filter_clauses.push(ObjectFilterClause::default());
+                    filter_changed = true;
+                }
+                if let Some(idx) = remove_filter_clause {
+                    if idx < self.filter_clauses.len() {
+                        self.filter_clauses.remove(idx);
+                        self.ensure_filter_clause_row();
+                        filter_changed = true;
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Clear").clicked() {
+                        self.filter_clauses = vec![ObjectFilterClause::default()];
+                        filter_changed = true;
+                    }
+                });
+            }
+            ObjectFilterMode::Query => {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.filter_query_text)
+                        .hint_text(
+                            "(broad_cell_type == \"immune_lymphoid\" and zz_mask_cd3)\n\
+                             or (broad_cell_type == \"immune_myeloid\" and zz_mask_hla_dr)",
                         )
-                        .changed();
+                        .desired_rows(4)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        filter_changed |= self.apply_filter_query_text();
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.filter_query_text.clear();
+                        self.filter_query_expr = None;
+                        self.filter_query_error = None;
+                        filter_changed = true;
+                    }
+                });
+                if let Some(error) = self.filter_query_error.as_ref() {
+                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), error);
+                } else if self.filter_query_expr.is_some() {
+                    ui.label("Query active.");
+                } else if !self.filter_query_text.trim().is_empty() {
+                    ui.label("Apply the query to update the filter.");
                 }
-                if ui
-                    .small_button("-")
-                    .on_hover_text("Remove filter")
-                    .clicked()
-                {
-                    remove_filter_clause = Some(idx);
-                }
-                if is_last && ui.small_button("+").on_hover_text("Add filter").clicked() {
-                    add_filter_clause = true;
-                }
-            });
-        }
-        if add_filter_clause {
-            self.filter_clauses.push(ObjectFilterClause::default());
-            filter_changed = true;
-        }
-        if let Some(idx) = remove_filter_clause {
-            if idx < self.filter_clauses.len() {
-                self.filter_clauses.remove(idx);
-                self.ensure_filter_clause_row();
-                filter_changed = true;
             }
         }
-        ui.horizontal(|ui| {
-            if ui.button("Clear").clicked() {
-                self.filter_clauses = vec![ObjectFilterClause::default()];
-                filter_changed = true;
-            }
-        });
         if filter_changed {
             self.reconcile_filter_clauses();
             self.ensure_active_filter_properties_loaded();
@@ -1768,6 +1840,12 @@ impl ObjectsLayer {
     }
 
     fn ensure_active_filter_properties_loaded(&mut self) {
+        if self.filter_mode == ObjectFilterMode::Query {
+            if let Some(key) = self.unloaded_active_query_property_key() {
+                self.ensure_property_loaded(&key);
+            }
+            return;
+        }
         let key = self
             .active_filter_clauses()
             .filter_map(|clause| (clause.property_key != "id").then(|| clause.property_key.clone()))
@@ -1787,7 +1865,43 @@ impl ObjectsLayer {
         out
     }
 
+    fn apply_filter_query_text(&mut self) -> bool {
+        let query = self.filter_query_text.trim();
+        if query.is_empty() {
+            let changed = self.filter_query_expr.is_some() || self.filter_query_error.is_some();
+            self.filter_query_expr = None;
+            self.filter_query_error = None;
+            return changed;
+        }
+
+        let expr = match ObjectFilterQueryExpr::parse(query) {
+            Ok(expr) => expr,
+            Err(err) => {
+                self.filter_query_error = Some(err.to_string());
+                return false;
+            }
+        };
+        let missing = expr
+            .referenced_properties()
+            .into_iter()
+            .filter(|key| !self.filter_property_key_available(key))
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            self.filter_query_error = Some(format!(
+                "Unknown object propert{}: {}",
+                if missing.len() == 1 { "y" } else { "ies" },
+                missing.join(", ")
+            ));
+            return false;
+        }
+
+        self.filter_query_error = None;
+        self.filter_query_expr = Some(expr);
+        true
+    }
+
     pub(crate) fn set_filter_clauses_from_pairs(&mut self, pairs: &[(String, String)]) {
+        self.filter_mode = ObjectFilterMode::Simple;
         self.filter_clauses = pairs
             .iter()
             .filter_map(|(property_key, query)| {
@@ -1816,6 +1930,103 @@ impl ObjectsLayer {
             self.invalidate_filter_cache();
         }
         self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
+    pub(crate) fn set_filter_logic(&mut self, logic: ObjectFilterLogic) {
+        let mode_changed = self.filter_mode != ObjectFilterMode::Simple;
+        if self.filter_logic == logic && !mode_changed {
+            return;
+        }
+        self.filter_mode = ObjectFilterMode::Simple;
+        self.filter_logic = logic;
+        self.invalidate_filter_cache();
+        self.ensure_filter_cache();
+        self.ensure_color_groups();
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
+    pub(crate) fn set_filter_query_from_text(&mut self, query: &str) {
+        self.filter_mode = ObjectFilterMode::Query;
+        self.filter_query_text = query.trim().to_string();
+        let changed = self.apply_filter_query_text();
+        if changed {
+            self.ensure_active_filter_properties_loaded();
+            self.invalidate_filter_cache();
+            self.ensure_filter_cache();
+            self.ensure_color_groups();
+            self.generation = self.generation.wrapping_add(1).max(1);
+        } else if self.filter_query_error.is_some() {
+            self.invalidate_filter_cache();
+            self.generation = self.generation.wrapping_add(1).max(1);
+        }
+    }
+
+    pub(crate) fn clear_filter(&mut self) {
+        self.filter_mode = ObjectFilterMode::Simple;
+        self.filter_logic = ObjectFilterLogic::All;
+        self.filter_clauses = vec![ObjectFilterClause::default()];
+        self.filter_query_text.clear();
+        self.filter_query_expr = None;
+        self.filter_query_error = None;
+        self.invalidate_filter_cache();
+        self.ensure_filter_cache();
+        self.ensure_color_groups();
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
+    pub(crate) fn filter_snapshot_json(&mut self) -> serde_json::Value {
+        self.ensure_filter_cache();
+        self.ensure_color_groups();
+        let total_count = self
+            .objects
+            .as_ref()
+            .map(|objects| objects.len())
+            .unwrap_or(0);
+        let active = self.has_active_filter();
+        let visible_count = if active {
+            self.filtered_ordered_indices
+                .as_ref()
+                .map(|indices| indices.len())
+                .unwrap_or(0)
+        } else {
+            total_count
+        };
+        let mode = match self.filter_mode {
+            ObjectFilterMode::Simple => "simple",
+            ObjectFilterMode::Query => "query",
+        };
+        let logic = match self.filter_logic {
+            ObjectFilterLogic::All => "all",
+            ObjectFilterLogic::Any => "any",
+        };
+        let clauses = self
+            .filter_clauses
+            .iter()
+            .map(|clause| {
+                serde_json::json!({
+                    "enabled": clause.enabled,
+                    "property": clause.property_key.as_str(),
+                    "query": clause.query.as_str(),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "active": active,
+            "mode": mode,
+            "logic": logic,
+            "total_count": total_count,
+            "visible_count": visible_count,
+            "hidden_count": total_count.saturating_sub(visible_count),
+            "simple": {
+                "logic": logic,
+                "clauses": clauses,
+            },
+            "query": {
+                "text": self.filter_query_text.as_str(),
+                "applied": self.filter_query_expr.is_some(),
+                "error": self.filter_query_error.as_deref(),
+            },
+        })
     }
 
     pub fn active_color_legend_entries(&mut self) -> Option<Vec<ObjectColorLegendEntry>> {
@@ -1967,17 +2178,19 @@ impl ObjectsLayer {
         let runtime_color_key = self.color_property_key.clone();
         let runtime_overrides_key = self.color_level_overrides_property_key.clone();
         let runtime_overrides = self.color_level_overrides.clone();
-        let preserve_runtime_visibility = !runtime_color_key.is_empty()
+        let preserve_runtime_overrides = !runtime_color_key.is_empty()
             && runtime_overrides_key == runtime_color_key
             && state.color_property_key.as_deref() == Some(runtime_color_key.as_str())
             && state.color_level_overrides.is_empty()
-            && runtime_overrides.values().any(|style| !style.visible);
+            && runtime_overrides
+                .values()
+                .any(|style| !style.visible || style.color_rgb.is_some());
 
         self.apply_project_display_state(state);
 
-        if preserve_runtime_visibility {
+        if preserve_runtime_overrides {
             crate::log_warn!(
-                "objects: preserving runtime Color by visibility for '{}' after project display restore",
+                "objects: preserving runtime Color by overrides for '{}' after project display restore",
                 runtime_color_key
             );
             self.color_level_overrides_property_key = runtime_overrides_key;
@@ -2056,6 +2269,17 @@ impl ObjectsLayer {
             property_key: property_key.to_string(),
             colors: colors.to_vec(),
         });
+        self.color_level_overrides_property_key = property_key.to_string();
+        for (value, color_rgb) in colors {
+            self.color_level_overrides
+                .entry(value.clone())
+                .or_default()
+                .color_rgb = Some(*color_rgb);
+        }
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.color_legend_cache = None;
+        self.generation = self.generation.wrapping_add(1).max(1);
         self.apply_pending_color_value_colors();
     }
 
@@ -2565,6 +2789,7 @@ impl ObjectsLayer {
         self.filtered_point_values = None;
         self.filtered_point_lods = None;
         self.filtered_color_groups = None;
+        self.filter_generation = self.filter_generation.wrapping_add(1).max(1);
         self.color_legend_cache = None;
         self.mark_live_analysis_selection_dirty();
         self.invalidate_object_property_analysis_cache();
@@ -2585,11 +2810,19 @@ impl ObjectsLayer {
         if self.filtered_mask.is_some() {
             return;
         }
-        let unloaded_key = self.active_filter_clauses().find_map(|clause| {
-            (clause.property_key != "id"
-                && self.property_column_available_but_unloaded(&clause.property_key))
-            .then(|| clause.property_key.clone())
-        });
+        if let Some(key) = self.unloaded_active_query_property_key() {
+            self.ensure_property_loaded(&key);
+            return;
+        }
+        let unloaded_key = (self.filter_mode == ObjectFilterMode::Simple)
+            .then(|| {
+                self.active_filter_clauses().find_map(|clause| {
+                    (clause.property_key != "id"
+                        && self.property_column_available_but_unloaded(&clause.property_key))
+                    .then(|| clause.property_key.clone())
+                })
+            })
+            .flatten();
         if let Some(key) = unloaded_key {
             self.ensure_property_loaded(&key);
             return;
@@ -2606,7 +2839,7 @@ impl ObjectsLayer {
         let mut mask = vec![false; objects.len()];
         let mut subset = Vec::new();
         for (idx, obj) in objects.iter().enumerate() {
-            if !Self::object_matches_prepared_filter(idx, obj, &prepared_clauses) {
+            if !self.object_matches_active_filter(idx, obj, &prepared_clauses) {
                 continue;
             }
             ordered_indices.push(idx);
@@ -2739,7 +2972,18 @@ impl ObjectsLayer {
     }
 
     pub(super) fn has_active_filter(&self) -> bool {
-        self.active_filter_clauses().next().is_some()
+        match self.filter_mode {
+            ObjectFilterMode::Simple => self.active_filter_clauses().next().is_some(),
+            ObjectFilterMode::Query => self.filter_query_expr.is_some(),
+        }
+    }
+
+    pub(super) fn render_cache_generation(&self) -> u64 {
+        if self.has_active_filter() {
+            self.generation ^ self.filter_generation.rotate_left(17) ^ 0x9e37_79b9_7f4a_7c15
+        } else {
+            self.generation
+        }
     }
 
     pub(super) fn filtered_mask_contains(&self, idx: usize) -> bool {
@@ -2750,6 +2994,9 @@ impl ObjectsLayer {
     }
 
     fn prepare_filter_clauses(&self) -> Vec<PreparedObjectFilterClause<'_>> {
+        if self.filter_mode != ObjectFilterMode::Simple {
+            return Vec::new();
+        }
         self.active_filter_clauses()
             .map(|clause| {
                 let column = self.property_store.loaded_columns.get(&clause.property_key);
@@ -2763,37 +3010,68 @@ impl ObjectsLayer {
             .collect()
     }
 
+    fn unloaded_active_query_property_key(&self) -> Option<String> {
+        if self.filter_mode != ObjectFilterMode::Query {
+            return None;
+        }
+        self.filter_query_expr.as_ref().and_then(|expr| {
+            expr.referenced_properties()
+                .into_iter()
+                .find(|key| self.property_column_available_but_unloaded(key))
+        })
+    }
+
+    fn object_matches_active_filter(
+        &self,
+        object_index: usize,
+        obj: &GeoJsonObjectFeature,
+        prepared_clauses: &[PreparedObjectFilterClause<'_>],
+    ) -> bool {
+        match self.filter_mode {
+            ObjectFilterMode::Simple => Self::object_matches_prepared_filter(
+                object_index,
+                obj,
+                prepared_clauses,
+                self.filter_logic,
+            ),
+            ObjectFilterMode::Query => self
+                .filter_query_expr
+                .as_ref()
+                .is_none_or(|expr| expr.matches(object_index, obj, &self.property_store)),
+        }
+    }
+
     fn object_matches_prepared_filter(
         object_index: usize,
         obj: &GeoJsonObjectFeature,
         clauses: &[PreparedObjectFilterClause<'_>],
+        logic: ObjectFilterLogic,
     ) -> bool {
-        for clause in clauses {
+        if clauses.is_empty() {
+            return true;
+        }
+
+        let clause_matches = |clause: &PreparedObjectFilterClause<'_>| {
             if clause.property_key == "id" {
-                if !obj.id.to_ascii_lowercase().contains(&clause.needle) {
-                    return false;
-                }
-                continue;
+                return obj.id.to_ascii_lowercase().contains(&clause.needle);
             }
 
             if let (Some(column), Some(matcher)) = (clause.column, clause.column_matcher.as_ref()) {
-                if !column.matches_contains(object_index, matcher) {
-                    return false;
-                }
-                continue;
+                return column.matches_contains(object_index, matcher);
             }
 
             let Some(value) = obj.inline_properties.get(clause.property_key) else {
                 return false;
             };
-            if !value_to_display_text(value)
+            value_to_display_text(value)
                 .to_ascii_lowercase()
                 .contains(&clause.needle)
-            {
-                return false;
-            }
+        };
+
+        match logic {
+            ObjectFilterLogic::All => clauses.iter().all(clause_matches),
+            ObjectFilterLogic::Any => clauses.iter().any(clause_matches),
         }
-        true
     }
 
     pub(super) fn color_value_visible_for_label(
@@ -3110,10 +3388,18 @@ impl ObjectsLayer {
                         .iter()
                         .enumerate()
                         .map(|(idx, obj)| {
-                            export_scalar_from_property_store(&snapshot.property_store, key, idx)
+                            if key == "id" {
+                                Some(ExportScalar::String(obj.id.clone()))
+                            } else {
+                                export_scalar_from_property_store(
+                                    &snapshot.property_store,
+                                    key,
+                                    idx,
+                                )
                                 .or_else(|| {
                                     obj.inline_properties.get(key).map(export_scalar_from_json)
                                 })
+                            }
                         })
                         .collect(),
                 });
@@ -3564,6 +3850,9 @@ impl ObjectsLayer {
                 Ok(_) => {}
                 Err(idx) => property_keys.insert(idx, key),
             }
+        }
+        if let Err(idx) = property_keys.binary_search_by(|existing| existing.as_str().cmp("id")) {
+            property_keys.insert(idx, "id".to_string());
         }
         Ok(ObjectExportSnapshot {
             objects: Arc::clone(objects),
@@ -4406,35 +4695,29 @@ fn parse_csv_objects(
         anyhow::bail!("missing CSV file: {}", path.to_string_lossy());
     }
     let schema = inspect_csv_object_schema(path)?;
+    let x_names = [
+        "x_centroid",
+        "x",
+        "x_centroid_image",
+        "centroid_x",
+        "xcoord",
+    ];
+    let y_names = [
+        "y_centroid",
+        "y",
+        "y_centroid_image",
+        "centroid_y",
+        "ycoord",
+    ];
     let x_column = options
         .map(|opts| opts.x_column.clone())
-        .or_else(|| {
-            preferred_xy_column(
-                &schema.numeric_columns,
-                &[
-                    "x_centroid",
-                    "x",
-                    "x_centroid_image",
-                    "centroid_x",
-                    "xcoord",
-                ],
-            )
-        })
+        .or_else(|| preferred_xy_column_exact(&schema.property_columns, &x_names))
+        .or_else(|| preferred_xy_column(&schema.numeric_columns, &x_names))
         .ok_or_else(|| anyhow!("CSV is missing a usable X column"))?;
     let y_column = options
         .map(|opts| opts.y_column.clone())
-        .or_else(|| {
-            preferred_xy_column(
-                &schema.numeric_columns,
-                &[
-                    "y_centroid",
-                    "y",
-                    "y_centroid_image",
-                    "centroid_y",
-                    "ycoord",
-                ],
-            )
-        })
+        .or_else(|| preferred_xy_column_exact(&schema.property_columns, &y_names))
+        .or_else(|| preferred_xy_column(&schema.numeric_columns, &y_names))
         .ok_or_else(|| anyhow!("CSV is missing a usable Y column"))?;
     let selected_property_columns = options
         .and_then(|opts| opts.property_columns.as_ref())
@@ -4697,6 +4980,74 @@ pub(super) fn object_proxy_position_world(obj: &GeoJsonObjectFeature) -> egui::P
 #[cfg(test)]
 mod point_payload_tests {
     use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    struct TestObjectDir(PathBuf);
+
+    impl TestObjectDir {
+        fn new() -> Self {
+            static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+            let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "odon-object-tests-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create object test directory");
+            Self(path)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TestObjectDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_object_fixture(path: &Path) {
+        let fixture = serde_json::json!({
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": "cell-a",
+                    "properties": {"class": "tumor", "score": 1.5, "positive": true},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]
+                    }
+                },
+                {
+                    "type": "Feature",
+                    "properties": {"cell_id": "cell-b", "class": "immune", "score": 2.5, "positive": false},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[20, 0], [30, 0], [30, 10], [20, 10], [20, 0]]]
+                    }
+                },
+                {
+                    "type": "Feature",
+                    "id": "cell-c",
+                    "properties": {"class": "tumor", "score": 3, "positive": true},
+                    "geometry": {
+                        "type": "MultiPolygon",
+                        "coordinates": [
+                            [[[0, 20], [5, 20], [5, 25], [0, 25], [0, 20]]],
+                            [[[6, 20], [10, 20], [10, 24], [6, 24], [6, 20]]]
+                        ]
+                    }
+                }
+            ]
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize object fixture"),
+        )
+        .expect("write object fixture");
+    }
 
     fn object_with_geometry_and_bad_point() -> GeoJsonObjectFeature {
         GeoJsonObjectFeature {
@@ -4733,6 +5084,333 @@ mod point_payload_tests {
         assert_eq!(
             object_proxy_position_world(&obj),
             egui::pos2(1000.0, 1000.0)
+        );
+    }
+
+    fn id_clause(needle: &str) -> PreparedObjectFilterClause<'static> {
+        PreparedObjectFilterClause {
+            property_key: "id",
+            needle: needle.to_string(),
+            column: None,
+            column_matcher: None,
+        }
+    }
+
+    #[test]
+    fn object_filter_logic_all_requires_every_clause() {
+        let obj = object_with_geometry_and_bad_point();
+        let clauses = vec![id_clause("ce"), id_clause("ll")];
+
+        assert!(ObjectsLayer::object_matches_prepared_filter(
+            0,
+            &obj,
+            &clauses,
+            ObjectFilterLogic::All
+        ));
+
+        let clauses = vec![id_clause("ce"), id_clause("missing")];
+        assert!(!ObjectsLayer::object_matches_prepared_filter(
+            0,
+            &obj,
+            &clauses,
+            ObjectFilterLogic::All
+        ));
+    }
+
+    #[test]
+    fn object_filter_logic_any_accepts_any_clause() {
+        let obj = object_with_geometry_and_bad_point();
+        let clauses = vec![id_clause("missing"), id_clause("ll")];
+
+        assert!(ObjectsLayer::object_matches_prepared_filter(
+            0,
+            &obj,
+            &clauses,
+            ObjectFilterLogic::Any
+        ));
+
+        let clauses = vec![id_clause("missing"), id_clause("absent")];
+        assert!(!ObjectsLayer::object_matches_prepared_filter(
+            0,
+            &obj,
+            &clauses,
+            ObjectFilterLogic::Any
+        ));
+    }
+
+    #[test]
+    fn display_restore_preserves_runtime_color_overrides_for_same_property() {
+        let mut layer = ObjectsLayer::default();
+        layer.color_mode = ObjectColorMode::ByProperty;
+        layer.color_property_key = "broad_cell_type".to_string();
+        layer.color_level_overrides_property_key = "broad_cell_type".to_string();
+        layer.color_level_overrides.insert(
+            "immune_lymphoid".to_string(),
+            ObjectColorLevelOverride {
+                visible: true,
+                color_rgb: Some([216, 70, 104]),
+            },
+        );
+
+        let saved_state = ObjectProjectDisplayState {
+            color_property_key: Some("broad_cell_type".to_string()),
+            color_level_overrides: BTreeMap::new(),
+            fill_cells: true,
+            fill_opacity: 0.3,
+            selected_fill_opacity: 0.7,
+            fast_rendering: true,
+        };
+
+        layer.apply_project_display_state_preserving_color_visibility(&saved_state);
+
+        assert_eq!(
+            layer
+                .color_level_overrides
+                .get("immune_lymphoid")
+                .and_then(|style| style.color_rgb),
+            Some([216, 70, 104])
+        );
+    }
+
+    #[test]
+    fn color_value_colors_are_staged_before_objects_load() {
+        let mut layer = ObjectsLayer::default();
+        layer.color_mode = ObjectColorMode::ByProperty;
+        layer.color_property_key = "broad_cell_type".to_string();
+
+        layer.set_color_value_colors(
+            Some("broad_cell_type"),
+            &[("immune_lymphoid".to_string(), [216, 70, 104])],
+        );
+
+        let display = layer.project_display_state();
+        assert_eq!(
+            display
+                .color_level_overrides
+                .get("immune_lymphoid")
+                .and_then(|style| style.color_rgb),
+            Some([216, 70, 104])
+        );
+        assert!(layer.pending_color_value_colors.is_some());
+
+        let dir = TestObjectDir::new();
+        let path = dir.path("staged-colours.geojson");
+        write_object_fixture(&path);
+        layer.color_property_key = "class".to_string();
+        layer.set_color_value_colors(Some("class"), &[("immune".to_string(), [10, 20, 30])]);
+        let cancel = AtomicBool::new(false);
+        let result = load_in_thread(path, 1.0, None, 1, &cancel).expect("load object fixture");
+        layer.install_load_result(result);
+        assert!(layer.pending_color_value_colors.is_none());
+        assert_eq!(
+            layer
+                .color_level_overrides
+                .get("immune")
+                .and_then(|style| style.color_rgb),
+            Some([10, 20, 30])
+        );
+    }
+
+    #[test]
+    fn geojson_lifecycle_filter_selection_and_exports_round_trip() {
+        let dir = TestObjectDir::new();
+        let geojson_path = dir.path("objects.geojson");
+        write_object_fixture(&geojson_path);
+        let cancel = AtomicBool::new(false);
+        let result = load_in_thread(geojson_path.clone(), 1.0, None, 7, &cancel)
+            .expect("load GeoJSON object fixture");
+
+        let mut layer = ObjectsLayer::default();
+        layer.install_load_result(result);
+
+        assert_eq!(layer.object_count(), 3);
+        assert!(layer.visible);
+        assert_eq!(
+            layer.loaded_geojson.as_deref(),
+            Some(geojson_path.as_path())
+        );
+        assert_eq!(layer.display_mode, ObjectDisplayMode::Polygons);
+        assert_eq!(
+            layer.available_property_columns(),
+            &["cell_id", "class", "positive", "score"]
+        );
+        assert!(
+            layer
+                .available_numeric_object_property_keys()
+                .contains(&"score".to_string())
+        );
+        assert_eq!(
+            layer.objects.as_ref().expect("loaded objects")[1].id,
+            "cell-b"
+        );
+
+        layer.set_filter_clauses_from_pairs(&[("class".to_string(), "tumor".to_string())]);
+        let filter = layer.filter_snapshot_json();
+        assert_eq!(filter["active"], true);
+        assert_eq!(filter["visible_count"], 2);
+        assert_eq!(filter["hidden_count"], 1);
+        layer.bulk_measurement_filtered_only = true;
+        assert_eq!(layer.bulk_measurement_target_indices(), vec![0, 2]);
+
+        layer.apply_bulk_measurement_result(BulkMeasurementResult {
+            metric: BulkMeasurementMetric::Mean,
+            scope_label: "test cells".to_string(),
+            level_index: 0,
+            level_downsample: 1.0,
+            object_count: 3,
+            measured_count: 3,
+            failed_count: 0,
+            column_values: vec![(
+                "mean_dapi".to_string(),
+                vec![Some(10.0), Some(20.0), Some(30.0)],
+            )],
+        });
+        assert!(
+            layer
+                .available_numeric_object_property_keys()
+                .contains(&"mean_dapi".to_string())
+        );
+        layer.set_filter_clauses_from_pairs(&[("mean_dapi".to_string(), "20".to_string())]);
+        assert_eq!(layer.filter_snapshot_json()["visible_count"], 1);
+        layer.clear_filter();
+
+        let first_rect = egui::Rect::from_min_max(egui::pos2(1.0, 1.0), egui::pos2(9.0, 9.0));
+        let query = layer.query_world_rect_snapshot_json(first_rect, egui::Vec2::ZERO, 10);
+        assert_eq!(query["match_count"], 1);
+        assert_eq!(query["matches"][0]["id"], "cell-a");
+        let selection =
+            layer.select_in_world_rect_snapshot_json(first_rect, egui::Vec2::ZERO, false, 10);
+        assert_eq!(selection["selection"]["selection_count"], 1);
+        assert_eq!(selection["selection"]["primary"]["id"], "cell-a");
+
+        layer.clear_filter();
+        let second_rect = egui::Rect::from_min_max(egui::pos2(21.0, 1.0), egui::pos2(29.0, 9.0));
+        layer.select_in_world_rect_snapshot_json(second_rect, egui::Vec2::ZERO, true, 10);
+        let selection = layer.selection_snapshot_json(egui::Vec2::ZERO, 10);
+        assert_eq!(selection["selection_count"], 2);
+        assert_eq!(selection["selected"][0]["id"], "cell-a");
+        assert_eq!(selection["selected"][1]["id"], "cell-b");
+
+        let lasso = [
+            egui::pos2(-1.0, 19.0),
+            egui::pos2(12.0, 19.0),
+            egui::pos2(12.0, 27.0),
+            egui::pos2(-1.0, 27.0),
+        ];
+        assert_eq!(
+            layer.select_in_world_lasso(&lasso, egui::Vec2::ZERO, false),
+            1
+        );
+        let selection = layer.selection_snapshot_json(egui::Vec2::ZERO, 10);
+        assert_eq!(selection["selection_count"], 1);
+        assert_eq!(selection["primary"]["id"], "cell-c");
+
+        layer.set_color_by_property(Some("class".to_string()));
+        let legend = layer
+            .active_color_legend_entries()
+            .expect("categorical class legend");
+        assert_eq!(legend.len(), 2);
+        assert!(legend.iter().any(|entry| entry.value_label == "immune"));
+        assert!(legend.iter().any(|entry| entry.value_label == "tumor"));
+
+        let export_columns = layer
+            .build_object_export_column_names()
+            .expect("build export columns");
+        assert!(export_columns.iter().any(|column| column == "class"));
+        assert!(export_columns.iter().any(|column| column == "score"));
+        assert!(
+            export_columns
+                .iter()
+                .any(|column| column == "_odon_selected")
+        );
+        let selected_columns = export_columns.into_iter().collect::<HashSet<_>>();
+        let snapshot = layer
+            .object_export_snapshot()
+            .expect("object export snapshot");
+
+        let csv_path = dir.path("objects.csv");
+        ObjectsLayer::export_objects_csv(&snapshot, &csv_path, &selected_columns)
+            .expect("export objects CSV");
+        let mut csv = csv::Reader::from_path(&csv_path).expect("open exported CSV");
+        let headers = csv.headers().expect("CSV headers").clone();
+        assert!(headers.iter().any(|header| header == "class"));
+        assert!(headers.iter().any(|header| header == "_odon_selected"));
+        let rows = csv
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read exported CSV rows");
+        assert_eq!(rows.len(), 3);
+        let selected_idx = headers
+            .iter()
+            .position(|header| header == "_odon_selected")
+            .expect("selection export column");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.get(selected_idx) == Some("true"))
+                .count(),
+            1
+        );
+
+        let parquet_path = dir.path("objects.geoparquet");
+        ObjectsLayer::export_objects_geoparquet(&snapshot, &parquet_path, &selected_columns)
+            .expect("export objects GeoParquet");
+        let reloaded = parse_geoparquet_objects(&parquet_path, None, &cancel)
+            .expect("reload exported GeoParquet");
+        assert_eq!(reloaded.len(), 3);
+        assert_eq!(reloaded[0].id, "cell-a");
+        assert_eq!(reloaded[1].inline_properties["class"], "immune");
+        assert_eq!(reloaded[2].polygons_world.len(), 2);
+
+        layer.clear();
+        assert_eq!(layer.object_count(), 0);
+        assert!(!layer.visible);
+        assert!(layer.loaded_geojson.is_none());
+        assert_eq!(layer.selection_count(), 0);
+    }
+
+    #[test]
+    fn csv_point_objects_infer_coordinates_properties_and_reject_bad_inputs() {
+        let dir = TestObjectDir::new();
+        let path = dir.path("points.csv");
+        std::fs::write(
+            &path,
+            "cell_id,x_centroid,y_centroid,class,score,positive\n\
+             p-1,10.5,20.25,immune,3.5,true\n\
+             p-2,30,40,tumor,7,false\n\
+             skipped,not-a-number,50,invalid,9,true\n",
+        )
+        .expect("write CSV object fixture");
+        let cancel = AtomicBool::new(false);
+        let objects = parse_csv_objects(&path, None, &cancel).expect("parse inferred CSV points");
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].id, "p-1");
+        assert_eq!(
+            objects[0].point_position_world,
+            Some(egui::pos2(10.5, 20.25))
+        );
+        assert_eq!(objects[0].inline_properties["class"], "immune");
+        assert_eq!(objects[0].inline_properties["score"], 3.5);
+        assert_eq!(objects[0].inline_properties["positive"], true);
+        assert_eq!(objects[0].source_row_index, Some(0));
+        assert_eq!(objects[1].id, "p-2");
+
+        let selected = ObjectCsvLoadOptions {
+            x_column: "x_centroid".to_string(),
+            y_column: "y_centroid".to_string(),
+            property_columns: Some(vec!["class".to_string()]),
+        };
+        let objects = parse_csv_objects(&path, Some(&selected), &cancel)
+            .expect("parse selected CSV properties");
+        assert!(objects[0].inline_properties.contains_key("class"));
+        assert!(!objects[0].inline_properties.contains_key("score"));
+
+        let invalid = dir.path("invalid.csv");
+        std::fs::write(&invalid, "id,label\na,cell\n").expect("write invalid CSV");
+        assert!(
+            parse_csv_objects(&invalid, None, &cancel)
+                .expect_err("missing coordinate columns")
+                .to_string()
+                .contains("usable X column")
         );
     }
 }

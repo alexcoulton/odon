@@ -242,7 +242,7 @@ impl ObjectsLayer {
         }
     }
 
-    fn bulk_measurement_target_indices(&self) -> Vec<usize> {
+    pub(super) fn bulk_measurement_target_indices(&self) -> Vec<usize> {
         let Some(objects) = self.objects.as_ref() else {
             return Vec::new();
         };
@@ -894,6 +894,59 @@ mod tests {
     use super::*;
     use ndarray::{Array, IxDyn};
 
+    fn full_image_object() -> GeoJsonObjectFeature {
+        let polygons_world = vec![vec![
+            egui::pos2(0.0, 0.0),
+            egui::pos2(512.0, 0.0),
+            egui::pos2(512.0, 512.0),
+            egui::pos2(0.0, 512.0),
+            egui::pos2(0.0, 0.0),
+        ]];
+        GeoJsonObjectFeature {
+            id: "whole-image".to_string(),
+            polygons_world,
+            point_position_world: None,
+            bbox_world: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(512.0, 512.0)),
+            area_px: 512.0 * 512.0,
+            perimeter_px: 4.0 * 512.0,
+            centroid_world: egui::pos2(256.0, 256.0),
+            inline_properties: serde_json::Map::new(),
+            source_row_index: None,
+        }
+    }
+
+    fn expected_level_channel_stats(
+        dataset: &OmeZarrDataset,
+        store: Arc<dyn ReadableStorageTraits>,
+        level: usize,
+        channel: usize,
+    ) -> (f32, f32) {
+        let info = &dataset.levels[level];
+        let array: zarrs::array::Array<dyn ReadableStorageTraits> =
+            zarrs::array::Array::open(store, &format!("/{}", info.path))
+                .expect("open expected-value array");
+        let height = info.shape[dataset.dims.y];
+        let width = info.shape[dataset.dims.x];
+        let subset = ArraySubset::new_with_ranges(&[
+            channel as u64..channel as u64 + 1,
+            0..height,
+            0..width,
+        ]);
+        let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)
+            .expect("read expected-value plane");
+        let mut values = data.iter().copied().collect::<Vec<_>>();
+        let mean =
+            values.iter().map(|value| *value as u64).sum::<u64>() as f32 / values.len() as f32;
+        values.sort_unstable();
+        let mid = values.len() / 2;
+        let median = if values.len() % 2 == 0 {
+            (values[mid - 1] as f32 + values[mid] as f32) * 0.5
+        } else {
+            values[mid] as f32
+        };
+        (mean, median)
+    }
+
     #[test]
     fn measurement_plane_squeezes_singleton_tczyx() {
         let data = Array::from_iter(0u16..12)
@@ -914,5 +967,78 @@ mod tests {
             .expect("shape");
 
         assert!(plane_from_channel_data(data, 3, 4).is_err());
+    }
+
+    #[test]
+    fn rasterized_mean_and_median_match_checked_in_image_pixels() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+        let (dataset, store) =
+            OmeZarrDataset::open_local(&fixture).expect("open measurement fixture");
+        let level = 3;
+        let channels = vec![dataset.channels[0].clone(), dataset.channels[1].clone()];
+        let objects = Arc::new(vec![full_image_object()]);
+        let targets = vec![0usize];
+        let cancel = AtomicBool::new(false);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let expected = channels
+            .iter()
+            .map(|channel| {
+                expected_level_channel_stats(&dataset, store.clone(), level, channel.index)
+            })
+            .collect::<Vec<_>>();
+
+        let means = measure_objects_rasterized_in_thread(
+            &dataset,
+            store.clone(),
+            &channels,
+            objects.clone(),
+            &targets,
+            egui::Vec2::ZERO,
+            level,
+            BulkMeasurementMetric::Mean,
+            "mean_",
+            2,
+            1,
+            &tx,
+            &cancel,
+            "test object".to_string(),
+        )
+        .expect("measure means");
+        assert_eq!(means.measured_count, 1);
+        assert_eq!(means.failed_count, 0);
+        assert_eq!(means.column_values[0].0, "mean_dapi");
+        assert_eq!(means.column_values[1].0, "mean_cd3");
+        for (channel_index, (_, values)) in means.column_values.iter().enumerate() {
+            let actual = values[0].expect("mean value");
+            assert!(
+                (actual - expected[channel_index].0).abs() < 0.01,
+                "channel {channel_index}: actual mean {actual}, expected {}",
+                expected[channel_index].0
+            );
+        }
+
+        let medians = measure_objects_rasterized_in_thread(
+            &dataset,
+            store,
+            &channels,
+            objects,
+            &targets,
+            egui::Vec2::ZERO,
+            level,
+            BulkMeasurementMetric::Median,
+            "median_",
+            2,
+            2,
+            &tx,
+            &cancel,
+            "test object".to_string(),
+        )
+        .expect("measure medians");
+        assert_eq!(medians.column_values[0].0, "median_dapi");
+        assert_eq!(medians.column_values[1].0, "median_cd3");
+        for (channel_index, (_, values)) in medians.column_values.iter().enumerate() {
+            assert_eq!(values[0], Some(expected[channel_index].1));
+        }
     }
 }

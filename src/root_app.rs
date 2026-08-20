@@ -411,6 +411,9 @@ impl RootApp {
             "query_object_ids_in_view" => self.control_query_object_ids_in_view(&request.params),
             "select_object_ids_in_rect" => self.control_select_object_ids_in_rect(&request.params),
             "clear_object_selection" => self.control_clear_object_selection(&request.params),
+            "get_object_filter" => self.control_get_object_filter(&request.params),
+            "set_object_filter_query" => self.control_set_object_filter_query(&request.params),
+            "clear_object_filter" => self.control_clear_object_filter(&request.params),
             "get_channel_intensity_stats" => {
                 self.control_get_channel_intensity_stats(&request.params)
             }
@@ -850,6 +853,60 @@ impl RootApp {
             }),
             Mode::Mosaic { .. } => serde_json::json!({
                 "error": "object rectangle selection MCP tools are available in single-image mode"
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_get_object_filter(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "objects": app.control_get_object_filter(params),
+            }),
+            Mode::Mosaic { .. } => serde_json::json!({
+                "error": "object filter MCP tools are available in single-image mode"
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_set_object_filter_query(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "objects": app.control_set_object_filter_query(params),
+            }),
+            Mode::Mosaic { .. } => serde_json::json!({
+                "error": "object filter MCP tools are available in single-image mode"
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
+        }
+    }
+
+    fn control_clear_object_filter(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => serde_json::json!({
+                "mode": "single",
+                "objects": app.control_clear_object_filter(params),
+            }),
+            Mode::Mosaic { .. } => serde_json::json!({
+                "error": "object filter MCP tools are available in single-image mode"
             }),
             Mode::Project { .. } => serde_json::json!({
                 "error": "No dataset viewer is currently open.",

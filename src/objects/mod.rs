@@ -35,11 +35,13 @@ use crate::spatialdata::{
 
 mod analysis;
 mod core;
+mod filter_query;
 mod measurements;
 mod render;
 
 use self::analysis::SimpleHistogram;
 pub use self::core::preload_objects_from_path;
+use self::filter_query::ObjectFilterQueryExpr;
 pub(crate) use self::geojson::GeoJsonSegmentationLayer;
 use self::render::property_scalar_value;
 
@@ -155,6 +157,48 @@ impl Default for ObjectFilterClause {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFilterLogic {
+    All,
+    Any,
+}
+
+impl Default for ObjectFilterLogic {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl ObjectFilterLogic {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Any => "Any",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectFilterMode {
+    Simple,
+    Query,
+}
+
+impl Default for ObjectFilterMode {
+    fn default() -> Self {
+        Self::Simple
+    }
+}
+
+impl ObjectFilterMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Simple => "Simple",
+            Self::Query => "Query",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ObjectsLayer {
     pub visible: bool,
@@ -193,7 +237,12 @@ pub struct ObjectsLayer {
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     pending_color_value_visibility: Option<PendingColorValueVisibility>,
     pending_color_value_colors: Option<PendingColorValueColors>,
+    filter_mode: ObjectFilterMode,
     filter_clauses: Vec<ObjectFilterClause>,
+    filter_logic: ObjectFilterLogic,
+    filter_query_text: String,
+    filter_query_expr: Option<ObjectFilterQueryExpr>,
+    filter_query_error: Option<String>,
     filtered_ordered_indices: Option<Arc<Vec<usize>>>,
     filtered_mask: Option<Arc<Vec<bool>>>,
     filtered_render_lods: Option<Vec<ObjectRenderLod>>,
@@ -201,6 +250,7 @@ pub struct ObjectsLayer {
     filtered_point_values: Option<Arc<Vec<f32>>>,
     filtered_point_lods: Option<Arc<Vec<FeaturePointLod>>>,
     filtered_color_groups: Option<ObjectColorGroups>,
+    filter_generation: u64,
     selected_object_indices: HashSet<usize>,
     selected_object_index: Option<usize>,
     selection_elements: Vec<SelectionElement>,
@@ -1321,7 +1371,12 @@ impl Default for ObjectsLayer {
             color_level_overrides: BTreeMap::new(),
             pending_color_value_visibility: None,
             pending_color_value_colors: None,
+            filter_mode: ObjectFilterMode::default(),
             filter_clauses: vec![ObjectFilterClause::default()],
+            filter_logic: ObjectFilterLogic::default(),
+            filter_query_text: String::new(),
+            filter_query_expr: None,
+            filter_query_error: None,
             filtered_ordered_indices: None,
             filtered_mask: None,
             filtered_render_lods: None,
@@ -1329,6 +1384,7 @@ impl Default for ObjectsLayer {
             filtered_point_values: None,
             filtered_point_lods: None,
             filtered_color_groups: None,
+            filter_generation: 1,
             selected_object_indices: HashSet::new(),
             selected_object_index: None,
             selection_elements: Vec::new(),

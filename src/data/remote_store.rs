@@ -153,7 +153,7 @@ pub fn list_s3_prefix(browser: &S3Browser, prefix: &str) -> anyhow::Result<S3Bro
             let name = prefix
                 .split('/')
                 .filter(|part| !part.is_empty())
-                .last()
+                .next_back()
                 .unwrap_or(&prefix)
                 .to_string();
             // Many OME-Zarr datasets are named `*.zarr` (not necessarily `*.ome.zarr`).
@@ -197,5 +197,55 @@ fn parent_prefix(prefix: &str) -> Option<String> {
         None
     } else {
         Some(parts.join("/"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_store_inputs_and_prefix_navigation_are_deterministic() {
+        assert!(build_http_store("  ").is_err());
+        assert!(build_http_store("example.test/data.ome.zarr/").is_ok());
+
+        let cases = [
+            ("", "", None),
+            ("/study/", "study", None),
+            (
+                "/study/patient/roi/",
+                "study/patient/roi",
+                Some("study/patient"),
+            ),
+        ];
+        for (raw, normalized, parent) in cases {
+            assert_eq!(normalize_prefix(raw), normalized);
+            assert_eq!(parent_prefix(normalized).as_deref(), parent);
+        }
+    }
+
+    #[test]
+    fn s3_builder_rejects_missing_credentials_before_network_access() {
+        assert!(
+            build_s3_browser("", "auto", "bucket", "key", "secret")
+                .err()
+                .expect("empty endpoint")
+                .to_string()
+                .contains("endpoint")
+        );
+        assert!(
+            build_s3_browser("s3.example.test", "auto", "", "key", "secret")
+                .err()
+                .expect("empty bucket")
+                .to_string()
+                .contains("bucket")
+        );
+        assert!(
+            build_s3_browser("s3.example.test", "auto", "bucket", "", "")
+                .err()
+                .expect("missing credentials")
+                .to_string()
+                .contains("access/secret")
+        );
     }
 }

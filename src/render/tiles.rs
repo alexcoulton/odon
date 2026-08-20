@@ -306,3 +306,109 @@ fn tile_loader_thread(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::ome::OmeZarrDataset;
+    use crate::imaging::view_plane::ViewPlaneMode;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[test]
+    fn tile_cache_deduplicates_requests_and_prunes_stale_work() {
+        let mut cache = TileCache::new(2);
+        let key = TileKey {
+            render_id: 1,
+            view: ViewPlaneSelection {
+                mode: ViewPlaneMode::Xy,
+                slice_level0: 0,
+            },
+            level: 0,
+            tile_y: 0,
+            tile_x: 0,
+        };
+        assert!(cache.mark_in_flight(key));
+        assert!(!cache.mark_in_flight(key));
+        assert!(cache.is_busy());
+        cache.prune_in_flight(&HashSet::new());
+        assert!(!cache.is_busy());
+        cache.put(key, 7u8);
+        assert_eq!(cache.get(&key), Some(&7));
+        assert!(!cache.mark_in_flight(key));
+    }
+
+    #[test]
+    fn tile_worker_composites_real_channels_and_honours_render_generation() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+        let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open fixture");
+        let loader = spawn_tile_loader(store, dataset.levels.clone(), dataset.dims.clone(), 1)
+            .expect("spawn tile loader");
+        let level = dataset.levels.last().expect("pyramid level");
+        let view = ViewPlaneSelection {
+            mode: ViewPlaneMode::Xy,
+            slice_level0: 0,
+        };
+        let stale = TileKey {
+            render_id: 9,
+            view,
+            level: level.index,
+            tile_y: 0,
+            tile_x: 0,
+        };
+        let current = TileKey {
+            render_id: 10,
+            ..stale
+        };
+        loader.set_latest_render_id(10);
+        loader.set_active_keys(HashSet::from([current]));
+        let channels = vec![
+            RenderChannel {
+                index: 0,
+                color_rgb: [1.0, 0.0, 0.0],
+                window: (0.0, dataset.abs_max),
+            },
+            RenderChannel {
+                index: 1,
+                color_rgb: [0.0, 1.0, 0.0],
+                window: (0.0, dataset.abs_max),
+            },
+        ];
+        loader
+            .tx
+            .send(TileRequest {
+                key: stale,
+                channels: channels.clone(),
+            })
+            .expect("queue stale request");
+        loader
+            .tx
+            .send(TileRequest {
+                key: current,
+                channels,
+            })
+            .expect("queue current request");
+
+        let response = loader
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("tile completion");
+        let TileWorkerResponse::Tile(tile) = response else {
+            panic!("expected composited tile");
+        };
+        assert_eq!(tile.key, current, "stale generation must be discarded");
+        assert!(tile.width > 0 && tile.height > 0);
+        assert_eq!(tile.rgba.len(), tile.width * tile.height * 4);
+        assert!(
+            tile.rgba
+                .chunks_exact(4)
+                .all(|pixel| pixel[2] == 0 && pixel[3] == 255)
+        );
+        assert!(
+            tile.rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[0] > 0 || pixel[1] > 0)
+        );
+    }
+}

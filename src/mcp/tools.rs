@@ -130,6 +130,15 @@ fn tools_list() -> Value {
                 "clear_object_selection",
                 "Clear selected objects on the active selectable object layer."
             ),
+            object_selection_tool_schema(
+                "get_object_filter",
+                "Return the active object filter/query state and visible object counts."
+            ),
+            object_filter_query_tool_schema(),
+            object_selection_tool_schema(
+                "clear_object_filter",
+                "Clear the active object filter/query."
+            ),
             channel_intensity_stats_tool_schema(),
             set_channel_order_tool_schema(),
             tool_schema(
@@ -475,6 +484,28 @@ fn object_rect_select_tool_schema() -> Value {
     })
 }
 
+fn object_filter_query_tool_schema() -> Value {
+    json!({
+        "name": "set_object_filter_query",
+        "description": "Apply an arbitrary boolean expression filter to the active object layer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "enum": ["active", "objects", "segmentation_objects", "spatial_shape"],
+                    "default": "active"
+                },
+                "layer_id": {"type": "integer", "minimum": 0},
+                "id": {"type": "integer", "minimum": 0}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        }
+    })
+}
+
 fn object_rect_tool_properties(include_additive: bool) -> Value {
     let mut properties = serde_json::Map::from_iter([
         (
@@ -783,6 +814,9 @@ fn handle_tool_call(id: Value, params: Value) -> Value {
         | "query_object_ids_in_view"
         | "select_object_ids_in_rect"
         | "clear_object_selection"
+        | "get_object_filter"
+        | "set_object_filter_query"
+        | "clear_object_filter"
         | "get_channel_intensity_stats"
         | "set_channel_order"
         | "list_channel_groups"
@@ -848,4 +882,117 @@ fn json_rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
             "message": message.into(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    fn request(value: Value) -> Value {
+        handle_json_rpc_line(&value.to_string()).expect("request should produce a response")
+    }
+
+    #[test]
+    fn malformed_json_returns_parse_error() {
+        let response = handle_json_rpc_line("{").expect("parse error response");
+
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], Value::Null);
+        assert_eq!(response["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn initialize_echoes_protocol_version_and_identifies_server() {
+        let response = request(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "initialize",
+            "params": {"protocolVersion": "test-version"}
+        }));
+
+        assert_eq!(response["id"], 7);
+        assert_eq!(response["result"]["protocolVersion"], "test-version");
+        assert_eq!(response["result"]["serverInfo"]["name"], SERVER_NAME);
+        assert_eq!(response["result"]["serverInfo"]["version"], SERVER_VERSION);
+        assert!(response["result"]["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn tools_list_has_unique_names_valid_object_schemas_and_core_tools() {
+        let response = request(json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/list"
+        }));
+        let tools = response["result"]["tools"]
+            .as_array()
+            .expect("tools/list result array");
+        let mut names = HashSet::new();
+
+        for tool in tools {
+            let name = tool["name"].as_str().expect("tool name");
+            assert!(names.insert(name), "duplicate MCP tool name: {name}");
+            assert!(
+                tool["description"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty()),
+                "missing description for {name}"
+            );
+            assert_eq!(tool["inputSchema"]["type"], "object", "tool: {name}");
+            assert!(
+                tool["inputSchema"]["properties"].is_object(),
+                "missing object properties schema for {name}"
+            );
+        }
+
+        for required in [
+            "get_current_view",
+            "open_project",
+            "set_visible_channels",
+            "set_channel_contrast",
+            "set_camera",
+            "set_object_filter_query",
+            "configure_mosaic_layout",
+            "capture_screenshot",
+        ] {
+            assert!(
+                names.contains(required),
+                "missing core MCP tool: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_method_and_tool_return_json_rpc_errors_without_contacting_gui() {
+        let unknown_method = request(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "unknown/method"
+        }));
+        assert_eq!(unknown_method["error"]["code"], -32601);
+
+        let unknown_tool = request(json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "unknown_tool", "arguments": {}}
+        }));
+        assert_eq!(unknown_tool["error"]["code"], -32602);
+        assert_eq!(unknown_tool["id"], 10);
+    }
+
+    #[test]
+    fn initialized_notification_does_not_produce_a_response() {
+        let response = handle_json_rpc_line(
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            })
+            .to_string(),
+        );
+
+        assert!(response.is_none());
+    }
 }

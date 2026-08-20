@@ -138,6 +138,7 @@ impl ObjectsLayer {
         if !use_fast_proxy_points && !use_fill_proxy_points && lod_empty {
             return;
         }
+        let render_generation = self.render_cache_generation();
 
         let a = (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let c = self.color_rgb;
@@ -262,7 +263,7 @@ impl ObjectsLayer {
                                 generation: self.generation,
                                 vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                 object_count: fill_mesh.object_count,
-                                selection_generation: self.generation,
+                                selection_generation: render_generation,
                                 selection_state: Arc::new(visible_fill_state),
                             },
                             params: ObjectFillGlDrawParams {
@@ -430,7 +431,7 @@ impl ObjectsLayer {
                                         0x4a00 | u32::from(lod.lod),
                                         group_idx as u64,
                                     ),
-                                    generation: self.generation,
+                                    generation: group.fill_generation,
                                     bins: Arc::clone(&group_lod.bins),
                                 },
                                 params: LineBinsGlDrawParams {
@@ -451,7 +452,7 @@ impl ObjectsLayer {
                         items.push(LineBinsGlDrawItem {
                             data: LineBinsGlDrawData {
                                 cache_id: object_render_cache_id(0x4a08, lod.lod as u64),
-                                generation: self.generation,
+                                generation: render_generation,
                                 bins: Arc::clone(&lod.bins),
                             },
                             params: LineBinsGlDrawParams {
@@ -1855,7 +1856,7 @@ impl ObjectsLayer {
             base_positions,
             base_values,
             self.proxy_point_style(self.color_rgb, opacity),
-            self.generation ^ generation_seed,
+            self.render_cache_generation() ^ generation_seed,
             Some(&self.gl_points),
         );
     }
@@ -1988,7 +1989,7 @@ impl ObjectsLayer {
 
         if gpu_available {
             let data = crate::render::points_gl::PointsGlDrawData {
-                generation: self.generation,
+                generation: self.render_cache_generation(),
                 positions_world: Arc::clone(base_positions),
                 values: Arc::clone(base_values),
             };

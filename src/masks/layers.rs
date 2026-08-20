@@ -214,3 +214,121 @@ pub fn save_mask_layers_geojson(path: &Path, layers: &[MaskLayer]) -> anyhow::Re
     fs::write(path, text).with_context(|| format!("failed to write {}", path.to_string_lossy()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
+
+    fn layer(id: u64, offset: egui::Vec2) -> MaskLayer {
+        MaskLayer {
+            id,
+            name: format!("Mask {id}"),
+            visible: id % 2 == 1,
+            opacity: 0.4,
+            width_screen_px: 3.0,
+            display_mode: MaskDisplayMode::TranslucentFill,
+            color_rgb: [10, 20, 30],
+            offset_world: offset,
+            editable: true,
+            polygons_world: Vec::new(),
+            raster_display: None,
+            source_geojson: Some(PathBuf::from(format!("mask-{id}.geojson"))),
+        }
+    }
+
+    #[test]
+    fn mask_layer_closes_polygons_and_round_trips_project_state() {
+        let mut mask = layer(7, egui::vec2(2.5, -4.0));
+        mask.add_closed_polygon(vec![
+            egui::pos2(0.0, 0.0),
+            egui::pos2(10.0, 0.0),
+            egui::pos2(10.0, 10.0),
+        ]);
+        mask.add_closed_polygon(vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)]);
+
+        assert_eq!(mask.polygons_world.len(), 1);
+        assert_eq!(
+            mask.polygons_world[0].first(),
+            mask.polygons_world[0].last()
+        );
+        let project = mask.to_project();
+        let restored = MaskLayer::from_project(&project);
+        assert_eq!(restored.id, mask.id);
+        assert_eq!(restored.name, mask.name);
+        assert_eq!(restored.visible, mask.visible);
+        assert_eq!(restored.opacity, mask.opacity);
+        assert_eq!(restored.width_screen_px, mask.width_screen_px);
+        assert_eq!(restored.display_mode, mask.display_mode);
+        assert_eq!(restored.color_rgb, mask.color_rgb);
+        assert_eq!(restored.offset_world, mask.offset_world);
+        assert_eq!(restored.editable, mask.editable);
+        assert_eq!(restored.polygons_world, mask.polygons_world);
+        assert!(restored.raster_display.is_none());
+
+        let mut legacy = project;
+        legacy.opacity = 0.0;
+        legacy.width_screen_px = 0.0;
+        legacy.display_mode = None;
+        legacy.color_rgb = [0, 0, 0];
+        let restored = MaskLayer::from_project(&legacy);
+        assert_eq!(restored.opacity, 0.9);
+        assert_eq!(restored.width_screen_px, 2.0);
+        assert_eq!(restored.display_mode, MaskDisplayMode::OutlineOnly);
+        assert_eq!(restored.color_rgb, [255, 210, 60]);
+    }
+
+    #[test]
+    fn mask_geojson_export_preserves_geometry_and_layer_metadata() {
+        let mut first = layer(1, egui::vec2(100.0, 200.0));
+        first.add_closed_polygon(vec![
+            egui::pos2(0.0, 0.0),
+            egui::pos2(10.0, 0.0),
+            egui::pos2(10.0, 5.0),
+        ]);
+        let mut second = layer(2, egui::vec2(-5.0, 3.0));
+        second.display_mode = MaskDisplayMode::FilledPreview;
+        second.add_closed_polygon(vec![
+            egui::pos2(20.0, 20.0),
+            egui::pos2(30.0, 20.0),
+            egui::pos2(30.0, 30.0),
+        ]);
+        let layers = vec![first, second];
+
+        let value = export_mask_layers_geojson_value(&layers);
+        assert_eq!(value["type"], "FeatureCollection");
+        assert_eq!(value["odon_masks_version"], 1);
+        assert_eq!(value["features"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value["features"][0]["properties"]["layer_id"], 1);
+        assert_eq!(
+            value["features"][1]["properties"]["layer_display_mode"],
+            "filled_preview"
+        );
+        assert_eq!(
+            value["features"][0]["geometry"]["coordinates"][0][0],
+            serde_json::json!([100.0, 200.0])
+        );
+
+        let path =
+            std::env::temp_dir().join(format!("odon-mask-export-{}.geojson", std::process::id()));
+        save_mask_layers_geojson(&path, &layers).expect("save mask GeoJSON");
+        let loaded = load_geojson_polylines_world(&path, 1.0, PolygonRingMode::AllRings)
+            .expect("reload mask geometry");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0][0], egui::pos2(100.0, 200.0));
+        assert_eq!(loaded[1][0], egui::pos2(15.0, 23.0));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn saving_empty_masks_is_rejected() {
+        let path = std::env::temp_dir().join(format!(
+            "odon-empty-mask-export-{}.geojson",
+            std::process::id()
+        ));
+        let error = save_mask_layers_geojson(&path, &[layer(1, egui::Vec2::ZERO)])
+            .expect_err("empty mask export must fail");
+        assert!(error.to_string().contains("no mask shapes"));
+        assert!(!path.exists());
+    }
+}

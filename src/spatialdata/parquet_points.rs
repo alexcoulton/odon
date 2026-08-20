@@ -323,12 +323,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn xenium_points_parquet_smoke_if_present() {
+    #[ignore = "requires data.zarr/points/transcripts/points.parquet extended-test fixture"]
+    fn xenium_points_parquet_extended_fixture() {
         let dir = Path::new("data.zarr/points/transcripts/points.parquet");
-        if !dir.is_dir() {
-            eprintln!("skipping: {dir:?} not present");
-            return;
-        }
+        assert!(dir.is_dir(), "missing extended-test fixture: {dir:?}");
 
         let opts = PointsLoadOptions {
             max_points: 10_000,

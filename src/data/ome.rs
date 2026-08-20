@@ -657,10 +657,74 @@ fn int_bits_to_max(bits: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use zarrs::array::{Array, ArraySubset};
+
+    struct TestOmeDir(PathBuf);
+
+    impl TestOmeDir {
+        fn new() -> Self {
+            let unique = format!(
+                "odon-ome-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system clock")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("create test OME-Zarr");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestOmeDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_czyx_fixture(root: &Path) {
+        fs::write(root.join(".zgroup"), r#"{"zarr_format":2}"#).expect("write group");
+        fs::write(
+            root.join(".zattrs"),
+            r#"{
+              "multiscales": [{
+                "name": "czyx-test",
+                "axes": [{"name":"c"},{"name":"z"},{"name":"y"},{"name":"x"}],
+                "datasets": [{"path":"0","coordinateTransformations":[
+                  {"type":"scale","scale":[1.0,2.0,0.5,0.5]},
+                  {"type":"translation","translation":[0.0,1.0,0.0,0.0]}
+                ]}]
+              }],
+              "omero": {"channels":[{"label":"DAPI"},{"label":"CD3"}]}
+            }"#,
+        )
+        .expect("write attributes");
+        let level = root.join("0");
+        fs::create_dir_all(&level).expect("create level");
+        fs::write(
+            level.join(".zarray"),
+            r#"{"zarr_format":2,"shape":[2,3,4,5],"chunks":[1,1,4,5],"dtype":"<u2","compressor":null,"fill_value":0,"order":"C","filters":null}"#,
+        )
+        .expect("write array metadata");
+        for c in 0..2u16 {
+            for z in 0..3u16 {
+                let mut bytes = Vec::with_capacity(4 * 5 * 2);
+                for y in 0..4u16 {
+                    for x in 0..5u16 {
+                        let value = c * 1000 + z * 100 + y * 10 + x;
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+                fs::write(level.join(format!("{c}.{z}.0.0")), bytes).expect("write chunk");
+            }
+        }
+    }
 
     fn fixture_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr")
@@ -692,5 +756,68 @@ mod tests {
         let tile = retrieve_image_subset_u16(&array, &subset, &dataset.levels[0].dtype)
             .expect("retrieve tile");
         assert_eq!(tile.shape(), &[1, 64, 64]);
+    }
+
+    #[test]
+    fn opens_generated_czyx_fixture_and_reads_xy_xz_yz_planes() {
+        let dir = TestOmeDir::new();
+        write_czyx_fixture(&dir.0);
+        let (dataset, store) = OmeZarrDataset::open_local(&dir.0).expect("open generated fixture");
+        assert_eq!(dataset.dims.c, Some(0));
+        assert_eq!(dataset.dims.z, Some(1));
+        assert_eq!((dataset.dims.y, dataset.dims.x), (2, 3));
+        assert_eq!(dataset.channels.len(), 2);
+        assert_eq!(dataset.levels[0].shape, vec![2, 3, 4, 5]);
+
+        let array: Array<dyn ReadableStorageTraits> =
+            Array::open(store, "/0").expect("open generated array");
+        let level = &dataset.levels[0];
+        let cases = [
+            (
+                vec![1..2, 2..3, 0..4, 0..5],
+                vec![1, 1, 4, 5],
+                1200u16,
+                1234u16,
+            ),
+            (
+                vec![1..2, 0..3, 3..4, 0..5],
+                vec![1, 3, 1, 5],
+                1030u16,
+                1234u16,
+            ),
+            (
+                vec![1..2, 0..3, 0..4, 4..5],
+                vec![1, 3, 4, 1],
+                1004u16,
+                1234u16,
+            ),
+        ];
+        for (ranges, expected_shape, first, last) in cases {
+            let data = retrieve_image_subset_u16(
+                &array,
+                &ArraySubset::new_with_ranges(&ranges),
+                &level.dtype,
+            )
+            .expect("read plane");
+            assert_eq!(data.shape(), expected_shape);
+            assert_eq!(data.iter().next().copied(), Some(first));
+            assert_eq!(data.iter().last().copied(), Some(last));
+        }
+    }
+
+    #[test]
+    fn rejects_missing_axes_and_level_dimensionality_mismatches() {
+        let dir = TestOmeDir::new();
+        fs::write(dir.0.join(".zgroup"), r#"{"zarr_format":2}"#).expect("write group");
+        fs::write(
+            dir.0.join(".zattrs"),
+            r#"{"multiscales":[{"axes":[{"name":"c"},{"name":"y"}],"datasets":[]}]}"#,
+        )
+        .expect("write invalid attrs");
+        let error = match OmeZarrDataset::open_local(&dir.0) {
+            Ok(_) => panic!("missing x axis must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("missing required 'x'"));
     }
 }

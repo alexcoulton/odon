@@ -39,7 +39,7 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
-use crate::deep_link::{DeepLinkChannelOrder, DeepLinkRequest};
+use crate::deep_link::{DeepLinkChannelOrder, DeepLinkObjectFilterLogic, DeepLinkRequest};
 use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::geometry::threshold_regions::{
     ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
@@ -63,8 +63,8 @@ use crate::masks::save_mask_layers_geojson;
 use crate::masks::{MaskDisplayMode, MaskLayer, MaskRasterDisplayCache};
 use crate::objects::GeoJsonSegmentationLayer;
 use crate::objects::ObjectPreloadSettings;
-use crate::objects::ObjectsLayer;
 use crate::objects::PreloadedObjectLayer;
+use crate::objects::{ObjectFilterLogic, ObjectsLayer};
 use crate::project::groups as layer_groups;
 use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
@@ -1318,6 +1318,337 @@ mod deep_link_channel_tests {
     }
 }
 
+#[cfg(test)]
+mod control_characterization_tests {
+    use super::*;
+
+    fn fixture_app() -> OmeZarrViewerApp {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+        let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open OME-Zarr fixture");
+        let settings = AutoContrastSettings {
+            enabled_on_open: false,
+            ..AutoContrastSettings::default()
+        };
+        OmeZarrViewerApp::new_runtime(&egui::Context::default(), false, dataset, store, settings)
+    }
+
+    fn visible_channel_names(app: &OmeZarrViewerApp) -> Vec<String> {
+        app.control_visible_channel_snapshot()
+            .as_array()
+            .expect("visible channel array")
+            .iter()
+            .map(|channel| {
+                channel["name"]
+                    .as_str()
+                    .expect("visible channel name")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn channel_and_view_controls_preserve_external_semantics() {
+        let mut app = fixture_app();
+
+        let active = app.control_set_active_channel(&serde_json::json!({"name": "Ki67"}));
+        assert_eq!(active["active_channel"]["name"], "Ki67");
+
+        let only = app.control_set_visible_channels(
+            &serde_json::json!({"channels": ["CD3", "PanCK"], "mode": "only"}),
+        );
+        assert_eq!(only["changed"], true);
+        assert_eq!(visible_channel_names(&app), vec!["CD3", "PanCK"]);
+        assert_eq!(app.control_active_channel_snapshot()["name"], "CD3");
+
+        let before_invalid = app.control_visible_channel_snapshot();
+        let invalid = app.control_set_visible_channels(
+            &serde_json::json!({"channels": ["CD3", "missing"], "mode": "only"}),
+        );
+        assert!(invalid.get("error").is_some());
+        assert_eq!(app.control_visible_channel_snapshot(), before_invalid);
+
+        app.control_set_visible_channels(
+            &serde_json::json!({"channels": ["Collagen"], "mode": "show"}),
+        );
+        app.control_set_visible_channels(&serde_json::json!({"channels": ["CD3"], "mode": "hide"}));
+        assert_eq!(visible_channel_names(&app), vec!["PanCK", "Collagen"]);
+
+        let contrast = app.control_set_channel_contrast(
+            &serde_json::json!({"channel": "PanCK", "min": 100.0, "max": 1000.0}),
+        );
+        assert_eq!(contrast["name"], "PanCK");
+        assert_eq!(contrast["min"], 100.0);
+        assert_eq!(contrast["max"], 1000.0);
+        let invalid_contrast = app.control_set_channel_contrast(
+            &serde_json::json!({"channel": "PanCK", "min": 1000.0, "max": 100.0}),
+        );
+        assert!(invalid_contrast.get("error").is_some());
+        assert_eq!(
+            app.control_get_channel_contrast(&serde_json::json!({"channel": "PanCK"}))["max"],
+            1000.0
+        );
+
+        let panels = app.control_set_side_panels(&serde_json::json!({
+            "left": false,
+            "right": true
+        }));
+        assert_eq!(
+            panels["panels"],
+            serde_json::json!({"left": false, "right": true})
+        );
+        assert!(
+            app.control_set_side_panels(&serde_json::json!({}))
+                .get("error")
+                .is_some()
+        );
+
+        let smooth = app.control_set_smooth_pixels(&serde_json::json!({"smooth": false}));
+        assert_eq!(smooth["changed"], true);
+        assert_eq!(smooth["smooth_pixels"]["smooth"], false);
+
+        let listed_first = app.control_set_channel_order(&serde_json::json!({
+            "channels": ["Collagen", "DAPI"],
+            "mode": "listed_first"
+        }));
+        assert_eq!(listed_first["changed"], true);
+        assert_eq!(
+            &app.channel_layer_order,
+            &[4usize, 0usize, 1usize, 2usize, 3usize]
+        );
+        let before_invalid_order = app.channel_layer_order.clone();
+        let invalid_order = app.control_set_channel_order(&serde_json::json!({
+            "channels": ["DAPI", "missing"],
+            "mode": "listed_first"
+        }));
+        assert!(invalid_order.get("error").is_some());
+        assert_eq!(app.channel_layer_order, before_invalid_order);
+        let exact = app.control_set_channel_order(&serde_json::json!({
+            "channels": ["Ki67", "PanCK", "CD3", "DAPI", "Collagen"],
+            "mode": "exact"
+        }));
+        assert_eq!(exact["mode"], "exact");
+        assert_eq!(app.channel_layer_order, vec![3, 2, 1, 0, 4]);
+
+        let grouped = app.control_set_channel_group(&serde_json::json!({
+            "channels": ["CD3", "PanCK"],
+            "group": "Markers",
+            "color": "#123456",
+            "inherit_color": false,
+            "replace_group_members": true
+        }));
+        let group_id = grouped["group_id"].as_u64().expect("channel group id");
+        let groups = app.current_layer_groups();
+        let group = groups
+            .channel_groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .expect("created channel group");
+        assert_eq!(group.name, "Markers");
+        assert_eq!(group.color_rgb, [0x12, 0x34, 0x56]);
+        assert!(!groups.channel_members["CD3"].inherit_color);
+        assert!(!groups.channel_members["PanCK"].inherit_color);
+
+        let camera = app.control_set_camera(&serde_json::json!({
+            "center_world_lvl0": [12.0, 34.0],
+            "zoom": 2.0
+        }));
+        assert_eq!(camera["center_world_lvl0"], serde_json::json!([12.0, 34.0]));
+        assert_eq!(camera["zoom_screen_per_lvl0_px"], 2.0);
+        assert_eq!(
+            app.control_zoom(0.5)["zoom_screen_per_lvl0_px"],
+            serde_json::json!(1.0)
+        );
+        assert!(app.control_zoom(0.0).get("error").is_some());
+        assert!(app.control_fit_to_view().get("error").is_some());
+
+        let screenshot_path = std::env::temp_dir().join(format!(
+            "odon-control-screenshot-{}.png",
+            std::process::id()
+        ));
+        let screenshot = app.control_capture_screenshot(&serde_json::json!({
+            "path": screenshot_path
+        }));
+        assert_eq!(screenshot["queued"], true);
+        assert_eq!(
+            app.screenshot_pending.as_ref().map(|request| request.id),
+            Some(1)
+        );
+        assert_eq!(app.screenshot_in_flight, Some(1));
+    }
+
+    #[test]
+    fn deep_link_application_updates_channels_groups_contrast_and_camera() {
+        let mut app = fixture_app();
+        let request = DeepLinkRequest::parse_arg(
+            "odon://open?channel=CD3&visible_channels=PanCK%7CCD3&channel_order=listed&group_visible_channels=1&visible_channel_group=T%20cell%20markers&visible_channel_group_color=%23abcdef&hidden_channels=DAPI&channel_color=CD3:%23112233&channel_contrast=CD3:100:1000&center=12.5,25&zoom=0.5&fast_rendering=0",
+        )
+        .expect("parse deep link")
+        .expect("Odon deep link");
+
+        app.apply_deep_link_request(&request);
+
+        assert_eq!(app.control_active_channel_snapshot()["name"], "CD3");
+        assert_eq!(visible_channel_names(&app), vec!["CD3", "PanCK"]);
+        assert_eq!(&app.channel_layer_order[..2], &[2, 1]);
+        assert_eq!(app.channels[1].color_rgb, [0x11, 0x22, 0x33]);
+        assert_eq!(app.channels[1].window, Some((100.0, 1000.0)));
+        assert_eq!(app.camera.center_world_lvl0, egui::pos2(12.5, 25.0));
+        assert_eq!(app.camera.zoom_screen_per_lvl0_px, 0.5);
+        assert!(!app.fast_object_rendering);
+
+        let groups = app.current_layer_groups();
+        let group = groups
+            .channel_groups
+            .iter()
+            .find(|group| group.name == "T cell markers")
+            .expect("deep-link channel group");
+        assert_eq!(group.color_rgb, [0xab, 0xcd, 0xef]);
+        assert_eq!(groups.channel_members["PanCK"].group_id, group.id);
+        assert_eq!(groups.channel_members["CD3"].group_id, group.id);
+        assert!(!groups.channel_members["CD3"].inherit_color);
+    }
+
+    #[test]
+    fn layer_transforms_order_masks_and_ui_roundtrip_through_project_state() {
+        let mut app = fixture_app();
+        app.project_space.add_roi_source(app.dataset.source.clone());
+        let mut mask = MaskLayer {
+            id: 17,
+            name: "Review exclusion".to_string(),
+            visible: false,
+            opacity: 0.45,
+            width_screen_px: 3.0,
+            display_mode: MaskDisplayMode::TranslucentFill,
+            color_rgb: [12, 34, 56],
+            offset_world: egui::vec2(8.0, -4.0),
+            editable: true,
+            polygons_world: Vec::new(),
+            raster_display: None,
+            source_geojson: None,
+        };
+        mask.add_closed_polygon(vec![
+            egui::pos2(1.0, 2.0),
+            egui::pos2(11.0, 2.0),
+            egui::pos2(11.0, 12.0),
+        ]);
+        app.mask_layers.push(mask);
+        app.next_mask_layer_id = 18;
+        app.mask_layers_project_dirty = true;
+        app.rebuild_layer_orders();
+
+        app.channel_offsets_world[1] = egui::vec2(3.0, 5.0);
+        app.channel_scales[1] = egui::vec2(1.25, 0.75);
+        app.channel_rotations_rad[1] = 0.25;
+        app.channels[1].note = "registration reference".to_string();
+        app.channels[1].visible = true;
+        app.active_layer = LayerId::Mask(17);
+        app.overlay_layer_order
+            .retain(|id| *id != LayerId::Mask(17));
+        app.overlay_layer_order.insert(0, LayerId::Mask(17));
+        app.show_left_panel = false;
+        app.show_right_panel = true;
+        app.smooth_pixels = false;
+
+        app.push_layer_offsets_undo_snapshot(&[LayerId::Channel(1), LayerId::Mask(17)]);
+        app.channel_offsets_world[1] = egui::vec2(30.0, 50.0);
+        app.mask_layers[0].offset_world = egui::vec2(80.0, -40.0);
+        assert!(app.undo_last_edit());
+        assert_eq!(app.channel_offsets_world[1], egui::vec2(3.0, 5.0));
+        assert_eq!(app.mask_layers[0].offset_world, egui::vec2(8.0, -4.0));
+        assert!(!app.undo_last_edit(), "undo stack is exhausted");
+
+        let source = app.dataset.source.clone();
+        let project = app.take_project_space();
+        let view = project.roi_view_state(&source).expect("saved ROI view");
+        assert_eq!(view.channel_order, app.channel_layer_order);
+        assert_eq!(view.channels[1].offset_world, Some([3.0, 5.0]));
+        assert_eq!(view.channels[1].scale, Some([1.25, 0.75]));
+        assert_eq!(view.channels[1].rotation_rad, Some(0.25));
+        assert_eq!(
+            view.channels[1].note.as_deref(),
+            Some("registration reference")
+        );
+        assert_eq!(
+            view.overlay_order.first().map(String::as_str),
+            Some("mask:17")
+        );
+        assert_eq!(view.overlay_visibility["mask:17"], false);
+        assert_eq!(view.overlay_offsets_world["mask:17"], [8.0, -4.0]);
+
+        let mut restored = fixture_app();
+        restored.set_project_space(project);
+        assert_eq!(restored.channel_offsets_world[1], egui::vec2(3.0, 5.0));
+        assert_eq!(restored.channel_scales[1], egui::vec2(1.25, 0.75));
+        assert_eq!(restored.channel_rotations_rad[1], 0.25);
+        assert_eq!(restored.channels[1].note, "registration reference");
+        assert_eq!(restored.active_layer, LayerId::Mask(17));
+        assert_eq!(
+            restored.overlay_layer_order.first(),
+            Some(&LayerId::Mask(17))
+        );
+        assert_eq!(restored.mask_layers.len(), 1);
+        assert!(!restored.mask_layers[0].visible);
+        assert_eq!(restored.mask_layers[0].offset_world, egui::vec2(8.0, -4.0));
+        assert_eq!(restored.mask_layers[0].polygons_world[0].len(), 4);
+        assert!(!restored.show_left_panel);
+        assert!(restored.show_right_panel);
+        assert!(!restored.smooth_pixels);
+    }
+
+    #[test]
+    fn object_filter_and_overlay_controls_have_stable_state_and_errors() {
+        let mut app = fixture_app();
+        let request =
+            DeepLinkRequest::parse_arg("odon://open?filter=id:cell-1%7Cid:cell-2&filter_logic=or")
+                .expect("parse object-filter deep link")
+                .expect("Odon deep link");
+
+        app.apply_deep_link_request(&request);
+
+        let filter = app.seg_objects.filter_snapshot_json();
+        assert_eq!(filter["mode"], "simple");
+        assert_eq!(filter["logic"], "any");
+        assert_eq!(
+            filter["simple"]["clauses"],
+            serde_json::json!([
+                {"enabled": true, "property": "id", "query": "cell-1"},
+                {"enabled": true, "property": "id", "query": "cell-2"}
+            ])
+        );
+
+        let query = app.control_set_object_filter_query(&serde_json::json!({
+            "target": "objects",
+            "query": "unknown_property == 3"
+        }));
+        assert!(
+            query["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("object layer is empty"))
+        );
+        assert_eq!(app.seg_objects.filter_snapshot_json()["mode"], "simple");
+
+        app.seg_objects.clear_filter();
+        let cleared = app.seg_objects.filter_snapshot_json();
+        assert_eq!(cleared["active"], false);
+        assert_eq!(cleared["mode"], "simple");
+
+        let visibility = app.control_set_object_overlay_visibility(
+            &serde_json::json!({"target": "all", "visible": false}),
+        );
+        assert_eq!(visibility["segmentation_labels"], false);
+        assert_eq!(visibility["segmentation_geojson"], false);
+        assert_eq!(visibility["segmentation_objects"], false);
+        assert!(
+            app.control_set_object_overlay_visibility(
+                &serde_json::json!({"target": "unknown", "visible": true})
+            )
+            .get("error")
+            .is_some()
+        );
+    }
+}
+
 fn build_tiff_dataset(
     dataset_root: PathBuf,
     dataset_name: String,
@@ -1496,6 +1827,7 @@ impl OmeZarrViewerApp {
                     | "cells_geoparquet"
             )
         }) || !request.object_filters.is_empty()
+            || request.object_query.is_some()
             || !request.object_level_colors.is_empty();
         let bundled_labels_requested = segmentation_source
             .as_deref()
@@ -1715,6 +2047,10 @@ impl OmeZarrViewerApp {
                 .apply_project_analysis_state(&analysis, active_channel_name);
         }
 
+        if let Some(fast_object_rendering) = request.fast_object_rendering {
+            self.set_fast_object_rendering(fast_object_rendering);
+        }
+
         if !request.object_level_colors.is_empty() {
             let colors = request
                 .object_level_colors
@@ -1734,6 +2070,14 @@ impl OmeZarrViewerApp {
             );
         }
 
+        if let Some(logic) = request.object_filter_logic {
+            let logic = match logic {
+                DeepLinkObjectFilterLogic::All => ObjectFilterLogic::All,
+                DeepLinkObjectFilterLogic::Any => ObjectFilterLogic::Any,
+            };
+            self.seg_objects.set_filter_logic(logic);
+        }
+
         if !request.object_filters.is_empty() {
             let filter_pairs = request
                 .object_filters
@@ -1742,6 +2086,11 @@ impl OmeZarrViewerApp {
                 .collect::<Vec<_>>();
             self.seg_objects
                 .set_filter_clauses_from_pairs(&filter_pairs);
+            self.set_active_layer(LayerId::SegmentationObjects);
+        }
+
+        if let Some(query) = request.object_query.as_deref() {
+            self.seg_objects.set_filter_query_from_text(query);
             self.set_active_layer(LayerId::SegmentationObjects);
         }
 
@@ -3903,6 +4252,121 @@ impl OmeZarrViewerApp {
                 })
             }
             Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_get_object_filter(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "filter": self.seg_objects.filter_snapshot_json(),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "filter": objects.filter_snapshot_json(),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object filters"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_object_filter_query(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(query) = params
+            .get("query")
+            .or_else(|| params.get("expression"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return serde_json::json!({"error": "set_object_filter_query requires query"});
+        };
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => {
+                self.seg_objects.set_filter_query_from_text(query);
+                serde_json::json!({
+                    "target": "segmentation_objects",
+                    "filter": self.seg_objects.filter_snapshot_json(),
+                })
+            }
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.set_filter_query_from_text(query);
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "filter": objects.filter_snapshot_json(),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object filters"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_clear_object_filter(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => {
+                self.seg_objects.clear_filter();
+                serde_json::json!({
+                    "target": "segmentation_objects",
+                    "filter": self.seg_objects.filter_snapshot_json(),
+                })
+            }
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.clear_filter();
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "filter": objects.filter_snapshot_json(),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object filters"}),
             Err(error) => serde_json::json!({"error": error}),
         };
         self.bump_render_id();

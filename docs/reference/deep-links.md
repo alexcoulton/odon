@@ -220,6 +220,7 @@ contrast in the UI.
 | `cell_color_by`, `color_by`, `object_color_by` | Object property used to colour loaded segmentation objects. |
 | `fill_cells` | Fill object polygons. Accepts `1`, `true`, `0`, or `false`. |
 | `show_selection_overlay`, `selection_overlay` | Show or hide the object selection overlay. |
+| `fast_rendering`, `fast_object_rendering`, `object_fast_rendering` | Enable or disable fast object rendering. Use `0` or `false` to force exact polygon rendering for figure links. |
 
 For report links that should colour cells by an annotation column, prefer project
 object segmentation:
@@ -265,12 +266,16 @@ rendering, counts, analysis, and export.
 | Parameter | Meaning |
 | --- | --- |
 | `filter`, `filters`, `object_filter`, `object_filters` | One or more object filter clauses. |
+| `filter_logic`, `filter_mode`, `object_filter_logic`, `object_filter_mode` | How multiple filter clauses are combined. Use `and`/`all` or `or`/`any`. Defaults to `and`. |
+| `object_query`, `filter_expression` | Boolean object query expression. Query mode supports nested `and`/`or`/`not` expressions. |
 | `filter_property`, `filter_key`, `object_filter_property`, `object_filter_key` | Property name for an explicit single filter. |
 | `filter_query`, `filter_value`, `object_filter_query`, `object_filter_value` | Query value for an explicit single filter. |
 
 Filter clauses may use `column:value`, `column=value`, `column==value`, or
-`column~value`. Separate multiple clauses with `|` or `;`. Multiple clauses are
-enabled and combined with AND.
+`column~value`. Separate multiple clauses with `|` or `;`. Multiple clauses
+default to AND logic, matching the `All` filter mode in the segmentation-object
+Properties panel. Use `filter_logic=or` or `filter_logic=any` to show objects
+that match at least one enabled clause.
 
 Examples:
 
@@ -278,7 +283,27 @@ Examples:
 filter=broad_cell_type:immune
 filter=zz_mask_galectin_3%3D%3DTRUE
 filter=broad_cell_type:immune%7Czz_mask_galectin_3%3D%3DTRUE
+filter=broad_cell_type:immune%7Cbroad_cell_type:tumor&filter_logic=or
 filter_property=sample_id&filter_query=Sample%2001
+```
+
+For complex phenotypes, use `object_query`. Supported query syntax includes
+`and`, `or`, `not`, parentheses, `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`,
+`starts_with`, `ends_with`, `in [...]`, quoted strings, numbers, `true`,
+`false`, and `null`. Boolean columns can be used directly, so `zz_mask_cd3`
+means `zz_mask_cd3 == true`.
+
+Use backticks around property names that contain spaces or punctuation:
+
+```text
+`median intensity CD3` > 1200
+```
+
+Examples:
+
+```text
+object_query=(broad_cell_type == "immune_lymphoid" and zz_mask_cd3) or (broad_cell_type == "immune_myeloid" and zz_mask_hla_dr)
+object_query=broad_cell_type in ["immune_lymphoid", "immune_myeloid"] and not zz_mask_pan_cytokeratin
 ```
 
 ## Camera Parameters

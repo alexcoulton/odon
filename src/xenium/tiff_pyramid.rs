@@ -804,33 +804,29 @@ fn select_base_ifd_group(
     )?
     .ok_or_else(|| anyhow!("OME plane selection requires channel-to-IFD mapping"))?;
 
-    let base_group_index = groups
+    // Equal-sized separate IFDs are ambiguous from geometry alone: they may be channels,
+    // Z/T planes, or both. OME metadata already gives the exact IFD for every channel in
+    // the requested plane, so use that mapping directly instead of relying on geometry
+    // group boundaries.
+    let selected = channel_ifds
         .iter()
-        .enumerate()
-        .find_map(|(group_index, (start, end))| {
-            let group_indices: Vec<_> = ifds[*start..*end]
-                .iter()
-                .map(|ifd| ifd.main_ifd_index)
-                .collect();
-            let matches = channel_ifds.len() == group_indices.len()
-                && channel_ifds
-                    .iter()
-                    .all(|ifd_index| group_indices.contains(ifd_index));
-            matches.then_some(group_index)
+        .map(|ifd_index| {
+            ifds.iter()
+                .find(|ifd| ifd.main_ifd_index == *ifd_index)
+                .cloned()
+                .ok_or_else(|| anyhow!("OME-TIFF mapping references missing IFD {ifd_index}"))
         })
-        .ok_or_else(|| {
-            anyhow!(
-                "could not find OME plane Z={}, T={} in TIFF IFD groups",
-                plane_selection.z,
-                plane_selection.t
-            )
-        })?;
-
-    let (start, end) = groups[base_group_index];
-    Ok((
-        base_group_index,
-        reorder_ifd_group_by_tiff_data(&ifds[start..end], Some(ome))?,
-    ))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if let Some(first) = selected.first()
+        && selected.iter().any(|ifd| !same_geometry(first, ifd))
+    {
+        return Err(anyhow!(
+            "OME-TIFF channels for Z={}, T={} do not share geometry",
+            plane_selection.z,
+            plane_selection.t
+        ));
+    }
+    Ok((0, selected))
 }
 
 fn ome_multichannel_plane_order(ome: &OmeTiffMetadata) -> anyhow::Result<[char; 2]> {
@@ -1845,12 +1841,230 @@ fn tiff_channel_max_loader_thread(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::fs::{self, File};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use tiff::encoder::{TiffEncoder, colortype};
+    use tiff::tags::Tag;
 
     use super::{
-        TiffPlaneSelection, TiffPyramid, ome_channel_ifd_order, ome_multichannel_plane_index,
-        parse_ome_xml,
+        TiffChannelLayout, TiffPlaneSelection, TiffPyramid, decode_tiff_channel_chunk,
+        ome_channel_ifd_order, ome_multichannel_plane_index, open_decoder, parse_ome_xml,
     };
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TestTiffDir {
+        path: PathBuf,
+    }
+
+    impl TestTiffDir {
+        fn new() -> Self {
+            let sequence = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("odon-tiff-tests-{}-{sequence}", std::process::id()));
+            fs::create_dir_all(&path).expect("create TIFF test directory");
+            Self { path }
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TestTiffDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn decode_channel(path: &Path, pyramid: &TiffPyramid, channel: usize) -> Vec<u16> {
+        let mut decoder = open_decoder(path).expect("open generated TIFF decoder");
+        let mut current_ifd = None;
+        let (width, height, pixels) = decode_tiff_channel_chunk(
+            &mut decoder,
+            &mut current_ifd,
+            &pyramid.levels[0],
+            0,
+            0,
+            channel,
+        )
+        .expect("decode generated TIFF channel");
+        assert_eq!((width, height), (8, 6));
+        pixels
+    }
+
+    #[test]
+    fn opens_generated_grayscale_tiff_and_decodes_pixels() {
+        let dir = TestTiffDir::new();
+        let path = dir.file("grayscale.tif");
+        let pixels = (0..48).map(|value| value as u8).collect::<Vec<_>>();
+
+        let file = File::create(&path).expect("create grayscale TIFF");
+        let mut encoder = TiffEncoder::new(file).expect("create TIFF encoder");
+        encoder
+            .new_image::<colortype::Gray8>(8, 6)
+            .expect("create grayscale image")
+            .write_data(&pixels)
+            .expect("write grayscale image");
+
+        let pyramid = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
+            .expect("open generated grayscale TIFF");
+
+        assert_eq!(pyramid.channel_count, 1);
+        assert_eq!(pyramid.levels.len(), 1);
+        assert_eq!(pyramid.levels[0].channel_layout, TiffChannelLayout::Single);
+        assert_eq!(pyramid.pixel_dtype, "|u1");
+        assert_eq!(pyramid.to_levels_info()[0].shape, vec![6, 8]);
+        assert_eq!(
+            decode_channel(&path, &pyramid, 0),
+            pixels.iter().map(|&value| value as u16).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn opens_generated_two_channel_ome_tiff_and_decodes_ifds() {
+        let dir = TestTiffDir::new();
+        let path = dir.file("two-channel.ome.tif");
+        let ome_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels DimensionOrder="XYZCT" Type="uint8" SizeX="8" SizeY="6" SizeZ="1" SizeC="2" SizeT="1" PhysicalSizeX="0.5" PhysicalSizeXUnit="um" PhysicalSizeY="0.75" PhysicalSizeYUnit="um">
+      <Channel ID="Channel:0:0" Name="DAPI" Color="255"/>
+      <Channel ID="Channel:0:1" Name="CD3" Color="16711680"/>
+      <TiffData/>
+    </Pixels>
+  </Image>
+</OME>"#;
+        let dapi = vec![7u8; 48];
+        let cd3 = vec![19u8; 48];
+
+        let file = File::create(&path).expect("create OME-TIFF");
+        let mut encoder = TiffEncoder::new(file).expect("create TIFF encoder");
+        {
+            let mut image = encoder
+                .new_image::<colortype::Gray8>(8, 6)
+                .expect("create first OME-TIFF channel");
+            image
+                .encoder()
+                .write_tag(Tag::ImageDescription, ome_xml)
+                .expect("write OME metadata");
+            image.write_data(&dapi).expect("write DAPI pixels");
+        }
+        encoder
+            .new_image::<colortype::Gray8>(8, 6)
+            .expect("create second OME-TIFF channel")
+            .write_data(&cd3)
+            .expect("write CD3 pixels");
+
+        let pyramid = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
+            .expect("open generated OME-TIFF");
+
+        assert_eq!(pyramid.channel_count, 2);
+        assert_eq!(pyramid.levels.len(), 1);
+        assert_eq!(
+            pyramid.levels[0].channel_layout,
+            TiffChannelLayout::SeparateIfds
+        );
+        assert_eq!(pyramid.to_levels_info()[0].shape, vec![2, 6, 8]);
+        assert_eq!(
+            pyramid.physical_pixel_size_xy(),
+            Some((
+                [0.75, 0.5],
+                [Some("um".to_string()), Some("um".to_string())]
+            ))
+        );
+        let channels = pyramid.default_channels_named("unused");
+        assert_eq!(channels[0].name, "DAPI");
+        assert_eq!(channels[0].color_rgb, [0, 0, 255]);
+        assert_eq!(channels[1].name, "CD3");
+        assert_eq!(channels[1].color_rgb, [255, 0, 0]);
+        assert_eq!(decode_channel(&path, &pyramid, 0), vec![7u16; 48]);
+        assert_eq!(decode_channel(&path, &pyramid, 1), vec![19u16; 48]);
+    }
+
+    #[test]
+    fn generated_ome_tiff_selects_distinct_z_planes() {
+        let dir = TestTiffDir::new();
+        let path = dir.file("two-channel-two-z.ome.tif");
+        let ome_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels DimensionOrder="XYZCT" Type="uint8" SizeX="8" SizeY="6" SizeZ="2" SizeC="2" SizeT="1">
+      <Channel ID="Channel:0:0" Name="DAPI"/>
+      <Channel ID="Channel:0:1" Name="CD3"/>
+      <TiffData/>
+    </Pixels>
+  </Image>
+</OME>"#;
+        let file = File::create(&path).expect("create OME-TIFF");
+        let mut encoder = TiffEncoder::new(file).expect("create TIFF encoder");
+        for (ifd, value) in [10u8, 11, 20, 21].into_iter().enumerate() {
+            let mut image = encoder
+                .new_image::<colortype::Gray8>(8, 6)
+                .expect("create plane");
+            if ifd == 0 {
+                image
+                    .encoder()
+                    .write_tag(Tag::ImageDescription, ome_xml)
+                    .expect("write OME metadata");
+            }
+            image
+                .write_data(&vec![value; 48])
+                .expect("write plane pixels");
+        }
+
+        let z0 = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
+            .expect("open z0");
+        let z1 = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 1, t: 0 })
+            .expect("open z1");
+        assert_eq!((z0.size_z, z0.size_t), (2, 1));
+        assert_eq!(decode_channel(&path, &z0, 0), vec![10; 48]);
+        assert_eq!(decode_channel(&path, &z0, 1), vec![20; 48]);
+        assert_eq!(decode_channel(&path, &z1, 0), vec![11; 48]);
+        assert_eq!(decode_channel(&path, &z1, 1), vec![21; 48]);
+        assert!(
+            TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 2, t: 0 }).is_err(),
+            "out-of-range z must fail"
+        );
+    }
+
+    #[test]
+    fn opens_generated_chunky_rgb_tiff_and_extracts_each_channel() {
+        let dir = TestTiffDir::new();
+        let path = dir.file("rgb.tif");
+        let mut pixels = Vec::with_capacity(8 * 6 * 3);
+        let mut red = Vec::with_capacity(8 * 6);
+        let mut green = Vec::with_capacity(8 * 6);
+        let mut blue = Vec::with_capacity(8 * 6);
+        for y in 0..6u8 {
+            for x in 0..8u8 {
+                pixels.extend_from_slice(&[x, y, x + y]);
+                red.push(x as u16);
+                green.push(y as u16);
+                blue.push((x + y) as u16);
+            }
+        }
+
+        let file = File::create(&path).expect("create RGB TIFF");
+        let mut encoder = TiffEncoder::new(file).expect("create TIFF encoder");
+        encoder
+            .new_image::<colortype::RGB8>(8, 6)
+            .expect("create RGB image")
+            .write_data(&pixels)
+            .expect("write RGB image");
+
+        let pyramid = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
+            .expect("open generated RGB TIFF");
+
+        assert_eq!(pyramid.channel_count, 3);
+        assert_eq!(pyramid.levels[0].channel_layout, TiffChannelLayout::Chunky);
+        assert_eq!(pyramid.to_levels_info()[0].shape, vec![3, 6, 8]);
+        assert_eq!(decode_channel(&path, &pyramid, 0), red);
+        assert_eq!(decode_channel(&path, &pyramid, 1), green);
+        assert_eq!(decode_channel(&path, &pyramid, 2), blue);
+    }
 
     #[test]
     fn parses_ome_xml_channel_names_and_sizes() {
@@ -2012,11 +2226,10 @@ mod tests {
     }
 
     #[test]
-    fn opens_imagej_hyperstack_fixture_if_present() {
+    #[ignore = "requires 1.tif extended-test fixture"]
+    fn opens_imagej_hyperstack_extended_fixture() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("1.tif");
-        if !path.exists() {
-            return;
-        }
+        assert!(path.exists(), "missing extended-test fixture: {path:?}");
 
         let pyramid = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
             .expect("open TIFF fixture");
@@ -2026,11 +2239,10 @@ mod tests {
     }
 
     #[test]
-    fn opens_pyramidal_ome_fixture_if_present() {
+    #[ignore = "requires 1_pyramid_crop.ome.tif extended-test fixture"]
+    fn opens_pyramidal_ome_extended_fixture() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("1_pyramid_crop.ome.tif");
-        if !path.exists() {
-            return;
-        }
+        assert!(path.exists(), "missing extended-test fixture: {path:?}");
 
         let pyramid = TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
             .expect("open pyramidal OME-TIFF fixture");

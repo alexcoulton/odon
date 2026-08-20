@@ -204,3 +204,93 @@ fn compute_stats_u16(values: &Vec<u16>) -> Option<HistogramStats> {
         n,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::ome::OmeZarrDataset;
+    use crate::imaging::view_plane::ViewPlaneMode;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[test]
+    fn histogram_math_clamps_values_and_reports_quantiles() {
+        let values = vec![0, 1, 2, 3, 4, 100];
+        let bins = compute_hist_u16(&values, 8, 7.0);
+        assert_eq!(bins.iter().sum::<u32>(), values.len() as u32);
+        assert_eq!(bins[0], 1);
+        assert_eq!(bins[7], 1, "values above abs_max clamp into the last bin");
+
+        let stats = compute_stats_u16(&values).expect("non-empty stats");
+        assert_eq!(stats.n, 6);
+        assert_eq!(
+            (stats.min, stats.q1, stats.median, stats.q3, stats.max),
+            (0.0, 1.0, 3.0, 4.0, 100.0)
+        );
+        assert!(compute_stats_u16(&Vec::new()).is_none());
+    }
+
+    #[test]
+    fn histogram_worker_reads_real_fixture_and_handles_empty_regions() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+        let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open fixture");
+        let loader = spawn_histogram_loader(store, dataset.levels.clone(), dataset.dims.clone())
+            .expect("spawn histogram worker");
+        let level = dataset.levels.last().expect("pyramid level");
+
+        loader
+            .tx
+            .send(HistogramRequest {
+                request_id: 41,
+                view: ViewPlaneSelection {
+                    mode: ViewPlaneMode::Xy,
+                    slice_level0: 0,
+                },
+                level: level.index,
+                channel: 0,
+                y0: 0,
+                y1: level.shape[dataset.dims.y],
+                x0: 0,
+                x1: level.shape[dataset.dims.x],
+                bins: 32,
+                abs_max: dataset.abs_max,
+            })
+            .expect("queue histogram");
+        let response = loader
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("histogram completion");
+        assert_eq!(response.request_id, 41);
+        assert_eq!(response.bins.len(), 32);
+        let stats = response.stats.expect("image statistics");
+        assert_eq!(response.bins.iter().sum::<u32>() as usize, stats.n);
+        assert!(stats.min <= stats.median && stats.median <= stats.max);
+
+        loader
+            .tx
+            .send(HistogramRequest {
+                request_id: 42,
+                view: ViewPlaneSelection {
+                    mode: ViewPlaneMode::Xy,
+                    slice_level0: 0,
+                },
+                level: level.index,
+                channel: 0,
+                y0: 0,
+                y1: 0,
+                x0: 0,
+                x1: 0,
+                bins: 4,
+                abs_max: dataset.abs_max,
+            })
+            .expect("queue empty histogram");
+        let empty = loader
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("empty histogram completion");
+        assert_eq!(empty.request_id, 42);
+        assert_eq!(empty.bins, vec![0; 8], "bin count has a documented minimum");
+        assert!(empty.stats.is_none());
+    }
+}

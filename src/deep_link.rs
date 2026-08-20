@@ -30,6 +30,12 @@ pub struct DeepLinkObjectFilterClause {
     pub query: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepLinkObjectFilterLogic {
+    All,
+    Any,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepLinkRequest {
     pub example: Option<String>,
@@ -56,10 +62,13 @@ pub struct DeepLinkRequest {
     pub cell_color_by: Option<String>,
     pub fill_cells: Option<bool>,
     pub show_selection_overlay: Option<bool>,
+    pub fast_object_rendering: Option<bool>,
     pub visible_cell_types: Vec<String>,
     pub hidden_cell_types: Vec<String>,
     pub object_level_colors: Vec<DeepLinkObjectLevelColor>,
     pub object_filters: Vec<DeepLinkObjectFilterClause>,
+    pub object_filter_logic: Option<DeepLinkObjectFilterLogic>,
+    pub object_query: Option<String>,
     pub center_world: Option<[f32; 2]>,
     pub zoom: Option<f32>,
 }
@@ -100,10 +109,13 @@ impl Default for DeepLinkRequest {
             cell_color_by: None,
             fill_cells: None,
             show_selection_overlay: None,
+            fast_object_rendering: None,
             visible_cell_types: Vec::new(),
             hidden_cell_types: Vec::new(),
             object_level_colors: Vec::new(),
             object_filters: Vec::new(),
+            object_filter_logic: None,
+            object_query: None,
             center_world: None,
             zoom: None,
         }
@@ -159,10 +171,13 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         cell_color_by: None,
         fill_cells: None,
         show_selection_overlay: None,
+        fast_object_rendering: None,
         visible_cell_types: Vec::new(),
         hidden_cell_types: Vec::new(),
         object_level_colors: Vec::new(),
         object_filters: Vec::new(),
+        object_filter_logic: None,
+        object_query: None,
         center_world: None,
         zoom: None,
     };
@@ -224,6 +239,9 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             "show_selection_overlay" | "selection_overlay" => {
                 req.show_selection_overlay = parse_bool(&value)
             }
+            "fast_rendering" | "fast_object_rendering" | "object_fast_rendering" => {
+                req.fast_object_rendering = parse_bool(&value)
+            }
             "visible_cell_types" | "show_cell_types" | "only_cell_types" | "cell_types" => {
                 req.visible_cell_types = parse_list(&value)
             }
@@ -238,6 +256,20 @@ fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             | "category_colours" => req.object_level_colors = parse_object_level_colors(&value),
             "filter" | "filters" | "object_filter" | "object_filters" => {
                 req.object_filters.extend(parse_object_filters(&value));
+            }
+            "object_query"
+            | "filter_query_expr"
+            | "filter_expression"
+            | "object_filter_query_expr" => {
+                req.object_query = non_empty(value);
+            }
+            "filter_logic"
+            | "filter_mode"
+            | "object_filter_logic"
+            | "object_filter_mode"
+            | "object_filters_logic"
+            | "object_filters_mode" => {
+                req.object_filter_logic = parse_object_filter_logic(&value);
             }
             "filter_property" | "filter_key" | "object_filter_property" | "object_filter_key" => {
                 filter_property = non_empty(value);
@@ -395,6 +427,14 @@ fn parse_object_filters(value: &str) -> Vec<DeepLinkObjectFilterClause> {
         .collect()
 }
 
+fn parse_object_filter_logic(value: &str) -> Option<DeepLinkObjectFilterLogic> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "all" | "and" => Some(DeepLinkObjectFilterLogic::All),
+        "any" | "or" => Some(DeepLinkObjectFilterLogic::Any),
+        _ => None,
+    }
+}
+
 fn parse_object_filter_clause(item: &str) -> Option<DeepLinkObjectFilterClause> {
     let item = item.trim();
     let (property_key, query) = item
@@ -509,7 +549,7 @@ mod tests {
     #[test]
     fn parses_open_link() {
         let req = DeepLinkRequest::parse_arg(
-            "odon://open?v=1&project=file:///tmp/my%20project.json&roi=18S1746%2FROI2&marker=CD68&segmentation=cells&segmentation_source=geoparquet&load_labels=0&cell_color_by=broad_cell_type&fill_cells=1&show_selection_overlay=0&center=10.5,20&zoom=0.25",
+            "odon://open?v=1&project=file:///tmp/my%20project.json&roi=18S1746%2FROI2&marker=CD68&segmentation=cells&segmentation_source=geoparquet&load_labels=0&cell_color_by=broad_cell_type&fill_cells=1&show_selection_overlay=0&fast_rendering=0&center=10.5,20&zoom=0.25",
         )
         .unwrap()
         .unwrap();
@@ -532,6 +572,7 @@ mod tests {
         assert_eq!(req.cell_color_by.as_deref(), Some("broad_cell_type"));
         assert_eq!(req.fill_cells, Some(true));
         assert_eq!(req.show_selection_overlay, Some(false));
+        assert_eq!(req.fast_object_rendering, Some(false));
         assert!(req.visible_cell_types.is_empty());
         assert!(req.hidden_cell_types.is_empty());
         assert!(req.object_level_colors.is_empty());
@@ -590,7 +631,7 @@ mod tests {
     #[test]
     fn parses_object_filter_clauses() {
         let req = DeepLinkRequest::parse_arg(
-            "odon://open?filter=broad_cell_type:immune_myeloid%7Czz_mask_galectin_3%3D%3DTRUE&filter_property=sample_id&filter_query=18S1746",
+            "odon://open?filter=broad_cell_type:immune_myeloid%7Czz_mask_galectin_3%3D%3DTRUE&filter_property=sample_id&filter_query=18S1746&filter_logic=or",
         )
         .unwrap()
         .unwrap();
@@ -611,6 +652,48 @@ mod tests {
                     query: "18S1746".to_string(),
                 },
             ]
+        );
+        assert_eq!(
+            req.object_filter_logic,
+            Some(DeepLinkObjectFilterLogic::Any)
+        );
+    }
+
+    #[test]
+    fn parses_object_filter_logic_aliases() {
+        let req = DeepLinkRequest::parse_arg("odon://open?object_filter_mode=all")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            req.object_filter_logic,
+            Some(DeepLinkObjectFilterLogic::All)
+        );
+
+        let req = DeepLinkRequest::parse_arg("odon://open?object_filters_logic=any")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            req.object_filter_logic,
+            Some(DeepLinkObjectFilterLogic::Any)
+        );
+
+        let req = DeepLinkRequest::parse_arg("odon://open?filter_logic=unexpected")
+            .unwrap()
+            .unwrap();
+        assert_eq!(req.object_filter_logic, None);
+    }
+
+    #[test]
+    fn parses_object_query() {
+        let req = DeepLinkRequest::parse_arg(
+            "odon://open?object_query=(broad_cell_type%20%3D%3D%20%22immune_lymphoid%22)%20or%20zz_mask_hla_dr",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            req.object_query.as_deref(),
+            Some("(broad_cell_type == \"immune_lymphoid\") or zz_mask_hla_dr")
         );
     }
 

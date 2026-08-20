@@ -446,3 +446,101 @@ fn fallback_axis_names(attrs: &serde_json::Map<String, serde_json::Value>) -> Op
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TestSpatialDir(PathBuf);
+
+    impl TestSpatialDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "odon-spatial-discovery-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&path).expect("create SpatialData fixture");
+            Self(path)
+        }
+
+        fn element(&self, family: &str, name: &str, attrs: &str) -> PathBuf {
+            let path = self.0.join(family).join(name);
+            fs::create_dir_all(&path).expect("create element");
+            fs::write(path.join(".zattrs"), attrs).expect("write element attrs");
+            path
+        }
+    }
+
+    impl Drop for TestSpatialDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn discovers_all_spatialdata_element_families_and_transforms() {
+        let dir = TestSpatialDir::new();
+        dir.element(
+            "images",
+            "image_b",
+            r#"{"multiscales":[{"coordinateTransformations":[{"type":"scale","scale":[1,2,3]}]}],"axes":["c","y","x"]}"#,
+        );
+        dir.element("images", "image_a", r#"{"ome":{"multiscales":[{}]}}"#);
+        dir.element(
+            "labels",
+            "cells",
+            r#"{"ome":{"multiscales":[{}],"image-label":{}},"coordinateTransformations":[{"type":"translation","translation":[4,5]}]}"#,
+        );
+        let points = dir.element(
+            "points",
+            "transcripts",
+            r#"{"encoding-type":"ngff:points","spatialdata_attrs":{"feature_key":"gene"},"coordinateTransformations":[{"type":"translation","translation":[7,8]}]}"#,
+        );
+        fs::create_dir_all(points.join("points.parquet")).expect("create point parquet dataset");
+        let shapes = dir.element(
+            "shapes",
+            "cells",
+            r#"{"encoding-type":"ngff:shapes","coordinateTransformations":[{"type":"scale","scale":[0.5,0.25]}]}"#,
+        );
+        fs::write(shapes.join("shapes.parquet"), []).expect("create shapes parquet file");
+        fs::create_dir_all(dir.0.join("tables").join("obs")).expect("create table");
+
+        let discovery = discover_spatialdata(&dir.0).expect("discover fixture");
+        assert_eq!(
+            discovery
+                .images
+                .iter()
+                .map(|element| element.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["image_a", "image_b"]
+        );
+        assert_eq!(discovery.images[1].transform.scale, [3.0, 2.0]);
+        assert_eq!(discovery.labels.len(), 1);
+        assert_eq!(discovery.labels[0].transform.translation, [5.0, 4.0]);
+        assert_eq!(discovery.points.len(), 1);
+        assert_eq!(discovery.points[0].feature_key.as_deref(), Some("gene"));
+        assert_eq!(
+            discovery.points[0].rel_parquet.as_deref(),
+            Some(Path::new("points/transcripts/points.parquet"))
+        );
+        assert_eq!(discovery.points[0].transform.translation, [8.0, 7.0]);
+        assert_eq!(discovery.shapes.len(), 1);
+        assert_eq!(discovery.shapes[0].transform.scale, [0.25, 0.5]);
+        assert_eq!(discovery.tables.len(), 1);
+    }
+
+    #[test]
+    fn rejects_non_spatialdata_directory() {
+        let dir = TestSpatialDir::new();
+        assert!(
+            discover_spatialdata(&dir.0)
+                .expect_err("plain directory must fail")
+                .to_string()
+                .contains("not a SpatialData container")
+        );
+    }
+}
