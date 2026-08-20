@@ -547,6 +547,15 @@ impl ProjectSpace {
         self.config_generation
     }
 
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.config_json_dirty || (self.project_file_path.is_none() && self.config_generation > 0)
+    }
+
+    pub fn mark_config_changed(&mut self) {
+        self.config_generation = self.config_generation.wrapping_add(1);
+        self.config_json_dirty = true;
+    }
+
     pub fn set_object_cache_ui_state(&mut self, state: ProjectObjectCacheUiState) {
         self.object_cache_ui = state;
     }
@@ -748,6 +757,235 @@ impl ProjectSpace {
         &self.config.rois
     }
 
+    pub fn roi_index_by_id(&self, id: &str) -> Result<usize, String> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("ROI id must not be empty".to_string());
+        }
+        let matches = self
+            .config
+            .rois
+            .iter()
+            .enumerate()
+            .filter(|(_, roi)| roi.id == id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [index] => Ok(*index),
+            [] => Err(format!("ROI '{id}' was not found")),
+            _ => Err(format!("ROI id '{id}' is ambiguous")),
+        }
+    }
+
+    pub fn add_roi_record(&mut self, mut roi: ProjectRoi) -> Result<usize, String> {
+        roi.id = roi.id.trim().to_string();
+        if roi.id.is_empty() {
+            return Err("ROI id must not be empty".to_string());
+        }
+        if self
+            .config
+            .rois
+            .iter()
+            .any(|existing| existing.id == roi.id)
+        {
+            return Err(format!("ROI '{}' already exists", roi.id));
+        }
+        let Some(source_key) = roi.source_key() else {
+            return Err("ROI must have a dataset source".to_string());
+        };
+        if self
+            .config
+            .rois
+            .iter()
+            .any(|existing| existing.source_key().as_deref() == Some(source_key.as_str()))
+        {
+            return Err("ROI dataset source is already present in the project".to_string());
+        }
+        self.config.rois.push(roi);
+        let index = self.config.rois.len() - 1;
+        if self.focused.is_none() {
+            self.focused = Some(source_key.clone());
+        }
+        self.selected.insert(source_key);
+        self.config_generation = self.config_generation.wrapping_add(1);
+        self.config_json_dirty = true;
+        Ok(index)
+    }
+
+    pub fn update_roi_record(&mut self, id: &str, mut roi: ProjectRoi) -> Result<usize, String> {
+        let index = self.roi_index_by_id(id)?;
+        roi.id = roi.id.trim().to_string();
+        if roi.id.is_empty() {
+            return Err("ROI id must not be empty".to_string());
+        }
+        if self
+            .config
+            .rois
+            .iter()
+            .enumerate()
+            .any(|(candidate, existing)| candidate != index && existing.id == roi.id)
+        {
+            return Err(format!("ROI '{}' already exists", roi.id));
+        }
+        let Some(new_key) = roi.source_key() else {
+            return Err("ROI must have a dataset source".to_string());
+        };
+        if self
+            .config
+            .rois
+            .iter()
+            .enumerate()
+            .any(|(candidate, existing)| {
+                candidate != index && existing.source_key().as_deref() == Some(new_key.as_str())
+            })
+        {
+            return Err("ROI dataset source is already present in the project".to_string());
+        }
+        let old_key = self.config.rois[index].source_key();
+        self.config.rois[index] = roi;
+        if let Some(old_key) = old_key
+            && old_key != new_key
+        {
+            if self.selected.remove(old_key.as_str()) {
+                self.selected.insert(new_key.clone());
+            }
+            if self.focused.as_deref() == Some(old_key.as_str()) {
+                self.focused = Some(new_key.clone());
+            }
+            if let Some(view) = self.state.roi_views.remove(old_key.as_str()) {
+                self.state.roi_views.insert(new_key, view);
+            }
+        }
+        self.config_generation = self.config_generation.wrapping_add(1);
+        self.config_json_dirty = true;
+        Ok(index)
+    }
+
+    pub fn remove_roi_by_id(&mut self, id: &str) -> Result<ProjectRoi, String> {
+        let index = self.roi_index_by_id(id)?;
+        let removed = self.config.rois.remove(index);
+        if let Some(key) = removed.source_key() {
+            self.selected.remove(key.as_str());
+            self.state.roi_views.remove(key.as_str());
+            if self.focused.as_deref() == Some(key.as_str()) {
+                self.focused = None;
+            }
+        }
+        if self.focused.is_none() {
+            self.focused = self.config.rois.first().and_then(ProjectRoi::source_key);
+        }
+        if self.selected.is_empty()
+            && let Some(key) = self.focused.clone()
+        {
+            self.selected.insert(key);
+        }
+        self.config_generation = self.config_generation.wrapping_add(1);
+        self.config_json_dirty = true;
+        Ok(removed)
+    }
+
+    pub fn reorder_rois(&mut self, ids: &[String]) -> Result<(), String> {
+        if ids.len() != self.config.rois.len() {
+            return Err("ROI order must contain every project ROI exactly once".to_string());
+        }
+        let mut seen = HashSet::new();
+        if ids.iter().any(|id| !seen.insert(id.as_str())) {
+            return Err("ROI order must not contain duplicate IDs".to_string());
+        }
+        let mut next = Vec::with_capacity(ids.len());
+        for id in ids {
+            let index = self.roi_index_by_id(id)?;
+            next.push(self.config.rois[index].clone());
+        }
+        if next
+            .iter()
+            .map(|roi| &roi.id)
+            .eq(self.config.rois.iter().map(|roi| &roi.id))
+        {
+            return Ok(());
+        }
+        self.config.rois = next;
+        self.config_generation = self.config_generation.wrapping_add(1);
+        self.config_json_dirty = true;
+        Ok(())
+    }
+
+    pub fn select_roi_ids(&mut self, ids: &[String], mode: &str) -> Result<(), String> {
+        let keys = ids
+            .iter()
+            .map(|id| {
+                let index = self.roi_index_by_id(id)?;
+                self.config.rois[index]
+                    .source_key()
+                    .ok_or_else(|| format!("ROI '{id}' has no dataset source"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        match mode {
+            "replace" => {
+                self.selected.clear();
+                self.selected.extend(keys.iter().cloned());
+            }
+            "add" => self.selected.extend(keys.iter().cloned()),
+            "remove" => {
+                for key in &keys {
+                    self.selected.remove(key.as_str());
+                }
+            }
+            "toggle" => {
+                for key in &keys {
+                    if !self.selected.remove(key.as_str()) {
+                        self.selected.insert(key.clone());
+                    }
+                }
+            }
+            _ => return Err("selection mode must be replace, add, remove, or toggle".to_string()),
+        }
+        if let Some(key) = keys.last() {
+            self.focused = Some(key.clone());
+        }
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(())
+    }
+
+    pub fn focus_roi_id(&mut self, id: &str) -> Result<(), String> {
+        let index = self.roi_index_by_id(id)?;
+        let key = self.config.rois[index]
+            .source_key()
+            .ok_or_else(|| format!("ROI '{id}' has no dataset source"))?;
+        self.focused = Some(key);
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(())
+    }
+
+    pub fn step_focused_roi(&mut self, step: i64, wrap: bool) -> Result<&ProjectRoi, String> {
+        if self.config.rois.is_empty() {
+            return Err("project has no ROIs".to_string());
+        }
+        let current = self
+            .focused
+            .as_deref()
+            .and_then(|key| {
+                self.config
+                    .rois
+                    .iter()
+                    .position(|roi| roi.source_key().as_deref() == Some(key))
+            })
+            .unwrap_or_default();
+        let len = self.config.rois.len() as i64;
+        let candidate = current as i64 + step;
+        let index = if wrap {
+            candidate.rem_euclid(len) as usize
+        } else {
+            candidate.clamp(0, len - 1) as usize
+        };
+        let key = self.config.rois[index]
+            .source_key()
+            .ok_or_else(|| "focused ROI has no dataset source".to_string())?;
+        self.focused = Some(key);
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(&self.config.rois[index])
+    }
+
     pub fn roi_mask_layers(&self, roi_path: &Path) -> Option<&[ProjectMaskLayer]> {
         let key = roi_path
             .canonicalize()
@@ -849,6 +1087,50 @@ impl ProjectSpace {
             self.status = format!("Saved view preset '{name}'.");
         }
         self.config_generation = self.config_generation.wrapping_add(1);
+    }
+
+    pub fn view_presets(&self) -> &[ProjectViewPreset] {
+        &self.state.view_presets
+    }
+
+    pub fn delete_view_preset(&mut self, index: usize) -> Result<ProjectViewPreset, String> {
+        if index >= self.state.view_presets.len() {
+            return Err(format!("view preset index {index} is out of range"));
+        }
+        let removed = self.state.view_presets.remove(index);
+        self.selected_view_preset = self
+            .selected_view_preset
+            .min(self.state.view_presets.len().saturating_sub(1));
+        self.status = format!("Deleted view preset '{}'.", removed.name);
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(removed)
+    }
+
+    pub fn rename_view_preset(&mut self, index: usize, name: String) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("view preset name must not be empty".to_string());
+        }
+        if self
+            .state
+            .view_presets
+            .iter()
+            .enumerate()
+            .any(|(candidate, preset)| candidate != index && preset.name == name)
+        {
+            return Err(format!("a view preset named '{name}' already exists"));
+        }
+        let Some(preset) = self.state.view_presets.get_mut(index) else {
+            return Err(format!("view preset index {index} is out of range"));
+        };
+        if preset.name == name {
+            return Ok(());
+        }
+        preset.name = name.to_string();
+        self.selected_view_preset = index;
+        self.status = format!("Renamed view preset to '{name}'.");
+        self.config_generation = self.config_generation.wrapping_add(1);
+        Ok(())
     }
 
     pub fn set_view_preset_draft(&mut self, spec: ProjectViewSpec) {
@@ -1122,7 +1404,7 @@ impl ProjectSpace {
             .unwrap_or_else(|| PathBuf::from(file_name))
     }
 
-    fn export_samplesheet_csv(&mut self, path: &Path) -> anyhow::Result<()> {
+    pub fn export_samplesheet_csv(&mut self, path: &Path) -> anyhow::Result<()> {
         let mut meta_columns = BTreeSet::new();
         let mut rows = Vec::new();
         let mut skipped_non_local = 0usize;
@@ -2491,7 +2773,7 @@ impl ProjectSpace {
         }
     }
 
-    fn import_rois_from_csv(&mut self, path: &Path) -> anyhow::Result<()> {
+    pub fn import_rois_from_csv(&mut self, path: &Path) -> anyhow::Result<()> {
         let sheet = load_samplesheet_csv(path)?;
         let base_dir = path.parent();
         self.config.rois.clear();
@@ -2583,7 +2865,7 @@ impl ProjectSpace {
         }
     }
 
-    fn import_rois_from_root(&mut self, root: &Path) -> anyhow::Result<()> {
+    pub fn import_rois_from_root(&mut self, root: &Path) -> anyhow::Result<()> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         if !root.is_dir() {
             anyhow::bail!("not a directory: {}", root.to_string_lossy());
@@ -3535,6 +3817,66 @@ mod tests {
         assert_eq!(request.roi.as_deref(), Some("ROI-1"));
         assert_eq!(request.channel.as_deref(), Some("DAPI"));
         assert_eq!(request.visible_channels, vec!["DAPI"]);
+
+        project
+            .rename_view_preset(0, "Nuclear review".to_string())
+            .expect("rename view preset");
+        assert_eq!(project.view_presets()[0].name, "Nuclear review");
+        assert!(
+            project
+                .rename_view_preset(1, "Missing".to_string())
+                .is_err()
+        );
+        let removed = project.delete_view_preset(0).expect("delete view preset");
+        assert_eq!(removed.name, "Nuclear review");
+        assert!(project.view_presets().is_empty());
+    }
+
+    #[test]
+    fn roi_crud_order_selection_and_focus_use_stable_ids() {
+        let mut project = ProjectSpace::default();
+        for (id, path) in [("ROI-A", "/tmp/a.ome.zarr"), ("ROI-B", "/tmp/b.ome.zarr")] {
+            let mut roi = ProjectRoi {
+                id: id.to_string(),
+                display_name: Some(id.to_string()),
+                ..Default::default()
+            };
+            roi.set_dataset_source(DatasetSource::Local(PathBuf::from(path)));
+            project.add_roi_record(roi).expect("add ROI");
+        }
+        assert_eq!(project.roi_index_by_id("ROI-B"), Ok(1));
+        assert!(
+            project
+                .select_roi_ids(&["ROI-A".to_string()], "replace")
+                .is_ok()
+        );
+        assert_eq!(
+            project
+                .selected_rois()
+                .into_iter()
+                .map(|roi| roi.id)
+                .collect::<Vec<_>>(),
+            vec!["ROI-A"]
+        );
+        project.step_focused_roi(1, true).expect("step focused ROI");
+        assert_eq!(
+            project.focused_roi().map(|roi| roi.id.as_str()),
+            Some("ROI-B")
+        );
+        project
+            .reorder_rois(&["ROI-B".to_string(), "ROI-A".to_string()])
+            .expect("reorder ROIs");
+        assert_eq!(project.rois()[0].id, "ROI-B");
+
+        let mut replacement = project.rois()[0].clone();
+        replacement.id = "ROI-C".to_string();
+        project
+            .update_roi_record("ROI-B", replacement)
+            .expect("update ROI");
+        assert_eq!(project.rois()[0].id, "ROI-C");
+        let removed = project.remove_roi_by_id("ROI-C").expect("remove ROI");
+        assert_eq!(removed.id, "ROI-C");
+        assert_eq!(project.rois().len(), 1);
     }
 
     #[test]

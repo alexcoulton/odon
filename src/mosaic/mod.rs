@@ -206,6 +206,8 @@ pub struct MosaicViewerApp {
     mosaic_bounds: egui::Rect,
 
     focused_core_id: Option<usize>,
+    selected_core_ids: HashSet<usize>,
+    pending_object_load_ids: HashSet<usize>,
 
     abs_max: f32,
     channels: Vec<GlobalChannel>,
@@ -1073,6 +1075,270 @@ impl MosaicViewerApp {
         self.control_get_channel_contrast(&serde_json::json!({"index": idx}))
     }
 
+    pub fn control_set_channel_color(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(values) = params
+            .get("color_rgb")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return serde_json::json!({"error": "set_channel_color requires color_rgb"});
+        };
+        let color = values
+            .iter()
+            .map(serde_json::Value::as_u64)
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| {
+                (values.len() == 3 && values.iter().all(|value| *value <= 255))
+                    .then(|| [values[0] as u8, values[1] as u8, values[2] as u8])
+            });
+        let Some(color) = color else {
+            return serde_json::json!({"error": "color_rgb must contain three integers from 0 to 255"});
+        };
+        let Some(channel) = self.channels.get_mut(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let changed = channel.color_rgb != color;
+        channel.color_rgb = color;
+        serde_json::json!({
+            "changed": changed,
+            "channel": self.control_channel_snapshot()[idx].clone(),
+        })
+    }
+
+    pub fn control_set_channel_note(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(note) = params.get("note").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "set_channel_note requires note"});
+        };
+        let Some(channel) = self.channels.get_mut(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let changed = channel.note != note;
+        channel.note = note.to_string();
+        serde_json::json!({
+            "changed": changed,
+            "channel": self.control_channel_snapshot()[idx].clone(),
+        })
+    }
+
+    fn control_native_layer_kind(id: MosaicLayerId) -> &'static str {
+        match id {
+            MosaicLayerId::TextLabels => "text_labels",
+            MosaicLayerId::SegmentationGeoJson => "segmentation_geojson",
+            MosaicLayerId::Annotation(_) => "annotation",
+            MosaicLayerId::Channel(_) => "channel",
+        }
+    }
+
+    fn control_native_layer_snapshot(
+        &self,
+        id: MosaicLayerId,
+        stack: &str,
+        order: usize,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "layer_id": Self::layer_id_storage_key(id),
+            "kind": Self::control_native_layer_kind(id),
+            "name": self.layer_display_name(id),
+            "stack": stack,
+            "order": order,
+            "active": self.active_layer == id,
+            "visible": self.layer_visible_value(id).unwrap_or(false),
+            "available": self.layer_available(id),
+            "offset_world": serde_json::Value::Null,
+        })
+    }
+
+    pub fn control_native_layer_snapshot_list(&self) -> serde_json::Value {
+        let mut layers = self
+            .channel_layer_order
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(order, idx)| {
+                self.control_native_layer_snapshot(MosaicLayerId::Channel(idx), "channels", order)
+            })
+            .collect::<Vec<_>>();
+        layers.extend(
+            self.overlay_layer_order
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(order, id)| self.control_native_layer_snapshot(id, "overlays", order)),
+        );
+        serde_json::Value::Array(layers)
+    }
+
+    fn control_native_layer_id_from_params(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<MosaicLayerId, String> {
+        let Some(raw) = params
+            .get("layer_id")
+            .or_else(|| params.get("id"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Err("layer_id is required".to_string());
+        };
+        let Some(id) = self.parse_layer_id_storage_key(raw) else {
+            return Err(format!("unknown native layer '{raw}'"));
+        };
+        let exists = match id {
+            MosaicLayerId::Channel(idx) => self.channel_layer_order.contains(&idx),
+            _ => self.overlay_layer_order.contains(&id),
+        };
+        exists
+            .then_some(id)
+            .ok_or_else(|| format!("native layer '{raw}' is not loaded"))
+    }
+
+    pub fn control_get_native_layer(&self, params: &serde_json::Value) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let (stack, order) = match id {
+            MosaicLayerId::Channel(idx) => (
+                "channels",
+                self.channel_layer_order
+                    .iter()
+                    .position(|candidate| *candidate == idx)
+                    .unwrap_or_default(),
+            ),
+            _ => (
+                "overlays",
+                self.overlay_layer_order
+                    .iter()
+                    .position(|candidate| *candidate == id)
+                    .unwrap_or_default(),
+            ),
+        };
+        self.control_native_layer_snapshot(id, stack, order)
+    }
+
+    pub fn control_set_active_native_layer(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        if !self.layer_available(id) {
+            return serde_json::json!({"error": "native layer is not currently available"});
+        }
+        let changed = self.active_layer != id;
+        self.set_active_layer(id);
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_set_native_layer_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(visible) = params.get("visible").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "visible is required"});
+        };
+        let changed = self.layer_visible_value(id) != Some(visible);
+        self.set_layer_visible(id, visible);
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_set_native_layer_order(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(stack) = params.get("stack").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "stack is required"});
+        };
+        let Some(values) = params.get("layers").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "layers is required"});
+        };
+        let parsed = values
+            .iter()
+            .map(|value| {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "layer IDs must be strings".to_string())?;
+                self.parse_layer_id_storage_key(raw)
+                    .ok_or_else(|| format!("unknown native layer '{raw}'"))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut unique = parsed.clone();
+        unique.sort_by_key(|id| Self::layer_id_storage_key(*id));
+        unique.dedup();
+        if unique.len() != parsed.len() {
+            return serde_json::json!({"error": "layers must not contain duplicates"});
+        }
+        let changed = match stack {
+            "channels" => {
+                let indices = parsed
+                    .iter()
+                    .map(|id| match id {
+                        MosaicLayerId::Channel(idx) => Ok(*idx),
+                        _ => Err("channels stack accepts only channel layers"),
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let indices = match indices {
+                    Ok(indices) => indices,
+                    Err(error) => return serde_json::json!({"error": error}),
+                };
+                if indices.len() != self.channel_layer_order.len()
+                    || !self
+                        .channel_layer_order
+                        .iter()
+                        .all(|idx| indices.contains(idx))
+                {
+                    return serde_json::json!({"error": "channels must contain every loaded channel exactly once"});
+                }
+                let changed = self.channel_layer_order != indices;
+                self.channel_layer_order = indices;
+                changed
+            }
+            "overlays" => {
+                if parsed.len() != self.overlay_layer_order.len()
+                    || !self
+                        .overlay_layer_order
+                        .iter()
+                        .all(|id| parsed.contains(id))
+                    || parsed
+                        .iter()
+                        .any(|id| matches!(id, MosaicLayerId::Channel(_)))
+                {
+                    return serde_json::json!({"error": "layers must contain every loaded overlay exactly once"});
+                }
+                let changed = self.overlay_layer_order != parsed;
+                self.overlay_layer_order = parsed;
+                changed
+            }
+            _ => return serde_json::json!({"error": "stack must be 'channels' or 'overlays'"}),
+        };
+        serde_json::json!({
+            "changed": changed,
+            "layers": self.control_native_layer_snapshot_list(),
+        })
+    }
+
     pub fn control_get_object_overlay_visibility(
         &self,
         params: &serde_json::Value,
@@ -1167,6 +1433,41 @@ impl MosaicViewerApp {
             "sort": self.channel_sort_mode.storage_key(),
             "order": self.control_channel_order_snapshot(),
         })
+    }
+
+    pub fn control_channel_presentation_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "search": self.channel_list_search,
+            "sort": self.channel_sort_mode.storage_key(),
+            "order": self.control_channel_order_snapshot(),
+        })
+    }
+
+    pub fn control_set_channel_presentation(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let search = match params.get("search") {
+            Some(value) => match value.as_str() {
+                Some(value) => Some(value.to_string()),
+                None => return serde_json::json!({"error": "search must be a string"}),
+            },
+            None => None,
+        };
+        let sort = match params.get("sort") {
+            Some(value) => match value.as_str().and_then(ChannelSortMode::from_storage_key) {
+                Some(value) => Some(value),
+                None => return serde_json::json!({"error": "unknown channel sort mode"}),
+            },
+            None => None,
+        };
+        if let Some(search) = search {
+            self.channel_list_search = search;
+        }
+        if let Some(sort) = sort {
+            self.channel_sort_mode = sort;
+        }
+        self.control_channel_presentation_json()
     }
 
     pub fn control_channel_groups_snapshot(&self) -> serde_json::Value {
@@ -1467,9 +1768,7 @@ impl MosaicViewerApp {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .collect::<Vec<_>>();
-            if !columns.is_empty() {
-                self.label_columns = columns;
-            }
+            self.label_columns = columns;
         }
         self.apply_sort_and_layout();
         if params
@@ -1488,6 +1787,7 @@ impl MosaicViewerApp {
             "sort_by_secondary": self.sort_by_secondary,
             "layout": self.layout_mode.storage_key(),
             "columns": self.grid_cols,
+            "group_gap": self.group_gap,
             "show_group_labels": self.show_group_labels,
             "show_text_labels": self.show_text_labels,
             "label_columns": self.label_columns,
@@ -1594,6 +1894,425 @@ impl MosaicViewerApp {
                     .find(|item| item.id == id)
                     .map(|item| item.sample_id.clone())
             }),
+        })
+    }
+
+    pub fn control_focus_snapshot(&self) -> serde_json::Value {
+        self.focused_core_id
+            .and_then(|id| {
+                self.items
+                    .iter()
+                    .position(|item| item.id == id)
+                    .map(|index| {
+                        let item = &self.items[index];
+                        serde_json::json!({
+                            "index": index,
+                            "id": item.id,
+                            "roi_id": item.sample_id,
+                            "metadata": item.meta,
+                        })
+                    })
+            })
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    pub fn control_mosaic_snapshot(&self) -> serde_json::Value {
+        let unresolved_layout_fields = [self.group_by.as_str(), self.sort_by.as_str()]
+            .into_iter()
+            .chain(
+                self.sort_secondary_enabled
+                    .then_some(self.sort_by_secondary.as_str()),
+            )
+            .chain(self.label_columns.iter().map(String::as_str))
+            .filter(|field| {
+                !field.is_empty()
+                    && *field != "id"
+                    && !self.metadata_columns.iter().any(|column| column == field)
+            })
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        serde_json::json!({
+            "roi_count": self.items.len(),
+            "focused": self.control_focus_snapshot(),
+            "selection": self.control_selection_snapshot(),
+            "metadata_columns": self.metadata_columns,
+            "mosaic_bounds": {
+                "min": [self.mosaic_bounds.min.x, self.mosaic_bounds.min.y],
+                "max": [self.mosaic_bounds.max.x, self.mosaic_bounds.max.y],
+            },
+            "layout": {
+                "group_by": self.group_by,
+                "sort_by": self.sort_by,
+                "sort_secondary_enabled": self.sort_secondary_enabled,
+                "sort_by_secondary": self.sort_by_secondary,
+                "layout": self.layout_mode.storage_key(),
+                "columns": self.grid_cols,
+                "group_gap": self.group_gap,
+                "show_group_labels": self.show_group_labels,
+                "show_text_labels": self.show_text_labels,
+                "label_columns": self.label_columns,
+                "unresolved_fields": unresolved_layout_fields,
+            },
+            "rois": self.items.iter().enumerate().map(|(index, item)| serde_json::json!({
+                "index": index,
+                "id": item.id,
+                "roi_id": item.sample_id,
+                "metadata": item.meta,
+                "focused": self.focused_core_id == Some(item.id),
+                "selected": self.selected_core_ids.contains(&item.id),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    pub fn control_list_items(&self, params: &serde_json::Value) -> serde_json::Value {
+        let offset = params
+            .get("offset")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(200) as usize;
+        let total = self.items.len();
+        let items = self
+            .items
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(limit)
+            .map(|(index, item)| {
+                let bounds = item_rect(item);
+                serde_json::json!({
+                    "index": index,
+                    "id": item.id,
+                    "roi_id": item.sample_id,
+                    "metadata": item.meta,
+                    "source": item.dataset.source,
+                    "offset_world": [item.offset.x, item.offset.y],
+                    "scale": item.scale,
+                    "placed_size": [item.placed_size.x, item.placed_size.y],
+                    "bounds_world": {
+                        "min": [bounds.min.x, bounds.min.y],
+                        "max": [bounds.max.x, bounds.max.y],
+                    },
+                    "focused": self.focused_core_id == Some(item.id),
+                    "selected": self.selected_core_ids.contains(&item.id),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset.saturating_add(items.len()) < total,
+            "items": items,
+        })
+    }
+
+    pub fn control_selection_snapshot(&self) -> serde_json::Value {
+        let selected = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| self.selected_core_ids.contains(&item.id))
+            .map(|(index, item)| {
+                serde_json::json!({"index": index, "id": item.id, "roi_id": item.sample_id})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"count": selected.len(), "selected": selected})
+    }
+
+    fn control_item_id_for_roi(&self, roi_id: &str) -> Result<usize, String> {
+        let matches = self
+            .items
+            .iter()
+            .filter(|item| item.sample_id == roi_id)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [id] => Ok(*id),
+            [] => Err(format!("mosaic ROI '{roi_id}' was not found")),
+            _ => Err(format!("mosaic ROI '{roi_id}' is ambiguous")),
+        }
+    }
+
+    pub fn control_select_rois(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("replace");
+        let requested = params
+            .get("ids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|roi_id| self.control_item_id_for_roi(roi_id))
+            .collect::<Result<HashSet<_>, _>>();
+        let requested = match requested {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        match mode {
+            "replace" => self.selected_core_ids = requested,
+            "add" => self.selected_core_ids.extend(requested),
+            "remove" => self.selected_core_ids.retain(|id| !requested.contains(id)),
+            "toggle" => {
+                for id in requested {
+                    if !self.selected_core_ids.insert(id) {
+                        self.selected_core_ids.remove(&id);
+                    }
+                }
+            }
+            "all" => self.selected_core_ids = self.items.iter().map(|item| item.id).collect(),
+            "range" => {
+                let Some(start) = params.get("start").and_then(serde_json::Value::as_str) else {
+                    return serde_json::json!({"error": "range selection requires start and end"});
+                };
+                let Some(end) = params.get("end").and_then(serde_json::Value::as_str) else {
+                    return serde_json::json!({"error": "range selection requires start and end"});
+                };
+                let start_id = match self.control_item_id_for_roi(start) {
+                    Ok(id) => id,
+                    Err(error) => return serde_json::json!({"error": error}),
+                };
+                let end_id = match self.control_item_id_for_roi(end) {
+                    Ok(id) => id,
+                    Err(error) => return serde_json::json!({"error": error}),
+                };
+                let start_index = self
+                    .items
+                    .iter()
+                    .position(|item| item.id == start_id)
+                    .unwrap();
+                let end_index = self
+                    .items
+                    .iter()
+                    .position(|item| item.id == end_id)
+                    .unwrap();
+                let (lo, hi) = if start_index <= end_index {
+                    (start_index, end_index)
+                } else {
+                    (end_index, start_index)
+                };
+                self.selected_core_ids = self.items[lo..=hi].iter().map(|item| item.id).collect();
+            }
+            _ => return serde_json::json!({"error": "unknown mosaic selection mode"}),
+        }
+        self.control_selection_snapshot()
+    }
+
+    pub fn control_clear_selection(&mut self) -> serde_json::Value {
+        self.selected_core_ids.clear();
+        self.control_selection_snapshot()
+    }
+
+    pub fn control_clear_focus(&mut self) -> serde_json::Value {
+        let changed = self.focused_core_id.take().is_some();
+        serde_json::json!({"changed": changed, "focused": null})
+    }
+
+    pub fn control_fit_all(&mut self) -> serde_json::Value {
+        let Some(viewport) = self.last_canvas_rect else {
+            return serde_json::json!({"error": "No canvas viewport is available yet."});
+        };
+        self.camera.fit_to_world_rect(viewport, self.mosaic_bounds);
+        serde_json::json!({"camera": self.control_camera_snapshot()})
+    }
+
+    pub fn control_set_focused_roi(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let index = if let Some(index) = params
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .map(|index| index as usize)
+        {
+            if index >= self.items.len() {
+                return serde_json::json!({"error": format!("mosaic ROI index {index} is out of range")});
+            }
+            index
+        } else if let Some(roi_id) = params
+            .get("roi_id")
+            .or_else(|| params.get("id"))
+            .and_then(serde_json::Value::as_str)
+        {
+            let matches = self
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.sample_id == roi_id)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [index] => *index,
+                [] => {
+                    return serde_json::json!({"error": format!("mosaic ROI '{roi_id}' was not found")});
+                }
+                _ => {
+                    return serde_json::json!({"error": format!("mosaic ROI '{roi_id}' is ambiguous")});
+                }
+            }
+        } else {
+            return serde_json::json!({"error": "provide index or roi_id"});
+        };
+        let before = self.focused_core_id;
+        self.focused_core_id = Some(self.items[index].id);
+        if params
+            .get("fit")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+            && let Some(viewport) = self.last_canvas_rect
+        {
+            self.camera
+                .fit_to_world_rect(viewport, item_rect(&self.items[index]));
+        }
+        serde_json::json!({
+            "changed": before != self.focused_core_id,
+            "focused": self.control_focus_snapshot(),
+        })
+    }
+
+    pub fn control_step_focused_roi(
+        &mut self,
+        params: &serde_json::Value,
+        forward: bool,
+    ) -> serde_json::Value {
+        if self.items.is_empty() {
+            return serde_json::json!({"error": "mosaic has no ROIs"});
+        }
+        let step = params
+            .get("step")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1) as usize;
+        let wrap = params
+            .get("wrap")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let current = self
+            .focused_core_id
+            .and_then(|id| self.items.iter().position(|item| item.id == id))
+            .unwrap_or_default();
+        let index = if wrap {
+            let offset = step % self.items.len();
+            if forward {
+                (current + offset) % self.items.len()
+            } else {
+                (current + self.items.len() - offset) % self.items.len()
+            }
+        } else if forward {
+            current.saturating_add(step).min(self.items.len() - 1)
+        } else {
+            current.saturating_sub(step)
+        };
+        self.control_set_focused_roi(&serde_json::json!({
+            "index": index,
+            "fit": params.get("fit").and_then(serde_json::Value::as_bool).unwrap_or(true),
+        }))
+    }
+
+    pub fn control_fit_focused_roi(&mut self) -> serde_json::Value {
+        let Some(id) = self.focused_core_id else {
+            return serde_json::json!({"error": "mosaic has no focused ROI"});
+        };
+        let Some(item) = self.items.iter().find(|item| item.id == id) else {
+            return serde_json::json!({"error": "focused mosaic ROI is not loaded"});
+        };
+        let Some(viewport) = self.last_canvas_rect else {
+            return serde_json::json!({"error": "No canvas viewport is available yet."});
+        };
+        self.camera.fit_to_world_rect(viewport, item_rect(item));
+        serde_json::json!({
+            "focused": self.control_focus_snapshot(),
+            "camera": self.control_camera_snapshot(),
+        })
+    }
+
+    pub fn control_object_loading_snapshot(&self) -> serde_json::Value {
+        let items = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let mut snapshot = self.seg_geojson.control_item_snapshot(item.id);
+                if let Some(object) = snapshot.as_object_mut() {
+                    object.insert("index".to_string(), serde_json::json!(index));
+                    object.insert("roi_id".to_string(), serde_json::json!(item.sample_id));
+                    object.insert(
+                        "selected".to_string(),
+                        serde_json::json!(self.selected_core_ids.contains(&item.id)),
+                    );
+                    object.insert(
+                        "requested".to_string(),
+                        serde_json::json!(self.pending_object_load_ids.contains(&item.id)),
+                    );
+                }
+                snapshot
+            })
+            .collect::<Vec<_>>();
+        let requested_count = self.pending_object_load_ids.len();
+        let requested_loading = self
+            .pending_object_load_ids
+            .iter()
+            .filter(|item_id| {
+                self.seg_geojson
+                    .control_item_snapshot(**item_id)
+                    .get("loading_data")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .count();
+        serde_json::json!({
+            "overlay": self.seg_geojson.control_loading_snapshot(),
+            "requested_count": requested_count,
+            "requested_loading": requested_loading,
+            "settled": requested_count == 0,
+            "items": items,
+        })
+    }
+
+    pub fn control_fast_object_rendering_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({"enabled": self.seg_geojson.fast_rendering})
+    }
+
+    pub fn control_load_selected_objects(&mut self) -> serde_json::Value {
+        if self.selected_core_ids.is_empty() {
+            return serde_json::json!({"error": "Select at least one mosaic ROI first."});
+        }
+        let mut requested = Vec::new();
+        let mut unavailable = Vec::new();
+        for item in &self.items {
+            if !self.selected_core_ids.contains(&item.id) {
+                continue;
+            }
+            if self.seg_geojson.item_has_segmentation(item.id) {
+                self.pending_object_load_ids.insert(item.id);
+                requested.push(item.sample_id.clone());
+            } else {
+                unavailable.push(item.sample_id.clone());
+            }
+        }
+        if requested.is_empty() {
+            return serde_json::json!({
+                "error": "None of the selected mosaic ROIs has an object segmentation source.",
+                "unavailable": unavailable,
+            });
+        }
+        self.seg_geojson.visible = true;
+        serde_json::json!({
+            "queued": true,
+            "requested": requested,
+            "unavailable": unavailable,
+            "state": self.control_object_loading_snapshot(),
+        })
+    }
+
+    pub fn control_cancel_object_load(&mut self) -> serde_json::Value {
+        let cancelled_requests = self.pending_object_load_ids.len();
+        self.pending_object_load_ids.clear();
+        serde_json::json!({
+            "cancelled_requests": cancelled_requests,
+            "in_flight_cancelled": false,
+            "note": "Queued scheduling was cancelled; an object layer already reading from disk is allowed to finish.",
+            "state": self.control_object_loading_snapshot(),
         })
     }
 
@@ -1747,6 +2466,66 @@ impl MosaicViewerApp {
         self.screenshot_settings_open = true;
     }
 
+    pub fn control_screenshot_settings_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "output_dir": self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            "include_scale_bar": false,
+            "include_legend": self.screenshot_settings.include_legend,
+            "scale_bar_scale": self.screenshot_settings.scale_bar_scale,
+            "legend_scale": self.screenshot_settings.legend_scale,
+            "pending": self.screenshot_pending.is_some(),
+            "in_flight": self.screenshot_in_flight.is_some(),
+            "default_filename": self.default_screenshot_filename(),
+        })
+    }
+
+    pub fn control_set_screenshot_settings_json(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let output_dir = match params.get("output_dir") {
+            Some(serde_json::Value::Null) => Some(None),
+            Some(value) => {
+                let Some(path) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                else {
+                    return serde_json::json!({"error": "output_dir must be a path string or null"});
+                };
+                let path = PathBuf::from(path);
+                if !path.is_dir() {
+                    return serde_json::json!({"error": format!("screenshot output directory does not exist: {}", path.to_string_lossy())});
+                }
+                Some(Some(path))
+            }
+            None => None,
+        };
+        if let Some(value) = params
+            .get("legend_scale")
+            .and_then(serde_json::Value::as_f64)
+            && (!value.is_finite() || !(0.5..=3.0).contains(&value))
+        {
+            return serde_json::json!({"error": "legend_scale must be finite and between 0.5 and 3.0"});
+        }
+        if let Some(output_dir) = output_dir {
+            self.screenshot_output_dir = output_dir;
+        }
+        if let Some(value) = params
+            .get("include_legend")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.screenshot_settings.include_legend = value;
+        }
+        if let Some(value) = params
+            .get("legend_scale")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.screenshot_settings.legend_scale = value as f32;
+        }
+        self.control_screenshot_settings_json()
+    }
+
     pub fn set_fast_object_rendering(&mut self, enabled: bool) {
         self.seg_geojson.set_fast_object_rendering(enabled);
     }
@@ -1806,6 +2585,224 @@ impl MosaicViewerApp {
         }
         self.close_dialog_open = true;
         false
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.project_space.has_unsaved_changes()
+    }
+
+    fn control_memory_channels(&self, params: &serde_json::Value) -> Result<Vec<u64>, String> {
+        let Some(values) = params.get("channels") else {
+            return Ok(self.selected_memory_global_channels());
+        };
+        let Some(values) = values.as_array() else {
+            return Err("channels must be an array".to_string());
+        };
+        let mut channels = Vec::new();
+        for value in values {
+            let index =
+                if let Some(index) = value.as_u64().and_then(|value| usize::try_from(value).ok()) {
+                    (index < self.channels.len()).then_some(index)
+                } else if let Some(name) = value.as_str() {
+                    self.channels
+                        .iter()
+                        .position(|channel| channel.name == name)
+                } else {
+                    None
+                };
+            let Some(index) = index else {
+                return Err(format!("unknown mosaic channel selector: {value}"));
+            };
+            if !channels.contains(&(index as u64)) {
+                channels.push(index as u64);
+            }
+        }
+        Ok(channels)
+    }
+
+    fn control_memory_dataset_ids(&self, params: &serde_json::Value) -> Result<Vec<usize>, String> {
+        match params
+            .get("scope")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("focused")
+        {
+            "all" => Ok(self.items.iter().map(|item| item.id).collect()),
+            "focused" => self
+                .focused_core_id
+                .map(|id| vec![id])
+                .ok_or_else(|| "mosaic has no focused ROI".to_string()),
+            "item" => {
+                let value = params
+                    .get("item")
+                    .ok_or_else(|| "item is required when scope is item".to_string())?;
+                let id = if let Some(id) =
+                    value.as_u64().and_then(|value| usize::try_from(value).ok())
+                {
+                    self.items.iter().any(|item| item.id == id).then_some(id)
+                } else if let Some(sample_id) = value.as_str() {
+                    self.items
+                        .iter()
+                        .find(|item| item.sample_id == sample_id)
+                        .map(|item| item.id)
+                } else {
+                    None
+                };
+                id.map(|id| vec![id])
+                    .ok_or_else(|| format!("unknown mosaic item selector: {value}"))
+            }
+            value => Err(format!(
+                "unknown memory scope '{value}'; use focused, item, or all"
+            )),
+        }
+    }
+
+    pub fn control_memory_json(&mut self) -> serde_json::Value {
+        self.refresh_system_memory_if_needed();
+        let selected_channels = self.selected_memory_global_channels();
+        let items = self.items.iter().map(|item| {
+            let levels = self.sources.get(item.id).map(|source| source.levels.iter().enumerate().map(|(level, source_level)| {
+                let estimate = estimate_level_ram_bytes_for_channels(source, level, Some(&selected_channels));
+                let (status, bytes, channels_loaded, error) = match self.pinned_levels.status(item.id, level) {
+                    MosaicPinnedLevelStatus::Unloaded => ("unloaded", None, None, None),
+                    MosaicPinnedLevelStatus::Loading => ("loading", None, None, None),
+                    MosaicPinnedLevelStatus::Loaded { bytes, channels_loaded } => ("loaded", Some(bytes), Some(channels_loaded), None),
+                    MosaicPinnedLevelStatus::Failed(error) => ("failed", None, None, Some(error)),
+                };
+                serde_json::json!({
+                    "level": level,
+                    "shape": source_level.shape,
+                    "selected_channel_estimate_bytes": estimate,
+                    "status": status,
+                    "loaded_bytes": bytes,
+                    "channels_loaded": channels_loaded,
+                    "error": error,
+                })
+            }).collect::<Vec<_>>()).unwrap_or_default();
+            serde_json::json!({"id": item.id, "sample_id": item.sample_id, "focused": self.focused_core_id == Some(item.id), "levels": levels})
+        }).collect::<Vec<_>>();
+        serde_json::json!({
+            "mode": "mosaic",
+            "running": self.pinned_levels.has_loading(),
+            "status": self.status,
+            "pinned_bytes": self.pinned_levels.total_loaded_bytes(),
+            "system": self.system_memory.as_ref().map(|memory| serde_json::json!({"total_bytes": memory.total_bytes, "available_bytes": memory.available_bytes})),
+            "selected_channels": selected_channels,
+            "items": items,
+        })
+    }
+
+    pub fn control_pin_memory(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(level) = params
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+        else {
+            return serde_json::json!({"error": "memory level is required"});
+        };
+        let channels = match self.control_memory_channels(params) {
+            Ok(channels) if !channels.is_empty() => channels,
+            Ok(_) => return serde_json::json!({"error": "select at least one channel to pin"}),
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let dataset_ids = match self.control_memory_dataset_ids(params) {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut requests = Vec::new();
+        let mut estimated_bytes = 0u64;
+        for dataset_id in dataset_ids {
+            let Some(source) = self.sources.get(dataset_id).cloned() else {
+                continue;
+            };
+            let Some((request, estimate)) =
+                self.memory_load_request_for_dataset(dataset_id, source, level, &channels)
+            else {
+                continue;
+            };
+            estimated_bytes = estimated_bytes.saturating_add(estimate);
+            requests.push(request);
+        }
+        if requests.is_empty() {
+            return serde_json::json!({"error": "the requested level and channels are unavailable for the selected mosaic scope"});
+        }
+        self.refresh_system_memory_if_needed();
+        let force = params
+            .get("force")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Some(risk) = self.memory_risk(estimated_bytes)
+            && !force
+        {
+            return serde_json::json!({
+                "confirmation_required": true,
+                "level": level,
+                "requested_bytes": risk.requested_bytes,
+                "projected_bytes": risk.projected_bytes,
+                "available_bytes": risk.available_bytes,
+                "risk": match risk.level { MemoryRiskLevel::Warning => "warning", MemoryRiskLevel::Danger => "danger" },
+            });
+        }
+        self.memory_selected_channels = channels
+            .iter()
+            .filter_map(|value| usize::try_from(*value).ok())
+            .collect();
+        let request_count = requests.len();
+        self.execute_memory_load(
+            format!(
+                "Loading {} channel(s) from level {level} into RAM for {request_count} ROI(s)",
+                channels.len()
+            ),
+            requests,
+        );
+        serde_json::json!({"started": true, "level": level, "items": request_count, "estimated_bytes": estimated_bytes})
+    }
+
+    pub fn control_unpin_memory(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(level) = params
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+        else {
+            return serde_json::json!({"error": "memory level is required"});
+        };
+        let dataset_ids = match self.control_memory_dataset_ids(params) {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut unloaded = 0usize;
+        for dataset_id in dataset_ids {
+            if !matches!(
+                self.pinned_levels.status(dataset_id, level),
+                MosaicPinnedLevelStatus::Unloaded
+            ) {
+                unloaded += 1;
+                self.pinned_levels.unload(dataset_id, level);
+            }
+        }
+        self.status = format!("Unloaded level {level} from {unloaded} ROI(s)");
+        serde_json::json!({"unloaded_items": unloaded, "level": level})
+    }
+
+    pub fn control_unpin_all_memory(&mut self) -> serde_json::Value {
+        let mut unloaded = 0usize;
+        for item in &self.items {
+            let level_count = self
+                .sources
+                .get(item.id)
+                .map(|source| source.levels.len())
+                .unwrap_or(0);
+            for level in 0..level_count {
+                if !matches!(
+                    self.pinned_levels.status(item.id, level),
+                    MosaicPinnedLevelStatus::Unloaded
+                ) {
+                    unloaded += 1;
+                    self.pinned_levels.unload(item.id, level);
+                }
+            }
+        }
+        self.status = format!("Unloaded {unloaded} pinned mosaic level(s) from RAM");
+        serde_json::json!({"unloaded_item_levels": unloaded})
     }
 
     pub fn from_args(
@@ -1975,6 +2972,8 @@ impl MosaicViewerApp {
             last_canvas_rect: None,
             mosaic_bounds,
             focused_core_id,
+            selected_core_ids: focused_core_id.into_iter().collect(),
+            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,
@@ -2201,6 +3200,8 @@ impl MosaicViewerApp {
             last_canvas_rect: None,
             mosaic_bounds,
             focused_core_id,
+            selected_core_ids: focused_core_id.into_iter().collect(),
+            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,
@@ -2460,6 +3461,8 @@ impl MosaicViewerApp {
             last_canvas_rect: None,
             mosaic_bounds,
             focused_core_id,
+            selected_core_ids: focused_core_id.into_iter().collect(),
+            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,
@@ -2739,6 +3742,8 @@ impl MosaicViewerApp {
             last_canvas_rect: None,
             mosaic_bounds,
             focused_core_id,
+            selected_core_ids: focused_core_id.into_iter().collect(),
+            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,
@@ -2955,6 +3960,8 @@ impl MosaicViewerApp {
             last_canvas_rect: None,
             mosaic_bounds,
             focused_core_id,
+            selected_core_ids: focused_core_id.into_iter().collect(),
+            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,
@@ -3039,6 +4046,8 @@ impl eframe::App for MosaicViewerApp {
         // viewport while progressively refining visible ROIs.
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
+        self.pending_object_load_ids
+            .retain(|item_id| !self.seg_geojson.item_load_settled(*item_id));
         self.drain_screenshots();
         for layer in &mut self.annotation_layers {
             if layer.tick() {
@@ -3191,6 +4200,7 @@ impl eframe::App for MosaicViewerApp {
         if self.tiles_gl.is_busy()
             || self.seg_geojson.is_busy()
             || self.seg_geojson_pending_visible
+            || !self.pending_object_load_ids.is_empty()
             || self.pinned_levels.has_loading()
             || self.screenshot_pending.is_some()
             || self.screenshot_in_flight.is_some()
@@ -5586,9 +6596,27 @@ impl MosaicViewerApp {
                                 visible_items.push((it.id, r, it.offset, it.scale));
                             }
                         }
+                        let mut load_items = visible_items.clone();
+                        for item in &self.items {
+                            if self.pending_object_load_ids.contains(&item.id)
+                                && !load_items.iter().any(|entry| entry.0 == item.id)
+                            {
+                                load_items.push((
+                                    item.id,
+                                    item_rect(item),
+                                    item.offset,
+                                    item.scale,
+                                ));
+                            }
+                        }
+                        let load_world = if self.pending_object_load_ids.is_empty() {
+                            visible_world
+                        } else {
+                            egui::Rect::EVERYTHING
+                        };
                         self.seg_geojson_pending_visible = self
                             .seg_geojson
-                            .ensure_visible_items_loading(&visible_items, visible_world);
+                            .ensure_visible_items_loading(&load_items, load_world);
                         let pending_gpu = self.seg_geojson.paint(
                             ui,
                             &self.camera,
@@ -6991,12 +8019,20 @@ mod layout_tests {
         );
         assert_eq!(mosaic.group_blocks.len(), 2);
 
-        mosaic.step_focused_core(&ctx, 1);
-        assert_eq!(mosaic.control_view_snapshot()["focused_roi"], "ROI-A");
-        mosaic.step_focused_core(&ctx, 1);
+        assert_eq!(mosaic.control_mosaic_snapshot()["roi_count"], 2);
+        let focused =
+            mosaic.control_set_focused_roi(&serde_json::json!({"roi_id": "ROI-A", "fit": false}));
+        assert_eq!(focused["focused"]["roi_id"], "ROI-A");
+        mosaic.control_step_focused_roi(&serde_json::json!({"step": 1, "wrap": true}), true);
         assert_eq!(
             mosaic.control_view_snapshot()["focused_roi"],
             "ROI-B",
+            "focus steps forward"
+        );
+        mosaic.control_step_focused_roi(&serde_json::json!({"step": 1, "wrap": true}), true);
+        assert_eq!(
+            mosaic.control_view_snapshot()["focused_roi"],
+            "ROI-A",
             "focus wraps"
         );
 

@@ -885,15 +885,17 @@ mod tests {
             .as_array()
             .expect("tools/list result array");
         let mut names = HashSet::new();
+        let mut canonical_names = HashSet::new();
 
         for tool in tools {
             let name = tool["name"].as_str().expect("tool name");
             assert!(names.insert(name), "duplicate MCP tool name: {name}");
+            let descriptor = crate::control::registry::method(name);
             assert!(
-                crate::control::registry::method(name)
-                    .is_some_and(|descriptor| descriptor.mcp_exposed),
+                descriptor.is_some_and(|descriptor| descriptor.mcp_exposed),
                 "MCP tool is missing from the control registry: {name}"
             );
+            canonical_names.insert(descriptor.expect("registered MCP tool").name);
             assert!(
                 tool["description"]
                     .as_str()
@@ -912,7 +914,7 @@ mod tests {
             .filter(|descriptor| descriptor.mcp_exposed)
         {
             assert!(
-                names.contains(descriptor.name),
+                canonical_names.contains(descriptor.name),
                 "control method marked for MCP has no tool schema: {}",
                 descriptor.name
             );

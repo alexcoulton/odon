@@ -46,11 +46,20 @@ class Events:
         callback: EventCallback | None = None,
     ) -> Mapping[str, Any]:
         patterns = (events,) if isinstance(events, str) else tuple(events)
-        result = self._client.call("events.subscribe", {"events": list(patterns)})
+        registration = (patterns, callback) if callback is not None else None
         if callback is not None:
+            assert registration is not None
             with self._lock:
-                self._callbacks.append((patterns, callback))
-        return result
+                self._callbacks.append(registration)
+        try:
+            return self._client.call("events.subscribe", {"events": list(patterns)})
+        except BaseException:
+            if registration is not None:
+                with self._lock:
+                    self._callbacks = [
+                        item for item in self._callbacks if item is not registration
+                    ]
+            raise
 
     def unsubscribe(self, events: str | Iterable[str] | None = None) -> Mapping[str, Any]:
         patterns = None if events is None else ((events,) if isinstance(events, str) else tuple(events))

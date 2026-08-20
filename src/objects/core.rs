@@ -49,13 +49,18 @@ impl ObjectsLayer {
         if let Some(rx) = self.load_rx.clone() {
             loop {
                 match rx.try_recv() {
-                    Ok(msg) => {
+                    Ok(Ok(msg)) => {
                         if msg.request_id != self.object_load_request_id {
                             continue;
                         }
                         self.load_rx = None;
                         self.object_load_cancel = None;
                         self.install_load_result(msg);
+                    }
+                    Ok(Err(error)) => {
+                        self.load_rx = None;
+                        self.object_load_cancel = None;
+                        self.status = format!("Object load failed: {error}");
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
@@ -1115,6 +1120,15 @@ impl ObjectsLayer {
         self.request_load(path, downsample_factor, None);
     }
 
+    pub fn cancel_load(&mut self) -> bool {
+        let was_loading = self.is_loading();
+        self.cancel_current_load();
+        if was_loading {
+            self.status = "Object load cancelled.".to_string();
+        }
+        was_loading
+    }
+
     pub fn install_preloaded(&mut self, preloaded: &PreloadedObjectLayer) {
         self.cancel_current_load();
         self.load_rx = None;
@@ -1133,7 +1147,7 @@ impl ObjectsLayer {
         let request_id = self.object_load_request_id;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = cancel.clone();
-        let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
         self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
@@ -1161,9 +1175,7 @@ impl ObjectsLayer {
                     msg.display_transform = display_transform;
                     msg
                 });
-                if let Ok(msg) = msg {
-                    let _ = tx.send(msg);
-                }
+                let _ = tx.send(msg.map_err(|error| error.to_string()));
             })
             .ok();
     }
@@ -1179,7 +1191,7 @@ impl ObjectsLayer {
         let request_id = self.object_load_request_id;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = cancel.clone();
-        let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
         self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
@@ -1189,11 +1201,9 @@ impl ObjectsLayer {
         std::thread::Builder::new()
             .name("seg-objects-spatialdata-loader".to_string())
             .spawn(move || {
-                if let Ok(msg) =
-                    load_spatialdata_in_thread(path, transform, request_id, &cancel_worker)
-                {
-                    let _ = tx.send(msg);
-                }
+                let msg = load_spatialdata_in_thread(path, transform, request_id, &cancel_worker)
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(msg);
             })
             .ok();
     }
@@ -1713,6 +1723,354 @@ impl ObjectsLayer {
         }
     }
 
+    pub fn control_state_snapshot_json(&mut self) -> serde_json::Value {
+        let display_mode = match self.display_mode {
+            ObjectDisplayMode::Polygons => "polygons",
+            ObjectDisplayMode::Points => "points",
+        };
+        let color_mode = match self.color_mode {
+            ObjectColorMode::Single => "single",
+            ObjectColorMode::ByProperty => "property",
+        };
+        let legend = self
+            .active_color_legend_entries()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "value": entry.value_label,
+                    "color_rgb": entry.color_rgb,
+                    "count": entry.count,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "source": self.loaded_geojson.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            "status": self.status,
+            "loaded": self.has_data(),
+            "busy": self.is_busy(),
+            "loading_data": self.is_loading(),
+            "loading_property": self.property_load_key,
+            "object_count": self.object_count(),
+            "filtered_count": self.filtered_count(),
+            "selection_count": self.selection_count(),
+            "display_mode": display_mode,
+            "downsample_factor": self.downsample_factor,
+            "style": {
+                "visible": self.visible,
+                "opacity": self.opacity,
+                "width_screen_px": self.width_screen_px,
+                "color_rgb": self.color_rgb,
+                "fill_cells": self.fill_cells,
+                "fill_opacity": self.fill_opacity,
+                "selected_fill_opacity": self.selected_fill_opacity,
+                "show_selection_overlay": self.show_selection_overlay,
+                "fast_rendering": self.fast_rendering,
+                "color_mode": color_mode,
+                "color_property": self.color_property_key,
+                "legend": legend,
+            },
+            "properties": {
+                "available_count": self.available_property_columns().len(),
+                "loaded": self.property_store.loaded_keys(),
+            },
+        })
+    }
+
+    pub fn control_style_snapshot_json(&mut self) -> serde_json::Value {
+        let color_mode = match self.color_mode {
+            ObjectColorMode::Single => "single",
+            ObjectColorMode::ByProperty => "property",
+        };
+        let legend = self
+            .active_color_legend_entries()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| {
+                let override_style = self.color_level_overrides.get(&entry.value_label);
+                serde_json::json!({
+                    "value": entry.value_label,
+                    "count": entry.count,
+                    "color_rgb": override_style
+                        .and_then(|style| style.color_rgb)
+                        .unwrap_or(entry.color_rgb),
+                    "visible": override_style.is_none_or(|style| style.visible),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "visible": self.visible,
+            "opacity": self.opacity,
+            "width_screen_px": self.width_screen_px,
+            "color_rgb": self.color_rgb,
+            "fill_cells": self.fill_cells,
+            "fill_opacity": self.fill_opacity,
+            "selected_fill_opacity": self.selected_fill_opacity,
+            "show_selection_overlay": self.show_selection_overlay,
+            "fast_rendering": self.fast_rendering,
+            "color_mode": color_mode,
+            "color_property": (self.color_mode == ObjectColorMode::ByProperty)
+                .then_some(self.color_property_key.as_str()),
+            "legend": legend,
+        })
+    }
+
+    pub fn control_set_style_json(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let mut changed = false;
+        macro_rules! set_bool {
+            ($field:ident, $name:literal) => {
+                if let Some(value) = params.get($name).and_then(serde_json::Value::as_bool) {
+                    changed |= self.$field != value;
+                    self.$field = value;
+                }
+            };
+        }
+        macro_rules! set_unit_f32 {
+            ($field:ident, $name:literal) => {
+                if let Some(value) = params.get($name).and_then(serde_json::Value::as_f64) {
+                    if !(0.0..=1.0).contains(&value) {
+                        return serde_json::json!({"error": format!("{} must be between 0 and 1", $name)});
+                    }
+                    let value = value as f32;
+                    changed |= self.$field != value;
+                    self.$field = value;
+                }
+            };
+        }
+        set_bool!(visible, "visible");
+        set_bool!(fill_cells, "fill_cells");
+        set_bool!(show_selection_overlay, "show_selection_overlay");
+        set_unit_f32!(opacity, "opacity");
+        set_unit_f32!(fill_opacity, "fill_opacity");
+        set_unit_f32!(selected_fill_opacity, "selected_fill_opacity");
+        if let Some(value) = params
+            .get("width_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            if !value.is_finite() || value <= 0.0 || value > 100.0 {
+                return serde_json::json!({"error": "width_screen_px must be greater than 0 and at most 100"});
+            }
+            let value = value as f32;
+            changed |= self.width_screen_px != value;
+            self.width_screen_px = value;
+        }
+        if let Some(values) = params
+            .get("color_rgb")
+            .and_then(serde_json::Value::as_array)
+        {
+            if values.len() != 3
+                || values
+                    .iter()
+                    .any(|value| value.as_u64().is_none_or(|v| v > 255))
+            {
+                return serde_json::json!({"error": "color_rgb must contain three integers from 0 to 255"});
+            }
+            let color = [
+                values[0].as_u64().unwrap() as u8,
+                values[1].as_u64().unwrap() as u8,
+                values[2].as_u64().unwrap() as u8,
+            ];
+            changed |= self.color_rgb != color;
+            self.color_rgb = color;
+        }
+        if params.get("color_property").is_some() {
+            let property = params
+                .get("color_property")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(property) = property
+                && !self.property_store.has_loaded(property)
+                && !self.objects.as_ref().is_some_and(|objects| {
+                    objects
+                        .iter()
+                        .any(|object| object.inline_properties.contains_key(property))
+                })
+            {
+                return serde_json::json!({
+                    "error": format!("object property '{property}' is not loaded"),
+                    "load_required": true,
+                });
+            }
+            let before = self.color_property_key.clone();
+            self.set_color_by_property(property.map(str::to_string));
+            changed |= before != self.color_property_key;
+        }
+        if changed {
+            self.generation = self.generation.wrapping_add(1).max(1);
+        }
+        serde_json::json!({
+            "changed": changed,
+            "style": self.control_style_snapshot_json(),
+        })
+    }
+
+    pub fn control_set_legend_json(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
+            return serde_json::json!({"error": "Select a color_property before editing its legend."});
+        }
+        let Some(entries) = params.get("entries").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "entries is required"});
+        };
+        let mut overrides = self.color_level_overrides.clone();
+        for entry in entries {
+            let Some(value) = entry
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return serde_json::json!({"error": "each legend entry requires a non-empty value"});
+            };
+            let style = overrides.entry(value.to_string()).or_default();
+            if let Some(visible) = entry.get("visible").and_then(serde_json::Value::as_bool) {
+                style.visible = visible;
+            }
+            if entry.get("color_rgb").is_some() {
+                style.color_rgb = match entry.get("color_rgb") {
+                    Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::Array(values))
+                        if values.len() == 3
+                            && values
+                                .iter()
+                                .all(|value| value.as_u64().is_some_and(|v| v <= 255)) =>
+                    {
+                        Some([
+                            values[0].as_u64().unwrap() as u8,
+                            values[1].as_u64().unwrap() as u8,
+                            values[2].as_u64().unwrap() as u8,
+                        ])
+                    }
+                    _ => {
+                        return serde_json::json!({"error": "legend color_rgb must be null or three integers from 0 to 255"});
+                    }
+                };
+            }
+        }
+        let property = self.color_property_key.clone();
+        self.color_level_overrides_property_key = property;
+        self.color_level_overrides = overrides;
+        self.color_groups = None;
+        self.filtered_color_groups = None;
+        self.color_legend_cache = None;
+        self.generation = self.generation.wrapping_add(1).max(1);
+        serde_json::json!({
+            "changed": true,
+            "style": self.control_style_snapshot_json(),
+        })
+    }
+
+    pub fn control_set_fast_rendering_json(&mut self, enabled: bool) -> serde_json::Value {
+        let changed = self.fast_rendering != enabled;
+        self.fast_rendering = enabled;
+        if changed {
+            self.generation = self.generation.wrapping_add(1).max(1);
+        }
+        serde_json::json!({"changed": changed, "fast_rendering": self.fast_rendering})
+    }
+
+    pub fn control_property_schema_json(&self, offset: usize, limit: usize) -> serde_json::Value {
+        let mut names = self.available_property_columns().to_vec();
+        names.sort();
+        names.dedup();
+        let total = names.len();
+        let columns = names
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|name| {
+                let loaded = self.property_store.loaded_columns.get(&name);
+                serde_json::json!({
+                    "name": name,
+                    "loaded": loaded.is_some(),
+                    "loading": self.property_load_key.as_deref() == Some(name.as_str()),
+                    "type": loaded.map(ObjectPropertyColumn::type_name),
+                    "numeric": loaded.is_some_and(ObjectPropertyColumn::is_numeric),
+                    "categorical": loaded.is_some_and(|column| column.is_categorical(256)),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset.saturating_add(columns.len()) < total,
+            "columns": columns,
+        })
+    }
+
+    pub fn control_request_property_load(&mut self, property: &str) -> serde_json::Value {
+        let property = property.trim();
+        if property.is_empty() {
+            return serde_json::json!({"error": "property must not be empty"});
+        }
+        if !self
+            .available_property_columns()
+            .iter()
+            .any(|candidate| candidate == property)
+        {
+            return serde_json::json!({"error": format!("unknown object property '{property}'")});
+        }
+        self.ensure_property_loaded(property);
+        serde_json::json!({
+            "property": property,
+            "loaded": self.property_store.has_loaded(property),
+            "loading": self.property_load_key.as_deref() == Some(property),
+        })
+    }
+
+    pub fn control_property_values_json(
+        &self,
+        property: &str,
+        offset: usize,
+        limit: usize,
+    ) -> serde_json::Value {
+        let Some(objects) = self.objects.as_ref() else {
+            return serde_json::json!({"error": "object data is not loaded"});
+        };
+        let loaded_column = self.property_store.loaded_columns.get(property);
+        let inline_available = objects
+            .iter()
+            .any(|object| object.inline_properties.contains_key(property));
+        if loaded_column.is_none() && !inline_available {
+            if self
+                .available_property_columns()
+                .iter()
+                .any(|candidate| candidate == property)
+            {
+                return serde_json::json!({
+                    "error": format!("object property '{property}' is not loaded"),
+                    "load_required": true,
+                    "loading": self.property_load_key.as_deref() == Some(property),
+                    "status": self.status,
+                });
+            }
+            return serde_json::json!({"error": format!("unknown object property '{property}'")});
+        }
+        let total = objects.len();
+        let values = objects
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(limit)
+            .map(|(index, object)| {
+                let value = loaded_column
+                    .map(|column| column.value_json_at(index))
+                    .or_else(|| object.inline_properties.get(property).cloned())
+                    .unwrap_or(serde_json::Value::Null);
+                serde_json::json!({"index": index, "id": object.id, "value": value})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "property": property,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset.saturating_add(values.len()) < total,
+            "values": values,
+        })
+    }
+
     pub(super) fn object_property_label(
         &self,
         object_index: usize,
@@ -2011,6 +2369,7 @@ impl ObjectsLayer {
             })
             .collect::<Vec<_>>();
         serde_json::json!({
+            "revision": self.filter_generation,
             "active": active,
             "mode": mode,
             "logic": logic,
@@ -2027,6 +2386,87 @@ impl ObjectsLayer {
                 "error": self.filter_query_error.as_deref(),
             },
         })
+    }
+
+    pub fn control_set_filter_model_json(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                if params.get("query").is_some() {
+                    "query"
+                } else {
+                    "simple"
+                }
+            });
+        match mode {
+            "query" => {
+                let Some(query) = params
+                    .get("query")
+                    .or_else(|| params.get("expression"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    return serde_json::json!({"error": "query mode requires query"});
+                };
+                self.set_filter_query_from_text(query);
+            }
+            "simple" => {
+                let logic = match params
+                    .get("logic")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("all")
+                {
+                    "all" => ObjectFilterLogic::All,
+                    "any" => ObjectFilterLogic::Any,
+                    _ => return serde_json::json!({"error": "logic must be 'all' or 'any'"}),
+                };
+                let Some(clauses) = params.get("clauses").and_then(serde_json::Value::as_array)
+                else {
+                    return serde_json::json!({"error": "simple mode requires clauses"});
+                };
+                let mut next = Vec::with_capacity(clauses.len().max(1));
+                for clause in clauses {
+                    let Some(property_key) = clause
+                        .get("property")
+                        .or_else(|| clause.get("property_key"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    else {
+                        return serde_json::json!({"error": "each filter clause requires property"});
+                    };
+                    if !self.filter_property_key_available(property_key) {
+                        return serde_json::json!({"error": format!("unknown object property '{property_key}'")});
+                    }
+                    let Some(query) = clause.get("query").and_then(serde_json::Value::as_str)
+                    else {
+                        return serde_json::json!({"error": "each filter clause requires query"});
+                    };
+                    next.push(ObjectFilterClause {
+                        enabled: clause
+                            .get("enabled")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true),
+                        property_key: property_key.to_string(),
+                        query: query.trim().to_string(),
+                    });
+                }
+                self.filter_mode = ObjectFilterMode::Simple;
+                self.filter_logic = logic;
+                self.filter_clauses = next;
+                self.ensure_filter_clause_row();
+                self.ensure_active_filter_properties_loaded();
+                self.invalidate_filter_cache();
+                self.ensure_filter_cache();
+                self.ensure_color_groups();
+                self.generation = self.generation.wrapping_add(1).max(1);
+            }
+            _ => return serde_json::json!({"error": "mode must be 'simple' or 'query'"}),
+        }
+        self.filter_snapshot_json()
     }
 
     pub fn active_color_legend_entries(&mut self) -> Option<Vec<ObjectColorLegendEntry>> {
@@ -2537,33 +2977,163 @@ impl ObjectsLayer {
     }
 
     pub fn select_objects_by_ids(&mut self, ids: &std::collections::HashSet<String>) -> usize {
-        let Some(objects) = self.objects.as_ref() else {
-            self.clear_selection();
-            return 0;
-        };
+        let indices = self.object_indices_matching_ids(ids);
+        self.apply_object_selection_mode(&indices, "replace");
+        self.selected_object_indices.len()
+    }
 
-        self.selected_object_indices.clear();
+    fn object_indices_matching_ids(&self, ids: &std::collections::HashSet<String>) -> Vec<usize> {
+        let Some(objects) = self.objects.as_ref() else {
+            return Vec::new();
+        };
+        let mut indices = Vec::new();
         for (idx, obj) in objects.iter().enumerate() {
             let mut matched = ids.contains(&obj.id);
             if !matched {
                 for key in ["cell_id", "id", "object_id", "label", "name"] {
-                    if let Some(value) = self.object_property_label(idx, obj, key) {
-                        if ids.contains(&value) {
-                            matched = true;
-                            break;
-                        }
+                    if let Some(value) = self.object_property_label(idx, obj, key)
+                        && ids.contains(&value)
+                    {
+                        matched = true;
+                        break;
                     }
                 }
             }
             if matched {
-                self.selected_object_indices.insert(idx);
+                indices.push(idx);
             }
         }
-        self.selected_object_index = self.selected_object_indices.iter().next().copied();
+        indices
+    }
+
+    pub(super) fn apply_object_selection_mode(&mut self, indices: &[usize], mode: &str) -> bool {
+        let before = self.selected_object_indices.clone();
+        match mode {
+            "replace" => self.selected_object_indices = indices.iter().copied().collect(),
+            "add" => self.selected_object_indices.extend(indices.iter().copied()),
+            "remove" => self
+                .selected_object_indices
+                .retain(|index| !indices.contains(index)),
+            "toggle" => {
+                for index in indices {
+                    if !self.selected_object_indices.insert(*index) {
+                        self.selected_object_indices.remove(index);
+                    }
+                }
+            }
+            _ => return false,
+        }
+        self.selected_object_index = self.selected_object_indices.iter().min().copied();
         self.rebuild_selection_render_lods();
         self.clear_measurements();
         self.invalidate_table_cache();
-        self.selected_object_indices.len()
+        before != self.selected_object_indices
+    }
+
+    pub fn control_select_ids_json(
+        &mut self,
+        ids: &std::collections::HashSet<String>,
+        mode: &str,
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> serde_json::Value {
+        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
+            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
+        }
+        let indices = self.object_indices_matching_ids(ids);
+        let missing = ids
+            .iter()
+            .filter(|id| {
+                self.object_indices_matching_ids(&std::collections::HashSet::from([(*id).clone()]))
+                    .is_empty()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let changed = self.apply_object_selection_mode(&indices, mode);
+        serde_json::json!({
+            "changed": changed,
+            "matched_count": indices.len(),
+            "missing_ids": missing,
+            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
+        })
+    }
+
+    pub fn control_select_filtered_json(
+        &mut self,
+        mode: &str,
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> serde_json::Value {
+        self.ensure_filter_cache();
+        let indices = self
+            .filtered_ordered_indices
+            .as_ref()
+            .map(|indices| indices.as_ref().clone())
+            .unwrap_or_else(|| {
+                self.objects
+                    .as_ref()
+                    .map(|objects| (0..objects.len()).collect())
+                    .unwrap_or_default()
+            });
+        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
+            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
+        }
+        let changed = self.apply_object_selection_mode(&indices, mode);
+        serde_json::json!({
+            "changed": changed,
+            "matched_count": indices.len(),
+            "filter_revision": self.filter_generation,
+            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
+        })
+    }
+
+    pub fn control_focus_object_json(
+        &mut self,
+        params: &serde_json::Value,
+        local_to_world_offset: egui::Vec2,
+    ) -> serde_json::Value {
+        let Some(objects) = self.objects.as_ref() else {
+            return serde_json::json!({"error": "object data is not loaded"});
+        };
+        let index = if let Some(index) = params.get("index").and_then(serde_json::Value::as_u64) {
+            let index = index as usize;
+            if index >= objects.len() {
+                return serde_json::json!({"error": format!("object index {index} is out of range")});
+            }
+            index
+        } else if let Some(id) = params.get("id").and_then(serde_json::Value::as_str) {
+            let ids = std::collections::HashSet::from([id.to_string()]);
+            let matches = self.object_indices_matching_ids(&ids);
+            match matches.as_slice() {
+                [index] => *index,
+                [] => return serde_json::json!({"error": format!("object '{id}' was not found")}),
+                _ => return serde_json::json!({"error": format!("object '{id}' is ambiguous")}),
+            }
+        } else {
+            return serde_json::json!({"error": "id or index is required"});
+        };
+        self.selected_object_indices.insert(index);
+        self.selected_object_index = Some(index);
+        self.rebuild_selection_render_lods();
+        self.clear_measurements();
+        self.invalidate_table_cache();
+        if params
+            .get("fit")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+        {
+            self.request_zoom_to_object(index);
+        }
+        serde_json::json!({
+            "focused": self.selection_snapshot_json(local_to_world_offset, 1)["primary"],
+            "selection_count": self.selection_count(),
+        })
+    }
+
+    pub fn control_clear_focus_json(&mut self) -> serde_json::Value {
+        let changed = self.selected_object_index.take().is_some();
+        self.rebuild_selection_render_lods();
+        serde_json::json!({"changed": changed, "focused": null})
     }
 
     fn current_selection_object_ids(&self) -> Vec<String> {
@@ -2758,7 +3328,7 @@ impl ObjectsLayer {
         let request_id = self.object_load_request_id;
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_worker = cancel.clone();
-        let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
+        let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
         self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
         self.property_load_rx = None;
@@ -2768,15 +3338,15 @@ impl ObjectsLayer {
         std::thread::Builder::new()
             .name("seg-objects-loader".to_string())
             .spawn(move || {
-                if let Ok(msg) = load_in_thread(
+                let msg = load_in_thread(
                     path,
                     downsample_factor,
                     load_options,
                     request_id,
                     &cancel_worker,
-                ) {
-                    let _ = tx.send(msg);
-                }
+                )
+                .map_err(|error| error.to_string());
+                let _ = tx.send(msg);
             })
             .ok();
     }
@@ -3375,6 +3945,14 @@ impl ObjectsLayer {
         if objects.is_empty() {
             anyhow::bail!("no objects loaded");
         }
+        let rows = snapshot
+            .row_indices
+            .iter()
+            .filter_map(|index| objects.get(*index).map(|object| (*index, object)))
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            anyhow::bail!("the requested export scope contains no objects");
+        }
 
         let property_keys = snapshot.property_keys.clone();
         let mut used_names = property_keys.iter().cloned().collect::<HashSet<_>>();
@@ -3384,9 +3962,8 @@ impl ObjectsLayer {
             if selected_columns.contains(key) {
                 columns.push(ExportColumn {
                     name: key.clone(),
-                    values: objects
+                    values: rows
                         .iter()
-                        .enumerate()
                         .map(|(idx, obj)| {
                             if key == "id" {
                                 Some(ExportScalar::String(obj.id.clone()))
@@ -3394,7 +3971,7 @@ impl ObjectsLayer {
                                 export_scalar_from_property_store(
                                     &snapshot.property_store,
                                     key,
-                                    idx,
+                                    *idx,
                                 )
                                 .or_else(|| {
                                     obj.inline_properties.get(key).map(export_scalar_from_json)
@@ -3412,9 +3989,8 @@ impl ObjectsLayer {
         if selected_columns.contains(&geometry_type_column_name) {
             if geometry_types_cache.is_none() {
                 geometry_types_cache = Some(
-                    objects
-                        .iter()
-                        .map(|obj| export_geometry_type_label(obj).to_string())
+                    rows.iter()
+                        .map(|(_, obj)| export_geometry_type_label(obj).to_string())
                         .collect::<Vec<_>>(),
                 );
             }
@@ -3434,9 +4010,9 @@ impl ObjectsLayer {
         if selected_columns.contains(&centroid_x_name) {
             columns.push(ExportColumn {
                 name: centroid_x_name,
-                values: objects
+                values: rows
                     .iter()
-                    .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.x as f64)))
+                    .map(|(_, obj)| Some(ExportScalar::Float64(obj.centroid_world.x as f64)))
                     .collect(),
             });
         }
@@ -3445,21 +4021,24 @@ impl ObjectsLayer {
         if selected_columns.contains(&centroid_y_name) {
             columns.push(ExportColumn {
                 name: centroid_y_name,
-                values: objects
+                values: rows
                     .iter()
-                    .map(|obj| Some(ExportScalar::Float64(obj.centroid_world.y as f64)))
+                    .map(|(_, obj)| Some(ExportScalar::Float64(obj.centroid_world.y as f64)))
                     .collect(),
             });
         }
 
-        if objects.iter().any(|obj| obj.point_position_world.is_some()) {
+        if rows
+            .iter()
+            .any(|(_, obj)| obj.point_position_world.is_some())
+        {
             let point_x_name = unique_export_name("_odon_point_x", &mut used_names);
             if selected_columns.contains(&point_x_name) {
                 columns.push(ExportColumn {
                     name: point_x_name,
-                    values: objects
+                    values: rows
                         .iter()
-                        .map(|obj| {
+                        .map(|(_, obj)| {
                             obj.point_position_world
                                 .map(|pos| ExportScalar::Float64(pos.x as f64))
                         })
@@ -3470,9 +4049,9 @@ impl ObjectsLayer {
             if selected_columns.contains(&point_y_name) {
                 columns.push(ExportColumn {
                     name: point_y_name,
-                    values: objects
+                    values: rows
                         .iter()
-                        .map(|obj| {
+                        .map(|(_, obj)| {
                             obj.point_position_world
                                 .map(|pos| ExportScalar::Float64(pos.y as f64))
                         })
@@ -3485,9 +4064,9 @@ impl ObjectsLayer {
         if selected_columns.contains(&area_name) {
             columns.push(ExportColumn {
                 name: area_name,
-                values: objects
+                values: rows
                     .iter()
-                    .map(|obj| Some(ExportScalar::Float64(obj.area_px as f64)))
+                    .map(|(_, obj)| Some(ExportScalar::Float64(obj.area_px as f64)))
                     .collect(),
             });
         }
@@ -3496,9 +4075,9 @@ impl ObjectsLayer {
         if selected_columns.contains(&perimeter_name) {
             columns.push(ExportColumn {
                 name: perimeter_name,
-                values: objects
+                values: rows
                     .iter()
-                    .map(|obj| Some(ExportScalar::Float64(obj.perimeter_px as f64)))
+                    .map(|(_, obj)| Some(ExportScalar::Float64(obj.perimeter_px as f64)))
                     .collect(),
             });
         }
@@ -3507,12 +4086,11 @@ impl ObjectsLayer {
         if selected_columns.contains(&selected_name) {
             columns.push(ExportColumn {
                 name: selected_name,
-                values: objects
+                values: rows
                     .iter()
-                    .enumerate()
                     .map(|(idx, _)| {
                         Some(ExportScalar::Bool(
-                            snapshot.selected_object_indices.contains(&idx),
+                            snapshot.selected_object_indices.contains(idx),
                         ))
                     })
                     .collect(),
@@ -3530,13 +4108,12 @@ impl ObjectsLayer {
             if selected_columns.contains(&live_name) {
                 columns.push(ExportColumn {
                     name: live_name,
-                    values: objects
+                    values: rows
                         .iter()
-                        .enumerate()
                         .map(|(idx, obj)| {
                             Some(ExportScalar::Bool(object_passes_threshold_rules(
                                 &snapshot.property_store,
-                                idx,
+                                *idx,
                                 obj,
                                 &snapshot.analysis_property_thresholds,
                             )))
@@ -3552,16 +4129,15 @@ impl ObjectsLayer {
             if selected_columns.contains(&column_name) {
                 columns.push(ExportColumn {
                     name: column_name,
-                    values: objects
+                    values: rows
                         .iter()
-                        .enumerate()
                         .map(|(idx, obj)| {
                             if threshold_call_marks_failed(element) {
                                 Some(ExportScalar::String("FAIL".to_string()))
                             } else {
                                 Some(ExportScalar::Bool(object_passes_threshold_rules(
                                     &snapshot.property_store,
-                                    idx,
+                                    *idx,
                                     obj,
                                     &element.rules,
                                 )))
@@ -3581,25 +4157,26 @@ impl ObjectsLayer {
                 let selected_ids = element.object_ids.iter().cloned().collect::<HashSet<_>>();
                 columns.push(ExportColumn {
                     name: column_name,
-                    values: objects
+                    values: rows
                         .iter()
-                        .map(|obj| Some(ExportScalar::Bool(selected_ids.contains(&obj.id))))
+                        .map(|(_, obj)| Some(ExportScalar::Bool(selected_ids.contains(&obj.id))))
                         .collect(),
                 });
             }
         }
 
         let geometry_wkb = if include_geometry {
-            objects.iter().map(encode_object_wkb).collect::<Vec<_>>()
+            rows.iter()
+                .map(|(_, object)| encode_object_wkb(object))
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
         let geometry_types = if include_geometry {
             if geometry_types_cache.is_none() {
                 geometry_types_cache = Some(
-                    objects
-                        .iter()
-                        .map(|obj| export_geometry_type_label(obj).to_string())
+                    rows.iter()
+                        .map(|(_, obj)| export_geometry_type_label(obj).to_string())
                         .collect::<Vec<_>>(),
                 );
             }
@@ -3616,7 +4193,7 @@ impl ObjectsLayer {
         };
 
         Ok(ObjectExportTable {
-            row_count: objects.len(),
+            row_count: rows.len(),
             columns,
             geometry_wkb,
             geometry_types,
@@ -3810,7 +4387,7 @@ impl ObjectsLayer {
             anyhow::bail!("no export columns selected");
         }
         let snapshot = self.object_export_snapshot()?;
-        let object_count = snapshot.objects.len();
+        let object_count = snapshot.row_indices.len();
         let request_id = self.object_export_request_id.wrapping_add(1).max(1);
         self.object_export_request_id = request_id;
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -3856,6 +4433,7 @@ impl ObjectsLayer {
         }
         Ok(ObjectExportSnapshot {
             objects: Arc::clone(objects),
+            row_indices: (0..objects.len()).collect(),
             property_keys,
             property_store: self.property_store.clone(),
             selected_object_indices: self.selected_object_indices.clone(),
@@ -3868,6 +4446,152 @@ impl ObjectsLayer {
 
     pub fn is_exporting(&self) -> bool {
         self.object_export_rx.is_some()
+    }
+
+    pub fn control_export_state_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "running": self.is_exporting(),
+            "status": self.status,
+            "request_id": self.object_export_request_id,
+        })
+    }
+
+    pub fn control_export_columns_json(&self) -> serde_json::Value {
+        match self.build_object_export_column_names() {
+            Ok(columns) => serde_json::json!({"columns": columns, "total": columns.len()}),
+            Err(error) => {
+                serde_json::json!({"error": format!("failed to inspect export columns: {error}")})
+            }
+        }
+    }
+
+    pub fn control_start_object_export_json(
+        &mut self,
+        params: &serde_json::Value,
+        path: PathBuf,
+    ) -> serde_json::Value {
+        if self.is_exporting() {
+            return serde_json::json!({"error": "an object export is already in progress"});
+        }
+        let overwrite = params
+            .get("overwrite")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if path.exists() && !overwrite {
+            return serde_json::json!({"error": "destination exists; pass overwrite=true to replace it"});
+        }
+        let format = match params
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| path.extension().and_then(|extension| extension.to_str()))
+            .unwrap_or("csv")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "csv" => ObjectExportFormat::Csv,
+            "parquet" | "geoparquet" => ObjectExportFormat::GeoParquet,
+            _ => return serde_json::json!({"error": "format must be 'csv' or 'geoparquet'"}),
+        };
+        let available = match self.build_object_export_column_names() {
+            Ok(columns) => columns,
+            Err(error) => {
+                return serde_json::json!({"error": format!("failed to inspect export columns: {error}")});
+            }
+        };
+        let selected_columns = match params.get("columns") {
+            Some(value) => {
+                let Some(values) = value.as_array() else {
+                    return serde_json::json!({"error": "columns must be an array of names"});
+                };
+                let mut columns = HashSet::new();
+                for value in values {
+                    let Some(column) = value.as_str() else {
+                        return serde_json::json!({"error": "columns must contain strings"});
+                    };
+                    if !available.iter().any(|candidate| candidate == column) {
+                        return serde_json::json!({"error": format!("unknown export column '{column}'")});
+                    }
+                    columns.insert(column.to_string());
+                }
+                columns
+            }
+            None => available.iter().cloned().collect(),
+        };
+        if selected_columns.is_empty() {
+            return serde_json::json!({"error": "at least one export column is required"});
+        }
+
+        self.ensure_filter_cache();
+        let mut snapshot = match self.object_export_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return serde_json::json!({"error": format!("failed to prepare object export: {error}")});
+            }
+        };
+        let scope = params
+            .get("scope")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("all");
+        snapshot.row_indices = match scope {
+            "all" => snapshot.row_indices,
+            "filtered" => self
+                .filtered_ordered_indices
+                .as_ref()
+                .map(|indices| indices.as_ref().clone())
+                .unwrap_or_else(|| (0..snapshot.objects.len()).collect()),
+            "selected" => {
+                let mut indices = self
+                    .selected_object_indices
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>();
+                indices.sort_unstable();
+                indices
+            }
+            _ => {
+                return serde_json::json!({"error": "scope must be 'all', 'filtered', or 'selected'"});
+            }
+        };
+        let object_count = snapshot.row_indices.len();
+        let column_count = selected_columns.len();
+        if object_count == 0 {
+            return serde_json::json!({"error": format!("the '{scope}' export scope contains no objects")});
+        }
+        let request_id = self.object_export_request_id.wrapping_add(1).max(1);
+        self.object_export_request_id = request_id;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.object_export_rx = Some(rx);
+        self.status = format!("Exporting {object_count} object(s)...");
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let error = match format {
+                ObjectExportFormat::GeoParquet => Self::export_objects_geoparquet(
+                    &snapshot,
+                    worker_path.as_path(),
+                    &selected_columns,
+                ),
+                ObjectExportFormat::Csv => {
+                    Self::export_objects_csv(&snapshot, worker_path.as_path(), &selected_columns)
+                }
+            }
+            .err()
+            .map(|error| error.to_string());
+            let _ = tx.send(ObjectExportEvent::Finished {
+                request_id,
+                path: worker_path,
+                object_count,
+                error,
+            });
+        });
+        serde_json::json!({
+            "started": true,
+            "request_id": request_id,
+            "path": path.to_string_lossy(),
+            "format": match format { ObjectExportFormat::Csv => "csv", ObjectExportFormat::GeoParquet => "geoparquet" },
+            "scope": scope,
+            "object_count": object_count,
+            "column_count": column_count,
+        })
     }
 
     fn extend_object_property_keys<'a, I>(&mut self, keys: I)

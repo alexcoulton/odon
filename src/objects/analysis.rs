@@ -3070,6 +3070,248 @@ impl ObjectsLayer {
             .collect::<Vec<_>>()
     }
 
+    pub fn control_analysis_state_json(
+        &mut self,
+        channels: &[ChannelInfo],
+        selected_channel: usize,
+    ) -> serde_json::Value {
+        self.save_live_threshold_rules();
+        let numeric_properties = self.available_numeric_object_property_keys();
+        self.ensure_channel_mapping_suggestions_cache(channels, &numeric_properties);
+        serde_json::json!({
+            "state": self.project_analysis_state(),
+            "numeric_properties": numeric_properties,
+            "warmup": self.control_analysis_warmup_json(),
+            "active_channel": channels.get(selected_channel).map(|channel| channel.name.as_str()),
+            "filtered": self.has_active_filter(),
+            "filtered_count": self.filtered_count(),
+            "object_count": self.object_count(),
+        })
+    }
+
+    pub fn control_set_analysis_state_json(
+        &mut self,
+        params: &serde_json::Value,
+        channels: &[ChannelInfo],
+        selected_channel: usize,
+    ) -> serde_json::Value {
+        let value = params.get("state").unwrap_or(params);
+        let state = match serde_json::from_value::<ObjectProjectAnalysisState>(value.clone()) {
+            Ok(state) => state,
+            Err(error) => {
+                return serde_json::json!({"error": format!("invalid analysis state: {error}")});
+            }
+        };
+        let mut names = HashSet::new();
+        for element in &state.threshold_elements {
+            if element.name.trim().is_empty() {
+                return serde_json::json!({"error": "analysis call names must not be empty"});
+            }
+            if !names.insert(element.name.trim().to_string()) {
+                return serde_json::json!({"error": format!("duplicate analysis call name '{}'", element.name)});
+            }
+            for rule in &element.rules {
+                if rule.column_key.trim().is_empty() || !rule.value.is_finite() {
+                    return serde_json::json!({"error": "analysis rules require a property and finite value"});
+                }
+            }
+        }
+        names.clear();
+        for element in &state.selection_elements {
+            if element.name.trim().is_empty() || !names.insert(element.name.trim().to_string()) {
+                return serde_json::json!({"error": "named selections require unique non-empty names"});
+            }
+        }
+        let active_channel = channels
+            .get(selected_channel)
+            .map(|channel| channel.name.as_str());
+        self.apply_project_analysis_state(&state, active_channel);
+        self.invalidate_object_property_analysis_cache();
+        self.control_analysis_state_json(channels, selected_channel)
+    }
+
+    pub fn control_histogram_json(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(property) = params
+            .get("property")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|property| !property.is_empty())
+        else {
+            return serde_json::json!({"error": "property is required"});
+        };
+        if self.property_column_available_but_unloaded(property) {
+            return serde_json::json!({"error": format!("property '{property}' must be loaded before analysis")});
+        }
+        let transform = match params
+            .get("transform")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("none")
+        {
+            "none" => HistogramValueTransform::None,
+            "arcsinh" => HistogramValueTransform::Arcsinh,
+            _ => return serde_json::json!({"error": "transform must be 'none' or 'arcsinh'"}),
+        };
+        let bins = params
+            .get("bins")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(128);
+        if !(8..=4096).contains(&bins) {
+            return serde_json::json!({"error": "bins must be an integer from 8 to 4096"});
+        }
+        self.ensure_filter_cache();
+        self.analysis_hist_value_transform = transform;
+        let values = self.object_property_histogram_values(property);
+        if values.is_empty() {
+            return serde_json::json!({"error": format!("numeric property '{property}' has no finite values in the active object set")});
+        }
+        let histogram = compute_histogram_f32(&values, bins);
+        serde_json::json!({
+            "property": property,
+            "transform": match transform { HistogramValueTransform::None => "none", HistogramValueTransform::Arcsinh => "arcsinh" },
+            "filtered": self.has_active_filter(),
+            "count": values.len(),
+            "min": histogram.min,
+            "max": histogram.max,
+            "median": histogram.median,
+            "max_bin_count": histogram.max_count,
+            "bins": histogram.bins,
+        })
+    }
+
+    pub fn control_threshold_suggestions_json(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(property) = params
+            .get("property")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|property| !property.is_empty())
+        else {
+            return serde_json::json!({"error": "property is required"});
+        };
+        if self.property_column_available_but_unloaded(property) {
+            return serde_json::json!({"error": format!("property '{property}' must be loaded before analysis")});
+        }
+        let method = match params
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("quantiles")
+        {
+            "quantiles" => HistogramLevelMethod::Quantiles,
+            "kmeans" => HistogramLevelMethod::KMeans,
+            _ => return serde_json::json!({"error": "method must be 'quantiles' or 'kmeans'"}),
+        };
+        let transform = match params
+            .get("transform")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("none")
+        {
+            "none" => HistogramValueTransform::None,
+            "arcsinh" => HistogramValueTransform::Arcsinh,
+            _ => return serde_json::json!({"error": "transform must be 'none' or 'arcsinh'"}),
+        };
+        let count = params
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(3);
+        if !(2..=12).contains(&count) {
+            return serde_json::json!({"error": "count must be an integer from 2 to 12"});
+        }
+        self.ensure_filter_cache();
+        self.analysis_hist_value_transform = transform;
+        let values = self.object_property_histogram_values(property);
+        let levels = match method {
+            HistogramLevelMethod::Quantiles => quantile_threshold_levels(&values, count),
+            HistogramLevelMethod::KMeans => kmeans_threshold_levels(&values, count, 24),
+        };
+        serde_json::json!({
+            "property": property,
+            "method": match method { HistogramLevelMethod::Quantiles => "quantiles", HistogramLevelMethod::KMeans => "kmeans" },
+            "transform": match transform { HistogramValueTransform::None => "none", HistogramValueTransform::Arcsinh => "arcsinh" },
+            "filtered": self.has_active_filter(),
+            "sample_count": values.len(),
+            "levels": levels,
+        })
+    }
+
+    pub fn control_analysis_warmup_json(&self) -> serde_json::Value {
+        let running = self.analysis_warm_rx.is_some();
+        serde_json::json!({
+            "started": self.analysis_warm_started,
+            "running": running,
+            "completed": self.analysis_warm_completed_columns,
+            "total": self.analysis_warm_total_columns,
+            "ready": self.analysis_warm_started && !running,
+        })
+    }
+
+    pub fn control_start_analysis_warmup_json(
+        &mut self,
+        channels: &[ChannelInfo],
+        selected_channel: usize,
+    ) -> serde_json::Value {
+        self.ensure_object_property_analysis_warmup_started(channels, selected_channel);
+        self.control_analysis_warmup_json()
+    }
+
+    pub fn control_export_call_preset_json(
+        &mut self,
+        path: &Path,
+        overwrite: bool,
+    ) -> serde_json::Value {
+        if path.exists() && !overwrite {
+            return serde_json::json!({"error": "destination exists; pass overwrite=true to replace it"});
+        }
+        self.save_live_threshold_rules();
+        let payload = ThresholdSetFile {
+            name: self.analysis_threshold_set_name.clone(),
+            elements: self.analysis_threshold_elements.clone(),
+        };
+        let text = match serde_json::to_string_pretty(&payload) {
+            Ok(text) => text,
+            Err(error) => {
+                return serde_json::json!({"error": format!("failed to encode call preset: {error}")});
+            }
+        };
+        if let Err(error) = std::fs::write(path, text) {
+            return serde_json::json!({"error": format!("failed to write call preset: {error}")});
+        }
+        serde_json::json!({"exported": true, "path": path.to_string_lossy(), "call_count": payload.elements.len()})
+    }
+
+    pub fn control_import_call_preset_json(
+        &mut self,
+        path: &Path,
+        active_channel_name: Option<&str>,
+    ) -> serde_json::Value {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                return serde_json::json!({"error": format!("failed to read call preset: {error}")});
+            }
+        };
+        let payload = match serde_json::from_str::<ThresholdSetFile>(&text) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return serde_json::json!({"error": format!("invalid call preset: {error}")});
+            }
+        };
+        self.analysis_threshold_set_name = payload.name;
+        self.analysis_threshold_elements = payload.elements;
+        self.normalize_threshold_call_elements();
+        self.analysis_threshold_selected_element =
+            (!self.analysis_threshold_elements.is_empty()).then_some(0);
+        if self.analysis_threshold_selected_element.is_some() {
+            self.load_threshold_element(0, active_channel_name);
+        } else {
+            self.analysis_property_thresholds.clear();
+        }
+        serde_json::json!({"imported": true, "path": path.to_string_lossy(), "call_count": self.analysis_threshold_elements.len()})
+    }
+
     pub(super) fn clear_measurements(&mut self) {}
 
     pub(super) fn clear_analysis(&mut self) {

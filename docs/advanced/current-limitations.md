@@ -2,6 +2,9 @@
 
 This page lists the main constraints a user should know before treating `odon` as a general-purpose spatial viewer.
 
+For control and extension-specific boundaries—including the current
+single-viewport model—see [Current Python API limitations](python-api-limitations.md).
+
 ## Viewer Model
 
 - the main viewing path is still XY, although OME-Zarr datasets with a `z` axis can now be scrubbed one plane at a time

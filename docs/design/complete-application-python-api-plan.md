@@ -1,6 +1,7 @@
 # Complete Odon Application Surface: Control and Python API Plan
 
-Status: proposed follow-on to the experimental Python API
+Status: implementation in progress; semantic parity phases A-G completed,
+contract hardening and ecosystem validation remain before stable v1
 
 Target: semantic control of the complete supported Odon application surface
 before declaring the Python API and Control Protocol v1 stable

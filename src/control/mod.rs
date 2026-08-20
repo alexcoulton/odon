@@ -7,6 +7,7 @@ mod events;
 mod protocol;
 pub mod registry;
 mod resources;
+mod surface;
 mod tasks;
 mod ui;
 
@@ -19,6 +20,10 @@ pub use protocol::{
 };
 pub use resources::{
     CoordinateSpace, DataResourceSnapshot, LayerSnapshot, Ownership, ResourceRegistry,
+};
+pub use surface::{
+    ApplicationSurfaceEntry, ApplicationSurfaceManifest, SurfaceStatus, application_surface,
+    application_surface_json,
 };
 pub use tasks::{TaskRegistry, TaskSnapshot, TaskState};
 pub use ui::{Component, ContributionSnapshot, ExtensionSnapshot, UiAction, UiRegistry};

@@ -71,5 +71,15 @@ well as events delivered to Python. `odon.run_extension(...)` provides a
 reconnecting lifecycle runner for separately packaged extensions.
 
 The control API is currently experimental. See
-`docs/reference/python-api.md` and `docs/design/control-protocol-v1.md` in the
-Odon repository for the full surface, guarantees, and current limitations.
+`docs/reference/python-api.md` for the guided introduction,
+`docs/reference/python-api-reference.md` for every sync and async member,
+`docs/reference/python-api-contracts.md` for behavioural guarantees, and
+`docs/advanced/python-api-limitations.md` for current boundaries. The control
+transport itself is documented in `docs/design/control-protocol-v1.md`.
+
+The complete semantic surface includes projects/ROIs and saved views, image
+planes and channels, native layers and NGFF labels, objects/masks/thresholds,
+analysis/measurements/exports, mosaics, RAM pinning and tile policy,
+screenshots, persistent settings, recent projects, and guarded application
+lifecycle requests. Query `app.application.get_application_surface()` for the
+machine-readable native/control/sync/async parity map.

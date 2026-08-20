@@ -9,12 +9,29 @@ import logging
 from typing import Any, Mapping, Sequence
 
 from .async_resources import (
+    AsyncAnalysis,
     AsyncApplication,
     AsyncChannels,
+    AsyncDatasets,
+    AsyncDeepLinks,
+    AsyncLabels,
+    AsyncMasks,
+    AsyncMemory,
+    AsyncMeasurements,
     AsyncMosaic,
+    AsyncNativeLayers,
     AsyncObjects,
+    AsyncObjectExports,
+    AsyncPlanes,
+    AsyncProjectDiscovery,
+    AsyncProjectObjects,
+    AsyncProjectRois,
+    AsyncProjectSamplesheets,
     AsyncProjects,
+    AsyncProjectViews,
     AsyncScreenshots,
+    AsyncS3Datasets,
+    AsyncThresholds,
     AsyncViewer,
 )
 from .errors import (
@@ -63,16 +80,48 @@ class AsyncClient:
         )
 
         self.application = AsyncApplication(self)
+        self.datasets = AsyncDatasets(self)
+        self.s3_datasets = AsyncS3Datasets(self)
+        self.datasets.s3 = self.s3_datasets
+        self.deep_links = AsyncDeepLinks(self)
         self.viewer = AsyncViewer(self)
         self.channels = AsyncChannels(self)
+        self.planes = AsyncPlanes(self)
+        self.native_layers = AsyncNativeLayers(self)
         self.layers = AsyncLayers(self)
         self.viewer.channels = self.channels
+        self.viewer.planes = self.planes
+        self.viewer.native_layers = self.native_layers
         self.viewer.layers = self.layers
         self.projects = AsyncProjects(self)
+        self.project_samplesheets = AsyncProjectSamplesheets(self)
+        self.projects.samplesheets = self.project_samplesheets
+        self.project_discovery = AsyncProjectDiscovery(self)
+        self.projects.discovery = self.project_discovery
+        self.project_objects = AsyncProjectObjects(self)
+        self.projects.objects = self.project_objects
+        self.project_rois = AsyncProjectRois(self)
+        self.projects.rois = self.project_rois
+        self.project_views = AsyncProjectViews(self)
+        self.projects.views = self.project_views
         self.screenshots = AsyncScreenshots(self)
+        self.labels = AsyncLabels(self)
+        self.memory = AsyncMemory(self)
         self.objects = AsyncObjects(self)
+        self.masks = AsyncMasks(self)
+        self.thresholds = AsyncThresholds(self)
+        self.analysis = AsyncAnalysis(self)
+        self.measurements = AsyncMeasurements(self)
+        self.object_exports = AsyncObjectExports(self)
         self.mosaic = AsyncMosaic(self)
         self.viewer.objects = self.objects
+        self.viewer.masks = self.masks
+        self.viewer.thresholds = self.thresholds
+        self.viewer.analysis = self.analysis
+        self.viewer.measurements = self.measurements
+        self.viewer.memory = self.memory
+        self.viewer.labels = self.labels
+        self.objects.exports = self.object_exports
         self.hello: Hello
 
     @classmethod

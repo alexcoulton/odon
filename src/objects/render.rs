@@ -1320,6 +1320,7 @@ impl ObjectsLayer {
         self.rect_query_snapshot_json(world_rect, local_to_world_offset, &indices, limit)
     }
 
+    #[cfg(test)]
     pub fn select_in_world_rect_snapshot_json(
         &mut self,
         world_rect: egui::Rect,
@@ -1327,27 +1328,12 @@ impl ObjectsLayer {
         additive: bool,
         limit: usize,
     ) -> serde_json::Value {
-        let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
-        self.apply_selection_indices(&indices, additive);
-        let id_preview = self.selection_id_preview(&indices);
-        self.status = if id_preview.is_empty() {
-            format!("Selected {} object(s) by rectangle.", indices.len())
-        } else {
-            format!(
-                "Selected {} object(s) by rectangle: {}",
-                indices.len(),
-                id_preview
-            )
-        };
-        serde_json::json!({
-            "query": self.rect_query_snapshot_json(
-                world_rect,
-                local_to_world_offset,
-                &indices,
-                limit,
-            ),
-            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
-        })
+        self.select_in_world_rect_snapshot_json_mode(
+            world_rect,
+            local_to_world_offset,
+            if additive { "add" } else { "replace" },
+            limit,
+        )
     }
 
     pub fn select_in_world_lasso(
@@ -1360,6 +1346,71 @@ impl ObjectsLayer {
         self.apply_selection_indices(&indices, additive);
         self.status = format!("Selected {} object(s) by lasso.", indices.len());
         indices.len()
+    }
+
+    pub fn query_world_lasso_snapshot_json(
+        &self,
+        world_points: &[egui::Pos2],
+        local_to_world_offset: egui::Vec2,
+        limit: usize,
+    ) -> serde_json::Value {
+        let indices = self.query_indices_in_world_lasso(world_points, local_to_world_offset);
+        let matches = self
+            .objects
+            .as_ref()
+            .map(|objects| {
+                self.object_entries_json(objects, &indices, local_to_world_offset, limit)
+            })
+            .unwrap_or_default();
+        serde_json::json!({
+            "world_points": world_points.iter().map(|point| [point.x, point.y]).collect::<Vec<_>>(),
+            "match_count": indices.len(),
+            "matches": matches,
+            "truncated": indices.len() > limit,
+        })
+    }
+
+    pub fn select_in_world_lasso_snapshot_json_mode(
+        &mut self,
+        world_points: &[egui::Pos2],
+        local_to_world_offset: egui::Vec2,
+        mode: &str,
+        limit: usize,
+    ) -> serde_json::Value {
+        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
+            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
+        }
+        let indices = self.query_indices_in_world_lasso(world_points, local_to_world_offset);
+        let changed = self.apply_object_selection_mode(&indices, mode);
+        serde_json::json!({
+            "changed": changed,
+            "query": self.query_world_lasso_snapshot_json(world_points, local_to_world_offset, limit),
+            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
+        })
+    }
+
+    pub fn select_in_world_rect_snapshot_json_mode(
+        &mut self,
+        world_rect: egui::Rect,
+        local_to_world_offset: egui::Vec2,
+        mode: &str,
+        limit: usize,
+    ) -> serde_json::Value {
+        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
+            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
+        }
+        let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
+        let changed = self.apply_object_selection_mode(&indices, mode);
+        serde_json::json!({
+            "changed": changed,
+            "query": self.rect_query_snapshot_json(
+                world_rect,
+                local_to_world_offset,
+                &indices,
+                limit,
+            ),
+            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
+        })
     }
 
     fn selection_id_preview(&self, indices: &[usize]) -> String {

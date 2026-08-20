@@ -33,10 +33,18 @@ class AsyncEvents:
         callback: AsyncEventCallback | None = None,
     ) -> Mapping[str, Any]:
         patterns = (events,) if isinstance(events, str) else tuple(events)
-        result = await self._client.call("events.subscribe", {"events": list(patterns)})
+        registration = (patterns, callback) if callback is not None else None
         if callback is not None:
-            self._callbacks.append((patterns, callback))
-        return result
+            assert registration is not None
+            self._callbacks.append(registration)
+        try:
+            return await self._client.call("events.subscribe", {"events": list(patterns)})
+        except BaseException:
+            if registration is not None:
+                self._callbacks = [
+                    item for item in self._callbacks if item is not registration
+                ]
+            raise
 
     async def unsubscribe(self, events: str | Iterable[str] | None = None) -> Mapping[str, Any]:
         patterns = None if events is None else ((events,) if isinstance(events, str) else tuple(events))

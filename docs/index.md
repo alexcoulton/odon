@@ -40,6 +40,16 @@ If you are new to the viewer, use this order:
 3. Use [Objects and Overlays](workflows/objects-and-overlays.md) if you are loading cells, masks, or points.
 4. Use [Mosaic Mode](workflows/mosaic.md) if you want to compare many ROIs.
 
+## Python control and extensions
+
+Odon can be controlled and extended by a separately installed pure-Python SDK;
+Python is not embedded in the application. Start with the
+[Python API guide](reference/python-api.md), then use the
+[complete member reference](reference/python-api-reference.md),
+[behavioural contracts](reference/python-api-contracts.md), and
+[current limitations](advanced/python-api-limitations.md) when building an
+extension.
+
 ## Supported Data At A Glance
 
 Primary workflows:

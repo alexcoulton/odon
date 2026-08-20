@@ -6,6 +6,17 @@ Odon remains a standalone Rust application. The separately installed,
 pure-Python `odon-client` package controls a running Odon process over the Odon
 Control Protocol; Odon does not embed or require Python.
 
+This page is the guided introduction. The documentation set also includes:
+
+- the generated [complete member reference](python-api-reference.md), containing
+  every synchronous and asynchronous signature plus its control method, modes,
+  task classification, and event;
+- [behavioural and domain contracts](python-api-contracts.md), covering state,
+  selectors, revisions, tasks, events, ownership, errors, and resource-specific
+  semantics; and
+- [current Python API limitations](../advanced/python-api-limitations.md),
+  including the single-viewport and predefined-UI-host boundaries.
+
 ## Install
 
 For development from this repository:
@@ -69,6 +80,52 @@ mosaic layout, screenshots, external data, layers, tasks, events, and native UI
 extensions. `app.call(method, params)` remains available for introspection and
 experimental methods.
 
+For a vim-slime/IPython tour made of independent `# %%` cells, open
+[`examples/interactive_python_api.py`](../../examples/interactive_python_api.py).
+
+## Application surface
+
+The high-level sync and async clients expose the same semantic resources. The
+async names below have identical arguments and add `await` to network calls:
+
+| Resource | Representative operations |
+| --- | --- |
+| `application` | state/readiness, settings, recent projects, diagnostics, navigation, guarded close/quit |
+| `datasets` | inspect/open local OME-Zarr, TIFF, SpatialData, Xenium, HTTP and authenticated S3 sources |
+| `projects` | create/open/save, metadata, samplesheets, discovery, ROI CRUD/selection/focus, saved views, object preload |
+| `viewer` | camera, panels, interpolation, renderer readiness, scale bar, active right tab |
+| `planes` | orientation/slice navigation and XY-only operation availability |
+| `channels` | visibility, active channel, colour, notes, contrast, transforms, order, groups, search and sorting |
+| `native_layers` | complete native-layer inventory, active layer, visibility, order and alignment offsets |
+| `labels` | NGFF label discovery, load/unload, render state and visibility |
+| `objects` | source lifecycle, paged properties, styling/legend, filter models, spatial queries, selection and focus |
+| `masks` | layer/polygon CRUD, selection, undo, GeoJSON import/export and project synchronization |
+| `thresholds` | levels, bounded preview configuration, refresh, polygon application and cancellation |
+| `analysis` | calls/selections/mappings, histograms, threshold suggestions, presets and cache warmup |
+| `measurements` | configuration, background execution, cancellation and generated property discovery |
+| `object_exports` | enriched CSV/GeoParquet columns, scoped export and progress |
+| `mosaic` | items, selection/focus, layout, object loading and cancellation |
+| `memory` | single/mosaic RAM estimates and pin lifecycle; single-view tile worker/prefetch policy |
+| `screenshots` | viewer/window/project capture, overlays, scaling, output folder and overwrite policy |
+| `data`, `layers`, `ui` | external resources, extension-owned layers and declarative native UI |
+
+The checked-in `api/application-surface.json` manifest is the authoritative
+native/control/Python parity map. Odon validates it against the central command
+registry at test time, including canonical methods, capabilities, events and
+sync/async Python references. `application.get_application_surface()` returns
+the same manifest at runtime.
+
+Mode restrictions are discoverable rather than inferred:
+
+```python
+availability = app.application.get_method_availability([
+    "viewer.labels.load",
+    "memory.pin",
+    "mosaic.focus.set",
+])
+plane_rules = app.planes.get_operation_availability()  # single-image mode
+```
+
 Calls are explicit network operations. `cached_state` only returns a deep copy
 of the last state fetched through `get_state()` and never performs hidden I/O.
 
@@ -103,6 +160,19 @@ pushes progress and completion events. `wait(timeout=...)` stops waiting but
 does not assume the Odon operation stopped. Cancellation is cooperative: it can
 cancel queued work and discard late results, but it cannot forcibly interrupt
 an operation already executing inside an indivisible library call.
+
+RAM pinning illustrates risk confirmation and mosaic scopes:
+
+```python
+state = app.memory.get()
+task = app.memory.pin(2, channels=["DAPI"], scope="all")
+result = task.wait()
+if result.get("confirmation_required"):
+    app.memory.pin(2, channels=["DAPI"], scope="all", force=True).wait()
+```
+
+In a mosaic, `scope` is `focused`, `item`, or `all`; pass `item=` with the item
+ID or sample name for item scope. In single-image mode, scope fields are ignored.
 
 ## Revisions and conflicts
 
@@ -274,3 +344,17 @@ Protocol v1 is loopback-only, requires the per-instance token, limits inline
 payloads and queue sizes, and never executes Python inside Odon. The API remains
 experimental: method aliases, snapshot shapes, UI vocabulary, and renderer
 coverage may change before a stable v1 subset is declared.
+
+The current implementation has one native canvas and one viewer state. Mosaic
+mode places several ROI items inside that canvas rather than creating
+independent viewports. Python cannot currently create side-by-side viewers with
+different per-view presentation. See the
+[limitations page](../advanced/python-api-limitations.md) for the complete
+boundary.
+
+Semantic feature families in the parity manifest are implemented. Entries
+classified as `adapter_only` or `presentation_only` cover packaging, operating-
+system URL registration, CLI/MCP adapters, fixture utilities, and visual-only
+chrome; they are deliberately not Python application-state commands. Packaged
+cross-platform smoke tests and a stable-v1 compatibility declaration remain
+release work rather than missing loopback control methods.

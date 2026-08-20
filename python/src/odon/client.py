@@ -23,7 +23,7 @@ from .data import DataResources
 from .layers import Layers
 from .ui import Ui
 from .discovery import Instance, select_instance
-from .resources import Application, Channels, Mosaic, Objects, Projects, Screenshots, Viewer
+from .resources import Analysis, Application, Channels, Datasets, DeepLinks, Labels, Masks, Measurements, Memory, Mosaic, NativeLayers, ObjectExports, Objects, Planes, ProjectDiscovery, ProjectObjects, ProjectRois, ProjectSamplesheets, Projects, ProjectViews, S3Datasets, Screenshots, Thresholds, Viewer
 
 logger = logging.getLogger("odon.client")
 
@@ -102,16 +102,48 @@ class Client:
         )
 
         self.application = Application(self)
+        self.datasets = Datasets(self)
+        self.s3_datasets = S3Datasets(self)
+        self.datasets.s3 = self.s3_datasets
+        self.deep_links = DeepLinks(self)
         self.viewer = Viewer(self)
         self.channels = Channels(self)
+        self.planes = Planes(self)
+        self.native_layers = NativeLayers(self)
         self.layers = Layers(self)
         self.viewer.channels = self.channels
+        self.viewer.planes = self.planes
+        self.viewer.native_layers = self.native_layers
         self.viewer.layers = self.layers
         self.projects = Projects(self)
+        self.project_samplesheets = ProjectSamplesheets(self)
+        self.projects.samplesheets = self.project_samplesheets
+        self.project_discovery = ProjectDiscovery(self)
+        self.projects.discovery = self.project_discovery
+        self.project_objects = ProjectObjects(self)
+        self.projects.objects = self.project_objects
+        self.project_rois = ProjectRois(self)
+        self.projects.rois = self.project_rois
+        self.project_views = ProjectViews(self)
+        self.projects.views = self.project_views
         self.screenshots = Screenshots(self)
+        self.labels = Labels(self)
+        self.memory = Memory(self)
         self.objects = Objects(self)
+        self.masks = Masks(self)
+        self.thresholds = Thresholds(self)
+        self.analysis = Analysis(self)
+        self.measurements = Measurements(self)
+        self.object_exports = ObjectExports(self)
         self.mosaic = Mosaic(self)
         self.viewer.objects = self.objects
+        self.viewer.masks = self.masks
+        self.viewer.thresholds = self.thresholds
+        self.viewer.analysis = self.analysis
+        self.viewer.measurements = self.measurements
+        self.viewer.memory = self.memory
+        self.viewer.labels = self.labels
+        self.objects.exports = self.object_exports
 
     def call(
         self,

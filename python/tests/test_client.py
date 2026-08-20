@@ -27,6 +27,7 @@ class _ControlHandler(socketserver.StreamRequestHandler):
             method = {
                 "app.get_state": "get_current_view",
                 "viewer.camera.get": "get_camera",
+                "viewer.camera.set": "set_camera",
             }.get(method, method)
             if method == "system.hello":
                 expected_token = getattr(self.server, "expected_token", None)

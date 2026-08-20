@@ -1390,6 +1390,92 @@ mod control_characterization_tests {
             1000.0
         );
 
+        let color = app.control_set_channel_color(
+            &serde_json::json!({"channel": "PanCK", "color_rgb": [12, 34, 56]}),
+        );
+        assert_eq!(
+            color["channel"]["color_rgb"],
+            serde_json::json!([12, 34, 56])
+        );
+        let note = app.control_set_channel_note(
+            &serde_json::json!({"channel": "PanCK", "note": "epithelial marker"}),
+        );
+        assert_eq!(note["channel"]["note"], "epithelial marker");
+
+        let transform = app.control_set_channel_transform(&serde_json::json!({
+            "channel": "PanCK",
+            "offset_world": [4.0, -3.0],
+            "scale": [1.25, 0.75],
+            "rotation_rad": 0.5
+        }));
+        assert_eq!(transform["changed"], true);
+        assert_eq!(
+            transform["transform"]["offset_world"],
+            serde_json::json!([4.0, -3.0])
+        );
+        assert_eq!(
+            transform["transform"]["scale"],
+            serde_json::json!([1.25, 0.75])
+        );
+        let before_invalid_transform =
+            app.control_get_channel_transform(&serde_json::json!({"channel": "PanCK"}));
+        assert!(
+            app.control_set_channel_transform(
+                &serde_json::json!({"channel": "PanCK", "scale": [0.0, 1.0]})
+            )
+            .get("error")
+            .is_some()
+        );
+        assert_eq!(
+            app.control_get_channel_transform(&serde_json::json!({"channel": "PanCK"})),
+            before_invalid_transform
+        );
+        let reset = app.control_reset_channel_transform(&serde_json::json!({"channel": "PanCK"}));
+        assert_eq!(
+            reset["transform"]["offset_world"],
+            serde_json::json!([0.0, 0.0])
+        );
+        assert_eq!(reset["transform"]["scale"], serde_json::json!([1.0, 1.0]));
+        assert_eq!(reset["transform"]["rotation_rad"], 0.0);
+
+        let native_layers = app.control_native_layer_snapshot_list();
+        assert_eq!(native_layers[0]["layer_id"], "channel:0");
+        assert_eq!(native_layers[0]["stack"], "channels");
+        let hidden = app.control_set_native_layer_visibility(
+            &serde_json::json!({"layer_id": "channel:2", "visible": false}),
+        );
+        assert_eq!(hidden["layer"]["visible"], false);
+        let active =
+            app.control_set_active_native_layer(&serde_json::json!({"layer_id": "channel:2"}));
+        assert_eq!(active["layer"]["active"], true);
+        let reordered = app.control_set_native_layer_order(&serde_json::json!({
+            "stack": "channels",
+            "layers": ["channel:4", "channel:3", "channel:2", "channel:1", "channel:0"]
+        }));
+        assert_eq!(reordered["changed"], true);
+        assert_eq!(app.channel_layer_order, vec![4, 3, 2, 1, 0]);
+        let moved = app.control_set_native_layer_offset(
+            &serde_json::json!({"layer_id": "channel:2", "offset_world": [9.0, -2.0]}),
+        );
+        assert_eq!(
+            moved["layer"]["offset_world"],
+            serde_json::json!([9.0, -2.0])
+        );
+        let reset_offset =
+            app.control_reset_native_layer_offset(&serde_json::json!({"layer_id": "channel:2"}));
+        assert_eq!(
+            reset_offset["layer"]["offset_world"],
+            serde_json::json!([0.0, 0.0])
+        );
+        app.control_set_native_layer_order(&serde_json::json!({
+            "stack": "channels",
+            "layers": ["channel:0", "channel:1", "channel:2", "channel:3", "channel:4"]
+        }));
+        app.control_set_native_layer_visibility(
+            &serde_json::json!({"layer_id": "channel:2", "visible": true}),
+        );
+        app.control_set_active_native_layer(&serde_json::json!({"layer_id": "channel:1"}));
+
         let panels = app.control_set_side_panels(&serde_json::json!({
             "left": false,
             "right": true
@@ -1648,6 +1734,36 @@ mod control_characterization_tests {
             .is_some()
         );
     }
+
+    #[test]
+    fn label_control_state_and_channel_presentation_are_bounded() {
+        let mut app = fixture_app();
+        let labels = app.control_labels_json();
+        assert!(labels["available"].is_array());
+        assert_eq!(labels["gpu_available"], false);
+        assert_eq!(labels["busy"], false);
+        let unloaded = app.control_unload_labels();
+        assert!(unloaded["labels"].is_object());
+        assert_eq!(unloaded["labels"]["visible"], false);
+        assert!(
+            app.control_load_labels(&serde_json::json!({"name": "missing"}))
+                .get("error")
+                .is_some()
+        );
+
+        let presentation = app.control_set_channel_presentation(
+            &serde_json::json!({"search": "nuc", "sort": "visible_first"}),
+        );
+        assert_eq!(presentation["search"], "nuc");
+        assert_eq!(presentation["sort"], "visible_first");
+        let before = app.control_channel_presentation_json();
+        assert!(
+            app.control_set_channel_presentation(&serde_json::json!({"sort": "unknown"}))
+                .get("error")
+                .is_some()
+        );
+        assert_eq!(app.control_channel_presentation_json(), before);
+    }
 }
 
 fn build_tiff_dataset(
@@ -1796,6 +1912,18 @@ fn build_tiff_runtime_assets(
 impl OmeZarrViewerApp {
     pub fn set_show_scale_bar(&mut self, show: bool) {
         self.show_scale_bar = show;
+    }
+
+    pub fn show_scale_bar(&self) -> bool {
+        self.show_scale_bar
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.mask_layers_project_dirty || self.project_space.has_unsaved_changes()
+    }
+
+    pub fn has_unsaved_mask_changes(&self) -> bool {
+        self.mask_layers_project_dirty
     }
 
     pub fn set_label_prompt_preference(&mut self, preference: LabelPromptSessionPreference) {
@@ -3145,6 +3273,33 @@ impl OmeZarrViewerApp {
         )
     }
 
+    pub fn new_tiff_runtime_with_plane(
+        ctx: &egui::Context,
+        gpu_available: bool,
+        image_path: PathBuf,
+        z: usize,
+        t: usize,
+        auto_contrast_settings: AutoContrastSettings,
+    ) -> anyhow::Result<Self> {
+        apply_napari_like_dark(ctx);
+        let dataset_name = image_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("tiff")
+            .to_string();
+        Self::new_tiff_runtime_named_with_plane(
+            ctx,
+            gpu_available,
+            image_path.clone(),
+            image_path,
+            dataset_name,
+            "image".to_string(),
+            crate::xenium::TiffPlaneSelection { z, t },
+            auto_contrast_settings,
+        )
+    }
+
     fn new_tiff_runtime_named(
         ctx: &egui::Context,
         gpu_available: bool,
@@ -3152,6 +3307,28 @@ impl OmeZarrViewerApp {
         image_path: PathBuf,
         dataset_name: String,
         channel_name: String,
+        auto_contrast_settings: AutoContrastSettings,
+    ) -> anyhow::Result<Self> {
+        Self::new_tiff_runtime_named_with_plane(
+            ctx,
+            gpu_available,
+            dataset_root,
+            image_path,
+            dataset_name,
+            channel_name,
+            crate::xenium::TiffPlaneSelection { z: 0, t: 0 },
+            auto_contrast_settings,
+        )
+    }
+
+    fn new_tiff_runtime_named_with_plane(
+        ctx: &egui::Context,
+        gpu_available: bool,
+        dataset_root: PathBuf,
+        image_path: PathBuf,
+        dataset_name: String,
+        channel_name: String,
+        plane_selection: crate::xenium::TiffPlaneSelection,
         auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         crate::log_info!(
@@ -3165,7 +3342,7 @@ impl OmeZarrViewerApp {
             image_path,
             dataset_name,
             channel_name,
-            crate::xenium::TiffPlaneSelection { z: 0, t: 0 },
+            plane_selection,
         )?;
         let tiles_gl = gpu_available.then(|| TilesGl::new(RAW_TILE_CACHE_CAPACITY_TILES));
 
@@ -3746,6 +3923,84 @@ impl OmeZarrViewerApp {
         )
     }
 
+    pub fn control_plane_snapshot(&self) -> serde_json::Value {
+        let selection = self.active_view_selection();
+        let supported = self
+            .view_plane_modes()
+            .into_iter()
+            .map(|mode| mode.label().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "mode": selection.mode.label().to_ascii_lowercase(),
+            "slice": selection.slice_level0,
+            "slice_axis": selection.mode.slice_axis_label().to_ascii_lowercase(),
+            "extent": self.view_slice_extent_level0().unwrap_or(1),
+            "supported_modes": supported,
+            "xy_only_operations_available": selection.mode == ViewPlaneMode::Xy,
+        })
+    }
+
+    pub fn control_set_plane(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let before = self.active_view_selection();
+        if let Some(mode) = params.get("mode").and_then(serde_json::Value::as_str) {
+            let mode = match mode.to_ascii_lowercase().as_str() {
+                "xy" => ViewPlaneMode::Xy,
+                "xz" => ViewPlaneMode::Xz,
+                "yz" => ViewPlaneMode::Yz,
+                _ => return serde_json::json!({"error": "mode must be 'xy', 'xz', or 'yz'"}),
+            };
+            if !self.view_plane_modes().contains(&mode) {
+                return serde_json::json!({
+                    "error": format!("{} view is not available for this dataset", mode.label()),
+                });
+            }
+            self.set_view_plane_mode(mode);
+        }
+        if let Some(slice) = params.get("slice").and_then(serde_json::Value::as_u64) {
+            self.set_active_view_slice_level0(slice);
+        }
+        let after = self.active_view_selection();
+        serde_json::json!({
+            "changed": before != after,
+            "plane": self.control_plane_snapshot(),
+        })
+    }
+
+    pub fn control_step_plane(
+        &mut self,
+        params: &serde_json::Value,
+        forward: bool,
+    ) -> serde_json::Value {
+        let step = params
+            .get("step")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        let wrap = params
+            .get("wrap")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let before = self.active_view_selection();
+        let extent = self.view_slice_extent_level0().unwrap_or(1).max(1);
+        let last = extent.saturating_sub(1);
+        let next = if wrap {
+            let offset = step % extent;
+            if forward {
+                (before.slice_level0 + offset) % extent
+            } else {
+                (before.slice_level0 + extent - offset) % extent
+            }
+        } else if forward {
+            before.slice_level0.saturating_add(step).min(last)
+        } else {
+            before.slice_level0.saturating_sub(step)
+        };
+        self.set_active_view_slice_level0(next);
+        serde_json::json!({
+            "changed": before.slice_level0 != next,
+            "plane": self.control_plane_snapshot(),
+        })
+    }
+
     pub fn control_active_channel_snapshot(&self) -> serde_json::Value {
         self.channels
             .get(self.selected_channel)
@@ -4004,6 +4259,481 @@ impl OmeZarrViewerApp {
         self.control_get_channel_contrast(&serde_json::json!({"index": idx}))
     }
 
+    pub fn control_set_channel_color(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(values) = params
+            .get("color_rgb")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return serde_json::json!({"error": "set_channel_color requires color_rgb"});
+        };
+        let color = values
+            .iter()
+            .map(serde_json::Value::as_u64)
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| {
+                (values.len() == 3 && values.iter().all(|value| *value <= 255))
+                    .then(|| [values[0] as u8, values[1] as u8, values[2] as u8])
+            });
+        let Some(color) = color else {
+            return serde_json::json!({"error": "color_rgb must contain three integers from 0 to 255"});
+        };
+        let Some(channel) = self.channels.get_mut(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let changed = channel.color_rgb != color;
+        channel.color_rgb = color;
+        if changed {
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "channel": self.control_channel_snapshot()[idx].clone(),
+        })
+    }
+
+    pub fn control_set_channel_note(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(note) = params.get("note").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "set_channel_note requires note"});
+        };
+        let Some(channel) = self.channels.get_mut(idx) else {
+            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
+        };
+        let changed = channel.note != note;
+        channel.note = note.to_string();
+        serde_json::json!({
+            "changed": changed,
+            "channel": self.control_channel_snapshot()[idx].clone(),
+        })
+    }
+
+    pub fn control_get_channel_transform(&self, params: &serde_json::Value) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let channel = &self.channels[idx];
+        let offset = self
+            .channel_offsets_world
+            .get(idx)
+            .copied()
+            .unwrap_or(egui::Vec2::ZERO);
+        let scale = self
+            .channel_scales
+            .get(idx)
+            .copied()
+            .unwrap_or(egui::Vec2::splat(1.0));
+        let rotation_rad = self.channel_rotations_rad.get(idx).copied().unwrap_or(0.0);
+        serde_json::json!({
+            "index": idx,
+            "name": channel.name,
+            "offset_world": [offset.x, offset.y],
+            "scale": [scale.x, scale.y],
+            "rotation_rad": rotation_rad,
+            "rotation_degrees": rotation_rad.to_degrees(),
+        })
+    }
+
+    pub fn control_set_channel_transform(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let before_offset = self.channel_offsets_world[idx];
+        let before_scale = self.channel_scales[idx];
+        let before_rotation = self.channel_rotations_rad[idx];
+        let parse_pair = |name: &str| -> Result<Option<[f32; 2]>, String> {
+            let Some(value) = params.get(name) else {
+                return Ok(None);
+            };
+            let Some(values) = value.as_array().filter(|values| values.len() == 2) else {
+                return Err(format!("{name} must contain exactly two numbers"));
+            };
+            let pair = [values[0].as_f64(), values[1].as_f64()];
+            if pair
+                .iter()
+                .any(|value| value.is_none_or(|value| !value.is_finite()))
+            {
+                return Err(format!("{name} values must be finite numbers"));
+            }
+            Ok(Some([
+                pair[0].unwrap_or_default() as f32,
+                pair[1].unwrap_or_default() as f32,
+            ]))
+        };
+        let offset = match parse_pair("offset_world") {
+            Ok(value) => value,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let scale = match parse_pair("scale") {
+            Ok(value) => value,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        if let Some([x, y]) = scale
+            && (!(0.01..=100.0).contains(&x) || !(0.01..=100.0).contains(&y))
+        {
+            return serde_json::json!({"error": "scale values must be between 0.01 and 100"});
+        }
+        let rotation = match params.get("rotation_rad") {
+            Some(value) => match value.as_f64().filter(|value| value.is_finite()) {
+                Some(rotation) => Some(rotation as f32),
+                None => {
+                    return serde_json::json!({"error": "rotation_rad must be a finite number"});
+                }
+            },
+            None => None,
+        };
+        if let Some([x, y]) = offset {
+            self.channel_offsets_world[idx] = egui::vec2(x, y);
+        }
+        if let Some([x, y]) = scale {
+            self.channel_scales[idx] = egui::vec2(x, y);
+        }
+        if let Some(rotation) = rotation {
+            self.channel_rotations_rad[idx] = rotation;
+        }
+        let changed = before_offset != self.channel_offsets_world[idx]
+            || before_scale != self.channel_scales[idx]
+            || before_rotation != self.channel_rotations_rad[idx];
+        if changed {
+            self.hist_dirty = true;
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "transform": self.control_get_channel_transform(&serde_json::json!({"index": idx})),
+        })
+    }
+
+    pub fn control_reset_channel_transform(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let idx = match self.control_channel_index_from_params(params) {
+            Ok(idx) => idx,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let changed = self.channel_offsets_world[idx] != egui::Vec2::ZERO
+            || self.channel_scales[idx] != egui::Vec2::splat(1.0)
+            || self.channel_rotations_rad[idx] != 0.0;
+        self.channel_offsets_world[idx] = egui::Vec2::ZERO;
+        self.channel_scales[idx] = egui::Vec2::splat(1.0);
+        self.channel_rotations_rad[idx] = 0.0;
+        if changed {
+            self.hist_dirty = true;
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "transform": self.control_get_channel_transform(&serde_json::json!({"index": idx})),
+        })
+    }
+
+    fn control_native_layer_kind(id: LayerId) -> &'static str {
+        match id {
+            LayerId::Channel(_) => "channel",
+            LayerId::SpatialImage(_) => "spatial_image",
+            LayerId::SegmentationLabels => "segmentation_labels",
+            LayerId::SegmentationGeoJson => "segmentation_geojson",
+            LayerId::SegmentationObjects => "segmentation_objects",
+            LayerId::Mask(_) => "mask",
+            LayerId::Points => "points",
+            LayerId::Annotation(_) => "annotation",
+            LayerId::SpatialShape(_) => "spatial_shape",
+            LayerId::SpatialPoints => "spatial_points",
+            LayerId::XeniumCells => "xenium_cells",
+            LayerId::XeniumTranscripts => "xenium_transcripts",
+        }
+    }
+
+    fn control_native_layer_snapshot(
+        &self,
+        id: LayerId,
+        stack: &str,
+        order: usize,
+    ) -> serde_json::Value {
+        let offset = self.layer_offset_world(id);
+        serde_json::json!({
+            "layer_id": Self::layer_id_storage_key(id),
+            "kind": Self::control_native_layer_kind(id),
+            "name": self.layer_display_name(id),
+            "stack": stack,
+            "order": order,
+            "active": self.active_layer == id,
+            "visible": self.layer_visible_value(id).unwrap_or(false),
+            "available": self.layer_is_available(id),
+            "offset_world": [offset.x, offset.y],
+        })
+    }
+
+    pub fn control_native_layer_snapshot_list(&self) -> serde_json::Value {
+        let mut layers = self
+            .channel_layer_order
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(order, idx)| {
+                self.control_native_layer_snapshot(LayerId::Channel(idx), "channels", order)
+            })
+            .collect::<Vec<_>>();
+        layers.extend(
+            self.overlay_layer_order
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(order, id)| self.control_native_layer_snapshot(id, "overlays", order)),
+        );
+        serde_json::Value::Array(layers)
+    }
+
+    fn control_native_layer_id_from_params(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<LayerId, String> {
+        let Some(raw) = params
+            .get("layer_id")
+            .or_else(|| params.get("id"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Err("layer_id is required".to_string());
+        };
+        let Some(id) = self.parse_layer_id_storage_key(raw) else {
+            return Err(format!("unknown native layer '{raw}'"));
+        };
+        let exists = match id {
+            LayerId::Channel(idx) => self.channel_layer_order.contains(&idx),
+            _ => self.overlay_layer_order.contains(&id),
+        };
+        exists
+            .then_some(id)
+            .ok_or_else(|| format!("native layer '{raw}' is not loaded"))
+    }
+
+    pub fn control_get_native_layer(&self, params: &serde_json::Value) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let (stack, order) = match id {
+            LayerId::Channel(idx) => (
+                "channels",
+                self.channel_layer_order
+                    .iter()
+                    .position(|candidate| *candidate == idx)
+                    .unwrap_or_default(),
+            ),
+            _ => (
+                "overlays",
+                self.overlay_layer_order
+                    .iter()
+                    .position(|candidate| *candidate == id)
+                    .unwrap_or_default(),
+            ),
+        };
+        self.control_native_layer_snapshot(id, stack, order)
+    }
+
+    pub fn control_set_active_native_layer(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        if !self.layer_is_available(id) {
+            return serde_json::json!({"error": "native layer is not currently available"});
+        }
+        let changed = self.active_layer != id;
+        self.set_active_layer(id);
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_set_native_layer_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(visible) = params.get("visible").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "visible is required"});
+        };
+        let before = self.layer_visible_value(id);
+        let Some(target) = self.layer_visible_mut(id) else {
+            return serde_json::json!({"error": "native layer has no visibility state"});
+        };
+        *target = visible;
+        let changed = before != Some(visible);
+        if changed {
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_set_native_layer_order(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(stack) = params.get("stack").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "stack is required"});
+        };
+        let Some(values) = params.get("layers").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "layers is required"});
+        };
+        let parsed = values
+            .iter()
+            .map(|value| {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "layer IDs must be strings".to_string())?;
+                self.parse_layer_id_storage_key(raw)
+                    .ok_or_else(|| format!("unknown native layer '{raw}'"))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut unique = parsed.clone();
+        unique.sort_by_key(|id| Self::layer_id_storage_key(*id));
+        unique.dedup();
+        if unique.len() != parsed.len() {
+            return serde_json::json!({"error": "layers must not contain duplicates"});
+        }
+        let changed = match stack {
+            "channels" => {
+                let indices = parsed
+                    .iter()
+                    .map(|id| match id {
+                        LayerId::Channel(idx) => Ok(*idx),
+                        _ => Err("channels stack accepts only channel layers"),
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let indices = match indices {
+                    Ok(indices) => indices,
+                    Err(error) => return serde_json::json!({"error": error}),
+                };
+                if indices.len() != self.channel_layer_order.len()
+                    || !self
+                        .channel_layer_order
+                        .iter()
+                        .all(|idx| indices.contains(idx))
+                {
+                    return serde_json::json!({"error": "channels must contain every loaded channel exactly once"});
+                }
+                let changed = self.channel_layer_order != indices;
+                self.channel_layer_order = indices;
+                changed
+            }
+            "overlays" => {
+                if parsed.len() != self.overlay_layer_order.len()
+                    || !self
+                        .overlay_layer_order
+                        .iter()
+                        .all(|id| parsed.contains(id))
+                    || parsed.iter().any(|id| matches!(id, LayerId::Channel(_)))
+                {
+                    return serde_json::json!({"error": "layers must contain every loaded overlay exactly once"});
+                }
+                let changed = self.overlay_layer_order != parsed;
+                self.overlay_layer_order = parsed;
+                changed
+            }
+            _ => return serde_json::json!({"error": "stack must be 'channels' or 'overlays'"}),
+        };
+        if changed {
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layers": self.control_native_layer_snapshot_list(),
+        })
+    }
+
+    pub fn control_set_native_layer_offset(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(values) = params
+            .get("offset_world")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| values.len() == 2)
+        else {
+            return serde_json::json!({"error": "offset_world must contain exactly two numbers"});
+        };
+        let Some(x) = values[0].as_f64().filter(|value| value.is_finite()) else {
+            return serde_json::json!({"error": "offset_world values must be finite numbers"});
+        };
+        let Some(y) = values[1].as_f64().filter(|value| value.is_finite()) else {
+            return serde_json::json!({"error": "offset_world values must be finite numbers"});
+        };
+        let before = self.layer_offset_world(id);
+        let Some(target) = self.layer_offset_world_mut(id) else {
+            return serde_json::json!({"error": "native layer does not support translation"});
+        };
+        *target = egui::vec2(x as f32, y as f32);
+        let changed = *target != before;
+        if changed {
+            self.hist_dirty = true;
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_reset_native_layer_offset(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let baseline = self
+            .loaded_layer_offsets_world
+            .get(&id)
+            .copied()
+            .unwrap_or(egui::Vec2::ZERO);
+        let before = self.layer_offset_world(id);
+        let Some(target) = self.layer_offset_world_mut(id) else {
+            return serde_json::json!({"error": "native layer does not support translation"});
+        };
+        *target = baseline;
+        let changed = before != baseline;
+        if changed {
+            self.hist_dirty = true;
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
     pub fn control_get_object_overlay_visibility(
         &self,
         params: &serde_json::Value,
@@ -4047,6 +4777,303 @@ impl OmeZarrViewerApp {
         }
         self.bump_render_id();
         self.control_get_object_overlay_visibility(params)
+    }
+
+    pub fn control_get_object_state(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match params
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("objects")
+        {
+            "objects" | "segmentation_objects" => serde_json::json!({
+                "target": "segmentation_objects",
+                "state": self.seg_objects.control_state_snapshot_json(),
+            }),
+            "spatial_shape" => {
+                let Some(id) = params
+                    .get("layer_id")
+                    .or_else(|| params.get("id"))
+                    .and_then(serde_json::Value::as_u64)
+                else {
+                    return serde_json::json!({"error": "target='spatial_shape' requires layer_id"});
+                };
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "state": objects.control_state_snapshot_json(),
+                })
+            }
+            target => serde_json::json!({"error": format!("unknown object target '{target}'")}),
+        }
+    }
+
+    pub fn control_load_object_source(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            return serde_json::json!({"error": "path is required"});
+        };
+        let path = PathBuf::from(path);
+        if !path.exists() || !path.is_file() {
+            return serde_json::json!({"error": format!("object source does not exist: {}", path.to_string_lossy())});
+        }
+        let downsample_factor = params
+            .get("downsample_factor")
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            .unwrap_or(self.seg_objects.downsample_factor)
+            .max(1e-6);
+        self.seg_objects.load_path(path.clone(), downsample_factor);
+        serde_json::json!({
+            "queued": true,
+            "path": path.to_string_lossy(),
+            "downsample_factor": downsample_factor,
+        })
+    }
+
+    pub fn control_reload_object_source(&mut self) -> serde_json::Value {
+        let Some(path) = self.seg_objects.loaded_geojson.clone() else {
+            return serde_json::json!({"error": "No object source is loaded."});
+        };
+        let downsample_factor = self.seg_objects.downsample_factor;
+        self.seg_objects.load_path(path.clone(), downsample_factor);
+        serde_json::json!({
+            "queued": true,
+            "path": path.to_string_lossy(),
+            "downsample_factor": downsample_factor,
+        })
+    }
+
+    pub fn control_clear_object_source(&mut self) -> serde_json::Value {
+        let previous_path = self
+            .seg_objects
+            .loaded_geojson
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        let previous_count = self.seg_objects.object_count();
+        self.seg_objects.clear();
+        self.bump_render_id();
+        serde_json::json!({
+            "cleared": previous_path.is_some() || previous_count > 0,
+            "previous_path": previous_path,
+            "previous_count": previous_count,
+        })
+    }
+
+    pub fn control_cancel_object_source_load(&mut self) -> serde_json::Value {
+        serde_json::json!({
+            "cancelled": self.seg_objects.cancel_load(),
+            "state": self.seg_objects.control_state_snapshot_json(),
+        })
+    }
+
+    pub fn control_get_object_style(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_style_snapshot_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(ObjectsLayer::control_style_snapshot_json)
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object style"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_object_style(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_set_style_json(params),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_set_style_json(params))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object style"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_set_object_legend(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_set_legend_json(params),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_set_legend_json(params))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object legend"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_get_fast_object_rendering(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({"enabled": self.seg_objects.fast_rendering}),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer())
+                .map(|objects| serde_json::json!({"enabled": objects.fast_rendering}))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object rendering settings"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_fast_object_rendering(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(enabled) = params.get("enabled").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "enabled is required"});
+        };
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_set_fast_rendering_json(enabled),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_set_fast_rendering_json(enabled))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object rendering settings"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_list_object_properties(&self, params: &serde_json::Value) -> serde_json::Value {
+        let offset = params
+            .get("offset")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(200) as usize;
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_property_schema_json(offset, limit),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer())
+                .map(|objects| objects.control_property_schema_json(offset, limit))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object properties"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_load_object_property(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(property) = params
+            .get("property")
+            .or_else(|| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return serde_json::json!({"error": "property is required"});
+        };
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "result": self.seg_objects.control_request_property_load(property),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let result = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                    .and_then(|layer| layer.object_layer_mut())
+                    .map(|objects| objects.control_request_property_load(property))
+                    .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")}));
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "result": result,
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer has no object properties"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_get_object_property_values(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(property) = params
+            .get("property")
+            .or_else(|| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return serde_json::json!({"error": "property is required"});
+        };
+        let offset = params
+            .get("offset")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(200) as usize;
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_property_values_json(property, offset, limit),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer())
+                .map(|objects| objects.control_property_values_json(property, offset, limit))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer has no object properties"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
     }
 
     pub fn control_get_object_selection(&self, params: &serde_json::Value) -> serde_json::Value {
@@ -4187,10 +5214,20 @@ impl OmeZarrViewerApp {
         params: &serde_json::Value,
     ) -> serde_json::Value {
         let limit = control_object_debug_limit(params);
-        let additive = params
-            .get("additive")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                if params
+                    .get("additive")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "add"
+                } else {
+                    "replace"
+                }
+            });
         let world_rect = match self.control_world_rect_from_params(params) {
             Ok(rect) => rect,
             Err(error) => return serde_json::json!({"error": error}),
@@ -4198,10 +5235,10 @@ impl OmeZarrViewerApp {
         let result = match self.control_object_selection_target(params) {
             Ok(LayerId::SegmentationObjects) => serde_json::json!({
                 "target": "segmentation_objects",
-                "result": self.seg_objects.select_in_world_rect_snapshot_json(
+                "result": self.seg_objects.select_in_world_rect_snapshot_json_mode(
                     world_rect,
                     self.seg_objects_offset_world,
-                    additive,
+                    mode,
                     limit,
                 ),
             }),
@@ -4223,13 +5260,91 @@ impl OmeZarrViewerApp {
                     "target": "spatial_shape",
                     "layer_id": id,
                     "layer_name": layer_name,
-                    "result": objects.select_in_world_rect_snapshot_json(
+                    "result": objects.select_in_world_rect_snapshot_json_mode(
                         world_rect,
                         offset_world,
-                        additive,
+                        mode,
                         limit,
                     ),
                 })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_query_object_ids_in_lasso(
+        &self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let points = match self.control_world_points_from_params(params) {
+            Ok(points) => points,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let limit = control_object_debug_limit(params);
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.query_world_lasso_snapshot_json(
+                &points,
+                self.seg_objects_offset_world,
+                limit,
+            ),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let Some(objects) = layer.object_layer() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.query_world_lasso_snapshot_json(&points, layer.offset_world, limit)
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_select_object_ids_in_lasso(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let points = match self.control_world_points_from_params(params) {
+            Ok(points) => points,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let limit = control_object_debug_limit(params);
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("replace");
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => {
+                self.seg_objects.select_in_world_lasso_snapshot_json_mode(
+                    &points,
+                    self.seg_objects_offset_world,
+                    mode,
+                    limit,
+                )
+            }
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset = layer.offset_world;
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.select_in_world_lasso_snapshot_json_mode(&points, offset, mode, limit)
             }
             Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
             Err(error) => serde_json::json!({"error": error}),
@@ -4276,6 +5391,134 @@ impl OmeZarrViewerApp {
                 })
             }
             Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_select_object_ids(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(values) = params.get("ids").and_then(serde_json::Value::as_array) else {
+            return serde_json::json!({"error": "ids is required"});
+        };
+        let ids = values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        if ids.len() != values.len() {
+            return serde_json::json!({"error": "ids must contain unique strings"});
+        }
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("replace");
+        let limit = control_object_debug_limit(params);
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_select_ids_json(
+                &ids,
+                mode,
+                self.seg_objects_offset_world,
+                limit,
+            ),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset = layer.offset_world;
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.control_select_ids_json(&ids, mode, offset, limit)
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_select_filtered_objects(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let mode = params
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("replace");
+        let limit = control_object_debug_limit(params);
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_select_filtered_json(
+                mode,
+                self.seg_objects_offset_world,
+                limit,
+            ),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset = layer.offset_world;
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.control_select_filtered_json(mode, offset, limit)
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object selection"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_focus_object(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_focus_object_json(params, self.seg_objects_offset_world),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let offset = layer.offset_world;
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                objects.control_focus_object_json(params, offset)
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object focus"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_clear_object_focus(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_clear_focus_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(ObjectsLayer::control_clear_focus_json)
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "active layer does not support object focus"}),
             Err(error) => serde_json::json!({"error": error}),
         };
         self.bump_render_id();
@@ -4388,6 +5631,42 @@ impl OmeZarrViewerApp {
                     "layer_id": id,
                     "layer_name": layer_name,
                     "filter": objects.filter_snapshot_json(),
+                })
+            }
+            Ok(_) => serde_json::json!({"error": "active layer does not support object filters"}),
+            Err(error) => serde_json::json!({"error": error}),
+        };
+        self.bump_render_id();
+        result
+    }
+
+    pub fn control_set_object_filter_model(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let result = match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => serde_json::json!({
+                "target": "segmentation_objects",
+                "filter": self.seg_objects.control_set_filter_model_json(params),
+            }),
+            Ok(LayerId::SpatialShape(id)) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} not found")});
+                };
+                let layer_name = layer.name.clone();
+                let Some(objects) = layer.object_layer_mut() else {
+                    return serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")});
+                };
+                serde_json::json!({
+                    "target": "spatial_shape",
+                    "layer_id": id,
+                    "layer_name": layer_name,
+                    "filter": objects.control_set_filter_model_json(params),
                 })
             }
             Ok(_) => serde_json::json!({"error": "active layer does not support object filters"}),
@@ -4522,6 +5801,41 @@ impl OmeZarrViewerApp {
             "sort": self.channel_sort_mode.storage_key(),
             "order": self.control_channel_order_snapshot(),
         })
+    }
+
+    pub fn control_channel_presentation_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "search": self.channel_list_search,
+            "sort": self.channel_sort_mode.storage_key(),
+            "order": self.control_channel_order_snapshot(),
+        })
+    }
+
+    pub fn control_set_channel_presentation(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let search = match params.get("search") {
+            Some(value) => match value.as_str() {
+                Some(value) => Some(value.to_string()),
+                None => return serde_json::json!({"error": "search must be a string"}),
+            },
+            None => None,
+        };
+        let sort = match params.get("sort") {
+            Some(value) => match value.as_str().and_then(ChannelSortMode::from_storage_key) {
+                Some(value) => Some(value),
+                None => return serde_json::json!({"error": "unknown channel sort mode"}),
+            },
+            None => None,
+        };
+        if let Some(search) = search {
+            self.channel_list_search = search;
+        }
+        if let Some(sort) = sort {
+            self.channel_sort_mode = sort;
+        }
+        self.control_channel_presentation_json()
     }
 
     pub fn control_channel_groups_snapshot(&self) -> serde_json::Value {
@@ -4811,7 +6125,7 @@ impl OmeZarrViewerApp {
         }
     }
 
-    fn current_project_view_spec(&mut self) -> ProjectViewSpec {
+    pub fn control_current_project_view_spec(&mut self) -> ProjectViewSpec {
         let display = self.seg_objects.project_display_state();
         let analysis = self.seg_objects.project_analysis_state();
         let (cell_color_by, visible_cell_types, hidden_cell_types) = self
@@ -4890,7 +6204,7 @@ impl OmeZarrViewerApp {
                 self.pending_request = Some(ViewerRequest::ClearRecentProjects);
             }
             ProjectSpaceAction::CaptureCurrentView => {
-                let spec = self.current_project_view_spec();
+                let spec = self.control_current_project_view_spec();
                 self.project_space.set_view_preset_draft(spec);
             }
             ProjectSpaceAction::OpenMosaic(rois) => {
@@ -4916,6 +6230,10 @@ impl OmeZarrViewerApp {
                 self.active_help_topic = Some(topic);
             }
         }
+    }
+
+    pub fn control_apply_project_view_spec(&mut self, spec: &ProjectViewSpec) {
+        self.apply_deep_link_request(&spec.to_deep_link_request(None));
     }
 
     fn ui_help_heading(
@@ -5577,8 +6895,723 @@ impl OmeZarrViewerApp {
         }
     }
 
+    pub fn control_get_object_analysis(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let channels = self.channels.clone();
+        let selected_channel = self.selected_channel;
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_analysis_state_json(&channels, selected_channel),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_analysis_state_json(&channels, selected_channel))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_object_analysis(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let channels = self.channels.clone();
+        let selected_channel = self.selected_channel;
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_set_analysis_state_json(
+                params,
+                &channels,
+                selected_channel,
+            ),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| {
+                    objects.control_set_analysis_state_json(params, &channels, selected_channel)
+                })
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_object_histogram(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_histogram_json(params),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_histogram_json(params))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_object_threshold_suggestions(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_threshold_suggestions_json(params),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_threshold_suggestions_json(params))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_get_analysis_warmup(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_analysis_warmup_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_analysis_warmup_json())
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_start_analysis_warmup(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let channels = self.channels.clone();
+        let selected_channel = self.selected_channel;
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_start_analysis_warmup_json(&channels, selected_channel),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| {
+                    objects.control_start_analysis_warmup_json(&channels, selected_channel)
+                })
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_export_analysis_preset(
+        &mut self,
+        params: &serde_json::Value,
+        path: &Path,
+    ) -> serde_json::Value {
+        let overwrite = params
+            .get("overwrite")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_export_call_preset_json(path, overwrite),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_export_call_preset_json(path, overwrite))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_import_analysis_preset(
+        &mut self,
+        params: &serde_json::Value,
+        path: &Path,
+    ) -> serde_json::Value {
+        let active_channel_name = self
+            .channels
+            .get(self.selected_channel)
+            .map(|channel| channel.name.clone());
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_import_call_preset_json(
+                path,
+                active_channel_name.as_deref(),
+            ),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| {
+                    objects.control_import_call_preset_json(
+                        path,
+                        active_channel_name.as_deref(),
+                    )
+                })
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "analysis requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_get_measurement_state(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_measurement_state_json(&self.dataset),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_measurement_state_json(&self.dataset))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "measurements require an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_configure_measurement(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_configure_measurement_json(params, &self.dataset),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_configure_measurement_json(params, &self.dataset))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "measurements require an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_start_measurement(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let store = self.store.clone();
+        let channels = self.channels.clone();
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_start_measurement_json(
+                params,
+                &self.dataset,
+                store,
+                &channels,
+                self.seg_objects_offset_world,
+            ),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .map(|layer| {
+                    let offset = layer.offset_world;
+                    layer
+                        .object_layer_mut()
+                        .map(|objects| {
+                            objects.control_start_measurement_json(
+                                params,
+                                &self.dataset,
+                                store,
+                                &channels,
+                                offset,
+                            )
+                        })
+                        .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")}))
+                })
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} not found")})),
+            Ok(_) => serde_json::json!({"error": "measurements require an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_cancel_measurement(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_cancel_measurement_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_cancel_measurement_json())
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "measurements require an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_get_object_export_columns(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_export_columns_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_export_columns_json())
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "object export requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_get_object_export_state(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self.seg_objects.control_export_state_json(),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_export_state_json())
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "object export requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_start_object_export(
+        &mut self,
+        params: &serde_json::Value,
+        path: PathBuf,
+    ) -> serde_json::Value {
+        match self.control_object_selection_target(params) {
+            Ok(LayerId::SegmentationObjects) => self
+                .seg_objects
+                .control_start_object_export_json(params, path),
+            Ok(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer_mut())
+                .map(|objects| objects.control_start_object_export_json(params, path))
+                .unwrap_or_else(|| serde_json::json!({"error": format!("spatial shape layer {id} has no object layer")})),
+            Ok(_) => serde_json::json!({"error": "object export requires an object-backed layer"}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_tile_loading_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "workers": self.tile_loader_threads,
+            "runtime_tuning_supported": self.supports_runtime_tile_loader_tuning(),
+            "prefetch_mode": match self.tile_prefetch_mode {
+                TilePrefetchMode::Off => "off",
+                TilePrefetchMode::TargetHalo => "target_halo",
+                TilePrefetchMode::TargetAndFinerHalo => "target_and_finer_halo",
+            },
+            "prefetch_aggressiveness": match self.tile_prefetch_aggressiveness {
+                TilePrefetchAggressiveness::Conservative => "conservative",
+                TilePrefetchAggressiveness::Balanced => "balanced",
+                TilePrefetchAggressiveness::Aggressive => "aggressive",
+            },
+            "prefer_pinned_finer_levels": self.prefer_pinned_finer_levels,
+            "status": self.tile_loading_status,
+            "cache": {"loaded": self.cache.len(), "capacity": self.cache.capacity(), "in_flight": self.cache.in_flight_len()},
+            "target_level": self.last_target_level,
+        })
+    }
+
+    pub fn control_labels_json(&self) -> serde_json::Value {
+        let mut available = self.seg_label_names.clone();
+        if self.dataset.is_root_label_mask() {
+            let name = LabelZarrDataset::root_label_name(&self.dataset);
+            if !available.contains(&name) {
+                available.push(name);
+            }
+        }
+        serde_json::json!({
+            "available": available,
+            "selected": self.seg_label_selected,
+            "loaded": self.label_cells.as_ref().map(|labels| labels.label_name.clone()),
+            "visible": self.cells_outlines_visible,
+            "busy": self.labels_gl.as_ref().is_some_and(|labels| labels.is_busy()),
+            "gpu_available": self.tiles_gl.is_some(),
+            "status": self.seg_label_status,
+            "offset_world": [self.seg_labels_offset_world.x, self.seg_labels_offset_world.y],
+        })
+    }
+
+    pub fn control_load_labels(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let name = params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.seg_label_selected.as_str())
+            .to_string();
+        if name.is_empty() {
+            return serde_json::json!({"error": "label name is required because this dataset has no default label group"});
+        }
+        match self.load_segmentation_labels(&name) {
+            Ok(()) => {
+                self.cells_outlines_visible = true;
+                self.seg_label_status = format!("Loaded labels/{name}.");
+                self.control_labels_json()
+            }
+            Err(error) => {
+                serde_json::json!({"error": format!("load labels/{name} failed: {error}")})
+            }
+        }
+    }
+
+    pub fn control_unload_labels(&mut self) -> serde_json::Value {
+        let unloaded = self.label_cells.take().map(|labels| labels.label_name);
+        self.label_loader = None;
+        self.label_cells_xform = None;
+        self.cells_outlines_visible = false;
+        if let Some(labels) = self.labels_gl.as_ref() {
+            labels.reset();
+        }
+        self.seg_label_status = "Unloaded segmentation labels.".to_string();
+        serde_json::json!({"unloaded": unloaded, "labels": self.control_labels_json()})
+    }
+
+    pub fn control_set_labels_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let Some(visible) = params.get("visible").and_then(serde_json::Value::as_bool) else {
+            return serde_json::json!({"error": "visible must be a boolean"});
+        };
+        if visible && self.label_cells.is_none() {
+            let loaded = self.control_load_labels(params);
+            if loaded.get("error").is_some() {
+                return loaded;
+            }
+        }
+        self.cells_outlines_visible = visible;
+        self.control_labels_json()
+    }
+
+    pub fn control_set_tile_loading_json(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let workers = match params.get("workers") {
+            Some(value) => {
+                let Some(value) = value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| (1..=12).contains(value))
+                else {
+                    return serde_json::json!({"error": "workers must be an integer from 1 to 12"});
+                };
+                Some(value)
+            }
+            None => None,
+        };
+        let prefetch_mode = match params
+            .get("prefetch_mode")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("off") => Some(TilePrefetchMode::Off),
+            Some("target_halo") => Some(TilePrefetchMode::TargetHalo),
+            Some("target_and_finer_halo") => Some(TilePrefetchMode::TargetAndFinerHalo),
+            Some(_) => return serde_json::json!({"error": "unknown prefetch_mode"}),
+            None => None,
+        };
+        let aggressiveness = match params
+            .get("prefetch_aggressiveness")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("conservative") => Some(TilePrefetchAggressiveness::Conservative),
+            Some("balanced") => Some(TilePrefetchAggressiveness::Balanced),
+            Some("aggressive") => Some(TilePrefetchAggressiveness::Aggressive),
+            Some(_) => return serde_json::json!({"error": "unknown prefetch_aggressiveness"}),
+            None => None,
+        };
+        if let Some(workers) = workers
+            && workers != self.tile_loader_threads
+        {
+            if !self.supports_runtime_tile_loader_tuning() {
+                return serde_json::json!({"error": "runtime tile-loader tuning is unavailable for this dataset backend"});
+            }
+            self.tile_loader_threads = workers;
+            if let Err(error) = self.respawn_tile_loaders() {
+                return serde_json::json!({"error": format!("tile loader reconfigure failed: {error}")});
+            }
+            self.tile_loading_status = format!("Respawned tile loaders with {workers} worker(s).");
+        }
+        if let Some(mode) = prefetch_mode {
+            self.tile_prefetch_mode = mode;
+        }
+        if let Some(value) = aggressiveness {
+            self.tile_prefetch_aggressiveness = value;
+        }
+        if let Some(value) = params
+            .get("prefer_pinned_finer_levels")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.prefer_pinned_finer_levels = value;
+        }
+        self.control_tile_loading_json()
+    }
+
+    pub fn control_memory_json(&mut self) -> serde_json::Value {
+        self.system_memory = crate::app_support::memory::read_system_memory_snapshot();
+        let selected_channels = self.selected_memory_channel_indices();
+        let levels = self
+            .dataset
+            .levels
+            .iter()
+            .enumerate()
+            .map(|(level_index, level)| {
+                let estimate = self.estimate_level_ram_bytes_for_selected_channels(
+                    level_index,
+                    &selected_channels,
+                );
+                let (status, bytes, channels_loaded, error) =
+                    match self.pinned_levels.status(level_index) {
+                        PinnedLevelStatus::Unloaded => ("unloaded", None, None, None),
+                        PinnedLevelStatus::Loading => ("loading", None, None, None),
+                        PinnedLevelStatus::Loaded {
+                            bytes,
+                            channels_loaded,
+                        } => ("loaded", Some(bytes), Some(channels_loaded), None),
+                        PinnedLevelStatus::Failed(error) => ("failed", None, None, Some(error)),
+                    };
+                serde_json::json!({
+                    "level": level_index,
+                    "downsample": level.downsample,
+                    "shape_y": level.shape.get(self.dataset.dims.y),
+                    "shape_x": level.shape.get(self.dataset.dims.x),
+                    "selected_channel_estimate_bytes": estimate,
+                    "status": status,
+                    "loaded_bytes": bytes,
+                    "channels_loaded": channels_loaded,
+                    "error": error,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "running": self.pinned_levels.has_loading(),
+            "status": self.memory_status,
+            "pinned_bytes": self.pinned_levels.total_loaded_bytes(),
+            "system": self.system_memory.as_ref().map(|memory| serde_json::json!({"total_bytes": memory.total_bytes, "available_bytes": memory.available_bytes})),
+            "selected_channels": selected_channels,
+            "z_stack_supported": !self.z_extent_level0().is_some_and(|extent| extent > 1),
+            "levels": levels,
+        })
+    }
+
+    pub fn control_pin_memory_level(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(level) = params
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|level| *level < self.dataset.levels.len())
+        else {
+            return serde_json::json!({"error": "memory level is required and must be in range"});
+        };
+        let selected = match params.get("channels") {
+            Some(value) => {
+                let Some(values) = value.as_array() else {
+                    return serde_json::json!({"error": "channels must be an array"});
+                };
+                let mut selected = Vec::new();
+                for value in values {
+                    match self.control_channel_index_from_value(value) {
+                        Ok(index) if !selected.contains(&index) => selected.push(index),
+                        Ok(_) => {}
+                        Err(error) => return serde_json::json!({"error": error}),
+                    }
+                }
+                selected
+            }
+            None => self.selected_memory_channel_indices(),
+        };
+        if selected.is_empty() {
+            return serde_json::json!({"error": "select at least one channel to pin"});
+        }
+        if self.z_extent_level0().is_some_and(|extent| extent > 1) {
+            return serde_json::json!({"error": "RAM pinning is currently unavailable for OME-Zarr z-stacks"});
+        }
+        let estimate = self.estimate_level_ram_bytes_for_selected_channels(level, &selected);
+        let force = params
+            .get("force")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Some(risk) = self.memory_risk(estimate)
+            && !force
+        {
+            return serde_json::json!({
+                "confirmation_required": true,
+                "level": level,
+                "requested_bytes": risk.requested_bytes,
+                "projected_bytes": risk.projected_bytes,
+                "available_bytes": risk.available_bytes,
+                "risk": match risk.level { crate::app_support::memory::MemoryRiskLevel::Warning => "warning", crate::app_support::memory::MemoryRiskLevel::Danger => "danger" },
+            });
+        }
+        let channel_ids = selected
+            .iter()
+            .filter_map(|index| {
+                self.channels
+                    .get(*index)
+                    .map(|channel| channel.index as u64)
+            })
+            .collect::<Vec<_>>();
+        self.memory_selected_channels = selected.into_iter().collect();
+        self.execute_memory_load(
+            format!(
+                "Loading {} channel(s) from level {level} into RAM",
+                channel_ids.len()
+            ),
+            vec![PendingPinnedLevelLoadRequest {
+                level,
+                selected_channels: channel_ids,
+            }],
+        );
+        serde_json::json!({"started": true, "level": level, "estimated_bytes": estimate})
+    }
+
+    pub fn control_unpin_memory_level(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(level) = params
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|level| *level < self.dataset.levels.len())
+        else {
+            return serde_json::json!({"error": "memory level is required and must be in range"});
+        };
+        let was_loaded = !matches!(
+            self.pinned_levels.status(level),
+            PinnedLevelStatus::Unloaded
+        );
+        self.pinned_levels.unload(level);
+        self.memory_status = format!("Unloaded pinned level {level} from RAM.");
+        serde_json::json!({"unloaded": was_loaded, "level": level})
+    }
+
+    pub fn control_unpin_all_memory(&mut self) -> serde_json::Value {
+        let mut count = 0;
+        for level in 0..self.dataset.levels.len() {
+            if !matches!(
+                self.pinned_levels.status(level),
+                PinnedLevelStatus::Unloaded
+            ) {
+                count += 1;
+                self.pinned_levels.unload(level);
+            }
+        }
+        self.memory_status = format!("Unloaded {count} pinned level(s) from RAM.");
+        serde_json::json!({"unloaded_levels": count})
+    }
+
     pub fn open_screenshot_settings(&mut self) {
         self.screenshot_settings_open = true;
+    }
+
+    pub fn control_screenshot_settings_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "output_dir": self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            "include_scale_bar": self.screenshot_settings.include_scale_bar,
+            "include_legend": self.screenshot_settings.include_legend,
+            "scale_bar_scale": self.screenshot_settings.scale_bar_scale,
+            "legend_scale": self.screenshot_settings.legend_scale,
+            "pending": self.screenshot_pending.is_some(),
+            "in_flight": self.screenshot_in_flight.is_some(),
+            "default_filename": self.default_screenshot_filename(),
+        })
+    }
+
+    pub fn control_set_screenshot_settings_json(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let output_dir = match params.get("output_dir") {
+            Some(serde_json::Value::Null) => Some(None),
+            Some(value) => {
+                let Some(path) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                else {
+                    return serde_json::json!({"error": "output_dir must be a path string or null"});
+                };
+                let path = PathBuf::from(path);
+                if !path.is_dir() {
+                    return serde_json::json!({"error": format!("screenshot output directory does not exist: {}", path.to_string_lossy())});
+                }
+                Some(Some(path))
+            }
+            None => None,
+        };
+        for key in ["scale_bar_scale", "legend_scale"] {
+            if let Some(value) = params.get(key).and_then(serde_json::Value::as_f64)
+                && (!value.is_finite() || !(0.5..=3.0).contains(&value))
+            {
+                return serde_json::json!({"error": format!("{key} must be finite and between 0.5 and 3.0")});
+            }
+        }
+        if let Some(output_dir) = output_dir {
+            self.screenshot_output_dir = output_dir;
+        }
+        if let Some(value) = params
+            .get("include_scale_bar")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.screenshot_settings.include_scale_bar = value;
+        }
+        if let Some(value) = params
+            .get("include_legend")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.screenshot_settings.include_legend = value;
+        }
+        if let Some(value) = params
+            .get("scale_bar_scale")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.screenshot_settings.scale_bar_scale = value as f32;
+        }
+        if let Some(value) = params
+            .get("legend_scale")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.screenshot_settings.legend_scale = value as f32;
+        }
+        self.control_screenshot_settings_json()
     }
 
     pub fn set_auto_contrast_settings(&mut self, settings: AutoContrastSettings) {
@@ -5693,6 +7726,596 @@ impl OmeZarrViewerApp {
             .find(|layer| layer.id == layer_id)
             .ok_or_else(|| anyhow::anyhow!("mask layer not found"))?;
         save_mask_layers_geojson(path, std::slice::from_ref(layer))
+    }
+
+    fn control_mask_layer_snapshot(&self, layer: &MaskLayer) -> serde_json::Value {
+        serde_json::json!({
+            "id": layer.id,
+            "name": layer.name,
+            "visible": layer.visible,
+            "opacity": layer.opacity,
+            "width_screen_px": layer.width_screen_px,
+            "display_mode": layer.display_mode.storage_key(),
+            "color_rgb": layer.color_rgb,
+            "offset_world": [layer.offset_world.x, layer.offset_world.y],
+            "editable": layer.editable,
+            "polygon_count": layer.polygons_world.len(),
+            "source_geojson": layer.source_geojson.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            "active": self.active_layer == LayerId::Mask(layer.id),
+        })
+    }
+
+    pub fn control_list_mask_layers(&self) -> serde_json::Value {
+        serde_json::json!({
+            "total": self.mask_layers.len(),
+            "layers": self.mask_layers.iter().map(|layer| self.control_mask_layer_snapshot(layer)).collect::<Vec<_>>(),
+            "undo_available": !self.undo_stack.is_empty(),
+        })
+    }
+
+    pub fn control_get_mask_layer(&self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        self.mask_layers
+            .iter()
+            .find(|layer| layer.id == id)
+            .map(|layer| self.control_mask_layer_snapshot(layer))
+            .unwrap_or_else(|| serde_json::json!({"error": format!("mask layer {id} not found")}))
+    }
+
+    pub fn control_get_mask_selection(&self) -> serde_json::Value {
+        let selection = self.selected_mask_polygon.and_then(|selection| {
+            let layer = self
+                .mask_layers
+                .iter()
+                .find(|layer| layer.id == selection.layer_id)?;
+            let polygon = layer.polygons_world.get(selection.polygon_idx)?;
+            Some(serde_json::json!({
+                "layer_id": selection.layer_id,
+                "polygon_index": selection.polygon_idx,
+                "vertex_index": self.selected_mask_vertex,
+                "vertices_local": polygon.iter().map(|point| [point.x, point.y]).collect::<Vec<_>>(),
+                "vertices_world": polygon.iter().map(|point| [point.x + layer.offset_world.x, point.y + layer.offset_world.y]).collect::<Vec<_>>(),
+            }))
+        });
+        serde_json::json!({"selection": selection})
+    }
+
+    pub fn control_set_mask_selection(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(layer_id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        let Some(polygon_index) = params
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+        else {
+            return serde_json::json!({"error": "polygon index is required"});
+        };
+        let Some(layer) = self.mask_layers.iter().find(|layer| layer.id == layer_id) else {
+            return serde_json::json!({"error": format!("mask layer {layer_id} not found")});
+        };
+        let Some(polygon) = layer.polygons_world.get(polygon_index) else {
+            return serde_json::json!({"error": format!("mask polygon index {polygon_index} is out of range")});
+        };
+        let vertex_index = match params.get("vertex_index") {
+            Some(serde_json::Value::Null) | None => None,
+            Some(value) => {
+                let Some(index) = value.as_u64().and_then(|value| usize::try_from(value).ok())
+                else {
+                    return serde_json::json!({"error": "vertex_index must be a non-negative integer or null"});
+                };
+                if index >= Self::mask_polygon_unique_vertex_count(polygon) {
+                    return serde_json::json!({"error": format!("mask vertex index {index} is out of range")});
+                }
+                Some(index)
+            }
+        };
+        self.selected_mask_polygon = Some(MaskPolygonSelection {
+            layer_id,
+            polygon_idx: polygon_index,
+        });
+        self.selected_mask_vertex = vertex_index;
+        self.active_layer = LayerId::Mask(layer_id);
+        self.bump_render_id();
+        self.control_get_mask_selection()
+    }
+
+    pub fn control_clear_mask_selection(&mut self) -> serde_json::Value {
+        let cleared = self.selected_mask_polygon.is_some() || self.selected_mask_vertex.is_some();
+        self.clear_mask_polygon_selection();
+        if cleared {
+            self.bump_render_id();
+        }
+        serde_json::json!({"cleared": cleared, "selection": null})
+    }
+
+    pub fn control_create_mask_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.push_mask_undo_snapshot();
+        let name = params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let id = self.create_editable_mask_layer(name);
+        self.active_layer = LayerId::Mask(id);
+        if let Some(layer) = self.mask_layers.iter_mut().find(|layer| layer.id == id) {
+            if let Some(editable) = params.get("editable").and_then(serde_json::Value::as_bool) {
+                layer.editable = editable;
+            }
+        }
+        self.rebuild_layer_orders();
+        self.bump_render_id();
+        self.control_get_mask_layer(&serde_json::json!({"id": id}))
+    }
+
+    pub fn control_update_mask_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        if !self.mask_layers.iter().any(|layer| layer.id == id) {
+            return serde_json::json!({"error": format!("mask layer {id} not found")});
+        }
+        if params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return serde_json::json!({"error": "mask layer name must not be empty"});
+        }
+        if let Some(value) = params.get("opacity").and_then(serde_json::Value::as_f64) {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return serde_json::json!({"error": "opacity must be finite and between 0 and 1"});
+            }
+        }
+        if let Some(value) = params
+            .get("width_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            if !value.is_finite() || value <= 0.0 {
+                return serde_json::json!({"error": "width_screen_px must be finite and greater than zero"});
+            }
+        }
+        let display_mode = match params
+            .get("display_mode")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(mode) => match MaskDisplayMode::from_storage_key(mode) {
+                Some(mode) => Some(mode),
+                None => return serde_json::json!({"error": "unknown mask display_mode"}),
+            },
+            None => None,
+        };
+        let color_rgb = match params.get("color_rgb") {
+            Some(value) => {
+                let Some(values) = value.as_array() else {
+                    return serde_json::json!({"error": "color_rgb must contain three integers from 0 to 255"});
+                };
+                if values.len() != 3
+                    || values
+                        .iter()
+                        .any(|value| value.as_u64().is_none_or(|value| value > 255))
+                {
+                    return serde_json::json!({"error": "color_rgb must contain three integers from 0 to 255"});
+                }
+                Some([
+                    values[0].as_u64().unwrap() as u8,
+                    values[1].as_u64().unwrap() as u8,
+                    values[2].as_u64().unwrap() as u8,
+                ])
+            }
+            None => None,
+        };
+        let offset_world = match params.get("offset_world") {
+            Some(value) => {
+                let Some(values) = value.as_array() else {
+                    return serde_json::json!({"error": "offset_world must contain two finite numbers"});
+                };
+                if values.len() != 2
+                    || values
+                        .iter()
+                        .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+                {
+                    return serde_json::json!({"error": "offset_world must contain two finite numbers"});
+                }
+                Some(egui::vec2(
+                    values[0].as_f64().unwrap() as f32,
+                    values[1].as_f64().unwrap() as f32,
+                ))
+            }
+            None => None,
+        };
+        self.push_mask_undo_snapshot();
+        let layer = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+            .unwrap();
+        if let Some(name) = params.get("name").and_then(serde_json::Value::as_str) {
+            layer.name = name.trim().to_string();
+        }
+        if let Some(visible) = params.get("visible").and_then(serde_json::Value::as_bool) {
+            layer.visible = visible;
+        }
+        if let Some(editable) = params.get("editable").and_then(serde_json::Value::as_bool) {
+            layer.editable = editable;
+        }
+        if let Some(value) = params.get("opacity").and_then(serde_json::Value::as_f64) {
+            layer.opacity = value as f32;
+        }
+        if let Some(value) = params
+            .get("width_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            layer.width_screen_px = value as f32;
+        }
+        if let Some(mode) = display_mode {
+            layer.display_mode = mode;
+        }
+        if let Some(color_rgb) = color_rgb {
+            layer.color_rgb = color_rgb;
+        }
+        if let Some(offset_world) = offset_world {
+            layer.offset_world = offset_world;
+        }
+        layer.raster_display = None;
+        self.mark_mask_layers_project_dirty();
+        self.bump_render_id();
+        self.control_get_mask_layer(params)
+    }
+
+    pub fn control_delete_mask_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        if self.delete_mask_layer(id) {
+            serde_json::json!({"deleted": true, "id": id})
+        } else {
+            serde_json::json!({"error": format!("mask layer {id} not found")})
+        }
+    }
+
+    pub fn control_list_mask_polygons(&self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        let Some(layer) = self.mask_layers.iter().find(|layer| layer.id == id) else {
+            return serde_json::json!({"error": format!("mask layer {id} not found")});
+        };
+        let offset = params
+            .get("offset")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(200) as usize;
+        let polygons = layer
+            .polygons_world
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(limit)
+            .map(|(index, polygon)| serde_json::json!({
+                "index": index,
+                "vertices_local": polygon.iter().map(|point| [point.x, point.y]).collect::<Vec<_>>(),
+                "vertices_world": polygon.iter().map(|point| [point.x + layer.offset_world.x, point.y + layer.offset_world.y]).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "layer_id": id,
+            "total": layer.polygons_world.len(),
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset.saturating_add(polygons.len()) < layer.polygons_world.len(),
+            "polygons": polygons,
+        })
+    }
+
+    fn control_mask_vertices(
+        params: &serde_json::Value,
+        layer_offset: egui::Vec2,
+    ) -> Result<Vec<egui::Pos2>, String> {
+        let values = params
+            .get("vertices")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "vertices is required".to_string())?;
+        if values.len() < 3 {
+            return Err("vertices must contain at least three points".to_string());
+        }
+        let coordinate_space = params
+            .get("coordinate_space")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("world");
+        let world = match coordinate_space {
+            "world" => true,
+            "local" => false,
+            _ => return Err("coordinate_space must be 'world' or 'local'".to_string()),
+        };
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let pair = value
+                    .as_array()
+                    .filter(|pair| pair.len() == 2)
+                    .ok_or_else(|| format!("vertices[{index}] must be [x, y]"))?;
+                let x = pair[0]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| format!("vertices[{index}][0] must be finite"))?
+                    as f32;
+                let y = pair[1]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| format!("vertices[{index}][1] must be finite"))?
+                    as f32;
+                let point = egui::pos2(x, y);
+                Ok(if world { point - layer_offset } else { point })
+            })
+            .collect()
+    }
+
+    pub fn control_add_mask_polygon(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        let Some(layer) = self.mask_layers.iter().find(|layer| layer.id == id) else {
+            return serde_json::json!({"error": format!("mask layer {id} not found")});
+        };
+        if !layer.editable {
+            return serde_json::json!({"error": format!("mask layer {id} is read-only")});
+        }
+        let vertices = match Self::control_mask_vertices(params, layer.offset_world) {
+            Ok(vertices) => vertices,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        self.push_mask_undo_snapshot();
+        let layer = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+            .unwrap();
+        layer.add_closed_polygon(vertices);
+        let index = layer.polygons_world.len() - 1;
+        self.mark_mask_layers_project_dirty();
+        self.bump_render_id();
+        serde_json::json!({"added": true, "layer_id": id, "index": index})
+    }
+
+    pub fn control_update_mask_polygon(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        let Some(index) = params
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .map(|v| v as usize)
+        else {
+            return serde_json::json!({"error": "polygon index is required"});
+        };
+        let Some(layer) = self.mask_layers.iter().find(|layer| layer.id == id) else {
+            return serde_json::json!({"error": format!("mask layer {id} not found")});
+        };
+        if !layer.editable {
+            return serde_json::json!({"error": format!("mask layer {id} is read-only")});
+        }
+        if index >= layer.polygons_world.len() {
+            return serde_json::json!({"error": format!("mask polygon index {index} is out of range")});
+        }
+        let mut vertices = match Self::control_mask_vertices(params, layer.offset_world) {
+            Ok(vertices) => vertices,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        if vertices.first() != vertices.last() {
+            vertices.push(vertices[0]);
+        }
+        self.push_mask_undo_snapshot();
+        let layer = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+            .unwrap();
+        layer.polygons_world[index] = vertices;
+        layer.raster_display = None;
+        self.mark_mask_layers_project_dirty();
+        self.bump_render_id();
+        serde_json::json!({"updated": true, "layer_id": id, "index": index})
+    }
+
+    pub fn control_remove_mask_polygon(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(id) = params.get("id").and_then(serde_json::Value::as_u64) else {
+            return serde_json::json!({"error": "mask layer id is required"});
+        };
+        let Some(index) = params
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .map(|v| v as usize)
+        else {
+            return serde_json::json!({"error": "polygon index is required"});
+        };
+        let Some(layer) = self.mask_layers.iter().find(|layer| layer.id == id) else {
+            return serde_json::json!({"error": format!("mask layer {id} not found")});
+        };
+        if !layer.editable {
+            return serde_json::json!({"error": format!("mask layer {id} is read-only")});
+        }
+        if index >= layer.polygons_world.len() {
+            return serde_json::json!({"error": format!("mask polygon index {index} is out of range")});
+        }
+        self.push_mask_undo_snapshot();
+        let layer = self
+            .mask_layers
+            .iter_mut()
+            .find(|layer| layer.id == id)
+            .unwrap();
+        layer.polygons_world.remove(index);
+        layer.raster_display = None;
+        self.mark_mask_layers_project_dirty();
+        self.bump_render_id();
+        serde_json::json!({"removed": true, "layer_id": id, "index": index})
+    }
+
+    pub fn control_undo_mask_edit(&mut self) -> serde_json::Value {
+        let undone = self.undo_last_edit();
+        if undone {
+            self.bump_render_id();
+        }
+        serde_json::json!({"undone": undone, "undo_available": !self.undo_stack.is_empty()})
+    }
+
+    pub fn control_import_masks_geojson(
+        &mut self,
+        path: &Path,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let downsample_factor = params
+            .get("downsample_factor")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0);
+        if !downsample_factor.is_finite() || downsample_factor <= 0.0 {
+            return serde_json::json!({"error": "downsample_factor must be finite and greater than zero"});
+        }
+        let editable = params
+            .get("editable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let name = params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "Imported masks".to_string());
+        let polygons = match load_geojson_polylines_world(
+            path,
+            downsample_factor as f32,
+            PolygonRingMode::AllRings,
+        ) {
+            Ok(polygons) => polygons,
+            Err(error) => {
+                return serde_json::json!({
+                    "error": format!("failed to import mask GeoJSON: {error}"),
+                    "path": path.to_string_lossy(),
+                });
+            }
+        };
+        if polygons.is_empty() {
+            return serde_json::json!({
+                "error": "mask GeoJSON contains no supported polygon or line geometry",
+                "path": path.to_string_lossy(),
+            });
+        }
+
+        self.push_mask_undo_snapshot();
+        let id = self.next_mask_layer_id.max(1);
+        self.next_mask_layer_id = id.saturating_add(1);
+        let polygon_count = polygons.len();
+        self.mask_layers.push(MaskLayer {
+            id,
+            name,
+            visible: true,
+            opacity: 0.85,
+            width_screen_px: 1.5,
+            display_mode: MaskDisplayMode::default_new_layer(),
+            color_rgb: [50, 220, 255],
+            offset_world: egui::Vec2::ZERO,
+            editable,
+            polygons_world: polygons,
+            raster_display: None,
+            source_geojson: Some(path.to_path_buf()),
+        });
+        self.active_layer = LayerId::Mask(id);
+        self.mark_mask_layers_project_dirty();
+        self.rebuild_layer_orders();
+        self.bump_render_id();
+        serde_json::json!({
+            "imported": true,
+            "path": path.to_string_lossy(),
+            "layer_id": id,
+            "polygon_count": polygon_count,
+            "layer": self.control_get_mask_layer(&serde_json::json!({"id": id})),
+        })
+    }
+
+    pub fn control_export_masks_geojson(
+        &self,
+        path: &Path,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let overwrite = params
+            .get("overwrite")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if path.exists() && !overwrite {
+            return serde_json::json!({
+                "error": "destination exists; pass overwrite=true to replace it",
+                "path": path.to_string_lossy(),
+            });
+        }
+        let layer_id = params.get("id").and_then(serde_json::Value::as_u64);
+        let export = match layer_id {
+            Some(id) => self.export_mask_layer_geojson(id, path),
+            None => self.export_masks_geojson(path),
+        };
+        if let Err(error) = export {
+            return serde_json::json!({
+                "error": format!("failed to export mask GeoJSON: {error}"),
+                "path": path.to_string_lossy(),
+            });
+        }
+        let polygon_count = match layer_id {
+            Some(id) => self
+                .mask_layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.polygons_world.len())
+                .unwrap_or(0),
+            None => self
+                .mask_layers
+                .iter()
+                .map(|layer| layer.polygons_world.len())
+                .sum(),
+        };
+        serde_json::json!({
+            "exported": true,
+            "path": path.to_string_lossy(),
+            "layer_id": layer_id,
+            "layer_count": layer_id.map(|_| 1).unwrap_or(self.mask_layers.len()),
+            "polygon_count": polygon_count,
+            "bytes": std::fs::metadata(path).ok().map(|metadata| metadata.len()),
+        })
+    }
+
+    pub fn control_mask_persistence(&self) -> serde_json::Value {
+        let local_root = self.dataset.source.local_path();
+        let persisted_layer_count = local_root
+            .and_then(|root| self.project_space.roi_mask_layers(root))
+            .map(|layers| layers.len());
+        serde_json::json!({
+            "dirty": self.mask_layers_project_dirty,
+            "dataset_local": local_root.is_some(),
+            "dataset_path": local_root.map(|path| path.to_string_lossy().into_owned()),
+            "project_path": self.project_space.current_project_path().map(|path| path.to_string_lossy().into_owned()),
+            "live_layer_count": self.mask_layers.len(),
+            "persisted_layer_count": persisted_layer_count,
+        })
+    }
+
+    pub fn control_sync_masks_to_project(&mut self) -> serde_json::Value {
+        if self.dataset.source.local_path().is_none() {
+            return serde_json::json!({"error": "mask project persistence requires a local dataset"});
+        }
+        self.sync_mask_layers_into_project_space();
+        serde_json::json!({
+            "synced": true,
+            "persistence": self.control_mask_persistence(),
+        })
     }
 
     fn delete_mask_layer(&mut self, layer_id: u64) -> bool {
@@ -8734,6 +11357,41 @@ impl OmeZarrViewerApp {
         }
     }
 
+    fn control_world_points_from_params(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<Vec<egui::Pos2>, String> {
+        let values = params
+            .get("world_points")
+            .or_else(|| params.get("points"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "world_points is required".to_string())?;
+        if values.len() < 3 {
+            return Err("world_points must contain at least three points".to_string());
+        }
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let point = value
+                    .as_array()
+                    .ok_or_else(|| format!("world_points[{index}] must be [x, y]"))?;
+                if point.len() != 2 {
+                    return Err(format!("world_points[{index}] must be [x, y]"));
+                }
+                let x = point[0]
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| format!("world_points[{index}][0] must be finite"))?;
+                let y = point[1]
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| format!("world_points[{index}][1] must be finite"))?;
+                Ok(egui::pos2(x as f32, y as f32))
+            })
+            .collect()
+    }
+
     fn apply_rect_selection_to_active_layer(
         &mut self,
         world_rect: egui::Rect,
@@ -9334,6 +11992,272 @@ impl OmeZarrViewerApp {
         self.rebuild_layer_orders();
         self.bump_render_id();
         Ok(created)
+    }
+
+    pub fn control_threshold_levels(&self) -> serde_json::Value {
+        serde_json::json!({
+            "max_interactive_pixels": THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS,
+            "default_full_level": default_threshold_full_level(
+                &self.dataset.levels,
+                self.dataset.dims.y,
+                self.dataset.dims.x,
+                THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS,
+            ),
+            "levels": self.dataset.levels.iter().map(|level| {
+                let summary = self.threshold_region_full_level_summary(level.index);
+                serde_json::json!({
+                    "index": level.index,
+                    "downsample": level.downsample,
+                    "width": summary.map(|value| value.0),
+                    "height": summary.map(|value| value.1),
+                    "pixel_count": summary.map(|value| value.2),
+                    "interactive": summary.is_some_and(|value| value.2 <= THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS),
+                })
+            }).collect::<Vec<_>>(),
+        })
+    }
+
+    pub fn control_threshold_preview_snapshot(&self) -> serde_json::Value {
+        let preview = self.threshold_region_preview.as_ref().map(|preview| {
+            let width = preview.plane.dim().1;
+            let height = preview.plane.dim().0;
+            let uses_gpu = self.uses_gpu_threshold_region_preview(preview);
+            let included_pixels = if uses_gpu {
+                preview
+                    .raw_values
+                    .iter()
+                    .filter(|value| **value >= preview.threshold)
+                    .count()
+            } else {
+                preview.mask.included.iter().filter(|value| **value).count()
+            };
+            serde_json::json!({
+                "generation": preview.generation,
+                "channel_index": preview.channel_index,
+                "channel_name": preview.channel_name,
+                "scope": match preview.scope {
+                    ThresholdRegionScope::VisibleRegion => "visible",
+                    ThresholdRegionScope::EntireImage => "entire_image",
+                },
+                "level": preview.level_index,
+                "downsample": preview.downsample,
+                "extent": {
+                    "x0": preview.x0,
+                    "y0": preview.y0,
+                    "width": width,
+                    "height": height,
+                },
+                "threshold": preview.threshold,
+                "source_min": preview.plane.iter().copied().min(),
+                "source_max": preview.plane.iter().copied().max(),
+                "min_component_pixels": preview.min_component_pixels,
+                "included_pixels": included_pixels,
+                "preview_engine": if uses_gpu { "gpu" } else { "cpu" },
+            })
+        });
+        serde_json::json!({
+            "active": preview.is_some(),
+            "configured_scope": match self.threshold_region_scope {
+                ThresholdRegionScope::VisibleRegion => "visible",
+                ThresholdRegionScope::EntireImage => "entire_image",
+            },
+            "configured_full_level": self.threshold_region_full_level,
+            "configured_min_component_pixels": self.threshold_region_min_pixels,
+            "status": self.threshold_region_status,
+            "preview": preview,
+        })
+    }
+
+    pub fn control_configure_threshold_preview(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let scope = match params.get("scope").and_then(serde_json::Value::as_str) {
+            Some("visible" | "visible_region") => Some(ThresholdRegionScope::VisibleRegion),
+            Some("entire_image" | "full" | "full_image") => Some(ThresholdRegionScope::EntireImage),
+            Some(_) => {
+                return serde_json::json!({"error": "scope must be 'visible' or 'entire_image'"});
+            }
+            None => None,
+        };
+        let level = match params.get("level") {
+            Some(value) => {
+                let Some(level) = value.as_u64().and_then(|value| usize::try_from(value).ok())
+                else {
+                    return serde_json::json!({"error": "level must be a non-negative integer"});
+                };
+                if level >= self.dataset.levels.len() {
+                    return serde_json::json!({"error": format!("threshold level {level} is out of range")});
+                }
+                Some(level)
+            }
+            None => None,
+        };
+        let min_component_pixels = match params.get("min_component_pixels") {
+            Some(value) => {
+                let Some(value) = value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| (1..=1_000_000).contains(value))
+                else {
+                    return serde_json::json!({"error": "min_component_pixels must be an integer from 1 to 1000000"});
+                };
+                Some(value)
+            }
+            None => None,
+        };
+        let threshold = match params.get("threshold") {
+            Some(value) => {
+                let Some(value) = value.as_u64().filter(|value| *value <= u16::MAX as u64) else {
+                    return serde_json::json!({"error": "threshold must be an integer from 0 to 65535"});
+                };
+                Some(value as u16)
+            }
+            None => None,
+        };
+        let has_channel = ["index", "channel_index", "name", "channel", "marker"]
+            .iter()
+            .any(|key| params.get(key).is_some());
+        let channel = if has_channel {
+            match self.control_channel_index_from_params(params) {
+                Ok(channel) => Some(channel),
+                Err(error) => return serde_json::json!({"error": error}),
+            }
+        } else {
+            None
+        };
+
+        if threshold.is_some() && self.threshold_region_preview.is_none() {
+            return serde_json::json!({"error": "threshold can only be set after a preview has started"});
+        }
+
+        if let Some(preview) = self.threshold_region_preview.as_ref() {
+            if scope.is_some_and(|scope| scope != preview.scope)
+                || level.is_some_and(|level| level != preview.level_index)
+                || channel.is_some_and(|channel| channel != preview.channel_index)
+            {
+                return serde_json::json!({
+                    "error": "cancel the active threshold preview before changing its scope, level, or channel"
+                });
+            }
+        }
+        if let Some(scope) = scope {
+            self.threshold_region_scope = scope;
+        }
+        if let Some(level) = level {
+            self.threshold_region_full_level = level;
+        }
+        if let Some(channel) = channel {
+            self.set_active_layer(LayerId::Channel(channel));
+        }
+        let mut preview_changed = false;
+        if let Some(min_component_pixels) = min_component_pixels {
+            self.threshold_region_min_pixels = min_component_pixels;
+            preview_changed |= self.threshold_region_preview.is_some();
+        }
+        if let Some(threshold) = threshold {
+            let preview = self
+                .threshold_region_preview
+                .as_mut()
+                .expect("threshold preview checked above");
+            preview.threshold = threshold;
+            preview_changed = true;
+        }
+        if preview_changed {
+            self.recompute_threshold_region_preview(ctx);
+        }
+        self.bump_render_id();
+        self.control_threshold_preview_snapshot()
+    }
+
+    pub fn control_start_threshold_preview(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        if !self.view_plane_is_xy() {
+            return serde_json::json!({"error": "threshold preview is only available in XY view"});
+        }
+        if self.threshold_region_preview.is_some() {
+            return serde_json::json!({"error": "a threshold preview is already active; refresh or cancel it first"});
+        }
+        let requested_threshold = params.get("threshold").cloned();
+        let mut configuration = params.clone();
+        if let Some(configuration) = configuration.as_object_mut() {
+            configuration.remove("threshold");
+        }
+        let configured = self.control_configure_threshold_preview(ctx, &configuration);
+        if configured.get("error").is_some() {
+            return configured;
+        }
+        self.threshold_region_status.clear();
+        if let Err(error) = self.start_threshold_region_preview(ctx) {
+            self.threshold_region_status = format!("Threshold regions failed: {error}");
+            return serde_json::json!({"error": format!("failed to start threshold preview: {error}")});
+        }
+        if let Some(threshold) = requested_threshold {
+            let configured = self.control_configure_threshold_preview(
+                ctx,
+                &serde_json::json!({"threshold": threshold}),
+            );
+            if configured.get("error").is_some() {
+                self.threshold_region_preview = None;
+                return configured;
+            }
+        }
+        self.bump_render_id();
+        self.control_threshold_preview_snapshot()
+    }
+
+    pub fn control_refresh_threshold_preview(&mut self, ctx: &egui::Context) -> serde_json::Value {
+        let Some(preview) = self.threshold_region_preview.as_ref() else {
+            return serde_json::json!({"error": "no threshold preview is active"});
+        };
+        self.selected_channel = preview.channel_index;
+        self.threshold_region_scope = preview.scope;
+        self.threshold_region_full_level = preview.level_index;
+        let threshold = preview.threshold;
+        self.threshold_region_preview = None;
+        if let Err(error) = self.start_threshold_region_preview(ctx) {
+            self.threshold_region_status = format!("Threshold regions failed: {error}");
+            return serde_json::json!({"error": format!("failed to refresh threshold preview: {error}")});
+        }
+        if let Some(preview) = self.threshold_region_preview.as_mut() {
+            preview.threshold = threshold;
+        }
+        self.recompute_threshold_region_preview(ctx);
+        self.bump_render_id();
+        self.control_threshold_preview_snapshot()
+    }
+
+    pub fn control_apply_threshold_preview(&mut self) -> serde_json::Value {
+        match self.create_threshold_mask_from_preview() {
+            Ok(polygon_count) => {
+                let layer_id = match self.active_layer {
+                    LayerId::Mask(id) => Some(id),
+                    _ => None,
+                };
+                serde_json::json!({
+                    "applied": true,
+                    "layer_id": layer_id,
+                    "polygon_count": polygon_count,
+                    "mask_layer": layer_id.map(|id| self.control_get_mask_layer(&serde_json::json!({"id": id}))),
+                })
+            }
+            Err(error) => {
+                serde_json::json!({"error": format!("failed to apply threshold preview: {error}")})
+            }
+        }
+    }
+
+    pub fn control_cancel_threshold_preview(&mut self) -> serde_json::Value {
+        let cancelled = self.threshold_region_preview.take().is_some();
+        self.threshold_region_status.clear();
+        if cancelled {
+            self.bump_render_id();
+        }
+        serde_json::json!({"cancelled": cancelled, "active": false})
     }
 
     fn draw_threshold_region_preview(&self, ui: &mut egui::Ui, rect: egui::Rect) {

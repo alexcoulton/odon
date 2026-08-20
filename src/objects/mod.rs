@@ -351,7 +351,7 @@ pub struct ObjectsLayer {
 
     object_load_request_id: u64,
     object_load_cancel: Option<Arc<AtomicBool>>,
-    load_rx: Option<Receiver<LoadResult>>,
+    load_rx: Option<Receiver<Result<LoadResult, String>>>,
     property_load_rx: Option<Receiver<PropertyLoadResult>>,
     property_load_key: Option<String>,
     status: String,
@@ -494,6 +494,48 @@ enum ObjectPropertyContainsMatcher {
 }
 
 impl ObjectPropertyColumn {
+    fn value_json_at(&self, object_index: usize) -> serde_json::Value {
+        match self {
+            Self::Bool(values) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .map(serde_json::Value::Bool)
+                .unwrap_or(serde_json::Value::Null),
+            Self::I64(values) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+            Self::F64(values) => values
+                .get(object_index)
+                .and_then(|value| *value)
+                .and_then(serde_json::Number::from_f64)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Self::Dictionary { dictionary, values } => values
+                .get(object_index)
+                .and_then(|code| *code)
+                .and_then(|code| dictionary.get(code as usize))
+                .cloned()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+            Self::Json(values) => values
+                .get(object_index)
+                .and_then(|value| value.clone())
+                .unwrap_or(serde_json::Value::Null),
+        }
+    }
+
+    fn type_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "boolean",
+            Self::I64(_) => "integer",
+            Self::F64(_) => "number",
+            Self::Dictionary { .. } => "categorical",
+            Self::Json(_) => "json",
+        }
+    }
+
     fn from_values_by_row(
         objects: &[GeoJsonObjectFeature],
         values_by_row: &HashMap<usize, serde_json::Value>,
@@ -891,6 +933,7 @@ struct AnalysisSelectionResult {
 #[derive(Debug, Clone)]
 struct ObjectExportSnapshot {
     objects: Arc<Vec<ObjectFeature>>,
+    row_indices: Vec<usize>,
     property_keys: Vec<String>,
     property_store: ObjectPropertyStore,
     selected_object_indices: HashSet<usize>,
