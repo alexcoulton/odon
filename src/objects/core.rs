@@ -201,10 +201,7 @@ impl ObjectsLayer {
             }
         }
 
-        loop {
-            let Some(rx) = self.object_export_rx.as_ref() else {
-                break;
-            };
+        if let Some(rx) = self.object_export_rx.as_ref() {
             match rx.try_recv() {
                 Ok(ObjectExportEvent::Finished {
                     request_id,
@@ -224,12 +221,10 @@ impl ObjectsLayer {
                             );
                         }
                     }
-                    break;
                 }
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.object_export_rx = None;
-                    break;
                 }
             }
         }
@@ -296,6 +291,7 @@ impl ObjectsLayer {
         self.lazy_parquet_source = msg.lazy_parquet_source;
         self.property_store = msg.property_store;
         self.color_legend_cache = None;
+        self.color_groups_cache.clear();
         let has_active_color_key = self
             .color_property_keys
             .iter()
@@ -392,6 +388,7 @@ impl ObjectsLayer {
         self.lazy_parquet_source = None;
         self.color_legend_cache = None;
         self.color_groups = None;
+        self.color_groups_cache.clear();
         self.color_property_key.clear();
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
@@ -2560,6 +2557,21 @@ impl ObjectsLayer {
         {
             return;
         }
+        // A legend can be inspected before the render path has materialized
+        // its color groups. Build the current unfiltered groups before
+        // switching properties so another viewport can restore them without
+        // recomputing or losing the property's cached presentation.
+        if self.color_mode == ObjectColorMode::ByProperty
+            && !self.color_property_key.is_empty()
+            && self.color_groups.is_none()
+            && !self.has_active_filter()
+        {
+            self.ensure_color_groups();
+        }
+        if let Some(groups) = self.color_groups.take() {
+            self.color_groups_cache
+                .insert(groups.property_key.clone(), groups);
+        }
         self.color_mode = next_mode;
         self.color_property_key = next_key;
         if self.color_mode == ObjectColorMode::ByProperty {
@@ -2571,7 +2583,9 @@ impl ObjectsLayer {
             self.apply_pending_color_value_colors();
             self.apply_pending_color_value_visibility();
         }
-        self.color_groups = None;
+        self.color_groups = (self.color_mode == ObjectColorMode::ByProperty)
+            .then(|| self.color_groups_cache.remove(&self.color_property_key))
+            .flatten();
         self.filtered_color_groups = None;
         self.color_legend_cache = None;
     }
@@ -2606,9 +2620,74 @@ impl ObjectsLayer {
         self.fill_opacity = state.fill_opacity.clamp(0.0, 1.0);
         self.selected_fill_opacity = state.selected_fill_opacity.clamp(0.0, 1.0);
         self.fast_rendering = state.fast_rendering;
-        self.color_groups = None;
         self.filtered_color_groups = None;
         self.color_legend_cache = None;
+    }
+
+    pub(crate) fn viewport_filter_state(&self) -> ObjectViewportFilterState {
+        ObjectViewportFilterState {
+            mode: self.filter_mode,
+            clauses: self.filter_clauses.clone(),
+            logic: self.filter_logic,
+            query_text: self.filter_query_text.clone(),
+            query_expr: self.filter_query_expr.clone(),
+            query_error: self.filter_query_error.clone(),
+        }
+    }
+
+    pub(crate) fn viewport_filter_cache_state(&self) -> ObjectViewportFilterCacheState {
+        ObjectViewportFilterCacheState {
+            filtered_ordered_indices: self.filtered_ordered_indices.clone(),
+            filtered_mask: self.filtered_mask.clone(),
+            filtered_render_lods: self.filtered_render_lods.clone(),
+            filtered_point_positions_world: self.filtered_point_positions_world.clone(),
+            filtered_point_values: self.filtered_point_values.clone(),
+            filtered_point_lods: self.filtered_point_lods.clone(),
+            filtered_color_groups: self.filtered_color_groups.clone(),
+            filter_generation: self.filter_generation,
+        }
+    }
+
+    pub(crate) fn apply_viewport_filter_cache_state(
+        &mut self,
+        state: &ObjectViewportFilterCacheState,
+    ) {
+        self.filtered_ordered_indices
+            .clone_from(&state.filtered_ordered_indices);
+        self.filtered_mask.clone_from(&state.filtered_mask);
+        self.filtered_render_lods
+            .clone_from(&state.filtered_render_lods);
+        self.filtered_point_positions_world
+            .clone_from(&state.filtered_point_positions_world);
+        self.filtered_point_values
+            .clone_from(&state.filtered_point_values);
+        self.filtered_point_lods
+            .clone_from(&state.filtered_point_lods);
+        self.filtered_color_groups
+            .clone_from(&state.filtered_color_groups);
+        self.filter_generation = state.filter_generation;
+        self.visible_selected_render_cache = None;
+    }
+
+    pub(crate) fn apply_viewport_filter_state(&mut self, state: &ObjectViewportFilterState) {
+        if self.filter_mode == state.mode
+            && self.filter_clauses == state.clauses
+            && self.filter_logic == state.logic
+            && self.filter_query_text == state.query_text
+            && self.filter_query_expr == state.query_expr
+            && self.filter_query_error == state.query_error
+        {
+            return;
+        }
+        self.filter_mode = state.mode;
+        self.filter_clauses.clone_from(&state.clauses);
+        self.filter_logic = state.logic;
+        self.filter_query_text.clone_from(&state.query_text);
+        self.filter_query_expr.clone_from(&state.query_expr);
+        self.filter_query_error.clone_from(&state.query_error);
+        self.ensure_filter_clause_row();
+        self.ensure_active_filter_properties_loaded();
+        self.invalidate_filter_cache();
     }
 
     pub(crate) fn apply_project_display_state_preserving_color_visibility(
@@ -3458,13 +3537,10 @@ impl ObjectsLayer {
             };
         }
 
-        let filtered_mask = self.filtered_mask.clone();
-        self.selected_object_indices
-            .retain(|idx| match filtered_mask.as_ref() {
-                Some(mask) => mask.get(*idx).copied().unwrap_or(false),
-                None => true,
-            });
-        self.rebuild_selection_render_lods();
+        // Selection identity belongs to the shared object document. A filter
+        // controls what this presentation draws, but must not delete selected
+        // IDs merely because they are hidden in one viewport.
+        self.visible_selected_render_cache = None;
         self.mark_live_analysis_selection_dirty();
         self.invalidate_table_cache();
     }
@@ -6007,6 +6083,13 @@ mod point_payload_tests {
         assert_eq!(selection["selection"]["selection_count"], 1);
         assert_eq!(selection["selection"]["primary"]["id"], "cell-a");
 
+        layer.set_filter_clauses_from_pairs(&[("class".to_string(), "immune".to_string())]);
+        let hidden_selection = layer.selection_snapshot_json(egui::Vec2::ZERO, 10);
+        assert_eq!(
+            hidden_selection["selection_count"], 1,
+            "a viewport filter must not delete shared selection identity"
+        );
+
         layer.clear_filter();
         let second_rect = egui::Rect::from_min_max(egui::pos2(21.0, 1.0), egui::pos2(29.0, 9.0));
         layer.select_in_world_rect_snapshot_json(second_rect, egui::Vec2::ZERO, true, 10);
@@ -6036,6 +6119,19 @@ mod point_payload_tests {
         assert_eq!(legend.len(), 2);
         assert!(legend.iter().any(|entry| entry.value_label == "immune"));
         assert!(legend.iter().any(|entry| entry.value_label == "tumor"));
+        layer.set_color_by_property(Some("positive".to_string()));
+        layer.ensure_color_groups();
+        assert!(layer.color_groups_cache.contains_key("class"));
+        layer.set_color_by_property(Some("class".to_string()));
+        assert_eq!(
+            layer
+                .color_groups
+                .as_ref()
+                .map(|groups| groups.property_key.as_str()),
+            Some("class"),
+            "switching viewport styles should restore cached property groups"
+        );
+        assert!(layer.color_groups_cache.contains_key("positive"));
 
         let export_columns = layer
             .build_object_export_column_names()

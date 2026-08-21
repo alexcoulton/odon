@@ -28,6 +28,9 @@ app
 │   └── s3
 ├── deep_links
 ├── viewer
+│   ├── workspace
+│   ├── viewports
+│   ├── viewport_links
 │   ├── channels          (also app.channels)
 │   ├── planes            (also app.planes)
 │   ├── native_layers     (also app.native_layers)
@@ -415,6 +418,46 @@ gaps, columns, and fitted-cell or native-pixel layout. Mosaic channels are
 shared presentation state across the mosaic rather than independent per-item
 channel configurations.
 
+### Viewport workspaces
+
+Single-image mode owns a versioned workspace with one or two stable viewport
+IDs. Creating the second viewport clones presentation and navigation state but
+does not reopen or duplicate the dataset, loaders, raw tile cache, object data,
+edit history, or selection identities. Explicit `viewer.viewports.*` methods
+target an ID; legacy `viewer.*` methods target the active viewport.
+
+Camera and plane links propagate one causal change to the peer. Disabling a
+link leaves subsequent changes independent. Selection is document-shared and
+cannot be unlinked in the first milestone. Presentation changes—including
+channels, object fill/property/filter, native-layer visibility/order, and
+active layer—do not mutate the peer. The last viewport cannot be removed.
+Existing project files load as one viewport; version-1 workspace state restores
+two-view layouts, split ratio, links, stable IDs, navigation, presentation, and
+per-view sampling/decorations. A stale handle continues targeting its stable ID
+and raises `ResourceNotFoundError` after that viewport is removed.
+
+Each viewport handle exposes an `objects` child resource for the planned
+`viewport.objects.set_style/set_legend/set_filter` spelling. Its calls remain
+ID-bound when activity changes. Flat `set_object_*` methods are retained as
+compatible aliases. Workspace layout accepts either `layout="horizontal"` or
+the declarative `split="horizontal", viewports=[...]` form; an explicit list
+must match the current stable-ID order.
+
+`app.viewer.viewport_links` exposes the canonical fixed link-group resource:
+`list()`, `create(viewports=..., fields=...)`, `update(fields=...)`, and
+`remove()`. Its ID is `comparison-navigation`. Removing it disables camera and
+plane propagation but its returned snapshot still contains `selection`, since
+selection identity cannot be separated from the document in this milestone.
+The older `workspace.get_links()` and `workspace.set_links()` calls remain
+supported compatibility wrappers.
+
+Filter-sensitive selection, analysis, measurement, and export calls in a
+two-view workspace require `viewport`, `filter_query`, `use_all_objects=True`,
+or an explicit active-view opt-in. Viewport navigation responses include the
+affected IDs and one link transaction ID; events retain initiating session and
+request metadata. `viewer.workspace.get` exposes sharing, decoded-byte, I/O,
+and frame-planning counters for runtime verification.
+
 ### Memory and screenshots
 
 `memory.get()` reports estimates and current pin state. Pinning returns a task
@@ -423,8 +466,9 @@ large memory; repeat with `force=True` only after presenting that estimate to
 the user. In mosaic mode, scopes determine which ROI items are pinned.
 
 Tile worker count is bounded from 1 to 12. Screenshot capture returns a task
-that settles when output has been written. Viewer, complete-window, and project
-page captures are separate operations. File output does not overwrite unless
+that settles when output has been written. Explicit viewport, composed
+workspace, complete-window, and project-page captures are separate operations.
+File output does not overwrite unless
 the relevant method explicitly accepts and receives overwrite permission.
 
 ### Deep links
@@ -476,7 +520,8 @@ by ID. Extension IDs use reverse-domain-style names and are unique while
 connected.
 
 The current API adds UI at predefined hosts; it cannot replace the native
-application shell or instantiate a second viewer canvas. See
+application shell. Viewport workspace methods can instantiate a second native
+canvas, but not arbitrary shell regions. See
 [Python API limitations](../advanced/python-api-limitations.md).
 
 ## Errors

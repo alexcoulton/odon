@@ -121,13 +121,14 @@ class ObjectResourceTests(unittest.TestCase):
         objects = Objects(client)  # type: ignore[arg-type]
 
         objects.select_ids(["cell-1", "cell-2"], mode="add", if_revision=11)
-        objects.select_filtered(mode="replace")
+        objects.select_filtered(mode="replace", viewport_id="viewport-left")
         objects.focus("cell-2", fit=False)
         objects.focus(3)
         objects.clear_focus(if_revision=12)
 
         self.assertEqual(client.calls[0][0], "viewer.objects.selection.select_ids")
         self.assertEqual(client.calls[0][1]["mode"], "add")
+        self.assertEqual(client.calls[1][1]["viewport_id"], "viewport-left")
         self.assertEqual(client.calls[2][1], {"id": "cell-2", "fit": False})
         self.assertEqual(client.calls[3][1], {"index": 3, "fit": True})
         self.assertEqual(client.calls[4][1]["if_revision"], 12)
@@ -225,11 +226,12 @@ class AsyncObjectResourceTests(unittest.IsolatedAsyncioTestCase):
         objects = AsyncObjects(client)  # type: ignore[arg-type]
 
         await objects.select_ids(["a"], mode="toggle")
-        await objects.select_filtered(mode="remove")
+        await objects.select_filtered(mode="remove", filter_query="score > 2")
         await objects.focus("a")
         await objects.clear_focus()
 
         self.assertEqual(client.calls[0][1]["mode"], "toggle")
+        self.assertEqual(client.calls[1][1]["filter_query"], "score > 2")
         self.assertEqual(client.calls[2][0], "viewer.objects.focus.set")
 
     async def test_async_object_source_wrappers(self) -> None:

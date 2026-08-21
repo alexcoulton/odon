@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,7 +15,9 @@ use ndarray::Array2;
 use rfd::FileDialog;
 use zarrs::array::{Array, ArraySubset};
 
-use crate::annotations::{AnnotationPointsLayer, AnnotationShape};
+use crate::annotations::{
+    AnnotationCategoryStyle, AnnotationLayerStyle, AnnotationPointsLayer, AnnotationShape,
+};
 use crate::app_support::memory::{
     MemoryChannelRow, PendingMemoryAction, SystemMemorySnapshot, format_bytes, memory_risk,
     refresh_system_memory_if_needed, ui_memory_channel_selector, ui_memory_overview,
@@ -64,20 +67,23 @@ use crate::masks::{MaskDisplayMode, MaskLayer, MaskRasterDisplayCache};
 use crate::objects::GeoJsonSegmentationLayer;
 use crate::objects::ObjectPreloadSettings;
 use crate::objects::PreloadedObjectLayer;
-use crate::objects::{ObjectFilterLogic, ObjectsLayer};
+use crate::objects::{
+    ObjectFilterLogic, ObjectProjectDisplayState, ObjectViewportFilterCacheState,
+    ObjectViewportFilterState, ObjectsLayer,
+};
 use crate::project::groups as layer_groups;
 use crate::project::{
     ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
     ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
     ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction, ProjectUiState,
-    ProjectViewChannelRef, ProjectViewSpec,
+    ProjectViewChannelRef, ProjectViewSpec, ProjectViewportViewState, ProjectWorkspaceViewState,
 };
 use crate::render::labels::{LabelZarrDataset, discover_label_names_local};
 use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
 use crate::render::labels_raw::{
     LabelTileKey, LabelTileLoaderHandle, LabelTileRequest, spawn_label_tile_loader,
 };
-use crate::render::points::PointsLayer;
+use crate::render::points::{PointsLayer, PointsStyle};
 use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
 use crate::render::threshold_preview_gl::{
     ThresholdPreviewGlDrawData, ThresholdPreviewGlDrawParams, ThresholdPreviewGlRenderer,
@@ -104,6 +110,9 @@ use crate::ui::left_panel;
 use crate::ui::right_panel;
 use crate::ui::style::apply_napari_like_dark;
 use crate::ui::top_bar;
+use crate::viewports::{
+    ViewportId, ViewportLayout, ViewportLinks, ViewportSlot, ViewportWorkspace,
+};
 use crate::xenium::XeniumLayers;
 use odon::control::{DataResourceSnapshot, LayerSnapshot};
 
@@ -121,6 +130,31 @@ const RAW_TILE_CACHE_HEADROOM_TILES: usize = 256;
 const RAW_TILE_ADAPTIVE_CHANNEL_THRESHOLD: usize = 16;
 const RAW_TILE_ADAPTIVE_BRIDGE_TILES_PER_FRAME: usize = 1;
 const RAW_TILE_ADAPTIVE_COARSE_TILES_PER_FRAME: usize = 1;
+
+fn viewport_image_request_budgets(multi_view: bool, active: bool) -> (usize, usize) {
+    if multi_view && !active {
+        // Keep the comparison view streaming on every frame while reserving
+        // more decode/upload bandwidth for the canvas under interaction.
+        (128, 32)
+    } else {
+        (256, 64)
+    }
+}
+
+fn merge_viewport_active_keys<K, I>(aggregate: &mut HashSet<K>, keys: I)
+where
+    K: Eq + Hash,
+    I: IntoIterator<Item = K>,
+{
+    aggregate.extend(keys);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewportControlDomain {
+    Read,
+    Navigation,
+    Presentation,
+}
 const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
 const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
@@ -610,6 +644,1230 @@ pub struct S3DatasetSelection {
     pub secret_key: String,
 }
 
+#[derive(Debug, Clone)]
+struct ObjectLayerViewportPresentation {
+    display: ObjectProjectDisplayState,
+    filter: ObjectViewportFilterState,
+    filter_cache: ObjectViewportFilterCacheState,
+    visible: bool,
+    opacity: f32,
+    width_screen_px: f32,
+    color_rgb: [u8; 3],
+    show_selection_overlay: bool,
+}
+
+impl ObjectLayerViewportPresentation {
+    fn capture(layer: &ObjectsLayer) -> Self {
+        Self {
+            display: layer.project_display_state(),
+            filter: layer.viewport_filter_state(),
+            filter_cache: layer.viewport_filter_cache_state(),
+            visible: layer.visible,
+            opacity: layer.opacity,
+            width_screen_px: layer.width_screen_px,
+            color_rgb: layer.color_rgb,
+            show_selection_overlay: layer.show_selection_overlay,
+        }
+    }
+
+    fn apply(&self, layer: &mut ObjectsLayer) {
+        layer.apply_project_display_state(&self.display);
+        layer.apply_viewport_filter_state(&self.filter);
+        layer.apply_viewport_filter_cache_state(&self.filter_cache);
+        layer.visible = self.visible;
+        layer.opacity = self.opacity;
+        layer.width_screen_px = self.width_screen_px;
+        layer.color_rgb = self.color_rgb;
+        layer.show_selection_overlay = self.show_selection_overlay;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MaskViewportPresentation {
+    id: u64,
+    visible: bool,
+    opacity: f32,
+    width_screen_px: f32,
+    display_mode: MaskDisplayMode,
+    color_rgb: [u8; 3],
+}
+
+#[derive(Debug, Clone)]
+struct AnnotationViewportPresentation {
+    id: u64,
+    visible: bool,
+    style: AnnotationLayerStyle,
+    category_styles: Vec<AnnotationCategoryStyle>,
+    continuous_shape: AnnotationShape,
+    continuous_range: Option<(f32, f32)>,
+}
+
+#[derive(Debug, Clone)]
+struct SpatialShapeViewportPresentation {
+    id: u64,
+    visible: bool,
+    opacity: f32,
+    width_screen_px: f32,
+    color_rgb: [u8; 3],
+    objects: Option<ObjectLayerViewportPresentation>,
+}
+
+#[derive(Debug, Clone)]
+struct SpatialImageViewportPresentation {
+    id: u64,
+    visible: bool,
+    opacity: f32,
+    current_z_level0: u64,
+    channels: Vec<ChannelInfo>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingViewportScreenshot {
+    viewport_id: ViewportId,
+    request: ScreenshotRequest,
+}
+
+#[derive(Debug, Clone)]
+struct ViewerViewportState {
+    camera: Camera,
+    last_canvas_rect: Option<egui::Rect>,
+    active_render_id: u64,
+    previous_render_id: Option<u64>,
+    active_render_smooth_pixels: bool,
+    previous_render_smooth_pixels: Option<bool>,
+    previous_view_selection: Option<ViewPlaneSelection>,
+    previous_displayed_view_selection: Option<ViewPlaneSelection>,
+    last_render_view_selection: ViewPlaneSelection,
+    last_target_level: Option<usize>,
+    fallback_ceiling_level: Option<usize>,
+    last_visible_world_tiles: Option<egui::Rect>,
+    zoom_out_floor_level: Option<usize>,
+    zoom_out_floor_until: Option<Instant>,
+    zoom_out_floor_visible_world_tiles: Option<egui::Rect>,
+    selected_channel: usize,
+    view_plane_mode: ViewPlaneMode,
+    draft_view_slice_level0: Option<u64>,
+    current_x_level0: u64,
+    current_y_level0: u64,
+    current_z_level0: u64,
+    channels: Vec<ChannelInfo>,
+    layer_groups: ProjectLayerGroups,
+    channel_window_overrides: HashMap<String, (f32, f32)>,
+    active_layer: LayerId,
+    selected_channel_layers: HashSet<usize>,
+    selected_channel_group_id: Option<u64>,
+    selected_overlay_layers: HashSet<LayerId>,
+    overlay_layer_order: Vec<LayerId>,
+    channel_layer_order: Vec<usize>,
+    channel_sort_mode: ChannelSortMode,
+    object_display: ObjectProjectDisplayState,
+    object_filter: ObjectViewportFilterState,
+    object_filter_cache: ObjectViewportFilterCacheState,
+    object_visible: bool,
+    object_opacity: f32,
+    object_width_screen_px: f32,
+    object_color_rgb: [u8; 3],
+    object_show_selection_overlay: bool,
+    cells_outlines_visible: bool,
+    cells_outlines_color_rgb: [u8; 3],
+    cells_outlines_opacity: f32,
+    cells_outlines_width_px: f32,
+    cell_points_visible: bool,
+    cell_points_style: PointsStyle,
+    masks: Vec<MaskViewportPresentation>,
+    annotations: Vec<AnnotationViewportPresentation>,
+    seg_geojson_visible: bool,
+    seg_geojson_opacity: f32,
+    seg_geojson_width_screen_px: f32,
+    seg_geojson_color_rgb: [u8; 3],
+    spatial_shapes: Vec<SpatialShapeViewportPresentation>,
+    spatial_points: Option<(bool, PointsStyle, f32, usize)>,
+    spatial_images: Vec<SpatialImageViewportPresentation>,
+    xenium_cells: Option<(bool, f32, f32, [u8; 3])>,
+    xenium_transcripts: Option<(bool, PointsStyle, String, usize)>,
+    smooth_pixels: bool,
+    show_scale_bar: bool,
+    show_hud: bool,
+    show_tile_debug: bool,
+}
+
+impl ViewerViewportState {
+    fn color_json(color: egui::Color32) -> serde_json::Value {
+        serde_json::json!(color.to_array())
+    }
+
+    fn color_from_json(value: &serde_json::Value) -> Option<egui::Color32> {
+        let values = value.as_array()?;
+        if values.len() != 4 {
+            return None;
+        }
+        let mut rgba = [0_u8; 4];
+        for (dst, value) in rgba.iter_mut().zip(values) {
+            *dst = u8::try_from(value.as_u64()?).ok()?;
+        }
+        Some(egui::Color32::from_rgba_unmultiplied(
+            rgba[0], rgba[1], rgba[2], rgba[3],
+        ))
+    }
+
+    fn rgb_from_json(value: &serde_json::Value) -> Option<[u8; 3]> {
+        let values = value.as_array()?;
+        if values.len() != 3 {
+            return None;
+        }
+        Some([
+            u8::try_from(values[0].as_u64()?).ok()?,
+            u8::try_from(values[1].as_u64()?).ok()?,
+            u8::try_from(values[2].as_u64()?).ok()?,
+        ])
+    }
+
+    fn points_style_json(style: &PointsStyle) -> serde_json::Value {
+        serde_json::json!({
+            "radius_screen_px": style.radius_screen_px,
+            "fill_positive_rgba": Self::color_json(style.fill_positive),
+            "fill_negative_rgba": Self::color_json(style.fill_negative),
+            "stroke_positive": {
+                "width": style.stroke_positive.width,
+                "color_rgba": Self::color_json(style.stroke_positive.color),
+            },
+            "stroke_negative": {
+                "width": style.stroke_negative.width,
+                "color_rgba": Self::color_json(style.stroke_negative.color),
+            },
+        })
+    }
+
+    fn apply_points_style_json(style: &mut PointsStyle, value: &serde_json::Value) {
+        if let Some(radius) = value
+            .get("radius_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            style.radius_screen_px = radius as f32;
+        }
+        if let Some(color) = value
+            .get("fill_positive_rgba")
+            .and_then(Self::color_from_json)
+        {
+            style.fill_positive = color;
+        }
+        if let Some(color) = value
+            .get("fill_negative_rgba")
+            .and_then(Self::color_from_json)
+        {
+            style.fill_negative = color;
+        }
+        for (key, stroke) in [
+            ("stroke_positive", &mut style.stroke_positive),
+            ("stroke_negative", &mut style.stroke_negative),
+        ] {
+            let Some(saved) = value.get(key) else {
+                continue;
+            };
+            if let Some(width) = saved.get("width").and_then(serde_json::Value::as_f64) {
+                stroke.width = width as f32;
+            }
+            if let Some(color) = saved.get("color_rgba").and_then(Self::color_from_json) {
+                stroke.color = color;
+            }
+        }
+    }
+
+    fn object_layer_presentation_json(
+        presentation: &ObjectLayerViewportPresentation,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "display": presentation.display,
+            "filter": presentation.filter.project_json(),
+            "visible": presentation.visible,
+            "opacity": presentation.opacity,
+            "width_screen_px": presentation.width_screen_px,
+            "color_rgb": presentation.color_rgb,
+            "show_selection_overlay": presentation.show_selection_overlay,
+        })
+    }
+
+    fn apply_object_layer_presentation_json(
+        presentation: &mut ObjectLayerViewportPresentation,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        if let Some(display) = value.get("display") {
+            presentation.display = serde_json::from_value(display.clone())
+                .map_err(|error| format!("invalid object display presentation: {error}"))?;
+        }
+        if let Some(filter) = value.get("filter") {
+            presentation.filter = ObjectViewportFilterState::from_project_json(filter)?;
+            presentation.filter_cache = ObjectViewportFilterCacheState::empty();
+        }
+        if let Some(visible) = value.get("visible").and_then(serde_json::Value::as_bool) {
+            presentation.visible = visible;
+        }
+        if let Some(opacity) = value.get("opacity").and_then(serde_json::Value::as_f64) {
+            presentation.opacity = (opacity as f32).clamp(0.0, 1.0);
+        }
+        if let Some(width) = value
+            .get("width_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            presentation.width_screen_px = (width as f32).max(0.0);
+        }
+        if let Some(color) = value.get("color_rgb").and_then(Self::rgb_from_json) {
+            presentation.color_rgb = color;
+        }
+        if let Some(show) = value
+            .get("show_selection_overlay")
+            .and_then(serde_json::Value::as_bool)
+        {
+            presentation.show_selection_overlay = show;
+        }
+        Ok(())
+    }
+
+    fn project_presentation_json(&self) -> serde_json::Value {
+        let masks = self
+            .masks
+            .iter()
+            .map(|layer| {
+                serde_json::json!({
+                    "id": layer.id,
+                    "visible": layer.visible,
+                    "opacity": layer.opacity,
+                    "width_screen_px": layer.width_screen_px,
+                    "display_mode": layer.display_mode.storage_key(),
+                    "color_rgb": layer.color_rgb,
+                })
+            })
+            .collect::<Vec<_>>();
+        let annotations = self
+            .annotations
+            .iter()
+            .map(|layer| {
+                serde_json::json!({
+                    "id": layer.id,
+                    "visible": layer.visible,
+                    "style": {
+                        "radius_screen_px": layer.style.radius_screen_px,
+                        "opacity": layer.style.opacity,
+                        "stroke_width": layer.style.stroke.width,
+                        "stroke_color_rgba": Self::color_json(layer.style.stroke.color),
+                    },
+                    "category_styles": layer.category_styles.iter().map(|category| serde_json::json!({
+                        "name": category.name,
+                        "visible": category.visible,
+                        "color_rgba": Self::color_json(category.color),
+                        "shape": category.shape.storage_key(),
+                    })).collect::<Vec<_>>(),
+                    "continuous_shape": layer.continuous_shape.storage_key(),
+                    "continuous_range": layer.continuous_range.map(|(lo, hi)| [lo, hi]),
+                })
+            })
+            .collect::<Vec<_>>();
+        let spatial_shapes = self
+            .spatial_shapes
+            .iter()
+            .map(|layer| {
+                serde_json::json!({
+                    "id": layer.id,
+                    "visible": layer.visible,
+                    "opacity": layer.opacity,
+                    "width_screen_px": layer.width_screen_px,
+                    "color_rgb": layer.color_rgb,
+                    "objects": layer.objects.as_ref().map(Self::object_layer_presentation_json),
+                })
+            })
+            .collect::<Vec<_>>();
+        let spatial_images = self
+            .spatial_images
+            .iter()
+            .map(|layer| {
+                serde_json::json!({
+                    "id": layer.id,
+                    "visible": layer.visible,
+                    "opacity": layer.opacity,
+                    "current_z_level0": layer.current_z_level0,
+                    "channels": layer.channels.iter().map(|channel| serde_json::json!({
+                        "index": channel.index,
+                        "name": channel.name,
+                        "visible": channel.visible,
+                        "color_rgb": channel.color_rgb,
+                        "window": channel.window.map(|(lo, hi)| [lo, hi]),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "cell_points": {
+                "visible": self.cell_points_visible,
+                "style": Self::points_style_json(&self.cell_points_style),
+            },
+            "masks": masks,
+            "annotations": annotations,
+            "segmentation_geojson": {
+                "visible": self.seg_geojson_visible,
+                "opacity": self.seg_geojson_opacity,
+                "width_screen_px": self.seg_geojson_width_screen_px,
+                "color_rgb": self.seg_geojson_color_rgb,
+            },
+            "spatial_shapes": spatial_shapes,
+            "spatial_points": self.spatial_points.as_ref().map(|(visible, style, threshold, max_points)| serde_json::json!({
+                "visible": visible,
+                "style": Self::points_style_json(style),
+                "threshold": threshold,
+                "max_render_points_total": max_points,
+            })),
+            "spatial_images": spatial_images,
+            "xenium_cells": self.xenium_cells.map(|(visible, opacity, width, color)| serde_json::json!({
+                "visible": visible,
+                "opacity": opacity,
+                "width_screen_px": width,
+                "color_rgb": color,
+            })),
+            "xenium_transcripts": self.xenium_transcripts.as_ref().map(|(visible, style, gene_query, max_points)| serde_json::json!({
+                "visible": visible,
+                "style": Self::points_style_json(style),
+                "gene_query": gene_query,
+                "max_render_points_total": max_points,
+            })),
+            "display_preferences": {
+                "smooth_pixels": self.smooth_pixels,
+                "show_scale_bar": self.show_scale_bar,
+                "show_hud": self.show_hud,
+                "show_tile_debug": self.show_tile_debug,
+            },
+        })
+    }
+
+    fn apply_project_presentation_json(&mut self, value: &serde_json::Value) -> Result<(), String> {
+        if let Some(saved) = value.get("display_preferences") {
+            if let Some(value) = saved
+                .get("smooth_pixels")
+                .and_then(serde_json::Value::as_bool)
+            {
+                self.smooth_pixels = value;
+            }
+            if let Some(value) = saved
+                .get("show_scale_bar")
+                .and_then(serde_json::Value::as_bool)
+            {
+                self.show_scale_bar = value;
+            }
+            if let Some(value) = saved.get("show_hud").and_then(serde_json::Value::as_bool) {
+                self.show_hud = value;
+            }
+            if let Some(value) = saved
+                .get("show_tile_debug")
+                .and_then(serde_json::Value::as_bool)
+            {
+                self.show_tile_debug = value;
+            }
+        }
+        if let Some(points) = value.get("cell_points") {
+            if let Some(visible) = points.get("visible").and_then(serde_json::Value::as_bool) {
+                self.cell_points_visible = visible;
+            }
+            if let Some(style) = points.get("style") {
+                Self::apply_points_style_json(&mut self.cell_points_style, style);
+            }
+        }
+        if let Some(saved_layers) = value.get("masks").and_then(serde_json::Value::as_array) {
+            for saved in saved_layers {
+                let Some(id) = saved.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Some(layer) = self.masks.iter_mut().find(|layer| layer.id == id) else {
+                    continue;
+                };
+                if let Some(visible) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                    layer.visible = visible;
+                }
+                if let Some(opacity) = saved.get("opacity").and_then(serde_json::Value::as_f64) {
+                    layer.opacity = (opacity as f32).clamp(0.0, 1.0);
+                }
+                if let Some(width) = saved
+                    .get("width_screen_px")
+                    .and_then(serde_json::Value::as_f64)
+                {
+                    layer.width_screen_px = (width as f32).max(0.0);
+                }
+                if let Some(mode) = saved
+                    .get("display_mode")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(MaskDisplayMode::from_storage_key)
+                {
+                    layer.display_mode = mode;
+                }
+                if let Some(color) = saved.get("color_rgb").and_then(Self::rgb_from_json) {
+                    layer.color_rgb = color;
+                }
+            }
+        }
+        if let Some(saved_layers) = value
+            .get("annotations")
+            .and_then(serde_json::Value::as_array)
+        {
+            for saved in saved_layers {
+                let Some(id) = saved.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Some(layer) = self.annotations.iter_mut().find(|layer| layer.id == id) else {
+                    continue;
+                };
+                if let Some(visible) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                    layer.visible = visible;
+                }
+                if let Some(style) = saved.get("style") {
+                    if let Some(radius) = style
+                        .get("radius_screen_px")
+                        .and_then(serde_json::Value::as_f64)
+                    {
+                        layer.style.radius_screen_px = radius as f32;
+                    }
+                    if let Some(opacity) = style.get("opacity").and_then(serde_json::Value::as_f64)
+                    {
+                        layer.style.opacity = (opacity as f32).clamp(0.0, 1.0);
+                    }
+                    if let Some(width) = style
+                        .get("stroke_width")
+                        .and_then(serde_json::Value::as_f64)
+                    {
+                        layer.style.stroke.width = (width as f32).max(0.0);
+                    }
+                    if let Some(color) = style
+                        .get("stroke_color_rgba")
+                        .and_then(Self::color_from_json)
+                    {
+                        layer.style.stroke.color = color;
+                    }
+                }
+                if let Some(categories) = saved
+                    .get("category_styles")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for saved_category in categories {
+                        let Some(name) = saved_category
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                        else {
+                            continue;
+                        };
+                        let Some(category) = layer
+                            .category_styles
+                            .iter_mut()
+                            .find(|category| category.name == name)
+                        else {
+                            continue;
+                        };
+                        if let Some(visible) = saved_category
+                            .get("visible")
+                            .and_then(serde_json::Value::as_bool)
+                        {
+                            category.visible = visible;
+                        }
+                        if let Some(color) = saved_category
+                            .get("color_rgba")
+                            .and_then(Self::color_from_json)
+                        {
+                            category.color = color;
+                        }
+                        if let Some(shape) = saved_category
+                            .get("shape")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(AnnotationShape::from_storage_key)
+                        {
+                            category.shape = shape;
+                        }
+                    }
+                }
+                if let Some(shape) = saved
+                    .get("continuous_shape")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(AnnotationShape::from_storage_key)
+                {
+                    layer.continuous_shape = shape;
+                }
+                if let Some(range) = saved
+                    .get("continuous_range")
+                    .and_then(serde_json::Value::as_array)
+                    .filter(|range| range.len() == 2)
+                    && let (Some(lo), Some(hi)) = (range[0].as_f64(), range[1].as_f64())
+                {
+                    layer.continuous_range = Some((lo as f32, hi as f32));
+                }
+            }
+        }
+        if let Some(saved) = value.get("segmentation_geojson") {
+            if let Some(visible) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                self.seg_geojson_visible = visible;
+            }
+            if let Some(opacity) = saved.get("opacity").and_then(serde_json::Value::as_f64) {
+                self.seg_geojson_opacity = (opacity as f32).clamp(0.0, 1.0);
+            }
+            if let Some(width) = saved
+                .get("width_screen_px")
+                .and_then(serde_json::Value::as_f64)
+            {
+                self.seg_geojson_width_screen_px = (width as f32).max(0.0);
+            }
+            if let Some(color) = saved.get("color_rgb").and_then(Self::rgb_from_json) {
+                self.seg_geojson_color_rgb = color;
+            }
+        }
+        if let Some(saved_layers) = value
+            .get("spatial_shapes")
+            .and_then(serde_json::Value::as_array)
+        {
+            for saved in saved_layers {
+                let Some(id) = saved.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Some(layer) = self.spatial_shapes.iter_mut().find(|layer| layer.id == id)
+                else {
+                    continue;
+                };
+                if let Some(visible) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                    layer.visible = visible;
+                }
+                if let Some(opacity) = saved.get("opacity").and_then(serde_json::Value::as_f64) {
+                    layer.opacity = (opacity as f32).clamp(0.0, 1.0);
+                }
+                if let Some(width) = saved
+                    .get("width_screen_px")
+                    .and_then(serde_json::Value::as_f64)
+                {
+                    layer.width_screen_px = (width as f32).max(0.0);
+                }
+                if let Some(color) = saved.get("color_rgb").and_then(Self::rgb_from_json) {
+                    layer.color_rgb = color;
+                }
+                if let (Some(objects), Some(saved_objects)) =
+                    (layer.objects.as_mut(), saved.get("objects"))
+                {
+                    Self::apply_object_layer_presentation_json(objects, saved_objects)?;
+                }
+            }
+        }
+        if let (Some(saved), Some((visible, style, threshold, max_points))) =
+            (value.get("spatial_points"), self.spatial_points.as_mut())
+        {
+            if let Some(value) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                *visible = value;
+            }
+            if let Some(saved_style) = saved.get("style") {
+                Self::apply_points_style_json(style, saved_style);
+            }
+            if let Some(value) = saved.get("threshold").and_then(serde_json::Value::as_f64) {
+                *threshold = value as f32;
+            }
+            if let Some(value) = saved
+                .get("max_render_points_total")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+            {
+                *max_points = value;
+            }
+        }
+        if let Some(saved_layers) = value
+            .get("spatial_images")
+            .and_then(serde_json::Value::as_array)
+        {
+            for saved in saved_layers {
+                let Some(id) = saved.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let Some(layer) = self.spatial_images.iter_mut().find(|layer| layer.id == id)
+                else {
+                    continue;
+                };
+                if let Some(visible) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                    layer.visible = visible;
+                }
+                if let Some(opacity) = saved.get("opacity").and_then(serde_json::Value::as_f64) {
+                    layer.opacity = (opacity as f32).clamp(0.0, 1.0);
+                }
+                if let Some(z) = saved
+                    .get("current_z_level0")
+                    .and_then(serde_json::Value::as_u64)
+                {
+                    layer.current_z_level0 = z;
+                }
+                if let Some(channels) = saved.get("channels").and_then(serde_json::Value::as_array)
+                {
+                    for saved_channel in channels {
+                        let Some(index) = saved_channel
+                            .get("index")
+                            .and_then(serde_json::Value::as_u64)
+                            .and_then(|index| usize::try_from(index).ok())
+                        else {
+                            continue;
+                        };
+                        let Some(channel) = layer
+                            .channels
+                            .iter_mut()
+                            .find(|channel| channel.index == index)
+                        else {
+                            continue;
+                        };
+                        if let Some(visible) = saved_channel
+                            .get("visible")
+                            .and_then(serde_json::Value::as_bool)
+                        {
+                            channel.visible = visible;
+                        }
+                        if let Some(color) =
+                            saved_channel.get("color_rgb").and_then(Self::rgb_from_json)
+                        {
+                            channel.color_rgb = color;
+                        }
+                        if let Some(window) = saved_channel
+                            .get("window")
+                            .and_then(serde_json::Value::as_array)
+                            .filter(|window| window.len() == 2)
+                            && let (Some(lo), Some(hi)) = (window[0].as_f64(), window[1].as_f64())
+                        {
+                            channel.window = Some((lo as f32, hi as f32));
+                        }
+                    }
+                }
+            }
+        }
+        if let (Some(saved), Some((visible, opacity, width, color))) =
+            (value.get("xenium_cells"), self.xenium_cells.as_mut())
+        {
+            if let Some(value) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                *visible = value;
+            }
+            if let Some(value) = saved.get("opacity").and_then(serde_json::Value::as_f64) {
+                *opacity = (value as f32).clamp(0.0, 1.0);
+            }
+            if let Some(value) = saved
+                .get("width_screen_px")
+                .and_then(serde_json::Value::as_f64)
+            {
+                *width = (value as f32).max(0.0);
+            }
+            if let Some(value) = saved.get("color_rgb").and_then(Self::rgb_from_json) {
+                *color = value;
+            }
+        }
+        if let (Some(saved), Some((visible, style, gene_query, max_points))) = (
+            value.get("xenium_transcripts"),
+            self.xenium_transcripts.as_mut(),
+        ) {
+            if let Some(value) = saved.get("visible").and_then(serde_json::Value::as_bool) {
+                *visible = value;
+            }
+            if let Some(saved_style) = saved.get("style") {
+                Self::apply_points_style_json(style, saved_style);
+            }
+            if let Some(value) = saved.get("gene_query").and_then(serde_json::Value::as_str) {
+                gene_query.clear();
+                gene_query.push_str(value);
+            }
+            if let Some(value) = saved
+                .get("max_render_points_total")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+            {
+                *max_points = value;
+            }
+        }
+        Ok(())
+    }
+
+    fn capture(app: &OmeZarrViewerApp) -> Self {
+        Self {
+            camera: app.camera.clone(),
+            last_canvas_rect: app.last_canvas_rect,
+            active_render_id: app.active_render_id,
+            previous_render_id: app.previous_render_id,
+            active_render_smooth_pixels: app.active_render_smooth_pixels,
+            previous_render_smooth_pixels: app.previous_render_smooth_pixels,
+            previous_view_selection: app.previous_view_selection,
+            previous_displayed_view_selection: app.previous_displayed_view_selection,
+            last_render_view_selection: app.last_render_view_selection,
+            last_target_level: app.last_target_level,
+            fallback_ceiling_level: app.fallback_ceiling_level,
+            last_visible_world_tiles: app.last_visible_world_tiles,
+            zoom_out_floor_level: app.zoom_out_floor_level,
+            zoom_out_floor_until: app.zoom_out_floor_until,
+            zoom_out_floor_visible_world_tiles: app.zoom_out_floor_visible_world_tiles,
+            selected_channel: app.selected_channel,
+            view_plane_mode: app.view_plane_mode,
+            draft_view_slice_level0: app.draft_view_slice_level0,
+            current_x_level0: app.current_x_level0,
+            current_y_level0: app.current_y_level0,
+            current_z_level0: app.current_z_level0,
+            channels: app.channels.clone(),
+            layer_groups: app.current_layer_groups(),
+            channel_window_overrides: app.channel_window_overrides.clone(),
+            active_layer: app.active_layer,
+            selected_channel_layers: app.selected_channel_layers.clone(),
+            selected_channel_group_id: app.selected_channel_group_id,
+            selected_overlay_layers: app.selected_overlay_layers.clone(),
+            overlay_layer_order: app.overlay_layer_order.clone(),
+            channel_layer_order: app.channel_layer_order.clone(),
+            channel_sort_mode: app.channel_sort_mode,
+            object_display: app.seg_objects.project_display_state(),
+            object_filter: app.seg_objects.viewport_filter_state(),
+            object_filter_cache: app.seg_objects.viewport_filter_cache_state(),
+            object_visible: app.seg_objects.visible,
+            object_opacity: app.seg_objects.opacity,
+            object_width_screen_px: app.seg_objects.width_screen_px,
+            object_color_rgb: app.seg_objects.color_rgb,
+            object_show_selection_overlay: app.seg_objects.show_selection_overlay,
+            cells_outlines_visible: app.cells_outlines_visible,
+            cells_outlines_color_rgb: app.cells_outlines_color_rgb,
+            cells_outlines_opacity: app.cells_outlines_opacity,
+            cells_outlines_width_px: app.cells_outlines_width_px,
+            cell_points_visible: app.cell_points.visible,
+            cell_points_style: app.cell_points.style.clone(),
+            masks: app
+                .mask_layers
+                .iter()
+                .map(|layer| MaskViewportPresentation {
+                    id: layer.id,
+                    visible: layer.visible,
+                    opacity: layer.opacity,
+                    width_screen_px: layer.width_screen_px,
+                    display_mode: layer.display_mode,
+                    color_rgb: layer.color_rgb,
+                })
+                .collect(),
+            annotations: app
+                .annotation_layers
+                .iter()
+                .map(|layer| AnnotationViewportPresentation {
+                    id: layer.id,
+                    visible: layer.visible,
+                    style: layer.style.clone(),
+                    category_styles: layer.category_styles.clone(),
+                    continuous_shape: layer.continuous_shape,
+                    continuous_range: layer.continuous_range,
+                })
+                .collect(),
+            seg_geojson_visible: app.seg_geojson.visible,
+            seg_geojson_opacity: app.seg_geojson.opacity,
+            seg_geojson_width_screen_px: app.seg_geojson.width_screen_px,
+            seg_geojson_color_rgb: app.seg_geojson.color_rgb,
+            spatial_shapes: app
+                .spatial_layers
+                .shapes
+                .iter()
+                .map(|layer| SpatialShapeViewportPresentation {
+                    id: layer.id,
+                    visible: layer.visible,
+                    opacity: layer.opacity,
+                    width_screen_px: layer.width_screen_px,
+                    color_rgb: layer.color_rgb,
+                    objects: layer
+                        .object_layer()
+                        .map(ObjectLayerViewportPresentation::capture),
+                })
+                .collect(),
+            spatial_points: app.spatial_layers.points.as_ref().map(|layer| {
+                (
+                    layer.visible,
+                    layer.style.clone(),
+                    layer.threshold,
+                    layer.max_render_points_total,
+                )
+            }),
+            spatial_images: app
+                .spatial_image_layers
+                .images
+                .iter()
+                .map(|layer| SpatialImageViewportPresentation {
+                    id: layer.id,
+                    visible: layer.visible,
+                    opacity: layer.opacity,
+                    current_z_level0: layer.current_z_level0,
+                    channels: layer.channels.clone(),
+                })
+                .collect(),
+            xenium_cells: app.xenium_layers.cells.as_ref().map(|layer| {
+                (
+                    layer.visible,
+                    layer.opacity,
+                    layer.width_screen_px,
+                    layer.color_rgb,
+                )
+            }),
+            xenium_transcripts: app.xenium_layers.transcripts.as_ref().map(|layer| {
+                (
+                    layer.visible,
+                    layer.style.clone(),
+                    layer.gene_query.clone(),
+                    layer.max_render_points_total,
+                )
+            }),
+            smooth_pixels: app.smooth_pixels,
+            show_scale_bar: app.show_scale_bar,
+            show_hud: app.show_hud,
+            show_tile_debug: app.show_tile_debug,
+        }
+    }
+
+    fn apply(&self, app: &mut OmeZarrViewerApp) {
+        app.camera = self.camera.clone();
+        app.last_canvas_rect = self.last_canvas_rect;
+        app.active_render_id = self.active_render_id;
+        app.previous_render_id = self.previous_render_id;
+        app.active_render_smooth_pixels = self.active_render_smooth_pixels;
+        app.previous_render_smooth_pixels = self.previous_render_smooth_pixels;
+        app.previous_view_selection = self.previous_view_selection;
+        app.previous_displayed_view_selection = self.previous_displayed_view_selection;
+        app.last_render_view_selection = self.last_render_view_selection;
+        app.last_target_level = self.last_target_level;
+        app.fallback_ceiling_level = self.fallback_ceiling_level;
+        app.last_visible_world_tiles = self.last_visible_world_tiles;
+        app.zoom_out_floor_level = self.zoom_out_floor_level;
+        app.zoom_out_floor_until = self.zoom_out_floor_until;
+        app.zoom_out_floor_visible_world_tiles = self.zoom_out_floor_visible_world_tiles;
+        app.selected_channel = self.selected_channel;
+        app.view_plane_mode = self.view_plane_mode;
+        app.draft_view_slice_level0 = self.draft_view_slice_level0;
+        app.current_x_level0 = self.current_x_level0;
+        app.current_y_level0 = self.current_y_level0;
+        app.current_z_level0 = self.current_z_level0;
+        // Channel identity, names, and notes are document metadata. Only the
+        // visual fields are swapped with a viewport presentation.
+        for source in &self.channels {
+            if let Some(channel) = app
+                .channels
+                .iter_mut()
+                .find(|channel| channel.index == source.index)
+            {
+                channel.color_rgb = source.color_rgb;
+                channel.window = source.window;
+                channel.visible = source.visible;
+            }
+        }
+        app.viewport_layer_groups.clone_from(&self.layer_groups);
+        app.channel_window_overrides
+            .clone_from(&self.channel_window_overrides);
+        app.active_layer = self.active_layer;
+        app.selected_channel_layers
+            .clone_from(&self.selected_channel_layers);
+        app.selected_channel_group_id = self.selected_channel_group_id;
+        app.selected_overlay_layers
+            .clone_from(&self.selected_overlay_layers);
+        app.overlay_layer_order
+            .clone_from(&self.overlay_layer_order);
+        app.channel_layer_order
+            .clone_from(&self.channel_layer_order);
+        app.channel_sort_mode = self.channel_sort_mode;
+        app.seg_objects
+            .apply_project_display_state(&self.object_display);
+        app.seg_objects
+            .apply_viewport_filter_state(&self.object_filter);
+        app.seg_objects
+            .apply_viewport_filter_cache_state(&self.object_filter_cache);
+        app.seg_objects.visible = self.object_visible;
+        app.seg_objects.opacity = self.object_opacity;
+        app.seg_objects.width_screen_px = self.object_width_screen_px;
+        app.seg_objects.color_rgb = self.object_color_rgb;
+        app.seg_objects.show_selection_overlay = self.object_show_selection_overlay;
+        app.cells_outlines_visible = self.cells_outlines_visible;
+        app.cells_outlines_color_rgb = self.cells_outlines_color_rgb;
+        app.cells_outlines_opacity = self.cells_outlines_opacity;
+        app.cells_outlines_width_px = self.cells_outlines_width_px;
+        app.cell_points.visible = self.cell_points_visible;
+        app.cell_points.style.clone_from(&self.cell_points_style);
+        for presentation in &self.masks {
+            if let Some(layer) = app
+                .mask_layers
+                .iter_mut()
+                .find(|layer| layer.id == presentation.id)
+            {
+                layer.visible = presentation.visible;
+                layer.opacity = presentation.opacity;
+                layer.width_screen_px = presentation.width_screen_px;
+                layer.display_mode = presentation.display_mode;
+                layer.color_rgb = presentation.color_rgb;
+            }
+        }
+        for presentation in &self.annotations {
+            if let Some(layer) = app
+                .annotation_layers
+                .iter_mut()
+                .find(|layer| layer.id == presentation.id)
+            {
+                layer.visible = presentation.visible;
+                layer.style.clone_from(&presentation.style);
+                layer
+                    .category_styles
+                    .clone_from(&presentation.category_styles);
+                layer.continuous_shape = presentation.continuous_shape;
+                layer.continuous_range = presentation.continuous_range;
+            }
+        }
+        app.seg_geojson.visible = self.seg_geojson_visible;
+        app.seg_geojson.opacity = self.seg_geojson_opacity;
+        app.seg_geojson.width_screen_px = self.seg_geojson_width_screen_px;
+        app.seg_geojson.color_rgb = self.seg_geojson_color_rgb;
+        for presentation in &self.spatial_shapes {
+            if let Some(layer) = app
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == presentation.id)
+            {
+                layer.visible = presentation.visible;
+                layer.opacity = presentation.opacity;
+                layer.width_screen_px = presentation.width_screen_px;
+                layer.color_rgb = presentation.color_rgb;
+                if let (Some(objects), Some(layer_objects)) =
+                    (&presentation.objects, layer.object_layer_mut())
+                {
+                    objects.apply(layer_objects);
+                }
+            }
+        }
+        if let (Some((visible, style, threshold, max_points)), Some(layer)) =
+            (&self.spatial_points, app.spatial_layers.points.as_mut())
+        {
+            layer.visible = *visible;
+            layer.style.clone_from(style);
+            layer.threshold = *threshold;
+            layer.max_render_points_total = *max_points;
+        }
+        for presentation in &self.spatial_images {
+            if let Some(layer) = app
+                .spatial_image_layers
+                .images
+                .iter_mut()
+                .find(|layer| layer.id == presentation.id)
+            {
+                layer.visible = presentation.visible;
+                layer.opacity = presentation.opacity;
+                layer.current_z_level0 = presentation.current_z_level0;
+                layer.channels.clone_from(&presentation.channels);
+            }
+        }
+        if let (Some((visible, opacity, width, color)), Some(layer)) =
+            (&self.xenium_cells, app.xenium_layers.cells.as_mut())
+        {
+            layer.visible = *visible;
+            layer.opacity = *opacity;
+            layer.width_screen_px = *width;
+            layer.color_rgb = *color;
+        }
+        if let (Some((visible, style, gene_query, max_points)), Some(layer)) = (
+            &self.xenium_transcripts,
+            app.xenium_layers.transcripts.as_mut(),
+        ) {
+            layer.visible = *visible;
+            layer.style.clone_from(style);
+            layer.gene_query.clone_from(gene_query);
+            layer.max_render_points_total = *max_points;
+        }
+        app.smooth_pixels = self.smooth_pixels;
+        app.show_scale_bar = self.show_scale_bar;
+        app.show_hud = self.show_hud;
+        app.show_tile_debug = self.show_tile_debug;
+    }
+
+    fn camera_changed_from(&self, other: &Self) -> bool {
+        self.camera.center_world_lvl0 != other.camera.center_world_lvl0
+            || self.camera.zoom_screen_per_lvl0_px != other.camera.zoom_screen_per_lvl0_px
+    }
+
+    fn plane_changed_from(&self, other: &Self) -> bool {
+        self.view_plane_mode != other.view_plane_mode
+            || self.current_x_level0 != other.current_x_level0
+            || self.current_y_level0 != other.current_y_level0
+            || self.current_z_level0 != other.current_z_level0
+    }
+
+    fn presentation_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.selected_channel.hash(&mut hasher);
+        self.active_layer.hash(&mut hasher);
+        self.channel_layer_order.hash(&mut hasher);
+        self.overlay_layer_order.hash(&mut hasher);
+        self.channel_sort_mode.storage_key().hash(&mut hasher);
+        serde_json::to_string(&self.layer_groups)
+            .unwrap_or_default()
+            .hash(&mut hasher);
+        for channel in &self.channels {
+            channel.index.hash(&mut hasher);
+            channel.visible.hash(&mut hasher);
+            channel.color_rgb.hash(&mut hasher);
+            channel
+                .window
+                .map(|(lo, hi)| (lo.to_bits(), hi.to_bits()))
+                .hash(&mut hasher);
+        }
+        serde_json::to_string(&self.object_display)
+            .unwrap_or_default()
+            .hash(&mut hasher);
+        self.object_filter
+            .project_json()
+            .to_string()
+            .hash(&mut hasher);
+        self.object_visible.hash(&mut hasher);
+        self.object_opacity.to_bits().hash(&mut hasher);
+        self.object_width_screen_px.to_bits().hash(&mut hasher);
+        self.object_color_rgb.hash(&mut hasher);
+        self.object_show_selection_overlay.hash(&mut hasher);
+        self.cells_outlines_visible.hash(&mut hasher);
+        self.cells_outlines_color_rgb.hash(&mut hasher);
+        self.cells_outlines_opacity.to_bits().hash(&mut hasher);
+        self.cells_outlines_width_px.to_bits().hash(&mut hasher);
+        self.cell_points_visible.hash(&mut hasher);
+        format!("{:?}", self.cell_points_style).hash(&mut hasher);
+        format!("{:?}", self.masks).hash(&mut hasher);
+        format!("{:?}", self.annotations).hash(&mut hasher);
+        self.seg_geojson_visible.hash(&mut hasher);
+        self.seg_geojson_opacity.to_bits().hash(&mut hasher);
+        self.seg_geojson_width_screen_px.to_bits().hash(&mut hasher);
+        self.seg_geojson_color_rgb.hash(&mut hasher);
+        for shape in &self.spatial_shapes {
+            shape.id.hash(&mut hasher);
+            shape.visible.hash(&mut hasher);
+            shape.opacity.to_bits().hash(&mut hasher);
+            shape.width_screen_px.to_bits().hash(&mut hasher);
+            shape.color_rgb.hash(&mut hasher);
+            if let Some(objects) = shape.objects.as_ref() {
+                serde_json::to_string(&objects.display)
+                    .unwrap_or_default()
+                    .hash(&mut hasher);
+                objects.filter.project_json().to_string().hash(&mut hasher);
+                objects.visible.hash(&mut hasher);
+                objects.opacity.to_bits().hash(&mut hasher);
+                objects.width_screen_px.to_bits().hash(&mut hasher);
+                objects.color_rgb.hash(&mut hasher);
+                objects.show_selection_overlay.hash(&mut hasher);
+            }
+        }
+        format!("{:?}", self.spatial_points).hash(&mut hasher);
+        for image in &self.spatial_images {
+            image.id.hash(&mut hasher);
+            image.visible.hash(&mut hasher);
+            image.opacity.to_bits().hash(&mut hasher);
+            image.current_z_level0.hash(&mut hasher);
+            for channel in &image.channels {
+                channel.index.hash(&mut hasher);
+                channel.visible.hash(&mut hasher);
+                channel.color_rgb.hash(&mut hasher);
+                channel
+                    .window
+                    .map(|(lo, hi)| (lo.to_bits(), hi.to_bits()))
+                    .hash(&mut hasher);
+            }
+        }
+        format!("{:?}", self.xenium_cells).hash(&mut hasher);
+        format!("{:?}", self.xenium_transcripts).hash(&mut hasher);
+        self.smooth_pixels.hash(&mut hasher);
+        self.show_scale_bar.hash(&mut hasher);
+        self.show_hud.hash(&mut hasher);
+        self.show_tile_debug.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn presentation_changed_from(&self, other: &Self) -> bool {
+        self.presentation_fingerprint() != other.presentation_fingerprint()
+    }
+
+    fn copy_linked_navigation_from(&mut self, source: &Self, links: ViewportLinks) {
+        if links.camera {
+            self.camera = source.camera.clone();
+        }
+        if links.plane {
+            self.view_plane_mode = source.view_plane_mode;
+            self.draft_view_slice_level0 = source.draft_view_slice_level0;
+            self.current_x_level0 = source.current_x_level0;
+            self.current_y_level0 = source.current_y_level0;
+            self.current_z_level0 = source.current_z_level0;
+            self.previous_displayed_view_selection = source.previous_displayed_view_selection;
+        }
+    }
+
+    fn layer_visible(&self, id: LayerId) -> Option<bool> {
+        match id {
+            LayerId::Channel(index) => self.channels.get(index).map(|channel| channel.visible),
+            LayerId::SpatialImage(id) => self
+                .spatial_images
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.visible),
+            LayerId::SegmentationLabels => Some(self.cells_outlines_visible),
+            LayerId::SegmentationGeoJson => Some(self.seg_geojson_visible),
+            LayerId::SegmentationObjects => Some(self.object_visible),
+            LayerId::Mask(id) => self
+                .masks
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.visible),
+            LayerId::Points => Some(self.cell_points_visible),
+            LayerId::Annotation(id) => self
+                .annotations
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.visible),
+            LayerId::SpatialShape(id) => self
+                .spatial_shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.visible),
+            LayerId::SpatialPoints => self.spatial_points.as_ref().map(|state| state.0),
+            LayerId::XeniumCells => self.xenium_cells.as_ref().map(|state| state.0),
+            LayerId::XeniumTranscripts => self.xenium_transcripts.as_ref().map(|state| state.0),
+        }
+    }
+
+    fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
+        match id {
+            LayerId::Channel(index) => {
+                if let Some(channel) = self.channels.get_mut(index) {
+                    channel.visible = visible;
+                }
+            }
+            LayerId::SpatialImage(id) => {
+                if let Some(layer) = self.spatial_images.iter_mut().find(|layer| layer.id == id) {
+                    layer.visible = visible;
+                }
+            }
+            LayerId::SegmentationLabels => self.cells_outlines_visible = visible,
+            LayerId::SegmentationGeoJson => self.seg_geojson_visible = visible,
+            LayerId::SegmentationObjects => self.object_visible = visible,
+            LayerId::Mask(id) => {
+                if let Some(layer) = self.masks.iter_mut().find(|layer| layer.id == id) {
+                    layer.visible = visible;
+                }
+            }
+            LayerId::Points => self.cell_points_visible = visible,
+            LayerId::Annotation(id) => {
+                if let Some(layer) = self.annotations.iter_mut().find(|layer| layer.id == id) {
+                    layer.visible = visible;
+                }
+            }
+            LayerId::SpatialShape(id) => {
+                if let Some(layer) = self.spatial_shapes.iter_mut().find(|layer| layer.id == id) {
+                    layer.visible = visible;
+                }
+            }
+            LayerId::SpatialPoints => {
+                if let Some(state) = self.spatial_points.as_mut() {
+                    state.0 = visible;
+                }
+            }
+            LayerId::XeniumCells => {
+                if let Some(state) = self.xenium_cells.as_mut() {
+                    state.0 = visible;
+                }
+            }
+            LayerId::XeniumTranscripts => {
+                if let Some(state) = self.xenium_transcripts.as_mut() {
+                    state.0 = visible;
+                }
+            }
+        }
+    }
+}
+
 pub struct OmeZarrViewerApp {
     dataset: OmeZarrDataset,
     store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
@@ -644,6 +1902,8 @@ pub struct OmeZarrViewerApp {
     camera: Camera,
     active_render_id: u64,
     previous_render_id: Option<u64>,
+    active_render_smooth_pixels: bool,
+    previous_render_smooth_pixels: Option<bool>,
     previous_view_selection: Option<ViewPlaneSelection>,
     previous_displayed_view_selection: Option<ViewPlaneSelection>,
     last_render_view_selection: ViewPlaneSelection,
@@ -743,6 +2003,7 @@ pub struct OmeZarrViewerApp {
     show_tile_debug: bool,
     mask_draw_debug_stats: MaskDrawDebugStats,
     show_scale_bar: bool,
+    show_hud: bool,
     tile_loader_threads: usize,
     tile_prefetch_mode: TilePrefetchMode,
     tile_prefetch_aggressiveness: TilePrefetchAggressiveness,
@@ -782,9 +2043,18 @@ pub struct OmeZarrViewerApp {
     screenshot_settings_open: bool,
     screenshot_worker: ScreenshotWorkerHandle,
     screenshot_next_id: u64,
-    screenshot_pending: Option<ScreenshotRequest>,
-    screenshot_in_flight: Option<u64>,
+    screenshot_pending: VecDeque<PendingViewportScreenshot>,
+    screenshot_in_flight: HashMap<u64, ViewportId>,
     screenshot_output_dir: Option<PathBuf>,
+    viewport_workspace: Option<ViewportWorkspace<ViewerViewportState>>,
+    viewport_layer_groups: ProjectLayerGroups,
+    viewport_raw_active_keys: Option<HashSet<RawTileKey>>,
+    viewport_cpu_active_keys: Option<HashSet<TileKey>>,
+    viewport_label_active_keys: Option<HashSet<LabelTileKey>>,
+    viewport_spatial_image_active_keys: Option<HashMap<u64, HashSet<RawTileKey>>>,
+    viewport_frame_plan_ms: f32,
+    viewport_frame_plan_ema_ms: f32,
+    viewport_frame_plan_samples: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1558,10 +2828,12 @@ mod control_characterization_tests {
         }));
         assert_eq!(screenshot["queued"], true);
         assert_eq!(
-            app.screenshot_pending.as_ref().map(|request| request.id),
+            app.screenshot_pending
+                .front()
+                .map(|pending| pending.request.id),
             Some(1)
         );
-        assert_eq!(app.screenshot_in_flight, Some(1));
+        assert!(app.screenshot_in_flight.is_empty());
     }
 
     #[test]
@@ -1763,6 +3035,1405 @@ mod control_characterization_tests {
                 .is_some()
         );
         assert_eq!(app.control_channel_presentation_json(), before);
+    }
+
+    #[test]
+    fn two_viewport_controls_keep_presentation_independent_and_navigation_linked() {
+        let mut app = fixture_app();
+        let initial = app.control_viewport_workspace_snapshot();
+        let left = initial["active_viewport_id"]
+            .as_str()
+            .expect("initial viewport ID")
+            .to_string();
+
+        let created = app.control_create_viewport(&serde_json::json!({
+            "source_viewport_id": left,
+            "title": "Property B",
+            "layout": "horizontal",
+        }));
+        let right = created["viewport_id"]
+            .as_str()
+            .expect("created viewport ID")
+            .to_string();
+        assert_ne!(left, right);
+        assert_eq!(created["workspace"]["layout"], "horizontal");
+        assert_eq!(
+            created["workspace"]["viewports"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            created["workspace"]["shared_resources"]["document_instances"],
+            1
+        );
+        assert_eq!(
+            created["workspace"]["shared_resources"]["dataset_instances"],
+            1
+        );
+        assert_eq!(
+            created["workspace"]["shared_resources"]["cpu_tile_cache_instances"],
+            1
+        );
+        assert_eq!(
+            created["workspace"]["shared_resources"]["primary_object_geometry_instances"],
+            1
+        );
+
+        let left_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": left,
+            "fill_cells": true,
+            "fill_opacity": 0.2,
+        }));
+        assert!(
+            (left_style["result"]["style"]["fill_opacity"]
+                .as_f64()
+                .unwrap()
+                - 0.2)
+                .abs()
+                < 1.0e-6
+        );
+        let right_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": right,
+            "fill_cells": true,
+            "fill_opacity": 0.8,
+        }));
+        assert!(
+            (right_style["result"]["style"]["fill_opacity"]
+                .as_f64()
+                .unwrap()
+                - 0.8)
+                .abs()
+                < 1.0e-6
+        );
+
+        app.control_set_viewport_channels(&serde_json::json!({
+            "viewport_id": left,
+            "channels": ["CD3"],
+            "mode": "only",
+        }));
+        app.control_set_viewport_channels(&serde_json::json!({
+            "viewport_id": right,
+            "channels": ["PanCK"],
+            "mode": "only",
+        }));
+
+        app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+            "center_world_lvl0": [123.0, 456.0],
+            "zoom": 3.0,
+        }));
+        let linked_right = app.control_get_viewport_camera(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(
+            linked_right["result"]["center_world_lvl0"],
+            serde_json::json!([123.0, 456.0])
+        );
+        assert_eq!(linked_right["result"]["zoom_screen_per_lvl0_px"], 3.0);
+
+        app.control_set_viewport_links(&serde_json::json!({
+            "camera": false,
+            "plane": true,
+            "selection": true,
+        }));
+        app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": right,
+            "center_world_lvl0": [10.0, 20.0],
+            "zoom": 1.5,
+        }));
+
+        let workspace = app.control_viewport_workspace_snapshot();
+        let viewports = workspace["viewports"].as_array().unwrap();
+        let left_snapshot = viewports
+            .iter()
+            .find(|viewport| viewport["viewport_id"] == left)
+            .unwrap();
+        let right_snapshot = viewports
+            .iter()
+            .find(|viewport| viewport["viewport_id"] == right)
+            .unwrap();
+        assert!((left_snapshot["objects"]["fill_opacity"].as_f64().unwrap() - 0.2).abs() < 1.0e-6);
+        assert!((right_snapshot["objects"]["fill_opacity"].as_f64().unwrap() - 0.8).abs() < 1.0e-6);
+        assert_eq!(
+            left_snapshot["camera"]["center_world_lvl0"],
+            serde_json::json!([123.0, 456.0])
+        );
+        assert_eq!(
+            right_snapshot["camera"]["center_world_lvl0"],
+            serde_json::json!([10.0, 20.0])
+        );
+        assert_eq!(
+            left_snapshot["channels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|channel| channel["visible"] == true)
+                .map(|channel| channel["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["CD3"]
+        );
+        assert_eq!(
+            right_snapshot["channels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|channel| channel["visible"] == true)
+                .map(|channel| channel["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["PanCK"]
+        );
+    }
+
+    #[test]
+    fn multi_viewport_scheduler_prioritizes_active_without_starving_peer() {
+        let (active_raw, active_cpu) = viewport_image_request_budgets(true, true);
+        let (peer_raw, peer_cpu) = viewport_image_request_budgets(true, false);
+        assert!(active_raw > peer_raw && peer_raw > 0);
+        assert!(active_cpu > peer_cpu && peer_cpu > 0);
+        assert_eq!(viewport_image_request_budgets(false, false), (256, 64));
+    }
+
+    #[test]
+    fn multi_viewport_active_key_union_deduplicates_and_retains_peer_work() {
+        let mut union = HashSet::new();
+        merge_viewport_active_keys(&mut union, [1u8, 2, 3]);
+        merge_viewport_active_keys(&mut union, [3u8, 4, 5]);
+        assert_eq!(union, HashSet::from([1u8, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn viewport_navigation_and_presentation_revisions_are_scoped_and_guarded() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let initial = app.control_get_viewport(&serde_json::json!({"viewport_id": left}));
+        assert_eq!(initial["navigation_revision"], 1);
+        assert_eq!(initial["presentation_revision"], 1);
+
+        let navigation = app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+            "center_world_lvl0": [42.0, 24.0],
+            "if_navigation_revision": 1,
+        }));
+        assert_eq!(navigation["navigation_revision"], 2);
+        assert_eq!(navigation["presentation_revision"], 1);
+        assert_eq!(
+            navigation["affected_viewport_ids"],
+            serde_json::json!([left, right])
+        );
+        assert!(navigation["link_transaction_id"].is_string());
+
+        let stale_navigation = app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+            "zoom": 3.0,
+            "if_navigation_revision": 1,
+        }));
+        assert!(
+            stale_navigation["error"]
+                .as_str()
+                .unwrap()
+                .contains("revision conflict")
+        );
+        assert_eq!(stale_navigation["current_revision"], 2);
+
+        let left_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": left,
+            "fill_cells": true,
+            "if_presentation_revision": 1,
+        }));
+        assert_eq!(left_style["presentation_revision"], 2);
+        assert_eq!(left_style["navigation_revision"], 2);
+        let right_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": right,
+            "fill_cells": true,
+            "if_presentation_revision": 1,
+        }));
+        assert_eq!(right_style["presentation_revision"], 2);
+
+        let stale_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": left,
+            "fill_opacity": 0.2,
+            "if_presentation_revision": 1,
+        }));
+        assert_eq!(stale_style["revision_domain"], "presentation");
+        assert_eq!(stale_style["current_revision"], 2);
+    }
+
+    #[test]
+    fn viewport_lifecycle_rejects_invalid_layouts_and_preserves_final_view() {
+        let mut app = fixture_app();
+        assert!(
+            app.control_set_viewport_layout(&serde_json::json!({
+                "layout": "single",
+                "ratio": 0.05,
+            }))
+            .get("error")
+            .is_some()
+        );
+        assert!(
+            app.control_set_viewport_layout(&serde_json::json!({
+                "layout": "single",
+                "ratio": "half",
+            }))
+            .get("error")
+            .is_some()
+        );
+        assert!(
+            app.control_set_viewport_layout(&serde_json::json!({"layout": "horizontal"}))
+                .get("error")
+                .is_some()
+        );
+        let initial_id = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let created = app.control_create_viewport(&serde_json::json!({
+            "layout": "vertical",
+            "activate": false,
+        }));
+        let second_id = created["viewport_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            app.control_viewport_workspace_snapshot()["active_viewport_id"],
+            initial_id
+        );
+        assert_eq!(app.control_get_viewport_layout()["layout"], "vertical");
+        let wrong_order = app.control_set_viewport_layout(&serde_json::json!({
+            "layout": "horizontal",
+            "viewports": [second_id.clone(), initial_id.clone()],
+        }));
+        assert!(
+            wrong_order["error"]
+                .as_str()
+                .unwrap()
+                .contains("workspace order")
+        );
+        let explicit_layout = app.control_set_viewport_layout(&serde_json::json!({
+            "layout": "horizontal",
+            "viewports": [initial_id.clone(), second_id.clone()],
+            "ratio": 0.6,
+        }));
+        assert!(
+            explicit_layout.get("error").is_none(),
+            "{explicit_layout:#}"
+        );
+        let resized = app.control_set_viewport_layout(&serde_json::json!({
+            "layout": "vertical",
+            "ratio": 0.7,
+        }));
+        assert!((resized["ratio"].as_f64().unwrap() - 0.7).abs() < 1.0e-6);
+        assert!(
+            app.control_set_viewport_layout(&serde_json::json!({
+                "layout": "vertical",
+                "ratio": 0.95,
+            }))
+            .get("error")
+            .is_some()
+        );
+        assert_eq!(app.control_get_viewport_links()["links"]["selection"], true);
+        let swapped = app.control_swap_viewports();
+        assert_eq!(swapped["changed"], true);
+        assert_eq!(
+            swapped["workspace"]["viewports"][0]["viewport_id"],
+            second_id
+        );
+        assert!(
+            app.control_create_viewport(&serde_json::json!({"layout": "horizontal"}))
+                .get("error")
+                .is_some()
+        );
+        assert_eq!(
+            app.control_remove_viewport(&serde_json::json!({"viewport_id": second_id}))["removed"],
+            true
+        );
+        assert!(
+            app.control_get_viewport(&serde_json::json!({"viewport_id": second_id}))["error"]
+                .as_str()
+                .unwrap()
+                .contains("not found")
+        );
+        assert!(
+            app.control_remove_viewport(&serde_json::json!({"viewport_id": initial_id}))
+                .get("error")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn canonical_viewport_link_group_validates_members_and_preserves_shared_selection() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let configured = app.control_create_viewport_link_group(&serde_json::json!({
+            "viewports": [left, right],
+            "fields": ["camera", "selection"],
+        }));
+        assert!(configured.get("error").is_none(), "{configured:#}");
+        assert_eq!(
+            configured["link_group"]["link_group_id"],
+            "comparison-navigation"
+        );
+        assert_eq!(
+            configured["link_group"]["fields"],
+            serde_json::json!(["camera", "selection"])
+        );
+        assert_eq!(
+            app.control_list_viewport_link_groups()["link_groups"][0],
+            configured["link_group"]
+        );
+
+        let wrong_members = app.control_create_viewport_link_group(&serde_json::json!({
+            "viewports": [left],
+            "fields": ["plane"],
+        }));
+        assert!(
+            wrong_members["error"]
+                .as_str()
+                .unwrap()
+                .contains("exactly the two")
+        );
+        let unknown_field = app.control_update_viewport_link_group(&serde_json::json!({
+            "fields": ["time"],
+        }));
+        assert!(unknown_field["error"].as_str().unwrap().contains("unknown"));
+
+        let removed = app.control_remove_viewport_link_group(&serde_json::json!({
+            "link_group_id": "comparison-navigation",
+        }));
+        assert_eq!(removed["removed"], true);
+        assert_eq!(removed["links"]["camera"], false);
+        assert_eq!(removed["links"]["plane"], false);
+        assert_eq!(removed["links"]["selection"], true);
+        assert_eq!(
+            removed["link_group"]["fields"],
+            serde_json::json!(["selection"])
+        );
+    }
+
+    #[test]
+    fn rendering_preferences_are_independent_and_revision_guarded_per_viewport() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let changed = app.control_set_viewport_rendering(&serde_json::json!({
+            "viewport_id": left,
+            "smooth_pixels": false,
+            "show_scale_bar": false,
+            "show_hud": false,
+            "show_tile_debug": true,
+            "if_presentation_revision": 1,
+        }));
+        assert_eq!(changed["presentation_revision"], 2, "{changed:#}");
+        assert_eq!(changed["result"]["rendering"]["smooth_pixels"], false);
+
+        let left_state = app.control_get_viewport_rendering(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        let right_state = app.control_get_viewport_rendering(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(left_state["result"]["show_hud"], false);
+        assert_eq!(left_state["result"]["show_tile_debug"], true);
+        assert_eq!(right_state["result"]["smooth_pixels"], true);
+        assert_eq!(right_state["result"]["show_scale_bar"], true);
+        assert_eq!(right_state["result"]["show_hud"], true);
+        assert_eq!(right_state["result"]["show_tile_debug"], false);
+
+        let stale = app.control_set_viewport_rendering(&serde_json::json!({
+            "viewport_id": left,
+            "show_hud": true,
+            "if_presentation_revision": 1,
+        }));
+        assert_eq!(stale["revision_domain"], "presentation");
+        assert_eq!(stale["current_revision"], 2);
+    }
+
+    #[test]
+    fn explicit_camera_fit_uses_target_canvas_and_propagates_one_link_transaction() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_id = ViewportId::new(left.clone()).unwrap();
+        app.viewport_workspace
+            .as_mut()
+            .unwrap()
+            .get_mut(&left_id)
+            .unwrap()
+            .state
+            .last_canvas_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(320.0, 200.0),
+        ));
+
+        let fitted = app.control_fit_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        assert!(fitted.get("error").is_none(), "{fitted:#}");
+        assert_eq!(
+            fitted["affected_viewport_ids"],
+            serde_json::json!([left, right])
+        );
+        assert!(fitted["link_transaction_id"].is_string());
+        let left_camera = app.control_get_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        let right_camera = app.control_get_viewport_camera(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(
+            left_camera["result"]["center_world_lvl0"],
+            right_camera["result"]["center_world_lvl0"]
+        );
+        assert_eq!(
+            left_camera["result"]["zoom_screen_per_lvl0_px"],
+            right_camera["result"]["zoom_screen_per_lvl0_px"]
+        );
+    }
+
+    #[test]
+    fn multi_viewport_workspace_roundtrips_through_versioned_project_state() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "title": "Marker B",
+            "layout": "vertical",
+            "ratio": 0.65,
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.control_set_viewport_links(&serde_json::json!({
+            "camera": false,
+            "plane": true,
+            "selection": true,
+        }));
+        app.control_set_viewport_channels(&serde_json::json!({
+            "viewport_id": left,
+            "channels": ["CD3"],
+            "mode": "only",
+        }));
+        app.control_set_viewport_channels(&serde_json::json!({
+            "viewport_id": right,
+            "channels": ["PanCK"],
+            "mode": "only",
+        }));
+        app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": left,
+            "fill_cells": true,
+            "fill_opacity": 0.25,
+        }));
+        app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": right,
+            "fill_cells": true,
+            "fill_opacity": 0.75,
+        }));
+        app.control_set_viewport_object_filter(&serde_json::json!({
+            "viewport_id": right,
+            "mode": "simple",
+            "logic": "all",
+            "clauses": [{"property": "id", "query": "1"}],
+        }));
+        app.control_set_viewport_rendering(&serde_json::json!({
+            "viewport_id": left,
+            "smooth_pixels": false,
+            "show_scale_bar": false,
+            "show_hud": false,
+            "show_tile_debug": true,
+        }));
+        app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+            "center_world_lvl0": [10.0, 20.0],
+            "zoom": 2.0,
+        }));
+        app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": right,
+            "center_world_lvl0": [30.0, 40.0],
+            "zoom": 3.0,
+        }));
+
+        app.sync_current_view_state_into_project_space();
+        let saved = app
+            .project_space
+            .roi_view_state(&app.dataset.source)
+            .cloned()
+            .expect("saved view state");
+        assert_eq!(saved.workspace.as_ref().unwrap().version, 1);
+        let encoded = serde_json::to_value(&saved).expect("serialize workspace");
+        let decoded: ProjectRoiViewState =
+            serde_json::from_value(encoded).expect("deserialize workspace");
+
+        let mut restored = fixture_app();
+        restored
+            .project_space
+            .set_roi_view_state(&restored.dataset.source, decoded);
+        restored.apply_view_state_from_project_space();
+        let workspace = restored.control_viewport_workspace_snapshot();
+        assert_eq!(workspace["layout"], "vertical");
+        assert!((workspace["ratio"].as_f64().unwrap() - 0.65).abs() < 1.0e-6);
+        assert_eq!(workspace["active_viewport_id"], right);
+        assert_eq!(workspace["links"]["camera"], false);
+        let viewports = workspace["viewports"].as_array().unwrap();
+        let left = viewports
+            .iter()
+            .find(|viewport| viewport["viewport_id"] == left)
+            .unwrap();
+        let right = viewports
+            .iter()
+            .find(|viewport| viewport["viewport_id"] == right)
+            .unwrap();
+        assert_eq!(
+            left["camera"]["center_world_lvl0"],
+            serde_json::json!([10.0, 20.0])
+        );
+        assert_eq!(
+            right["camera"]["center_world_lvl0"],
+            serde_json::json!([30.0, 40.0])
+        );
+        assert!((left["objects"]["fill_opacity"].as_f64().unwrap() - 0.25).abs() < 1e-6);
+        assert!((right["objects"]["fill_opacity"].as_f64().unwrap() - 0.75).abs() < 1e-6);
+        assert_eq!(left["rendering"]["smooth_pixels"], false);
+        assert_eq!(left["rendering"]["show_scale_bar"], false);
+        assert_eq!(left["rendering"]["show_hud"], false);
+        assert_eq!(left["rendering"]["show_tile_debug"], true);
+        assert_eq!(right["rendering"]["smooth_pixels"], true);
+        let restored_filter = restored.control_get_viewport_object_filter(&serde_json::json!({
+            "viewport_id": right["viewport_id"],
+        }));
+        assert_eq!(restored_filter["result"]["mode"], "simple");
+        assert_eq!(restored_filter["result"]["active"], true);
+    }
+
+    #[test]
+    fn channel_group_presentation_is_independent_and_persistent_per_viewport() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let grouped = app.control_set_viewport_channel_group(&serde_json::json!({
+            "viewport_id": left,
+            "channels": ["DAPI"],
+            "group": "Nuclei",
+            "color": "#102030",
+            "inherit_color": true,
+        }));
+        assert_eq!(grouped["result"]["changed"], true);
+        let right = app.control_create_viewport(&serde_json::json!({
+            "title": "Override",
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let changed = app.control_set_viewport_channel_color(&serde_json::json!({
+            "viewport_id": right,
+            "channel": "DAPI",
+            "color_rgb": [200, 100, 50],
+        }));
+        assert_eq!(changed["result"]["changed"], true);
+
+        app.sync_current_view_state_into_project_space();
+        let saved = app
+            .project_space
+            .roi_view_state(&app.dataset.source)
+            .cloned()
+            .unwrap();
+        let mut restored = fixture_app();
+        restored
+            .project_space
+            .set_roi_view_state(&restored.dataset.source, saved);
+        restored.apply_view_state_from_project_space();
+
+        let workspace = restored.viewport_workspace.as_ref().unwrap();
+        let left_state = &workspace
+            .get(&ViewportId::new(left).unwrap())
+            .unwrap()
+            .state;
+        let right_state = &workspace
+            .get(&ViewportId::new(right).unwrap())
+            .unwrap()
+            .state;
+        let left_dapi = left_state
+            .channels
+            .iter()
+            .find(|channel| channel.name == "DAPI")
+            .unwrap();
+        let right_dapi = right_state
+            .channels
+            .iter()
+            .find(|channel| channel.name == "DAPI")
+            .unwrap();
+        assert_eq!(
+            layer_groups::effective_channel_color_rgb(
+                &left_state.layer_groups,
+                &left_dapi.name,
+                left_dapi.color_rgb,
+            ),
+            [0x10, 0x20, 0x30]
+        );
+        assert_eq!(
+            layer_groups::effective_channel_color_rgb(
+                &right_state.layer_groups,
+                &right_dapi.name,
+                right_dapi.color_rgb,
+            ),
+            [200, 100, 50]
+        );
+    }
+
+    #[test]
+    fn extended_overlay_presentation_roundtrips_per_viewport() {
+        fn add_mask(app: &mut OmeZarrViewerApp) {
+            app.mask_layers.push(MaskLayer {
+                id: 41,
+                name: "Comparison mask".to_string(),
+                visible: true,
+                opacity: 0.5,
+                width_screen_px: 2.0,
+                display_mode: MaskDisplayMode::OutlineOnly,
+                color_rgb: [255, 255, 255],
+                offset_world: egui::Vec2::ZERO,
+                editable: false,
+                polygons_world: Vec::new(),
+                raster_display: None,
+                source_geojson: None,
+            });
+            app.rebuild_layer_orders();
+        }
+
+        let mut app = fixture_app();
+        add_mask(&mut app);
+        app.mask_layers[0].opacity = 0.2;
+        app.mask_layers[0].display_mode = MaskDisplayMode::TranslucentFill;
+        app.mask_layers[0].color_rgb = [10, 20, 30];
+        app.cell_points.visible = true;
+        app.cell_points.style.radius_screen_px = 3.0;
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.mask_layers[0].opacity = 0.8;
+        app.mask_layers[0].display_mode = MaskDisplayMode::FilledPreview;
+        app.mask_layers[0].color_rgb = [200, 100, 50];
+        app.cell_points.style.radius_screen_px = 9.0;
+
+        app.sync_current_view_state_into_project_space();
+        let saved = app
+            .project_space
+            .roi_view_state(&app.dataset.source)
+            .cloned()
+            .unwrap();
+        let encoded = serde_json::to_value(saved).unwrap();
+        let decoded: ProjectRoiViewState = serde_json::from_value(encoded).unwrap();
+
+        let mut restored = fixture_app();
+        add_mask(&mut restored);
+        restored
+            .project_space
+            .set_roi_view_state(&restored.dataset.source, decoded);
+        restored.apply_view_state_from_project_space();
+        let workspace = restored.viewport_workspace.as_ref().unwrap();
+        let left = &workspace
+            .get(&ViewportId::new(left).unwrap())
+            .unwrap()
+            .state;
+        let right = &workspace
+            .get(&ViewportId::new(right).unwrap())
+            .unwrap()
+            .state;
+        assert!((left.masks[0].opacity - 0.2).abs() < 1e-6);
+        assert_eq!(left.masks[0].display_mode, MaskDisplayMode::TranslucentFill);
+        assert_eq!(left.masks[0].color_rgb, [10, 20, 30]);
+        assert!((left.cell_points_style.radius_screen_px - 3.0).abs() < 1e-6);
+        assert!((right.masks[0].opacity - 0.8).abs() < 1e-6);
+        assert_eq!(right.masks[0].display_mode, MaskDisplayMode::FilledPreview);
+        assert_eq!(right.masks[0].color_rgb, [200, 100, 50]);
+        assert!((right.cell_points_style.radius_screen_px - 9.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn explicit_layer_get_set_keeps_presentations_independent() {
+        let mut app = fixture_app();
+        app.mask_layers.push(MaskLayer {
+            id: 42,
+            name: "Shared mask data".to_string(),
+            visible: true,
+            opacity: 0.5,
+            width_screen_px: 2.0,
+            display_mode: MaskDisplayMode::OutlineOnly,
+            color_rgb: [255, 255, 255],
+            offset_world: egui::Vec2::ZERO,
+            editable: false,
+            polygons_world: Vec::new(),
+            raster_display: None,
+            source_geojson: None,
+        });
+        app.rebuild_layer_orders();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_revision = app.control_get_viewport(&serde_json::json!({
+            "viewport_id": left,
+        }))["presentation_revision"]
+            .as_u64()
+            .unwrap();
+
+        let changed = app.control_set_viewport_layer(&serde_json::json!({
+            "viewport_id": left,
+            "layer_id": "mask:42",
+            "presentation": {
+                "opacity": 0.2,
+                "width_screen_px": 4.0,
+                "display_mode": "translucent_fill",
+                "color_rgb": [10, 20, 30],
+            },
+            "if_presentation_revision": left_revision,
+        }));
+        assert_eq!(
+            changed["presentation_revision"],
+            left_revision + 1,
+            "{changed:#}"
+        );
+        assert!(
+            (changed["result"]["layer"]["presentation"]["opacity"]
+                .as_f64()
+                .unwrap()
+                - 0.2)
+                .abs()
+                < 1.0e-6
+        );
+
+        let left_mask = app.control_get_viewport_layer(&serde_json::json!({
+            "viewport_id": left,
+            "layer_id": "mask:42",
+        }));
+        let right_mask = app.control_get_viewport_layer(&serde_json::json!({
+            "viewport_id": right,
+            "layer_id": "mask:42",
+        }));
+        assert_eq!(
+            left_mask["result"]["presentation"]["color_rgb"],
+            serde_json::json!([10, 20, 30])
+        );
+        assert_eq!(
+            left_mask["result"]["presentation"]["display_mode"],
+            "translucent_fill"
+        );
+        assert_eq!(right_mask["result"]["presentation"]["opacity"], 0.5);
+        assert_eq!(
+            right_mask["result"]["presentation"]["display_mode"],
+            "outline_only"
+        );
+
+        let channel = app.control_set_viewport_layer(&serde_json::json!({
+            "viewport_id": right,
+            "layer_id": "channel:0",
+            "presentation": {
+                "visible": true,
+                "color_rgb": [1, 2, 3],
+                "window": {"min": 5.0, "max": 50.0},
+            },
+        }));
+        assert_eq!(
+            channel["result"]["layer"]["presentation"]["color_rgb"],
+            serde_json::json!([1, 2, 3])
+        );
+        assert_eq!(
+            channel["result"]["layer"]["presentation"]["window"]["min"],
+            5.0
+        );
+    }
+
+    #[test]
+    fn filter_sensitive_operations_require_and_honor_an_explicit_source() {
+        let mut app = fixture_app();
+        let temp = std::env::temp_dir().join(format!(
+            "odon-multiview-filter-{}-{}.geojson",
+            std::process::id(),
+            app.active_render_id
+        ));
+        let fixture = serde_json::json!({
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "id": "a", "properties": {"class": "tumor", "score": 1.0}, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[5,0],[5,5],[0,5],[0,0]]]}},
+                {"type": "Feature", "id": "b", "properties": {"class": "immune", "score": 2.5}, "geometry": {"type": "Polygon", "coordinates": [[[10,0],[15,0],[15,5],[10,5],[10,0]]]}},
+                {"type": "Feature", "id": "c", "properties": {"class": "tumor", "score": 3.0}, "geometry": {"type": "Polygon", "coordinates": [[[20,0],[25,0],[25,5],[20,5],[20,0]]]}}
+            ]
+        });
+        std::fs::write(&temp, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        app.seg_objects.load_path(temp.clone(), 1.0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.seg_objects.object_count() != 3 && Instant::now() < deadline {
+            app.seg_objects.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(app.seg_objects.object_count(), 3);
+        app.rebuild_layer_orders();
+
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.control_set_viewport_object_filter(&serde_json::json!({
+            "viewport_id": left,
+            "query": "class == 'tumor'",
+        }));
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.control_set_viewport_object_filter(&serde_json::json!({
+            "viewport_id": right,
+            "query": "class == 'immune'",
+        }));
+
+        let ambiguous = app.control_select_filtered_objects(&serde_json::json!({
+            "target": "objects",
+        }));
+        assert!(
+            ambiguous["error"]
+                .as_str()
+                .unwrap()
+                .contains("require viewport_id")
+        );
+
+        let left_selection = app.control_select_filtered_objects(&serde_json::json!({
+            "target": "objects",
+            "viewport_id": left,
+            "mode": "replace",
+        }));
+        assert_eq!(left_selection["result"]["matched_count"], 2);
+        assert_eq!(
+            app.control_viewport_workspace_snapshot()["active_viewport_id"],
+            right
+        );
+
+        let standalone = app.control_select_filtered_objects(&serde_json::json!({
+            "target": "objects",
+            "filter_query": "score >= 2.5",
+            "mode": "replace",
+        }));
+        assert_eq!(standalone["matched_count"], 2);
+        let right_filter = app.control_get_viewport_object_filter(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(right_filter["result"]["query"]["text"], "class == 'immune'");
+
+        let all_histogram = app.control_object_histogram(&serde_json::json!({
+            "target": "objects",
+            "property": "score",
+            "use_all_objects": true,
+        }));
+        assert_eq!(all_histogram["count"], 3);
+        assert_eq!(all_histogram["filtered"], false);
+        let left_histogram = app.control_object_histogram(&serde_json::json!({
+            "target": "objects",
+            "property": "score",
+            "viewport_id": left,
+        }));
+        assert_eq!(left_histogram["result"]["count"], 2);
+
+        let _ = std::fs::remove_file(temp);
+    }
+
+    #[test]
+    fn viewport_screenshot_queue_keeps_targets_independent_and_cleans_removed_view() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let first = app.control_capture_screenshot(&serde_json::json!({
+            "viewport_id": left,
+            "path": std::env::temp_dir().join("odon-left-viewport.png"),
+        }));
+        let second = app.control_capture_screenshot(&serde_json::json!({
+            "viewport_id": right,
+            "path": std::env::temp_dir().join("odon-right-viewport.png"),
+        }));
+        assert_eq!(first["queued"], true);
+        assert_eq!(second["queued"], true);
+        assert_eq!(app.screenshot_pending.len(), 2);
+        assert_eq!(app.screenshot_pending[0].viewport_id.as_str(), left);
+        assert_eq!(app.screenshot_pending[1].viewport_id.as_str(), right);
+
+        let removed = app.control_remove_viewport(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(removed["removed"], true);
+        assert_eq!(app.screenshot_pending.len(), 1);
+        assert_eq!(app.screenshot_pending[0].viewport_id.as_str(), left);
+    }
+
+    #[test]
+    fn removing_viewport_drops_only_its_cpu_generation_during_loading() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_id = ViewportId::new(left).unwrap();
+        let right_id = ViewportId::new(right.clone()).unwrap();
+        let workspace = app.viewport_workspace.as_mut().unwrap();
+        workspace.get_mut(&left_id).unwrap().state.active_render_id = 91_001;
+        workspace.get_mut(&right_id).unwrap().state.active_render_id = 91_002;
+        app.active_render_id = 91_002;
+        app.loader
+            .set_active_render_ids(HashSet::from([91_001, 91_002]));
+
+        let removed = app.control_remove_viewport(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(removed["removed"], true);
+        let accepted = app.loader.active_render_ids.lock().unwrap().clone();
+        assert!(accepted.contains(&91_001));
+        assert!(!accepted.contains(&91_002));
+    }
+
+    #[test]
+    fn activating_or_removing_a_viewport_cancels_transient_edit_gestures() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.selection_rect_start_world = Some(egui::pos2(1.0, 2.0));
+        app.selection_rect_current_world = Some(egui::pos2(3.0, 4.0));
+        app.selection_lasso_world.push(egui::pos2(5.0, 6.0));
+        app.drawing_mask_polygon.push(egui::pos2(7.0, 8.0));
+
+        let activated = app.control_set_active_viewport(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        assert_eq!(activated["changed"], true);
+        assert!(app.selection_rect_start_world.is_none());
+        assert!(app.selection_rect_current_world.is_none());
+        assert!(app.selection_lasso_world.is_empty());
+        assert!(app.drawing_mask_polygon.is_empty());
+
+        app.selection_rect_start_world = Some(egui::pos2(1.0, 2.0));
+        app.drawing_mask_polygon.push(egui::pos2(7.0, 8.0));
+        let removed = app.control_remove_viewport(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(removed["removed"], true);
+        assert!(app.selection_rect_start_world.is_none());
+        assert!(app.drawing_mask_polygon.is_empty());
+    }
+
+    #[test]
+    fn workspace_canvas_rect_is_the_union_of_both_viewport_canvases() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_id = ViewportId::new(left).unwrap();
+        let right_id = ViewportId::new(right).unwrap();
+        app.last_canvas_rect = Some(egui::Rect::from_min_max(
+            egui::pos2(210.0, 20.0),
+            egui::pos2(410.0, 220.0),
+        ));
+        app.sync_runtime_to_active_viewport();
+        app.viewport_workspace
+            .as_mut()
+            .unwrap()
+            .get_mut(&left_id)
+            .unwrap()
+            .state
+            .last_canvas_rect = Some(egui::Rect::from_min_max(
+            egui::pos2(0.0, 10.0),
+            egui::pos2(200.0, 210.0),
+        ));
+        assert_eq!(
+            app.viewport_workspace.as_ref().unwrap().active_id(),
+            &right_id
+        );
+
+        let rect = app.workspace_canvas_rect().unwrap();
+        assert_eq!(rect.min, egui::pos2(0.0, 10.0));
+        assert_eq!(rect.max, egui::pos2(410.0, 220.0));
+    }
+
+    #[test]
+    fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
+        let mut app = fixture_app();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let created = app.control_create_viewport(&serde_json::json!({
+            "viewport_id": left,
+            "layout": "horizontal",
+            "ratio": 0.55,
+        }));
+        assert!(created.get("error").is_none(), "{created:#}");
+
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        });
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            app.ui_viewport_workspace(ui, &ctx);
+        });
+        let _ = ctx.end_pass();
+
+        let canvases = app
+            .viewport_workspace
+            .as_ref()
+            .unwrap()
+            .viewports()
+            .iter()
+            .map(|viewport| viewport.state.last_canvas_rect.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(canvases.len(), 2);
+        assert!(
+            (canvases[0].top() - canvases[1].top()).abs() <= 2.0,
+            "horizontal split canvas rectangles must align: {canvases:?}"
+        );
+        assert!((canvases[0].bottom() - canvases[1].bottom()).abs() < 1.0);
+        assert!(canvases[0].height() > 700.0);
+        assert!(canvases[1].height() > 700.0);
+        assert!(canvases[0].right() < canvases[1].left());
+        assert!(canvases[1].left() - canvases[0].right() < 30.0);
+        let content_width = canvases[0].width() + canvases[1].width();
+        assert!((canvases[0].width() / content_width - 0.55).abs() < 0.01);
+    }
+
+    #[test]
+    fn motivating_two_property_comparison_runs_end_to_end_on_one_document() {
+        let mut app = fixture_app();
+        let object_path = std::env::temp_dir().join(format!(
+            "odon-multiview-acceptance-{}-{}.geojson",
+            std::process::id(),
+            app.active_render_id
+        ));
+        let objects = serde_json::json!({
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "id": "cell-a", "properties": {"marker_a": 1.0, "marker_b": 9.0}, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[5,0],[5,5],[0,5],[0,0]]]}},
+                {"type": "Feature", "id": "cell-b", "properties": {"marker_a": 4.0, "marker_b": 2.0}, "geometry": {"type": "Polygon", "coordinates": [[[10,0],[15,0],[15,5],[10,5],[10,0]]]}},
+                {"type": "Feature", "id": "cell-c", "properties": {"marker_a": 7.0, "marker_b": 5.0}, "geometry": {"type": "Polygon", "coordinates": [[[20,0],[25,0],[25,5],[20,5],[20,0]]]}}
+            ]
+        });
+        std::fs::write(&object_path, serde_json::to_vec(&objects).unwrap()).unwrap();
+        app.seg_objects.load_path(object_path.clone(), 1.0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.seg_objects.object_count() != 3 && Instant::now() < deadline {
+            app.seg_objects.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(app.seg_objects.object_count(), 3);
+        app.rebuild_layer_orders();
+
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "viewport_id": left,
+            "title": "Marker B",
+            "layout": "horizontal",
+            "ratio": 0.55,
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": left,
+            "fill_cells": true,
+            "fill_opacity": 0.65,
+            "color_property": "marker_a",
+        }));
+        let right_style = app.control_set_viewport_object_style(&serde_json::json!({
+            "viewport_id": right,
+            "fill_cells": true,
+            "fill_opacity": 0.65,
+            "color_property": "marker_b",
+        }));
+        assert!(left_style.get("error").is_none(), "{left_style:#}");
+        assert!(right_style.get("error").is_none(), "{right_style:#}");
+        let left_value = left_style["result"]["style"]["legend"][0]["value"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right_value = right_style["result"]["style"]["legend"][0]["value"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let left_palette = app.control_set_viewport_object_legend(&serde_json::json!({
+            "viewport_id": left,
+            "entries": [{"value": left_value, "color_rgb": [255, 0, 0]}],
+        }));
+        let right_palette = app.control_set_viewport_object_legend(&serde_json::json!({
+            "viewport_id": right,
+            "entries": [{"value": right_value, "color_rgb": [0, 255, 0]}],
+        }));
+        assert!(left_palette.get("error").is_none(), "{left_palette:#}");
+        assert!(right_palette.get("error").is_none(), "{right_palette:#}");
+
+        app.control_set_viewport_links(&serde_json::json!({
+            "camera": true,
+            "plane": true,
+            "selection": true,
+        }));
+        let navigation = app.control_set_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+            "center_world_lvl0": [12.0, 18.0],
+            "zoom": 2.25,
+        }));
+        assert_eq!(
+            navigation["affected_viewport_ids"],
+            serde_json::json!([left, right])
+        );
+        let plane = app.control_set_viewport_plane(&serde_json::json!({
+            "viewport_id": right,
+            "mode": "xy",
+            "slice": 0,
+        }));
+        assert!(plane.get("error").is_none(), "{plane:#}");
+        let selected = app.control_select_object_ids(&serde_json::json!({
+            "target": "objects",
+            "ids": ["cell-b"],
+            "mode": "replace",
+        }));
+        assert_eq!(selected["matched_count"], 1);
+        assert_eq!(
+            app.control_object_selection_signature()["selection"]["selection_count"],
+            1
+        );
+
+        let workspace = app.control_viewport_workspace_snapshot();
+        assert_eq!(workspace["layout"], "horizontal");
+        assert!((workspace["ratio"].as_f64().unwrap() - 0.55).abs() < 1.0e-6);
+        assert_eq!(workspace["shared_resources"]["document_instances"], 1);
+        assert_eq!(workspace["shared_resources"]["dataset_instances"], 1);
+        assert_eq!(
+            workspace["shared_resources"]["primary_object_geometry_instances"],
+            1
+        );
+        assert_eq!(workspace["shared_resources"]["primary_object_count"], 3);
+        let viewport = |id: &str| {
+            workspace["viewports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|viewport| viewport["viewport_id"] == id)
+                .unwrap()
+        };
+        assert_eq!(viewport(&left)["objects"]["color_property"], "marker_a");
+        assert_eq!(viewport(&right)["objects"]["color_property"], "marker_b");
+        assert_eq!(
+            viewport(&left)["camera"]["center_world_lvl0"],
+            viewport(&right)["camera"]["center_world_lvl0"]
+        );
+
+        let left_shot = app.control_capture_screenshot(&serde_json::json!({
+            "viewport_id": left,
+            "path": std::env::temp_dir().join("odon-acceptance-left.png"),
+        }));
+        let right_shot = app.control_capture_screenshot(&serde_json::json!({
+            "viewport_id": right,
+            "path": std::env::temp_dir().join("odon-acceptance-right.png"),
+        }));
+        assert_eq!(left_shot["queued"], true);
+        assert_eq!(right_shot["queued"], true);
+
+        let level = app.dataset.levels.last().unwrap();
+        let view = ViewPlaneSelection {
+            mode: ViewPlaneMode::Xy,
+            slice_level0: 0,
+        };
+        let left_key = TileKey {
+            render_id: 77_001,
+            view,
+            level: level.index,
+            tile_y: 0,
+            tile_x: 0,
+        };
+        let right_key = TileKey {
+            render_id: 77_002,
+            ..left_key
+        };
+        app.loader
+            .set_active_render_ids(HashSet::from([left_key.render_id, right_key.render_id]));
+        app.loader
+            .set_active_keys(HashSet::from([left_key, right_key]));
+        for (key, color_rgb) in [(left_key, [1.0, 0.0, 0.0]), (right_key, [0.0, 1.0, 0.0])] {
+            app.loader
+                .tx
+                .send(TileRequest {
+                    key,
+                    channels: vec![RenderChannel {
+                        index: 0,
+                        color_rgb,
+                        window: (0.0, app.dataset.abs_max),
+                    }],
+                })
+                .unwrap();
+        }
+        let mut rendered = HashMap::new();
+        for _ in 0..2 {
+            let response = app
+                .loader
+                .rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("viewport tile completion");
+            let TileWorkerResponse::Tile(tile) = response else {
+                panic!("expected successful tile");
+            };
+            rendered.insert(tile.key.render_id, tile.rgba);
+        }
+        assert_ne!(rendered[&77_001], rendered[&77_002]);
+        let stats = app.loader.stats();
+        assert_eq!(stats.decode_requests, 2);
+        assert_eq!(stats.source_reads, 1);
+        assert_eq!(stats.cache_hits, 1);
+        assert!(stats.decoded_cache_bytes > 0);
+
+        let _ = std::fs::remove_file(object_path);
+    }
+
+    #[test]
+    #[ignore = "diagnostic benchmark; run explicitly with --ignored --nocapture"]
+    fn benchmark_single_and_two_viewport_frame_planning() {
+        fn run_frames(app: &mut OmeZarrViewerApp, ctx: &egui::Context, count: usize) -> f32 {
+            for _ in 0..count {
+                ctx.begin_pass(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    ..Default::default()
+                });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.ui_viewport_workspace(ui, ctx);
+                });
+                let _ = ctx.end_pass();
+            }
+            app.viewport_frame_plan_ema_ms
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = fixture_app();
+        let single_ms = run_frames(&mut app, &ctx, 40);
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let created = app.control_create_viewport(&serde_json::json!({
+            "viewport_id": left,
+            "layout": "horizontal",
+        }));
+        assert!(created.get("error").is_none(), "{created:#}");
+        let split_ms = run_frames(&mut app, &ctx, 40);
+        let resources = app.control_viewport_workspace_snapshot()["shared_resources"].clone();
+        println!(
+            "multi-viewport benchmark: single_frame_plan_ema_ms={single_ms:.4} split_frame_plan_ema_ms={split_ms:.4} resources={resources}"
+        );
+        assert_eq!(resources["document_instances"], 1);
+        assert_eq!(resources["dataset_instances"], 1);
+        assert_eq!(resources["cpu_decoded_tile_cache_instances"], 1);
+    }
+
+    #[test]
+    fn legacy_project_view_migrates_to_one_viewport() {
+        let mut app = fixture_app();
+        let legacy = ProjectRoiViewState {
+            camera: Some(ProjectCameraState {
+                center_world_lvl0: [77.0, 88.0],
+                zoom_screen_per_lvl0_px: 1.25,
+            }),
+            ..Default::default()
+        };
+        app.project_space
+            .set_roi_view_state(&app.dataset.source, legacy);
+        app.apply_view_state_from_project_space();
+        let workspace = app.control_viewport_workspace_snapshot();
+        assert_eq!(workspace["layout"], "single");
+        assert_eq!(workspace["viewports"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            workspace["viewports"][0]["camera"]["center_world_lvl0"],
+            serde_json::json!([77.0, 88.0])
+        );
     }
 }
 
@@ -2758,6 +5429,8 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            active_render_smooth_pixels: true,
+            previous_render_smooth_pixels: None,
             previous_view_selection: None,
             previous_displayed_view_selection: None,
             last_render_view_selection: ViewPlaneSelection {
@@ -2874,6 +5547,7 @@ impl OmeZarrViewerApp {
             show_tile_debug: false,
             mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
+            show_hud: true,
             tile_loader_threads,
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
             tile_prefetch_aggressiveness: TilePrefetchAggressiveness::Balanced,
@@ -2914,9 +5588,18 @@ impl OmeZarrViewerApp {
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),
             screenshot_next_id: 1,
-            screenshot_pending: None,
-            screenshot_in_flight: None,
+            screenshot_pending: VecDeque::new(),
+            screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
+            viewport_workspace: None,
+            viewport_layer_groups: ProjectLayerGroups::default(),
+            viewport_raw_active_keys: None,
+            viewport_cpu_active_keys: None,
+            viewport_label_active_keys: None,
+            viewport_spatial_image_active_keys: None,
+            viewport_frame_plan_ms: 0.0,
+            viewport_frame_plan_ema_ms: 0.0,
+            viewport_frame_plan_samples: 0,
         };
 
         app.configure_root_label_dataset_if_needed();
@@ -2930,6 +5613,7 @@ impl OmeZarrViewerApp {
         if let Some(viewport) = cc.egui_ctx.input(|i| i.viewport().inner_rect) {
             app.camera.fit_to_world_rect(viewport, world);
         }
+        app.viewport_workspace = Some(ViewportWorkspace::new(ViewerViewportState::capture(&app)));
 
         app
     }
@@ -3037,6 +5721,8 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            active_render_smooth_pixels: true,
+            previous_render_smooth_pixels: None,
             previous_view_selection: None,
             previous_displayed_view_selection: None,
             last_render_view_selection: ViewPlaneSelection {
@@ -3150,6 +5836,7 @@ impl OmeZarrViewerApp {
             show_tile_debug: false,
             mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
+            show_hud: true,
             tile_loader_threads: Self::default_tile_loader_threads(),
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
             tile_prefetch_aggressiveness: TilePrefetchAggressiveness::Balanced,
@@ -3190,9 +5877,18 @@ impl OmeZarrViewerApp {
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),
             screenshot_next_id: 1,
-            screenshot_pending: None,
-            screenshot_in_flight: None,
+            screenshot_pending: VecDeque::new(),
+            screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
+            viewport_workspace: None,
+            viewport_layer_groups: ProjectLayerGroups::default(),
+            viewport_raw_active_keys: None,
+            viewport_cpu_active_keys: None,
+            viewport_label_active_keys: None,
+            viewport_spatial_image_active_keys: None,
+            viewport_frame_plan_ms: 0.0,
+            viewport_frame_plan_ema_ms: 0.0,
+            viewport_frame_plan_samples: 0,
         };
 
         app.configure_root_label_dataset_if_needed();
@@ -3206,6 +5902,7 @@ impl OmeZarrViewerApp {
         if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
             app.camera.fit_to_world_rect(viewport, world);
         }
+        app.viewport_workspace = Some(ViewportWorkspace::new(ViewerViewportState::capture(&app)));
 
         app
     }
@@ -3437,6 +6134,8 @@ impl OmeZarrViewerApp {
             camera,
             active_render_id: 1,
             previous_render_id: None,
+            active_render_smooth_pixels: true,
+            previous_render_smooth_pixels: None,
             previous_view_selection: None,
             previous_displayed_view_selection: None,
             last_render_view_selection: ViewPlaneSelection {
@@ -3547,6 +6246,7 @@ impl OmeZarrViewerApp {
             show_tile_debug: false,
             mask_draw_debug_stats: MaskDrawDebugStats::default(),
             show_scale_bar: true,
+            show_hud: true,
             tile_loader_threads: Self::default_tile_loader_threads(),
             tile_prefetch_mode: TilePrefetchMode::TargetHalo,
             tile_prefetch_aggressiveness: TilePrefetchAggressiveness::Balanced,
@@ -3584,9 +6284,18 @@ impl OmeZarrViewerApp {
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),
             screenshot_next_id: 1,
-            screenshot_pending: None,
-            screenshot_in_flight: None,
+            screenshot_pending: VecDeque::new(),
+            screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
+            viewport_workspace: None,
+            viewport_layer_groups: ProjectLayerGroups::default(),
+            viewport_raw_active_keys: None,
+            viewport_cpu_active_keys: None,
+            viewport_label_active_keys: None,
+            viewport_spatial_image_active_keys: None,
+            viewport_frame_plan_ms: 0.0,
+            viewport_frame_plan_ema_ms: 0.0,
+            viewport_frame_plan_samples: 0,
         };
 
         app.configure_root_label_dataset_if_needed();
@@ -3599,6 +6308,7 @@ impl OmeZarrViewerApp {
         if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
             app.camera.fit_to_world_rect(viewport, world);
         }
+        app.viewport_workspace = Some(ViewportWorkspace::new(ViewerViewportState::capture(&app)));
 
         app
     }
@@ -3607,13 +6317,1697 @@ impl OmeZarrViewerApp {
         self.pending_request.take()
     }
 
+    fn split_active_viewport(
+        &mut self,
+        layout: ViewportLayout,
+        title: Option<String>,
+    ) -> Result<ViewportId, String> {
+        self.cancel_viewport_transient_gestures();
+        let mut workspace = self
+            .viewport_workspace
+            .take()
+            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
+        let source_id = workspace.active_id().clone();
+        if let Some(source) = workspace.get_mut(&source_id) {
+            source.state = ViewerViewportState::capture(self);
+        }
+        let result = workspace
+            .clone_viewport(&source_id, title, layout)
+            .map_err(|error| error.to_string());
+        if result.is_ok() {
+            workspace.active().state.apply(self);
+        }
+        self.viewport_workspace = Some(workspace);
+        result
+    }
+
+    fn remove_viewport(&mut self, viewport_id: &ViewportId) -> Result<(), String> {
+        self.cancel_viewport_transient_gestures();
+        let mut workspace = self
+            .viewport_workspace
+            .take()
+            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
+        let active_id = workspace.active_id().clone();
+        if let Some(active) = workspace.get_mut(&active_id) {
+            active.state = ViewerViewportState::capture(self);
+        }
+        let result = workspace
+            .remove(viewport_id)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        if result.is_ok() {
+            self.screenshot_pending
+                .retain(|pending| pending.viewport_id != *viewport_id);
+            self.loader
+                .set_active_render_ids(Self::workspace_cpu_render_ids(&workspace));
+        }
+        workspace.active().state.apply(self);
+        self.bump_render_id();
+        self.viewport_workspace = Some(workspace);
+        result
+    }
+
+    fn set_viewport_layout(&mut self, layout: ViewportLayout) -> Result<bool, String> {
+        let Some(workspace) = self.viewport_workspace.as_mut() else {
+            return Err("viewer workspace is not initialized".to_string());
+        };
+        workspace
+            .set_layout(layout)
+            .map_err(|error| error.to_string())
+    }
+
+    fn set_viewport_links(&mut self, links: ViewportLinks) -> bool {
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            return false;
+        };
+        let active_id = workspace.active_id().clone();
+        if let Some(active) = workspace.get_mut(&active_id) {
+            active.state = ViewerViewportState::capture(self);
+        }
+        let active_state = workspace.active().state.clone();
+        let other_ids = workspace
+            .viewports()
+            .iter()
+            .filter(|viewport| viewport.id != active_id)
+            .map(|viewport| viewport.id.clone())
+            .collect::<Vec<_>>();
+        for id in other_ids {
+            if let Some(viewport) = workspace.get_mut(&id) {
+                let before = viewport.state.clone();
+                viewport
+                    .state
+                    .copy_linked_navigation_from(&active_state, links);
+                if viewport.state.camera_changed_from(&before)
+                    || viewport.state.plane_changed_from(&before)
+                {
+                    viewport.navigation_revision =
+                        viewport.navigation_revision.wrapping_add(1).max(1);
+                }
+            }
+        }
+        let changed = workspace.set_links(links);
+        self.viewport_workspace = Some(workspace);
+        changed
+    }
+
+    fn ui_viewport_controls(&mut self, ui: &mut egui::Ui) {
+        let Some(workspace) = self.viewport_workspace.as_ref() else {
+            return;
+        };
+        let viewport_count = workspace.len();
+        let layout = workspace.layout();
+        let split_ratio = workspace.split_ratio();
+        let links = workspace.links();
+        let active_id = workspace.active_id().clone();
+
+        ui.menu_button(format!("Views ({viewport_count})"), |ui| {
+            if viewport_count == 1 {
+                if ui.button("Split side by side").clicked() {
+                    let _ = self.split_active_viewport(ViewportLayout::Horizontal, None);
+                    ui.close();
+                }
+                if ui.button("Split top and bottom").clicked() {
+                    let _ = self.split_active_viewport(ViewportLayout::Vertical, None);
+                    ui.close();
+                }
+                return;
+            }
+
+            ui.label("Layout");
+            if ui
+                .selectable_label(layout == ViewportLayout::Horizontal, "Side by side")
+                .clicked()
+            {
+                let _ = self.set_viewport_layout(ViewportLayout::Horizontal);
+            }
+            if ui
+                .selectable_label(layout == ViewportLayout::Vertical, "Top and bottom")
+                .clicked()
+            {
+                let _ = self.set_viewport_layout(ViewportLayout::Vertical);
+            }
+            if ui.button("Swap positions").clicked() {
+                if let Some(workspace) = self.viewport_workspace.as_mut() {
+                    workspace.swap_order();
+                }
+            }
+            let mut next_ratio = split_ratio;
+            if ui
+                .add(
+                    egui::Slider::new(&mut next_ratio, 0.1..=0.9)
+                        .text("Split ratio")
+                        .fixed_decimals(2),
+                )
+                .changed()
+                && let Some(workspace) = self.viewport_workspace.as_mut()
+            {
+                let _ = workspace.set_split_ratio(next_ratio);
+            }
+
+            ui.separator();
+            ui.label("Linked state");
+            let mut next_links = links;
+            let mut links_changed = false;
+            links_changed |= ui.checkbox(&mut next_links.camera, "Camera").changed();
+            links_changed |= ui.checkbox(&mut next_links.plane, "Plane").changed();
+            links_changed |= ui
+                .add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut next_links.selection, "Selection"),
+                )
+                .on_hover_text("Object selection is shared by the document")
+                .changed();
+            if links_changed {
+                self.set_viewport_links(next_links);
+            }
+
+            ui.separator();
+            if ui.button("Close active view").clicked() {
+                let _ = self.remove_viewport(&active_id);
+                ui.close();
+            }
+        });
+    }
+
+    fn parse_viewport_id(params: &serde_json::Value) -> Result<ViewportId, String> {
+        let value = params
+            .get("viewport_id")
+            .or_else(|| params.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "viewport_id is required".to_string())?;
+        ViewportId::new(value).map_err(|error| error.to_string())
+    }
+
+    fn parse_viewport_split_ratio(params: &serde_json::Value) -> Result<Option<f32>, String> {
+        let Some(value) = params.get("ratio") else {
+            return Ok(None);
+        };
+        let ratio = value
+            .as_f64()
+            .ok_or_else(|| "ratio must be a number".to_string())? as f32;
+        if !ratio.is_finite() || !(0.1..=0.9).contains(&ratio) {
+            return Err("ratio must be finite and between 0.1 and 0.9".to_string());
+        }
+        Ok(Some(ratio))
+    }
+
+    fn sync_runtime_to_active_viewport(&mut self) {
+        let state = ViewerViewportState::capture(self);
+        if let Some(workspace) = self.viewport_workspace.as_mut() {
+            let active_id = workspace.active_id().clone();
+            let previous = workspace.active().state.clone();
+            workspace.active_mut().state = state.clone();
+            if state.camera_changed_from(&previous) || state.plane_changed_from(&previous) {
+                let _ = workspace.bump_navigation_revision(&active_id);
+            }
+            if state.presentation_changed_from(&previous) {
+                let _ = workspace.bump_presentation_revision(&active_id);
+            }
+        } else {
+            self.viewport_workspace = Some(ViewportWorkspace::new(state));
+        }
+    }
+
+    fn viewport_state_snapshot(
+        viewport_id: &ViewportId,
+        title: &str,
+        active: bool,
+        navigation_revision: u64,
+        presentation_revision: u64,
+        state: &ViewerViewportState,
+    ) -> serde_json::Value {
+        let slice = match state.view_plane_mode {
+            ViewPlaneMode::Xy => state.current_z_level0,
+            ViewPlaneMode::Xz => state.current_y_level0,
+            ViewPlaneMode::Yz => state.current_x_level0,
+        };
+        let channels = state
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                serde_json::json!({
+                    "index": index,
+                    "name": channel.name,
+                    "visible": channel.visible,
+                    "selected": index == state.selected_channel,
+                    "color_rgb": channel.color_rgb,
+                    "window": channel.window.map(|(min, max)| serde_json::json!({
+                        "min": min,
+                        "max": max,
+                    })),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "viewport_id": viewport_id.as_str(),
+            "title": title,
+            "active": active,
+            "navigation_revision": navigation_revision,
+            "presentation_revision": presentation_revision,
+            "camera": {
+                "center_world_lvl0": [
+                    state.camera.center_world_lvl0.x,
+                    state.camera.center_world_lvl0.y,
+                ],
+                "zoom_screen_per_lvl0_px": state.camera.zoom_screen_per_lvl0_px,
+                "viewport": state.last_canvas_rect.map(|rect| [
+                    rect.min.x,
+                    rect.min.y,
+                    rect.max.x,
+                    rect.max.y,
+                ]),
+            },
+            "plane": {
+                "mode": state.view_plane_mode.label().to_ascii_lowercase(),
+                "slice": slice,
+            },
+            "channels": channels,
+            "objects": {
+                "visible": state.object_visible,
+                "opacity": state.object_opacity,
+                "width_screen_px": state.object_width_screen_px,
+                "color_rgb": state.object_color_rgb,
+                "fill_cells": state.object_display.fill_cells,
+                "fill_opacity": state.object_display.fill_opacity,
+                "selected_fill_opacity": state.object_display.selected_fill_opacity,
+                "show_selection_overlay": state.object_show_selection_overlay,
+                "fast_rendering": state.object_display.fast_rendering,
+                "color_property": state.object_display.color_property_key,
+            },
+            "rendering": {
+                "smooth_pixels": state.smooth_pixels,
+                "show_scale_bar": state.show_scale_bar,
+                "show_hud": state.show_hud,
+                "show_tile_debug": state.show_tile_debug,
+            },
+        })
+    }
+
+    pub fn control_viewport_workspace_snapshot(&mut self) -> serde_json::Value {
+        self.sync_runtime_to_active_viewport();
+        let Some(workspace) = self.viewport_workspace.as_ref() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        let active_id = workspace.active_id();
+        let viewports = workspace
+            .viewports()
+            .iter()
+            .map(|viewport| {
+                Self::viewport_state_snapshot(
+                    &viewport.id,
+                    &viewport.title,
+                    viewport.id == *active_id,
+                    viewport.navigation_revision,
+                    viewport.presentation_revision,
+                    &viewport.state,
+                )
+            })
+            .collect::<Vec<_>>();
+        let links = workspace.links();
+        let cpu_loader_stats = self.loader.stats();
+        serde_json::json!({
+            "revision": workspace.revision(),
+            "layout": workspace.layout().as_str(),
+            "ratio": workspace.split_ratio(),
+            "active_viewport_id": active_id.as_str(),
+            "max_viewports": crate::viewports::MAX_VIEWPORTS,
+            "shared_resources": {
+                "document_instances": 1,
+                "dataset_source": self.dataset.source.source_key(),
+                "dataset_instances": 1,
+                "cpu_tile_cache_instances": 1,
+                "cpu_tile_cache_entries": self.cache.len(),
+                "cpu_decoded_tile_cache_instances": 1,
+                "cpu_decoded_tile_cache_entries": cpu_loader_stats.decoded_cache_entries,
+                "cpu_decoded_tile_cache_bytes": cpu_loader_stats.decoded_cache_bytes,
+                "cpu_decode_requests": cpu_loader_stats.decode_requests,
+                "cpu_source_reads": cpu_loader_stats.source_reads,
+                "cpu_decoded_cache_hits": cpu_loader_stats.cache_hits,
+                "gpu_raw_tile_cache_instances": usize::from(self.tiles_gl.is_some()),
+                "gpu_raw_tile_cache_entries": self.tiles_gl.as_ref().map(TilesGl::len).unwrap_or(0),
+                "primary_object_geometry_instances": 1,
+                "primary_object_count": self.seg_objects.object_count(),
+            },
+            "performance": {
+                "frame_plan_last_ms": self.viewport_frame_plan_ms,
+                "frame_plan_ema_ms": self.viewport_frame_plan_ema_ms,
+                "frame_plan_samples": self.viewport_frame_plan_samples,
+            },
+            "links": {
+                "camera": links.camera,
+                "plane": links.plane,
+                "selection": links.selection,
+            },
+            "viewports": viewports,
+        })
+    }
+
+    pub fn workspace_canvas_rect(&mut self) -> Option<egui::Rect> {
+        self.sync_runtime_to_active_viewport();
+        self.viewport_workspace
+            .as_ref()?
+            .viewports()
+            .iter()
+            .filter_map(|viewport| viewport.state.last_canvas_rect)
+            .reduce(|union, rect| union.union(rect))
+    }
+
+    pub fn control_get_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.sync_runtime_to_active_viewport();
+        let viewport_id = match Self::parse_viewport_id(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(workspace) = self.viewport_workspace.as_ref() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        let Some(viewport) = workspace.get(&viewport_id) else {
+            return serde_json::json!({"error": format!("viewport '{viewport_id}' was not found")});
+        };
+        Self::viewport_state_snapshot(
+            &viewport.id,
+            &viewport.title,
+            viewport.id == *workspace.active_id(),
+            viewport.navigation_revision,
+            viewport.presentation_revision,
+            &viewport.state,
+        )
+    }
+
+    pub fn control_create_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.sync_runtime_to_active_viewport();
+        let split_ratio = match Self::parse_viewport_split_ratio(params) {
+            Ok(value) => value,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let layout = match params
+            .get("layout")
+            .and_then(serde_json::Value::as_str)
+            .map(ViewportLayout::parse)
+        {
+            Some(Some(layout @ (ViewportLayout::Horizontal | ViewportLayout::Vertical))) => layout,
+            Some(Some(ViewportLayout::Single)) => {
+                return serde_json::json!({"error": "creating a second viewport requires a split layout"});
+            }
+            Some(None) => {
+                return serde_json::json!({"error": "layout must be 'horizontal' or 'vertical'"});
+            }
+            None => ViewportLayout::Horizontal,
+        };
+        let title = params
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let activate = params
+            .get("activate")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        let previous_active = workspace.active_id().clone();
+        let source_id = match params
+            .get("source_viewport_id")
+            .or_else(|| params.get("viewport_id"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(value) => match ViewportId::new(value) {
+                Ok(id) => id,
+                Err(error) => {
+                    self.viewport_workspace = Some(workspace);
+                    return serde_json::json!({"error": error.to_string()});
+                }
+            },
+            None => previous_active.clone(),
+        };
+        let created = workspace.clone_viewport(&source_id, title, layout);
+        let viewport_id = match created {
+            Ok(id) => id,
+            Err(error) => {
+                self.viewport_workspace = Some(workspace);
+                return serde_json::json!({"error": error.to_string()});
+            }
+        };
+        if let Some(ratio) = split_ratio {
+            if let Err(error) = workspace.set_split_ratio(ratio) {
+                self.viewport_workspace = Some(workspace);
+                return serde_json::json!({"error": error.to_string()});
+            }
+        }
+        if !activate {
+            let _ = workspace.set_active(&previous_active);
+        } else {
+            self.cancel_viewport_transient_gestures();
+        }
+        workspace.active().state.apply(self);
+        self.bump_render_id();
+        self.viewport_workspace = Some(workspace);
+        serde_json::json!({
+            "created": true,
+            "viewport_id": viewport_id.as_str(),
+            "workspace": self.control_viewport_workspace_snapshot(),
+        })
+    }
+
+    pub fn control_remove_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let viewport_id = match Self::parse_viewport_id(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        match self.remove_viewport(&viewport_id) {
+            Ok(()) => serde_json::json!({
+                "removed": true,
+                "viewport_id": viewport_id.as_str(),
+                "workspace": self.control_viewport_workspace_snapshot(),
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    pub fn control_set_active_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.sync_runtime_to_active_viewport();
+        let viewport_id = match Self::parse_viewport_id(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        let changed = match workspace.set_active(&viewport_id) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.viewport_workspace = Some(workspace);
+                return serde_json::json!({"error": error.to_string()});
+            }
+        };
+        if changed {
+            self.cancel_viewport_transient_gestures();
+        }
+        workspace.active().state.apply(self);
+        self.bump_render_id();
+        self.viewport_workspace = Some(workspace);
+        serde_json::json!({
+            "changed": changed,
+            "active_viewport_id": viewport_id.as_str(),
+            "viewport": self.control_get_viewport(&serde_json::json!({
+                "viewport_id": viewport_id.as_str(),
+            })),
+        })
+    }
+
+    pub fn control_rename_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let viewport_id = match Self::parse_viewport_id(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(title) = params.get("title").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "title is required"});
+        };
+        let Some(workspace) = self.viewport_workspace.as_mut() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        if let Some(expected) = params
+            .get("if_presentation_revision")
+            .and_then(serde_json::Value::as_u64)
+        {
+            let Some(current) = workspace
+                .get(&viewport_id)
+                .map(|viewport| viewport.presentation_revision)
+            else {
+                return serde_json::json!({"error": format!("viewport '{viewport_id}' was not found")});
+            };
+            if expected != current {
+                return serde_json::json!({
+                    "error": format!(
+                        "viewport presentation revision conflict: expected {expected}, current {current}"
+                    ),
+                    "viewport_id": viewport_id.as_str(),
+                    "expected_revision": expected,
+                    "current_revision": current,
+                    "revision_domain": "presentation",
+                });
+            }
+        }
+        match workspace.rename(&viewport_id, title.to_string()) {
+            Ok(changed) => {
+                let presentation_revision = if changed {
+                    workspace
+                        .bump_presentation_revision(&viewport_id)
+                        .unwrap_or(1)
+                } else {
+                    workspace
+                        .get(&viewport_id)
+                        .map(|viewport| viewport.presentation_revision)
+                        .unwrap_or(1)
+                };
+                serde_json::json!({
+                    "changed": changed,
+                    "viewport_id": viewport_id.as_str(),
+                    "title": title.trim(),
+                    "presentation_revision": presentation_revision,
+                })
+            }
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    pub fn control_set_viewport_layout(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let Some(value) = params.get("layout").and_then(serde_json::Value::as_str) else {
+            return serde_json::json!({"error": "layout is required"});
+        };
+        let Some(layout) = ViewportLayout::parse(value) else {
+            return serde_json::json!({"error": "layout must be 'single', 'horizontal', or 'vertical'"});
+        };
+        if let Some(requested) = params
+            .get("viewports")
+            .or_else(|| params.get("viewport_ids"))
+        {
+            let Some(requested) = requested.as_array() else {
+                return serde_json::json!({"error": "viewports must be an array of viewport IDs"});
+            };
+            let requested = requested
+                .iter()
+                .map(|value| value.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>();
+            let Some(requested) = requested else {
+                return serde_json::json!({"error": "viewports must contain only viewport ID strings"});
+            };
+            let current = self
+                .viewport_workspace
+                .as_ref()
+                .map(|workspace| {
+                    workspace
+                        .viewports()
+                        .iter()
+                        .map(|viewport| viewport.id.as_str().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if requested != current {
+                return serde_json::json!({
+                    "error": "viewports must match the current workspace order; use viewer.workspace.swap to reorder",
+                });
+            }
+        }
+        let ratio = match Self::parse_viewport_split_ratio(params) {
+            Ok(value) => value,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut changed = match self.set_viewport_layout(layout) {
+            Ok(changed) => changed,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        if let Some(ratio) = ratio {
+            let Some(workspace) = self.viewport_workspace.as_mut() else {
+                return serde_json::json!({"error": "viewer workspace is not initialized"});
+            };
+            match workspace.set_split_ratio(ratio) {
+                Ok(ratio_changed) => changed |= ratio_changed,
+                Err(error) => return serde_json::json!({"error": error.to_string()}),
+            }
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layout": layout.as_str(),
+            "ratio": self.viewport_workspace.as_ref().map(ViewportWorkspace::split_ratio),
+        })
+    }
+
+    pub fn control_get_viewport_layout(&mut self) -> serde_json::Value {
+        let workspace = self.control_viewport_workspace_snapshot();
+        serde_json::json!({
+            "revision": workspace["revision"],
+            "layout": workspace["layout"],
+            "ratio": workspace["ratio"],
+            "viewport_ids": workspace["viewports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|viewport| viewport["viewport_id"].as_str())
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    pub fn control_swap_viewports(&mut self) -> serde_json::Value {
+        let Some(workspace) = self.viewport_workspace.as_mut() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        if !workspace.swap_order() {
+            return serde_json::json!({"error": "swapping requires exactly two viewports"});
+        }
+        serde_json::json!({
+            "changed": true,
+            "workspace": self.control_viewport_workspace_snapshot(),
+        })
+    }
+
+    pub fn control_get_viewport_links(&mut self) -> serde_json::Value {
+        let workspace = self.control_viewport_workspace_snapshot();
+        serde_json::json!({
+            "links": workspace["links"],
+            "viewport_ids": workspace["viewports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|viewport| viewport["viewport_id"].as_str())
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn control_viewport_link_group_snapshot(&self) -> serde_json::Value {
+        let links = self
+            .viewport_workspace
+            .as_ref()
+            .map(ViewportWorkspace::links)
+            .unwrap_or_default();
+        let viewport_ids = self
+            .viewport_workspace
+            .as_ref()
+            .map(|workspace| {
+                workspace
+                    .viewports()
+                    .iter()
+                    .map(|viewport| viewport.id.as_str().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut fields = Vec::new();
+        if links.camera {
+            fields.push("camera");
+        }
+        if links.plane {
+            fields.push("plane");
+        }
+        // Selection identity belongs to the document in this milestone, so it
+        // remains represented in the fixed comparison link group.
+        fields.push("selection");
+        serde_json::json!({
+            "link_group_id": "comparison-navigation",
+            "viewport_ids": viewport_ids,
+            "fields": fields,
+        })
+    }
+
+    pub fn control_list_viewport_link_groups(&self) -> serde_json::Value {
+        serde_json::json!({
+            "link_groups": [self.control_viewport_link_group_snapshot()],
+        })
+    }
+
+    fn validate_viewport_link_group_request(
+        &self,
+        params: &serde_json::Value,
+        require_viewports: bool,
+    ) -> Result<ViewportLinks, String> {
+        if let Some(link_group_id) = params.get("link_group_id") {
+            if link_group_id.as_str() != Some("comparison-navigation") {
+                return Err("link_group_id must be 'comparison-navigation'".to_string());
+            }
+        }
+
+        let requested_viewports = params
+            .get("viewport_ids")
+            .or_else(|| params.get("viewports"));
+        if require_viewports && requested_viewports.is_none() {
+            return Err("viewports must identify both workspace viewports".to_string());
+        }
+        if let Some(value) = requested_viewports {
+            let Some(values) = value.as_array() else {
+                return Err("viewports must be an array of viewport IDs".to_string());
+            };
+            let mut requested = HashSet::new();
+            for value in values {
+                let Some(id) = value.as_str() else {
+                    return Err("viewports must contain only viewport ID strings".to_string());
+                };
+                if !requested.insert(id.to_string()) {
+                    return Err("viewports must not contain duplicate IDs".to_string());
+                }
+            }
+            let current = self
+                .viewport_workspace
+                .as_ref()
+                .map(|workspace| {
+                    workspace
+                        .viewports()
+                        .iter()
+                        .map(|viewport| viewport.id.as_str().to_string())
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            if current.len() != 2 || requested != current {
+                return Err(
+                    "viewports must identify exactly the two current workspace viewports"
+                        .to_string(),
+                );
+            }
+        }
+
+        let Some(fields) = params.get("fields").and_then(serde_json::Value::as_array) else {
+            return Err(
+                "fields must be an array containing camera, plane, and/or selection".to_string(),
+            );
+        };
+        let mut camera = false;
+        let mut plane = false;
+        for field in fields {
+            match field.as_str() {
+                Some("camera") => camera = true,
+                Some("plane") => plane = true,
+                Some("selection") => {}
+                Some(other) => return Err(format!("unknown viewport link field '{other}'")),
+                None => return Err("fields must contain only strings".to_string()),
+            }
+        }
+        Ok(ViewportLinks {
+            camera,
+            plane,
+            selection: true,
+        })
+    }
+
+    fn control_configure_viewport_link_group(
+        &mut self,
+        params: &serde_json::Value,
+        require_viewports: bool,
+    ) -> serde_json::Value {
+        let links = match self.validate_viewport_link_group_request(params, require_viewports) {
+            Ok(links) => links,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let mut response = self.control_set_viewport_links(&serde_json::json!({
+            "camera": links.camera,
+            "plane": links.plane,
+            "selection": true,
+        }));
+        if response.get("error").is_none() {
+            response["link_group"] = self.control_viewport_link_group_snapshot();
+        }
+        response
+    }
+
+    pub fn control_create_viewport_link_group(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_configure_viewport_link_group(params, true)
+    }
+
+    pub fn control_update_viewport_link_group(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_configure_viewport_link_group(params, false)
+    }
+
+    pub fn control_remove_viewport_link_group(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        if params
+            .get("link_group_id")
+            .is_some_and(|value| value.as_str() != Some("comparison-navigation"))
+        {
+            return serde_json::json!({
+                "error": "link_group_id must be 'comparison-navigation'",
+            });
+        }
+        let mut response = self.control_set_viewport_links(&serde_json::json!({
+            "camera": false,
+            "plane": false,
+            "selection": true,
+        }));
+        if response.get("error").is_none() {
+            response["removed"] = serde_json::Value::Bool(true);
+            response["link_group"] = self.control_viewport_link_group_snapshot();
+        }
+        response
+    }
+
+    pub fn control_set_viewport_links(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let before = self.control_viewport_workspace_snapshot();
+        let current = self
+            .viewport_workspace
+            .as_ref()
+            .map(ViewportWorkspace::links)
+            .unwrap_or_default();
+        let links = ViewportLinks {
+            camera: params
+                .get("camera")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(current.camera),
+            plane: params
+                .get("plane")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(current.plane),
+            selection: params
+                .get("selection")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+        };
+        if !links.selection {
+            return serde_json::json!({
+                "error": "selection is document-shared in the two-viewport milestone",
+            });
+        }
+        let changed = self.set_viewport_links(links);
+        let workspace = self.control_viewport_workspace_snapshot();
+        let before_revisions = before["viewports"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|viewport| {
+                Some((
+                    viewport["viewport_id"].as_str()?.to_string(),
+                    viewport["navigation_revision"].as_u64()?,
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        let affected_viewport_ids = workspace["viewports"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|viewport| {
+                let id = viewport["viewport_id"].as_str()?;
+                let revision = viewport["navigation_revision"].as_u64()?;
+                (before_revisions.get(id).copied() != Some(revision)).then(|| id.to_string())
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "changed": changed,
+            "links": {
+                "camera": links.camera,
+                "plane": links.plane,
+                "selection": links.selection,
+            },
+            "affected_viewport_ids": affected_viewport_ids,
+            "workspace": workspace,
+        })
+    }
+
+    fn control_in_viewport(
+        &mut self,
+        params: &serde_json::Value,
+        domain: ViewportControlDomain,
+        operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
+    ) -> serde_json::Value {
+        self.sync_runtime_to_active_viewport();
+        let viewport_id = match Self::parse_viewport_id(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            return serde_json::json!({"error": "viewer workspace is not initialized"});
+        };
+        let active_viewport_id = workspace.active_id().clone();
+        let active_before = workspace.active().state.clone();
+        let Some(target) = workspace.get(&viewport_id) else {
+            self.viewport_workspace = Some(workspace);
+            return serde_json::json!({"error": format!("viewport '{viewport_id}' was not found")});
+        };
+        let revision_guard = match domain {
+            ViewportControlDomain::Read => None,
+            ViewportControlDomain::Navigation => params
+                .get("if_navigation_revision")
+                .and_then(serde_json::Value::as_u64)
+                .map(|expected| ("navigation", expected, target.navigation_revision)),
+            ViewportControlDomain::Presentation => params
+                .get("if_presentation_revision")
+                .and_then(serde_json::Value::as_u64)
+                .map(|expected| ("presentation", expected, target.presentation_revision)),
+        };
+        if let Some((kind, expected, current)) = revision_guard
+            && expected != current
+        {
+            self.viewport_workspace = Some(workspace);
+            return serde_json::json!({
+                "error": format!(
+                    "viewport {kind} revision conflict: expected {expected}, current {current}"
+                ),
+                "viewport_id": viewport_id.as_str(),
+                "expected_revision": expected,
+                "current_revision": current,
+                "revision_domain": kind,
+            });
+        }
+        let before = target.state.clone();
+        before.apply(self);
+        self.bump_render_id();
+        let result = operation(self, params);
+        let after = ViewerViewportState::capture(self);
+        let succeeded = result.get("error").is_none();
+        if let Some(target) = workspace.get_mut(&viewport_id) {
+            target.state = after.clone();
+        }
+        let mut affected_viewport_ids = vec![viewport_id.as_str().to_string()];
+        if succeeded {
+            match domain {
+                ViewportControlDomain::Read => {}
+                ViewportControlDomain::Navigation => {
+                    let _ = workspace.bump_navigation_revision(&viewport_id);
+                }
+                ViewportControlDomain::Presentation => {
+                    let _ = workspace.bump_presentation_revision(&viewport_id);
+                }
+            }
+        }
+        let links = workspace.links();
+        if succeeded
+            && domain == ViewportControlDomain::Navigation
+            && ((links.camera && after.camera_changed_from(&before))
+                || (links.plane && after.plane_changed_from(&before)))
+        {
+            let other_ids = workspace
+                .viewports()
+                .iter()
+                .filter(|viewport| viewport.id != viewport_id)
+                .map(|viewport| viewport.id.clone())
+                .collect::<Vec<_>>();
+            for other_id in other_ids {
+                if let Some(other) = workspace.get_mut(&other_id) {
+                    other.state.copy_linked_navigation_from(&after, links);
+                }
+                let _ = workspace.bump_navigation_revision(&other_id);
+                affected_viewport_ids.push(other_id.as_str().to_string());
+            }
+        }
+        let target = workspace
+            .get(&viewport_id)
+            .expect("target viewport remains in workspace");
+        let navigation_revision = target.navigation_revision;
+        let presentation_revision = target.presentation_revision;
+        let link_transaction_id = (affected_viewport_ids.len() > 1)
+            .then(|| format!("{}-{navigation_revision}", viewport_id.as_str()));
+        let active_after = &workspace.active().state;
+        let active_viewport_changed = succeeded
+            && match domain {
+                ViewportControlDomain::Read => false,
+                ViewportControlDomain::Navigation => {
+                    active_after.camera_changed_from(&active_before)
+                        || active_after.plane_changed_from(&active_before)
+                }
+                ViewportControlDomain::Presentation => {
+                    active_after.presentation_changed_from(&active_before)
+                }
+            };
+        workspace.active().state.apply(self);
+        self.bump_render_id();
+        self.viewport_workspace = Some(workspace);
+        serde_json::json!({
+            "viewport_id": viewport_id.as_str(),
+            "navigation_revision": navigation_revision,
+            "presentation_revision": presentation_revision,
+            "affected_viewport_ids": affected_viewport_ids,
+            "link_transaction_id": link_transaction_id,
+            "active_viewport_id": active_viewport_id.as_str(),
+            "active_viewport_changed": active_viewport_changed,
+            "result": result,
+        })
+    }
+
+    fn control_filter_sensitive_operation(
+        &mut self,
+        params: &serde_json::Value,
+        operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
+    ) -> serde_json::Value {
+        if params.get("viewport_id").is_some() {
+            return self.control_in_viewport(params, ViewportControlDomain::Read, operation);
+        }
+        if params.get("filter_query").is_some()
+            || params
+                .get("use_all_objects")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
+            return self.control_with_temporary_object_filter(params, operation);
+        }
+        if params
+            .get("use_active_viewport_filter")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            || self
+                .viewport_workspace
+                .as_ref()
+                .is_none_or(|workspace| workspace.len() <= 1)
+        {
+            return operation(self, params);
+        }
+        serde_json::json!({
+            "error": "multi-viewport filter-sensitive operations require viewport_id, filter_query, use_all_objects=true, or explicit use_active_viewport_filter=true",
+        })
+    }
+
+    fn control_with_temporary_object_filter(
+        &mut self,
+        params: &serde_json::Value,
+        operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
+    ) -> serde_json::Value {
+        let mut effective = params.clone();
+        if effective.get("target").is_none()
+            && let Some(object) = effective.as_object_mut()
+        {
+            // A standalone query is a data input, so it defaults to the stable
+            // primary object resource instead of whichever layer is active.
+            object.insert("target".to_string(), serde_json::json!("objects"));
+        }
+        let target = match self.control_object_selection_target(&effective) {
+            Ok(target @ (LayerId::SegmentationObjects | LayerId::SpatialShape(_))) => target,
+            Ok(_) => {
+                return serde_json::json!({
+                    "error": "filter-sensitive operations require an object-backed target",
+                });
+            }
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let use_all = params
+            .get("use_all_objects")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let query = params
+            .get("filter_query")
+            .and_then(serde_json::Value::as_str);
+        if !use_all && query.is_none() {
+            return serde_json::json!({"error": "filter_query must be a string"});
+        }
+
+        let (saved_filter, saved_cache, query_error) = match target {
+            LayerId::SegmentationObjects => {
+                let filter = self.seg_objects.viewport_filter_state();
+                let cache = self.seg_objects.viewport_filter_cache_state();
+                if use_all {
+                    self.seg_objects.clear_filter();
+                } else if let Some(query) = query {
+                    self.seg_objects.set_filter_query_from_text(query);
+                }
+                let error = self.seg_objects.filter_snapshot_json()["query"]["error"]
+                    .as_str()
+                    .map(str::to_string);
+                (filter, cache, error)
+            }
+            LayerId::SpatialShape(id) => {
+                let Some(objects) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                    .and_then(|layer| layer.object_layer_mut())
+                else {
+                    return serde_json::json!({
+                        "error": format!("spatial shape layer {id} has no object layer"),
+                    });
+                };
+                let filter = objects.viewport_filter_state();
+                let cache = objects.viewport_filter_cache_state();
+                if use_all {
+                    objects.clear_filter();
+                } else if let Some(query) = query {
+                    objects.set_filter_query_from_text(query);
+                }
+                let error = objects.filter_snapshot_json()["query"]["error"]
+                    .as_str()
+                    .map(str::to_string);
+                (filter, cache, error)
+            }
+            _ => unreachable!(),
+        };
+        if let Some(error) = query_error {
+            match target {
+                LayerId::SegmentationObjects => {
+                    self.seg_objects.apply_viewport_filter_state(&saved_filter);
+                    self.seg_objects
+                        .apply_viewport_filter_cache_state(&saved_cache);
+                }
+                LayerId::SpatialShape(id) => {
+                    if let Some(objects) = self
+                        .spatial_layers
+                        .shapes
+                        .iter_mut()
+                        .find(|layer| layer.id == id)
+                        .and_then(|layer| layer.object_layer_mut())
+                    {
+                        objects.apply_viewport_filter_state(&saved_filter);
+                        objects.apply_viewport_filter_cache_state(&saved_cache);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            return serde_json::json!({"error": format!("invalid filter_query: {error}")});
+        }
+
+        let result = operation(self, &effective);
+        match target {
+            LayerId::SegmentationObjects => {
+                self.seg_objects.apply_viewport_filter_state(&saved_filter);
+                self.seg_objects
+                    .apply_viewport_filter_cache_state(&saved_cache);
+            }
+            LayerId::SpatialShape(id) => {
+                if let Some(objects) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                    .and_then(|layer| layer.object_layer_mut())
+                {
+                    objects.apply_viewport_filter_state(&saved_filter);
+                    objects.apply_viewport_filter_cache_state(&saved_cache);
+                }
+            }
+            _ => unreachable!(),
+        }
+        result
+    }
+
+    pub fn control_get_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_camera_snapshot()
+        })
+    }
+
+    pub fn control_set_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Navigation,
+            OmeZarrViewerApp::control_set_camera,
+        )
+    }
+
+    pub fn control_fit_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Navigation, |app, _| {
+            app.control_fit_to_view()
+        })
+    }
+
+    pub fn control_get_viewport_plane(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_plane_snapshot()
+        })
+    }
+
+    pub fn control_set_viewport_plane(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Navigation,
+            OmeZarrViewerApp::control_set_plane,
+        )
+    }
+
+    pub fn control_get_viewport_object_style(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.seg_objects.control_style_snapshot_json()
+        })
+    }
+
+    pub fn control_set_viewport_object_style(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            |app, params| {
+                let result = app.seg_objects.control_set_style_json(params);
+                app.bump_render_id();
+                result
+            },
+        )
+    }
+
+    pub fn control_set_viewport_object_legend(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            |app, params| {
+                let result = app.seg_objects.control_set_legend_json(params);
+                app.bump_render_id();
+                result
+            },
+        )
+    }
+
+    pub fn control_get_viewport_object_filter(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.seg_objects.filter_snapshot_json()
+        })
+    }
+
+    pub fn control_set_viewport_object_filter(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            |app, params| {
+                let result = if params.get("model").is_some()
+                    || params.get("clauses").is_some()
+                    || params.get("logic").is_some()
+                    || params.get("mode").is_some()
+                {
+                    app.seg_objects.control_set_filter_model_json(params)
+                } else if let Some(query) = params
+                    .get("query")
+                    .or_else(|| params.get("expression"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    app.seg_objects.set_filter_query_from_text(query);
+                    app.seg_objects.filter_snapshot_json()
+                } else {
+                    serde_json::json!({"error": "provide query or a filter model"})
+                };
+                app.bump_render_id();
+                result
+            },
+        )
+    }
+
+    pub fn control_clear_viewport_object_filter(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Presentation, |app, _| {
+            app.seg_objects.clear_filter();
+            app.bump_render_id();
+            app.seg_objects.filter_snapshot_json()
+        })
+    }
+
+    pub fn control_get_viewport_channels(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_channel_snapshot()
+        })
+    }
+
+    pub fn control_set_viewport_channels(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_visible_channels,
+        )
+    }
+
+    pub fn control_set_viewport_active_channel(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_active_channel,
+        )
+    }
+
+    pub fn control_set_viewport_channel_color(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_channel_color,
+        )
+    }
+
+    pub fn control_set_viewport_channel_contrast(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_channel_contrast,
+        )
+    }
+
+    pub fn control_set_viewport_channel_order(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_channel_order,
+        )
+    }
+
+    pub fn control_get_viewport_channel_groups(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_channel_groups_snapshot()
+        })
+    }
+
+    pub fn control_set_viewport_channel_group(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_channel_group,
+        )
+    }
+
+    pub fn control_get_viewport_layers(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_native_layer_snapshot_list()
+        })
+    }
+
+    pub fn control_get_viewport_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, params| {
+            app.control_get_native_layer(params)
+        })
+    }
+
+    pub fn control_set_viewport_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_native_layer_presentation,
+        )
+    }
+
+    pub fn control_get_viewport_rendering(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
+            app.control_rendering_snapshot()
+        })
+    }
+
+    pub fn control_set_viewport_rendering(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_rendering,
+        )
+    }
+
+    pub fn control_set_viewport_layer_visibility(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_native_layer_visibility,
+        )
+    }
+
+    pub fn control_set_viewport_layer_order(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_native_layer_order,
+        )
+    }
+
+    pub fn control_set_viewport_active_layer(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_in_viewport(
+            params,
+            ViewportControlDomain::Presentation,
+            OmeZarrViewerApp::control_set_active_native_layer,
+        )
+    }
+
+    fn project_workspace_view_state(&self) -> Option<ProjectWorkspaceViewState> {
+        let workspace = self.viewport_workspace.as_ref()?;
+        if workspace.len() <= 1 {
+            return None;
+        }
+        let links = workspace.links();
+        Some(ProjectWorkspaceViewState {
+            version: 1,
+            layout: workspace.layout().as_str().to_string(),
+            split_ratio: workspace.split_ratio(),
+            active_viewport_id: workspace.active_id().as_str().to_string(),
+            link_camera: links.camera,
+            link_plane: links.plane,
+            link_selection: links.selection,
+            viewports: workspace
+                .viewports()
+                .iter()
+                .map(|viewport| {
+                    let state = &viewport.state;
+                    ProjectViewportViewState {
+                        id: viewport.id.as_str().to_string(),
+                        title: viewport.title.clone(),
+                        navigation_revision: viewport.navigation_revision.max(1),
+                        presentation_revision: viewport.presentation_revision.max(1),
+                        layer_groups: Some(state.layer_groups.clone()),
+                        camera: Some(ProjectCameraState {
+                            center_world_lvl0: [
+                                state.camera.center_world_lvl0.x,
+                                state.camera.center_world_lvl0.y,
+                            ],
+                            zoom_screen_per_lvl0_px: state.camera.zoom_screen_per_lvl0_px,
+                        }),
+                        plane_mode: Some(state.view_plane_mode.label().to_ascii_lowercase()),
+                        x_level0: Some(state.current_x_level0),
+                        y_level0: Some(state.current_y_level0),
+                        z_level0: Some(state.current_z_level0),
+                        channel_order: state.channel_layer_order.clone(),
+                        channels: state
+                            .channels
+                            .iter()
+                            .map(|channel| ProjectChannelViewState {
+                                name: Some(channel.name.clone()),
+                                visible: Some(channel.visible),
+                                color_rgb: Some(channel.color_rgb),
+                                window: channel.window.map(|(lo, hi)| [lo, hi]),
+                                note: (!channel.note.is_empty()).then(|| channel.note.clone()),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        active_channel: Some(state.selected_channel),
+                        active_layer: Some(Self::layer_id_storage_key(state.active_layer)),
+                        overlay_order: state
+                            .overlay_layer_order
+                            .iter()
+                            .copied()
+                            .map(Self::layer_id_storage_key)
+                            .collect(),
+                        overlay_visibility: state
+                            .overlay_layer_order
+                            .iter()
+                            .copied()
+                            .filter_map(|id| {
+                                state
+                                    .layer_visible(id)
+                                    .map(|visible| (Self::layer_id_storage_key(id), visible))
+                            })
+                            .collect(),
+                        segmentation: Some(ProjectSegmentationViewState {
+                            label_name: (!self.seg_label_selected.is_empty())
+                                .then(|| self.seg_label_selected.clone()),
+                            outlines_color_rgb: Some(state.cells_outlines_color_rgb),
+                            outlines_opacity: Some(state.cells_outlines_opacity),
+                            outlines_width_px: Some(state.cells_outlines_width_px),
+                            object_display: Some(state.object_display.clone()),
+                        }),
+                        object_filter: Some(state.object_filter.project_json()),
+                        object_visible: Some(state.object_visible),
+                        object_opacity: Some(state.object_opacity),
+                        object_width_screen_px: Some(state.object_width_screen_px),
+                        object_color_rgb: Some(state.object_color_rgb),
+                        object_show_selection_overlay: Some(state.object_show_selection_overlay),
+                        presentation: Some(state.project_presentation_json()),
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    fn restore_project_workspace(
+        &mut self,
+        saved: &ProjectWorkspaceViewState,
+    ) -> Result<(), String> {
+        if saved.version != 1 {
+            return Err(format!(
+                "unsupported viewport workspace version {}",
+                saved.version
+            ));
+        }
+        let layout = ViewportLayout::parse(&saved.layout)
+            .ok_or_else(|| format!("unknown viewport layout '{}'", saved.layout))?;
+        let base = ViewerViewportState::capture(self);
+        let mut slots = Vec::with_capacity(saved.viewports.len());
+        for saved_viewport in &saved.viewports {
+            let id = ViewportId::new(&saved_viewport.id).map_err(|error| error.to_string())?;
+            let mut state = base.clone();
+            state.last_canvas_rect = None;
+            if let Some(layer_groups) = saved_viewport.layer_groups.as_ref() {
+                state.layer_groups.clone_from(layer_groups);
+            }
+            if let Some(camera) = saved_viewport.camera.as_ref() {
+                state.camera.center_world_lvl0 =
+                    egui::pos2(camera.center_world_lvl0[0], camera.center_world_lvl0[1]);
+                state.camera.zoom_screen_per_lvl0_px = camera.zoom_screen_per_lvl0_px.max(1e-6);
+            }
+            if let Some(mode) = saved_viewport.plane_mode.as_deref() {
+                state.view_plane_mode = match mode.to_ascii_lowercase().as_str() {
+                    "xy" => ViewPlaneMode::Xy,
+                    "xz" => ViewPlaneMode::Xz,
+                    "yz" => ViewPlaneMode::Yz,
+                    _ => return Err(format!("unknown viewport plane mode '{mode}'")),
+                };
+            }
+            if let Some(value) = saved_viewport.x_level0 {
+                state.current_x_level0 = value;
+            }
+            if let Some(value) = saved_viewport.y_level0 {
+                state.current_y_level0 = value;
+            }
+            if let Some(value) = saved_viewport.z_level0 {
+                state.current_z_level0 = value;
+            }
+            if !saved_viewport.channel_order.is_empty() {
+                state.channel_layer_order = saved_viewport.channel_order.clone();
+            }
+            for (index, channel) in state.channels.iter_mut().enumerate() {
+                let saved_channel = saved_viewport
+                    .channels
+                    .iter()
+                    .find(|candidate| candidate.name.as_deref() == Some(channel.name.as_str()))
+                    .or_else(|| saved_viewport.channels.get(index));
+                let Some(saved_channel) = saved_channel else {
+                    continue;
+                };
+                if let Some(visible) = saved_channel.visible {
+                    channel.visible = visible;
+                }
+                if let Some(color) = saved_channel.color_rgb {
+                    channel.color_rgb = color;
+                }
+                if let Some([lo, hi]) = saved_channel.window {
+                    channel.window = Some((lo, hi));
+                }
+            }
+            if let Some(active_channel) = saved_viewport.active_channel {
+                state.selected_channel = active_channel.min(state.channels.len().saturating_sub(1));
+            }
+            if let Some(segmentation) = saved_viewport.segmentation.as_ref() {
+                if let Some(color) = segmentation.outlines_color_rgb {
+                    state.cells_outlines_color_rgb = color;
+                }
+                if let Some(opacity) = segmentation.outlines_opacity {
+                    state.cells_outlines_opacity = opacity;
+                }
+                if let Some(width) = segmentation.outlines_width_px {
+                    state.cells_outlines_width_px = width;
+                }
+                if let Some(display) = segmentation.object_display.as_ref() {
+                    state.object_display = display.clone();
+                }
+            }
+            if let Some(filter) = saved_viewport.object_filter.as_ref() {
+                state.object_filter = ObjectViewportFilterState::from_project_json(filter)?;
+                state.object_filter_cache = ObjectViewportFilterCacheState::empty();
+            }
+            if let Some(value) = saved_viewport.object_visible {
+                state.object_visible = value;
+            }
+            if let Some(value) = saved_viewport.object_opacity {
+                state.object_opacity = value.clamp(0.0, 1.0);
+            }
+            if let Some(value) = saved_viewport.object_width_screen_px {
+                state.object_width_screen_px = value.max(0.0);
+            }
+            if let Some(value) = saved_viewport.object_color_rgb {
+                state.object_color_rgb = value;
+            }
+            if let Some(value) = saved_viewport.object_show_selection_overlay {
+                state.object_show_selection_overlay = value;
+            }
+            if let Some(presentation) = saved_viewport.presentation.as_ref() {
+                state.apply_project_presentation_json(presentation)?;
+            }
+            if !saved_viewport.overlay_order.is_empty() {
+                state.overlay_layer_order = saved_viewport
+                    .overlay_order
+                    .iter()
+                    .filter_map(|key| self.parse_layer_id_storage_key(key))
+                    .collect();
+            }
+            for (key, visible) in &saved_viewport.overlay_visibility {
+                if let Some(layer_id) = self.parse_layer_id_storage_key(key) {
+                    state.set_layer_visible(layer_id, *visible);
+                }
+            }
+            if let Some(active_layer) = saved_viewport
+                .active_layer
+                .as_deref()
+                .and_then(|key| self.parse_layer_id_storage_key(key))
+            {
+                state.active_layer = active_layer;
+            }
+            slots.push(ViewportSlot {
+                id,
+                title: saved_viewport.title.clone(),
+                state,
+                navigation_revision: saved_viewport.navigation_revision.max(1),
+                presentation_revision: saved_viewport.presentation_revision.max(1),
+            });
+        }
+        let active =
+            ViewportId::new(&saved.active_viewport_id).map_err(|error| error.to_string())?;
+        let mut workspace = ViewportWorkspace::restore(
+            slots,
+            active,
+            layout,
+            ViewportLinks {
+                camera: saved.link_camera,
+                plane: saved.link_plane,
+                // Selection identity is document-owned in workspace v1, so a
+                // stale or hand-edited false value cannot create a misleading
+                // apparently-independent selection mode.
+                selection: true,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        workspace
+            .set_split_ratio(saved.split_ratio)
+            .map_err(|error| error.to_string())?;
+        workspace.active().state.apply(self);
+        self.viewport_workspace = Some(workspace);
+        self.bump_render_id();
+        Ok(())
+    }
+
     fn sync_current_view_state_into_project_space(&mut self) {
+        self.sync_runtime_to_active_viewport();
         self.sync_mask_layers_into_project_space();
         self.ensure_loaded_layer_offset_baselines();
-        let layer_groups = self
-            .project_space
-            .roi_view_state(&self.dataset.source)
-            .and_then(|view| view.layer_groups.clone());
+        let layer_groups = Some(self.current_layer_groups());
         let overlay_order = self
             .overlay_layer_order
             .iter()
@@ -3652,6 +8046,7 @@ impl OmeZarrViewerApp {
                     .map(|baseline| (Self::layer_id_storage_key(id), vec2_to_array(baseline)))
             })
             .collect::<BTreeMap<_, _>>();
+        let workspace = self.project_workspace_view_state();
         self.project_space.set_roi_view_state(
             &self.dataset.source,
             ProjectRoiViewState {
@@ -3707,18 +8102,17 @@ impl OmeZarrViewerApp {
                     .iter()
                     .map(|layer| self.project_annotation_layer_state(layer))
                     .collect(),
+                workspace,
             },
         );
     }
 
     fn current_layer_groups(&self) -> ProjectLayerGroups {
-        self.project_space
-            .roi_view_state(&self.dataset.source)
-            .and_then(|view| view.layer_groups.clone())
-            .unwrap_or_default()
+        self.viewport_layer_groups.clone()
     }
 
     fn set_current_layer_groups(&mut self, groups: ProjectLayerGroups) {
+        self.viewport_layer_groups.clone_from(&groups);
         let mut view = self
             .project_space
             .roi_view_state(&self.dataset.source)
@@ -3735,6 +8129,7 @@ impl OmeZarrViewerApp {
             .roi_view_state(&self.dataset.source)
             .cloned();
         if let Some(view) = saved_view.as_ref() {
+            self.viewport_layer_groups = view.layer_groups.clone().unwrap_or_default();
             self.channel_window_overrides.clear();
             if let Some(ui) = view.ui.as_ref() {
                 self.apply_project_ui_state(ui);
@@ -3865,6 +8260,19 @@ impl OmeZarrViewerApp {
             self.restore_loaded_layer_offsets_from_project_view(view);
         } else {
             self.capture_loaded_layer_offsets();
+        }
+        if let Some(workspace) = saved_view.as_ref().and_then(|view| view.workspace.as_ref()) {
+            if let Err(error) = self.restore_project_workspace(workspace) {
+                self.viewport_workspace =
+                    Some(ViewportWorkspace::new(ViewerViewportState::capture(self)));
+                self.set_status(format!(
+                    "Could not restore multi-viewport workspace: {error}. Loaded the active view instead."
+                ));
+            }
+        } else {
+            // Migration path for all pre-workspace project files.
+            self.viewport_workspace =
+                Some(ViewportWorkspace::new(ViewerViewportState::capture(self)));
         }
     }
 
@@ -4054,6 +8462,69 @@ impl OmeZarrViewerApp {
         })
     }
 
+    pub fn control_rendering_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "smooth_pixels": self.smooth_pixels,
+            "show_scale_bar": self.show_scale_bar,
+            "show_hud": self.show_hud,
+            "show_tile_debug": self.show_tile_debug,
+        })
+    }
+
+    pub fn control_set_rendering(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let mut changed = false;
+        let mut saw_field = false;
+        let mut sampling_changed = false;
+
+        macro_rules! set_bool {
+            ($name:literal, $field:ident) => {
+                if let Some(value) = params.get($name) {
+                    saw_field = true;
+                    let Some(value) = value.as_bool() else {
+                        return serde_json::json!({
+                            "error": format!("{} must be a boolean", $name),
+                        });
+                    };
+                    if self.$field != value {
+                        self.$field = value;
+                        changed = true;
+                    }
+                }
+            };
+        }
+
+        if let Some(value) = params.get("smooth_pixels").or_else(|| params.get("smooth")) {
+            saw_field = true;
+            let Some(value) = value.as_bool() else {
+                return serde_json::json!({"error": "smooth_pixels must be a boolean"});
+            };
+            if self.smooth_pixels != value {
+                self.smooth_pixels = value;
+                changed = true;
+                sampling_changed = true;
+            }
+        }
+        set_bool!("show_scale_bar", show_scale_bar);
+        set_bool!("show_hud", show_hud);
+        set_bool!("show_tile_debug", show_tile_debug);
+
+        if !saw_field {
+            return serde_json::json!({
+                "error": "provide smooth_pixels, show_scale_bar, show_hud, and/or show_tile_debug",
+            });
+        }
+        if sampling_changed {
+            // Sampling is selected when each viewport's draw callback runs.
+            // A new presentation generation preserves already-composited tiles
+            // for the other viewport while refreshing this one.
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "rendering": self.control_rendering_snapshot(),
+        })
+    }
+
     pub fn control_set_smooth_pixels(&mut self, params: &serde_json::Value) -> serde_json::Value {
         let Some(smooth) = params.get("smooth").and_then(serde_json::Value::as_bool) else {
             return serde_json::json!({"error": "set_smooth_pixels requires smooth"});
@@ -4061,14 +8532,7 @@ impl OmeZarrViewerApp {
         let changed = self.smooth_pixels != smooth;
         if changed {
             self.smooth_pixels = smooth;
-            if let Some(tiles_gl) = self.tiles_gl.as_ref() {
-                tiles_gl.set_smooth_pixels(self.smooth_pixels);
-            } else {
-                self.cache = TileCache::new(256);
-                self.pending.clear();
-            }
-            self.spatial_image_layers
-                .set_smooth_pixels(self.smooth_pixels);
+            self.bump_render_id();
         }
         serde_json::json!({
             "changed": changed,
@@ -4102,8 +8566,8 @@ impl OmeZarrViewerApp {
         let async_reasons = self.async_ui_debug_reasons();
         let busy = self.is_loading_scene()
             || !async_reasons.is_empty()
-            || self.screenshot_pending.is_some()
-            || self.screenshot_in_flight.is_some();
+            || !self.screenshot_pending.is_empty()
+            || !self.screenshot_in_flight.is_empty();
         serde_json::json!({
             "busy": busy,
             "indicator_text": self.loading_indicator_text(),
@@ -4127,8 +8591,10 @@ impl OmeZarrViewerApp {
             },
             "pinned_levels_loading": self.pinned_levels.has_loading(),
             "screenshot": {
-                "pending": self.screenshot_pending.is_some(),
-                "in_flight": self.screenshot_in_flight.is_some(),
+                "pending": !self.screenshot_pending.is_empty(),
+                "pending_count": self.screenshot_pending.len(),
+                "in_flight": !self.screenshot_in_flight.is_empty(),
+                "in_flight_count": self.screenshot_in_flight.len(),
             },
         })
     }
@@ -4284,8 +8750,23 @@ impl OmeZarrViewerApp {
         let Some(channel) = self.channels.get_mut(idx) else {
             return serde_json::json!({"error": format!("channel index {idx} is out of range")});
         };
-        let changed = channel.color_rgb != color;
+        let color_changed = channel.color_rgb != color;
         channel.color_rgb = color;
+        let channel_name = channel.name.clone();
+        let mut groups = self.current_layer_groups();
+        let inheritance_changed =
+            groups
+                .channel_members
+                .get_mut(&channel_name)
+                .is_some_and(|member| {
+                    let changed = member.inherit_color;
+                    member.inherit_color = false;
+                    changed
+                });
+        if inheritance_changed {
+            self.set_current_layer_groups(groups);
+        }
+        let changed = color_changed || inheritance_changed;
         if changed {
             self.bump_render_id();
         }
@@ -4473,7 +8954,162 @@ impl OmeZarrViewerApp {
             "visible": self.layer_visible_value(id).unwrap_or(false),
             "available": self.layer_is_available(id),
             "offset_world": [offset.x, offset.y],
+            "presentation": self.control_native_layer_presentation(id),
         })
+    }
+
+    fn control_native_layer_presentation(&self, id: LayerId) -> serde_json::Value {
+        match id {
+            LayerId::Channel(index) => self
+                .channels
+                .get(index)
+                .map(|channel| {
+                    serde_json::json!({
+                        "visible": channel.visible,
+                        "color_rgb": channel.color_rgb,
+                        "window": channel.window.map(|(min, max)| serde_json::json!({
+                            "min": min,
+                            "max": max,
+                        })),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::SpatialImage(id) => self
+                .spatial_image_layers
+                .images
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "opacity": layer.opacity,
+                        "current_z_level0": layer.current_z_level0,
+                        "channels": layer.channels.iter().map(|channel| serde_json::json!({
+                            "index": channel.index,
+                            "name": channel.name,
+                            "visible": channel.visible,
+                            "color_rgb": channel.color_rgb,
+                            "window": channel.window.map(|(min, max)| [min, max]),
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::SegmentationLabels => serde_json::json!({
+                "visible": self.cells_outlines_visible,
+                "opacity": self.cells_outlines_opacity,
+                "width_screen_px": self.cells_outlines_width_px,
+                "color_rgb": self.cells_outlines_color_rgb,
+            }),
+            LayerId::SegmentationGeoJson => serde_json::json!({
+                "visible": self.seg_geojson.visible,
+                "opacity": self.seg_geojson.opacity,
+                "width_screen_px": self.seg_geojson.width_screen_px,
+                "color_rgb": self.seg_geojson.color_rgb,
+            }),
+            LayerId::SegmentationObjects => ViewerViewportState::object_layer_presentation_json(
+                &ObjectLayerViewportPresentation::capture(&self.seg_objects),
+            ),
+            LayerId::Mask(id) => self
+                .mask_layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "opacity": layer.opacity,
+                        "width_screen_px": layer.width_screen_px,
+                        "display_mode": layer.display_mode.storage_key(),
+                        "color_rgb": layer.color_rgb,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::Points => serde_json::json!({
+                "visible": self.cell_points.visible,
+                "style": ViewerViewportState::points_style_json(&self.cell_points.style),
+            }),
+            LayerId::Annotation(id) => self
+                .annotation_layers
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "style": {
+                            "radius_screen_px": layer.style.radius_screen_px,
+                            "opacity": layer.style.opacity,
+                            "stroke_width": layer.style.stroke.width,
+                            "stroke_color_rgba": ViewerViewportState::color_json(layer.style.stroke.color),
+                        },
+                        "category_styles": layer.category_styles.iter().map(|category| serde_json::json!({
+                            "name": category.name,
+                            "visible": category.visible,
+                            "color_rgba": ViewerViewportState::color_json(category.color),
+                            "shape": category.shape.storage_key(),
+                        })).collect::<Vec<_>>(),
+                        "continuous_shape": layer.continuous_shape.storage_key(),
+                        "continuous_range": layer.continuous_range.map(|(min, max)| [min, max]),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::SpatialShape(id) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "opacity": layer.opacity,
+                        "width_screen_px": layer.width_screen_px,
+                        "color_rgb": layer.color_rgb,
+                        "objects": layer.object_layer().map(|objects| {
+                            ViewerViewportState::object_layer_presentation_json(
+                                &ObjectLayerViewportPresentation::capture(objects),
+                            )
+                        }),
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::SpatialPoints => self
+                .spatial_layers
+                .points
+                .as_ref()
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "style": ViewerViewportState::points_style_json(&layer.style),
+                        "threshold": layer.threshold,
+                        "max_render_points_total": layer.max_render_points_total,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::XeniumCells => self
+                .xenium_layers
+                .cells
+                .as_ref()
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "opacity": layer.opacity,
+                        "width_screen_px": layer.width_screen_px,
+                        "color_rgb": layer.color_rgb,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+            LayerId::XeniumTranscripts => self
+                .xenium_layers
+                .transcripts
+                .as_ref()
+                .map(|layer| {
+                    serde_json::json!({
+                        "visible": layer.visible,
+                        "style": ViewerViewportState::points_style_json(&layer.style),
+                        "gene_query": layer.gene_query,
+                        "max_render_points_total": layer.max_render_points_total,
+                    })
+                })
+                .unwrap_or(serde_json::Value::Null),
+        }
     }
 
     pub fn control_native_layer_snapshot_list(&self) -> serde_json::Value {
@@ -4579,6 +9215,190 @@ impl OmeZarrViewerApp {
         };
         *target = visible;
         let changed = before != Some(visible);
+        if changed {
+            self.bump_render_id();
+        }
+        serde_json::json!({
+            "changed": changed,
+            "layer": self.control_get_native_layer(params),
+        })
+    }
+
+    pub fn control_set_native_layer_presentation(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let id = match self.control_native_layer_id_from_params(params) {
+            Ok(id) => id,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let presentation = params.get("presentation").unwrap_or(params);
+        let Some(presentation_object) = presentation.as_object() else {
+            return serde_json::json!({"error": "presentation must be an object"});
+        };
+        let presentation = serde_json::Value::Object(presentation_object.clone());
+        let before = self.control_native_layer_presentation(id);
+
+        let invalid_unit = |name: &str| {
+            presentation.get(name).is_some_and(|value| {
+                value
+                    .as_f64()
+                    .is_none_or(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+            })
+        };
+        if invalid_unit("opacity") {
+            return serde_json::json!({"error": "opacity must be a finite number between 0 and 1"});
+        }
+        if presentation.get("width_screen_px").is_some_and(|value| {
+            value
+                .as_f64()
+                .is_none_or(|v| !v.is_finite() || v < 0.0 || v > 100.0)
+        }) {
+            return serde_json::json!({
+                "error": "width_screen_px must be a finite number between 0 and 100",
+            });
+        }
+        if presentation.get("color_rgb").is_some()
+            && presentation
+                .get("color_rgb")
+                .and_then(ViewerViewportState::rgb_from_json)
+                .is_none()
+        {
+            return serde_json::json!({
+                "error": "color_rgb must contain three integers from 0 to 255",
+            });
+        }
+
+        let apply_result = match id {
+            LayerId::Channel(index) => {
+                let Some(channel) = self.channels.get_mut(index) else {
+                    return serde_json::json!({"error": "channel layer is not loaded"});
+                };
+                if let Some(value) = presentation.get("visible") {
+                    let Some(value) = value.as_bool() else {
+                        return serde_json::json!({"error": "visible must be a boolean"});
+                    };
+                    channel.visible = value;
+                }
+                if let Some(color) = presentation
+                    .get("color_rgb")
+                    .and_then(ViewerViewportState::rgb_from_json)
+                {
+                    channel.color_rgb = color;
+                }
+                if let Some(window) = presentation.get("window") {
+                    let values = if let Some(values) = window.as_array().filter(|v| v.len() == 2) {
+                        (values[0].as_f64(), values[1].as_f64())
+                    } else {
+                        (
+                            window.get("min").and_then(serde_json::Value::as_f64),
+                            window.get("max").and_then(serde_json::Value::as_f64),
+                        )
+                    };
+                    let (Some(min), Some(max)) = values else {
+                        return serde_json::json!({
+                            "error": "window must be [min, max] or an object containing min and max",
+                        });
+                    };
+                    if !min.is_finite() || !max.is_finite() || max <= min {
+                        return serde_json::json!({
+                            "error": "window values must be finite and max must be greater than min",
+                        });
+                    }
+                    channel.window = Some((min as f32, max as f32));
+                }
+                Ok(())
+            }
+            LayerId::SegmentationLabels => {
+                if let Some(value) = presentation.get("visible") {
+                    let Some(value) = value.as_bool() else {
+                        return serde_json::json!({"error": "visible must be a boolean"});
+                    };
+                    self.cells_outlines_visible = value;
+                }
+                if let Some(value) = presentation
+                    .get("opacity")
+                    .and_then(serde_json::Value::as_f64)
+                {
+                    self.cells_outlines_opacity = value as f32;
+                }
+                if let Some(value) = presentation
+                    .get("width_screen_px")
+                    .and_then(serde_json::Value::as_f64)
+                {
+                    self.cells_outlines_width_px = value as f32;
+                }
+                if let Some(color) = presentation
+                    .get("color_rgb")
+                    .and_then(ViewerViewportState::rgb_from_json)
+                {
+                    self.cells_outlines_color_rgb = color;
+                }
+                Ok(())
+            }
+            LayerId::SegmentationObjects => {
+                let result = self.seg_objects.control_set_style_json(&presentation);
+                if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
+                    Err(error.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            other => {
+                let mut state = ViewerViewportState::capture(self);
+                let mut with_id = presentation_object.clone();
+                let payload = match other {
+                    LayerId::SpatialImage(id) => {
+                        with_id.insert("id".to_string(), serde_json::json!(id));
+                        serde_json::json!({"spatial_images": [with_id]})
+                    }
+                    LayerId::SegmentationGeoJson => {
+                        serde_json::json!({"segmentation_geojson": presentation})
+                    }
+                    LayerId::Mask(id) => {
+                        if let Some(mode) = presentation.get("display_mode") {
+                            let Some(mode) =
+                                mode.as_str().and_then(MaskDisplayMode::from_storage_key)
+                            else {
+                                return serde_json::json!({
+                                    "error": "display_mode must be outline_only, translucent_fill, or filled_preview",
+                                });
+                            };
+                            with_id.insert(
+                                "display_mode".to_string(),
+                                serde_json::json!(mode.storage_key()),
+                            );
+                        }
+                        with_id.insert("id".to_string(), serde_json::json!(id));
+                        serde_json::json!({"masks": [with_id]})
+                    }
+                    LayerId::Points => serde_json::json!({"cell_points": presentation}),
+                    LayerId::Annotation(id) => {
+                        with_id.insert("id".to_string(), serde_json::json!(id));
+                        serde_json::json!({"annotations": [with_id]})
+                    }
+                    LayerId::SpatialShape(id) => {
+                        with_id.insert("id".to_string(), serde_json::json!(id));
+                        serde_json::json!({"spatial_shapes": [with_id]})
+                    }
+                    LayerId::SpatialPoints => serde_json::json!({"spatial_points": presentation}),
+                    LayerId::XeniumCells => serde_json::json!({"xenium_cells": presentation}),
+                    LayerId::XeniumTranscripts => {
+                        serde_json::json!({"xenium_transcripts": presentation})
+                    }
+                    LayerId::Channel(_)
+                    | LayerId::SegmentationLabels
+                    | LayerId::SegmentationObjects => unreachable!(),
+                };
+                state
+                    .apply_project_presentation_json(&payload)
+                    .map(|()| state.apply(self))
+            }
+        };
+        if let Err(error) = apply_result {
+            return serde_json::json!({"error": error});
+        }
+        let changed = before != self.control_native_layer_presentation(id);
         if changed {
             self.bump_render_id();
         }
@@ -5447,6 +10267,16 @@ impl OmeZarrViewerApp {
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
+        self.control_filter_sensitive_operation(
+            params,
+            OmeZarrViewerApp::control_select_filtered_objects_current,
+        )
+    }
+
+    fn control_select_filtered_objects_current(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
         let mode = params
             .get("mode")
             .and_then(serde_json::Value::as_str)
@@ -6017,6 +10847,35 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        let target = match params
+            .get("viewport_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(value) => match ViewportId::new(value) {
+                Ok(id)
+                    if self
+                        .viewport_workspace
+                        .as_ref()
+                        .is_some_and(|workspace| workspace.get(&id).is_some()) =>
+                {
+                    id
+                }
+                Ok(id) => {
+                    return serde_json::json!({"error": format!("viewport '{id}' was not found")});
+                }
+                Err(error) => return serde_json::json!({"error": error.to_string()}),
+            },
+            None => match self
+                .viewport_workspace
+                .as_ref()
+                .map(|workspace| workspace.active_id().clone())
+            {
+                Some(id) => id,
+                None => {
+                    return serde_json::json!({"error": "viewer workspace is not initialized"});
+                }
+            },
+        };
         if let Some(path) = params
             .get("path")
             .and_then(serde_json::Value::as_str)
@@ -6024,16 +10883,18 @@ impl OmeZarrViewerApp {
             .filter(|value| !value.is_empty())
         {
             let path = PathBuf::from(path);
-            self.request_screenshot_png(path.clone());
+            self.request_screenshot_png_for_viewport(path.clone(), target.clone());
             return serde_json::json!({
                 "queued": true,
                 "path": path.to_string_lossy(),
+                "viewport_id": target.as_str(),
             });
         }
-        match self.request_quick_screenshot_png() {
+        match self.request_quick_screenshot_png_for_viewport(target.clone()) {
             Ok(path) => serde_json::json!({
                 "queued": true,
                 "path": path.to_string_lossy(),
+                "viewport_id": target.as_str(),
             }),
             Err(err) => serde_json::json!({"error": format!("{err}")}),
         }
@@ -6123,6 +10984,26 @@ impl OmeZarrViewerApp {
             ) => path == *active || path.to_string_lossy() == active.to_string_lossy(),
             (source, active) => source == *active,
         }
+    }
+
+    pub fn control_project_view_spec_for_viewport(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> Result<ProjectViewSpec, String> {
+        self.sync_runtime_to_active_viewport();
+        let viewport_id = Self::parse_viewport_id(params)?;
+        let Some(workspace) = self.viewport_workspace.take() else {
+            return Err("viewer workspace is not initialized".to_string());
+        };
+        let Some(target) = workspace.get(&viewport_id) else {
+            self.viewport_workspace = Some(workspace);
+            return Err(format!("viewport '{viewport_id}' was not found"));
+        };
+        target.state.apply(self);
+        let spec = self.control_current_project_view_spec();
+        workspace.active().state.apply(self);
+        self.viewport_workspace = Some(workspace);
+        Ok(spec)
     }
 
     pub fn control_current_project_view_spec(&mut self) -> ProjectViewSpec {
@@ -6940,6 +11821,16 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_object_histogram(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_filter_sensitive_operation(
+            params,
+            OmeZarrViewerApp::control_object_histogram_current,
+        )
+    }
+
+    fn control_object_histogram_current(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
         match self.control_object_selection_target(params) {
             Ok(LayerId::SegmentationObjects) => self.seg_objects.control_histogram_json(params),
             Ok(LayerId::SpatialShape(id)) => self
@@ -6956,6 +11847,16 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_object_threshold_suggestions(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        self.control_filter_sensitive_operation(
+            params,
+            OmeZarrViewerApp::control_object_threshold_suggestions_current,
+        )
+    }
+
+    fn control_object_threshold_suggestions_current(
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
@@ -7118,6 +12019,16 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_start_measurement(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        self.control_filter_sensitive_operation(
+            params,
+            OmeZarrViewerApp::control_start_measurement_current,
+        )
+    }
+
+    fn control_start_measurement_current(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
         let store = self.store.clone();
         let channels = self.channels.clone();
         match self.control_object_selection_target(params) {
@@ -7209,6 +12120,23 @@ impl OmeZarrViewerApp {
     }
 
     pub fn control_start_object_export(
+        &mut self,
+        params: &serde_json::Value,
+        path: PathBuf,
+    ) -> serde_json::Value {
+        let scope = params
+            .get("scope")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("all");
+        if scope == "filtered" {
+            return self.control_filter_sensitive_operation(params, move |app, params| {
+                app.control_start_object_export_current(params, path)
+            });
+        }
+        self.control_start_object_export_current(params, path)
+    }
+
+    fn control_start_object_export_current(
         &mut self,
         params: &serde_json::Value,
         path: PathBuf,
@@ -7549,8 +12477,10 @@ impl OmeZarrViewerApp {
             "include_legend": self.screenshot_settings.include_legend,
             "scale_bar_scale": self.screenshot_settings.scale_bar_scale,
             "legend_scale": self.screenshot_settings.legend_scale,
-            "pending": self.screenshot_pending.is_some(),
-            "in_flight": self.screenshot_in_flight.is_some(),
+            "pending": !self.screenshot_pending.is_empty(),
+            "pending_count": self.screenshot_pending.len(),
+            "in_flight": !self.screenshot_in_flight.is_empty(),
+            "in_flight_count": self.screenshot_in_flight.len(),
             "default_filename": self.default_screenshot_filename(),
         })
     }
@@ -7650,26 +12580,53 @@ impl OmeZarrViewerApp {
     }
 
     pub fn request_screenshot_png(&mut self, path: PathBuf) {
+        let Some(viewport_id) = self
+            .viewport_workspace
+            .as_ref()
+            .map(|workspace| workspace.active_id().clone())
+        else {
+            self.set_status("Cannot capture screenshot before the viewer workspace is ready.");
+            return;
+        };
+        self.request_screenshot_png_for_viewport(path, viewport_id);
+    }
+
+    fn request_screenshot_png_for_viewport(&mut self, path: PathBuf, viewport_id: ViewportId) {
         let id = self.screenshot_next_id;
         self.screenshot_next_id = self.screenshot_next_id.wrapping_add(1).max(1);
-        self.screenshot_pending = Some(ScreenshotRequest {
-            id,
-            path,
-            settings: self.screenshot_settings,
-        });
-        self.screenshot_in_flight = Some(id);
+        self.screenshot_pending
+            .push_back(PendingViewportScreenshot {
+                viewport_id,
+                request: ScreenshotRequest {
+                    id,
+                    path,
+                    settings: self.screenshot_settings,
+                },
+            });
         // Avoid capturing floating dialogs over the canvas.
         self.screenshot_settings_open = false;
         self.set_status("Capturing screenshot...".to_string());
     }
 
-    pub fn request_quick_screenshot_png(&mut self) -> anyhow::Result<PathBuf> {
+    fn request_quick_screenshot_png_for_viewport(
+        &mut self,
+        viewport_id: ViewportId,
+    ) -> anyhow::Result<PathBuf> {
         let Some(dir) = self.screenshot_output_dir.as_deref() else {
             anyhow::bail!("No screenshot folder configured");
         };
         let path = next_numbered_screenshot_path(dir, &self.default_screenshot_filename())?;
-        self.request_screenshot_png(path.clone());
+        self.request_screenshot_png_for_viewport(path.clone(), viewport_id);
         Ok(path)
+    }
+
+    pub fn request_quick_screenshot_png(&mut self) -> anyhow::Result<PathBuf> {
+        let viewport_id = self
+            .viewport_workspace
+            .as_ref()
+            .map(|workspace| workspace.active_id().clone())
+            .ok_or_else(|| anyhow::anyhow!("Viewer workspace is not initialized"))?;
+        self.request_quick_screenshot_png_for_viewport(viewport_id)
     }
 
     pub fn default_screenshot_filename(&self) -> String {
@@ -9116,20 +14073,18 @@ impl eframe::App for OmeZarrViewerApp {
                     &mut self.show_left_panel,
                     &mut self.show_right_panel,
                 );
+                ui.separator();
+                self.ui_viewport_controls(ui);
 
                 if top_bar::ui_smooth_toggle(ui, &mut self.smooth_pixels) {
-                    if let Some(tiles_gl) = self.tiles_gl.as_ref() {
-                        tiles_gl.set_smooth_pixels(self.smooth_pixels);
-                    } else {
-                        // CPU fallback: texture filtering is chosen at texture creation time.
-                        // Recreate the cache so tiles are re-uploaded with the new sampling.
-                        self.cache = TileCache::new(256);
-                        self.pending.clear();
-                    }
-                    self.spatial_image_layers
-                        .set_smooth_pixels(self.smooth_pixels);
+                    // Smoothness is presentation-local. The CPU render ID and
+                    // each GPU paint callback carry the selected sampling mode,
+                    // so changing one view must not clear another view's cache.
+                    self.bump_render_id();
                 }
                 ui.checkbox(&mut self.show_tile_debug, "Tile Debug");
+                ui.checkbox(&mut self.show_hud, "HUD");
+                ui.checkbox(&mut self.show_scale_bar, "Scale Bar");
 
                 if have_channels {
                     ui.separator();
@@ -9361,7 +14316,7 @@ impl eframe::App for OmeZarrViewerApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.ui_canvas(ui, ctx);
+            self.ui_viewport_workspace(ui, ctx);
         });
 
         if self.remote_dialog_open {
@@ -9769,7 +14724,7 @@ impl OmeZarrViewerApp {
         if self.chanmax_pending.iter().any(|pending| *pending) {
             reasons.push("channel_max_pending");
         }
-        if self.screenshot_in_flight.is_some() {
+        if !self.screenshot_in_flight.is_empty() {
             reasons.push("screenshot");
         }
         if self
@@ -11225,6 +16180,17 @@ impl OmeZarrViewerApp {
         self.selection_rect_start_world = None;
         self.selection_rect_current_world = None;
         self.selection_lasso_world.clear();
+    }
+
+    fn cancel_viewport_transient_gestures(&mut self) {
+        self.clear_spatial_selection_drag();
+        self.dragging_mask_vertex = None;
+        self.moving_mask_polygon = None;
+        self.layer_drag = None;
+        self.layer_move = None;
+        self.layer_transform = None;
+        self.drawing_mask_layer = None;
+        self.drawing_mask_polygon.clear();
     }
 
     fn switch_to_pan_if_analysis_interacted(&mut self, ui: &egui::Ui) {
@@ -14394,6 +19360,7 @@ impl OmeZarrViewerApp {
             smooth_pixels: Some(self.smooth_pixels),
             show_tile_debug: Some(self.show_tile_debug),
             show_scale_bar: Some(self.show_scale_bar),
+            show_hud: Some(self.show_hud),
             auto_level: None,
             manual_level: None,
         }
@@ -14561,6 +19528,9 @@ impl OmeZarrViewerApp {
         }
         if let Some(show_scale_bar) = state.show_scale_bar {
             self.show_scale_bar = show_scale_bar;
+        }
+        if let Some(show_hud) = state.show_hud {
+            self.show_hud = show_hud;
         }
         let _ = (state.auto_level, state.manual_level);
     }
@@ -14812,8 +19782,7 @@ impl OmeZarrViewerApp {
     fn ui_group_contrast(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui, group_id: u64) {
         let abs_max = self.dataset.abs_max.max(1.0);
         let Some(group) = self
-            .project_space
-            .layer_groups()
+            .current_layer_groups()
             .channel_groups
             .iter()
             .find(|g| g.id == group_id)
@@ -16093,9 +21062,334 @@ impl OmeZarrViewerApp {
         }
     }
 
-    fn ui_canvas(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn ui_viewport_workspace(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let frame_plan_started = Instant::now();
+        let mut workspace = self
+            .viewport_workspace
+            .take()
+            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
+
+        let active_id = workspace.active_id().clone();
+        if let Some(active) = workspace.get_mut(&active_id) {
+            let state = ViewerViewportState::capture(self);
+            let navigation_changed =
+                state.camera_changed_from(&active.state) || state.plane_changed_from(&active.state);
+            let presentation_changed = state.presentation_changed_from(&active.state);
+            active.state = state;
+            if navigation_changed {
+                active.navigation_revision = active.navigation_revision.wrapping_add(1).max(1);
+            }
+            if presentation_changed {
+                active.presentation_revision = active.presentation_revision.wrapping_add(1).max(1);
+            }
+        }
+
+        let viewport_ids = workspace
+            .viewports()
+            .iter()
+            .map(|viewport| viewport.id.clone())
+            .collect::<Vec<_>>();
+        let multi_view = viewport_ids.len() > 1;
+        let mut remove_requested = None;
+        if multi_view {
+            self.viewport_raw_active_keys = Some(HashSet::new());
+            self.viewport_cpu_active_keys = Some(HashSet::new());
+            self.viewport_label_active_keys = Some(HashSet::new());
+            self.viewport_spatial_image_active_keys = Some(HashMap::new());
+            self.loader
+                .set_active_render_ids(Self::workspace_cpu_render_ids(&workspace));
+        }
+
+        match workspace.layout() {
+            ViewportLayout::Single => {
+                if let Some(id) = viewport_ids.first() {
+                    if self.ui_viewport_cell(ui, ctx, &mut workspace, id) {
+                        remove_requested = Some(id.clone());
+                    }
+                }
+            }
+            ViewportLayout::Horizontal => {
+                let available = ui.available_size();
+                let separator_width = ui.spacing().item_spacing.x.max(1.0);
+                let content_width = (available.x - separator_width).max(2.0);
+                let first_width = (content_width * workspace.split_ratio()).max(1.0);
+                let second_width = (content_width - first_width).max(1.0);
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(first_width, available.y),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            if self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[0]) {
+                                remove_requested = Some(viewport_ids[0].clone());
+                            }
+                        },
+                    );
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(second_width, available.y),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            if self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[1]) {
+                                remove_requested = Some(viewport_ids[1].clone());
+                            }
+                        },
+                    );
+                });
+            }
+            ViewportLayout::Vertical => {
+                let available = ui.available_size();
+                let separator_height = ui.spacing().item_spacing.y.max(1.0);
+                let content_height = (available.y - separator_height).max(2.0);
+                for (index, id) in viewport_ids.iter().enumerate() {
+                    let cell_height = if index == 0 {
+                        content_height * workspace.split_ratio()
+                    } else {
+                        content_height * (1.0 - workspace.split_ratio())
+                    }
+                    .max(1.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(available.x, cell_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            if self.ui_viewport_cell(ui, ctx, &mut workspace, id) {
+                                remove_requested = Some(id.clone());
+                            }
+                        },
+                    );
+                    if index + 1 < viewport_ids.len() {
+                        ui.separator();
+                    }
+                }
+            }
+        }
+
+        if let Some(viewport_id) = remove_requested
+            && workspace.len() > 1
+            && workspace.remove(&viewport_id).is_ok()
+        {
+            self.cancel_viewport_transient_gestures();
+            self.screenshot_pending
+                .retain(|pending| pending.viewport_id != viewport_id);
+        }
+
+        if let Some(active_keys) = self.viewport_raw_active_keys.take() {
+            if let Some(loader) = self.raw_loader.as_ref() {
+                loader.set_active_keys(active_keys.clone());
+            }
+            if let Some(tiles_gl) = self.tiles_gl.as_ref() {
+                tiles_gl.prune_in_flight(&active_keys);
+            }
+        }
+        if let Some(active_keys) = self.viewport_cpu_active_keys.take() {
+            self.loader.set_active_keys(active_keys.clone());
+            self.cache.prune_in_flight(&active_keys);
+        }
+        if let Some(active_keys) = self.viewport_label_active_keys.take()
+            && let Some(labels_gl) = self.labels_gl.as_ref()
+        {
+            labels_gl.prune_in_flight(&active_keys);
+        }
+        if let Some(mut active_keys_by_layer) = self.viewport_spatial_image_active_keys.take() {
+            for layer in &self.spatial_image_layers.images {
+                let active_keys = active_keys_by_layer.remove(&layer.id).unwrap_or_default();
+                layer.prune_in_flight(&active_keys);
+            }
+        }
+
+        if multi_view {
+            self.loader
+                .set_active_render_ids(Self::workspace_cpu_render_ids(&workspace));
+        }
+
+        workspace.active().state.apply(self);
+        self.bump_render_id();
+        self.viewport_frame_plan_ms = frame_plan_started.elapsed().as_secs_f32() * 1_000.0;
+        self.viewport_frame_plan_ema_ms = if self.viewport_frame_plan_samples == 0 {
+            self.viewport_frame_plan_ms
+        } else {
+            self.viewport_frame_plan_ema_ms * 0.9 + self.viewport_frame_plan_ms * 0.1
+        };
+        self.viewport_frame_plan_samples = self.viewport_frame_plan_samples.saturating_add(1);
+        self.viewport_workspace = Some(workspace);
+    }
+
+    fn workspace_cpu_render_ids(
+        workspace: &ViewportWorkspace<ViewerViewportState>,
+    ) -> HashSet<u64> {
+        workspace
+            .viewports()
+            .iter()
+            .flat_map(|viewport| {
+                std::iter::once(viewport.state.active_render_id)
+                    .chain(viewport.state.previous_render_id)
+            })
+            .filter(|render_id| *render_id != 0)
+            .collect()
+    }
+
+    fn cpu_render_id_is_current(&self, render_id: u64) -> bool {
+        if render_id == self.active_render_id || self.previous_render_id == Some(render_id) {
+            return true;
+        }
+        self.viewport_workspace.as_ref().is_some_and(|workspace| {
+            workspace.viewports().iter().any(|viewport| {
+                viewport.state.active_render_id == render_id
+                    || viewport.state.previous_render_id == Some(render_id)
+            })
+        })
+    }
+
+    fn smooth_pixels_for_render_id(&self, render_id: u64) -> bool {
+        if self.active_render_id == render_id {
+            return self.active_render_smooth_pixels;
+        }
+        if self.previous_render_id == Some(render_id) {
+            return self
+                .previous_render_smooth_pixels
+                .unwrap_or(self.active_render_smooth_pixels);
+        }
+        self.viewport_workspace
+            .as_ref()
+            .and_then(|workspace| {
+                workspace.viewports().iter().find_map(|viewport| {
+                    (viewport.state.active_render_id == render_id)
+                        .then_some(viewport.state.active_render_smooth_pixels)
+                        .or_else(|| {
+                            (viewport.state.previous_render_id == Some(render_id)).then_some(
+                                viewport
+                                    .state
+                                    .previous_render_smooth_pixels
+                                    .unwrap_or(viewport.state.active_render_smooth_pixels),
+                            )
+                        })
+                })
+            })
+            .unwrap_or(self.smooth_pixels)
+    }
+
+    fn ui_viewport_cell(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        workspace: &mut ViewportWorkspace<ViewerViewportState>,
+        viewport_id: &ViewportId,
+    ) -> bool {
+        let Some(viewport) = workspace.get(viewport_id) else {
+            return false;
+        };
+        let before = viewport.state.clone();
+        let title = viewport.title.clone();
+        let is_active = workspace.active_id() == viewport_id;
+
+        before.apply(self);
+        self.bump_render_id();
+
+        let mut activate = false;
+        let mut renamed_title = None;
+        let mut close_requested = false;
+        ui.horizontal(|ui| {
+            if is_active {
+                ui.label("●");
+                let mut edited = title.clone();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut edited)
+                        .desired_width(120.0)
+                        .hint_text("Viewport name"),
+                );
+                if response.changed() && !edited.trim().is_empty() {
+                    renamed_title = Some(edited);
+                }
+            } else {
+                activate |= ui
+                    .selectable_label(false, title)
+                    .on_hover_text("Make this the active viewport")
+                    .clicked();
+            }
+            if workspace.links().camera {
+                ui.small("camera linked");
+            }
+            if workspace.links().plane && self.view_plane_modes().len() > 1 {
+                ui.small("plane linked");
+            }
+            if workspace.len() > 1 {
+                close_requested = ui
+                    .small_button("×")
+                    .on_hover_text("Close this viewport")
+                    .clicked();
+            }
+        });
+        if let Some(title) = renamed_title {
+            if workspace.rename(viewport_id, title).unwrap_or(false) {
+                let _ = workspace.bump_presentation_revision(viewport_id);
+            }
+        }
+        ui.separator();
+
+        let tool_mode = self.tool_mode;
+        if !is_active {
+            self.tool_mode = ToolMode::Pan;
+        }
+        let (raw_request_budget, cpu_request_budget) =
+            viewport_image_request_budgets(workspace.len() > 1, is_active);
+        activate |= self.ui_canvas(
+            ui,
+            ctx,
+            viewport_id,
+            is_active,
+            raw_request_budget,
+            cpu_request_budget,
+        );
+        self.tool_mode = tool_mode;
+
+        let after = ViewerViewportState::capture(self);
+        if let Some(viewport) = workspace.get_mut(viewport_id) {
+            viewport.state = after.clone();
+        }
+
+        let links = workspace.links();
+        let camera_changed = after.camera_changed_from(&before);
+        let plane_changed = after.plane_changed_from(&before);
+        if camera_changed || plane_changed {
+            let _ = workspace.bump_navigation_revision(viewport_id);
+        }
+        if after.presentation_changed_from(&before) {
+            let _ = workspace.bump_presentation_revision(viewport_id);
+        }
+        if (links.camera && camera_changed) || (links.plane && plane_changed) {
+            let other_ids = workspace
+                .viewports()
+                .iter()
+                .filter(|viewport| viewport.id != *viewport_id)
+                .map(|viewport| viewport.id.clone())
+                .collect::<Vec<_>>();
+            for other_id in other_ids {
+                if let Some(other) = workspace.get_mut(&other_id) {
+                    other.state.copy_linked_navigation_from(&after, links);
+                }
+                let _ = workspace.bump_navigation_revision(&other_id);
+            }
+        }
+
+        if activate {
+            if workspace.set_active(viewport_id).unwrap_or(false) {
+                self.cancel_viewport_transient_gestures();
+            }
+        }
+        close_requested
+    }
+
+    fn ui_canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        viewport_id: &ViewportId,
+        allows_edits: bool,
+        raw_request_budget: usize,
+        cpu_request_budget: usize,
+    ) -> bool {
         let available = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        let activate_viewport = response.clicked() || response.drag_started();
         self.last_canvas_rect = Some(rect);
         self.mask_draw_debug_stats = MaskDrawDebugStats::default();
         ui.painter()
@@ -16370,14 +21664,18 @@ impl OmeZarrViewerApp {
             }
         }
 
-        let cancel_selection_gesture = !ctx.wants_keyboard_input()
+        let cancel_selection_gesture = allows_edits
+            && !ctx.wants_keyboard_input()
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
             && matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect)
             && (self.selection_rect_start_world.is_some()
                 || !self.selection_lasso_world.is_empty());
         if cancel_selection_gesture {
             self.clear_spatial_selection_drag();
-        } else if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        } else if allows_edits
+            && !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             if matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect) {
                 self.clear_spatial_selection_drag();
             }
@@ -16394,7 +21692,8 @@ impl OmeZarrViewerApp {
             }
         }
 
-        if !ctx.wants_keyboard_input()
+        if allows_edits
+            && !ctx.wants_keyboard_input()
             && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z))
             && self.undo_last_edit()
         {
@@ -16704,10 +22003,10 @@ impl OmeZarrViewerApp {
         levels_to_draw.dedup();
 
         let Some(level0) = self.dataset.levels.first() else {
-            return;
+            return activate_viewport;
         };
         let Some(display_axes) = self.display_axes() else {
-            return;
+            return activate_viewport;
         };
         let mut needed_per_level: Vec<(usize, crate::data::ome::LevelInfo, Vec<TileKey>)> =
             Vec::with_capacity(levels_to_draw.len());
@@ -16910,7 +22209,7 @@ impl OmeZarrViewerApp {
                 })();
 
             let mut requested_this_frame = 0usize;
-            let max_requests_per_frame = 256usize;
+            let max_requests_per_frame = raw_request_budget;
             let mut request_levels: Vec<usize> = Vec::new();
             if adaptive_raw_request_mode {
                 let coarsest_level = needed_per_level.first().map(|(level, _, _)| *level);
@@ -17014,7 +22313,16 @@ impl OmeZarrViewerApp {
                     }
                 }
             }
-            raw_loader.set_active_keys(raw_active_keys.clone());
+            let aggregate_raw_keys = self.viewport_raw_active_keys.is_some();
+            if let Some(active_keys) = self.viewport_raw_active_keys.as_mut() {
+                merge_viewport_active_keys(active_keys, raw_active_keys.iter().copied());
+                // Publish the growing union before work is submitted. A fast
+                // loader must not compare new requests with the preceding
+                // frame's active-key set and discard them.
+                raw_loader.set_active_keys(active_keys.clone());
+            } else {
+                raw_loader.set_active_keys(raw_active_keys.clone());
+            }
 
             for level in &request_levels {
                 let Some((_, _, needed)) = needed_per_level.iter().find(|(l, _, _)| l == level)
@@ -17060,7 +22368,7 @@ impl OmeZarrViewerApp {
             }
 
             // Prune stale in-flight requests so the app can go idle immediately after a fast pan/zoom.
-            if let Some(tiles_gl_ref) = self.tiles_gl.as_ref() {
+            if !aggregate_raw_keys && let Some(tiles_gl_ref) = self.tiles_gl.as_ref() {
                 tiles_gl_ref.prune_in_flight(&raw_active_keys);
             }
 
@@ -17170,7 +22478,9 @@ impl OmeZarrViewerApp {
 
             let channels: Vec<ChannelDraw> =
                 render_channels.into_iter().map(ChannelDraw::from).collect();
+            let smooth_pixels = self.smooth_pixels;
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
+                tiles_gl.set_smooth_pixels(smooth_pixels);
                 if any_affine || any_offset {
                     if any_affine {
                         tiles_gl.paint_with_channel_transforms_screen(
@@ -17211,11 +22521,17 @@ impl OmeZarrViewerApp {
                     keep.insert(*key);
                 }
             }
-            self.loader.set_active_keys(keep.clone());
+            let aggregate_cpu_keys = self.viewport_cpu_active_keys.is_some();
+            if let Some(active_keys) = self.viewport_cpu_active_keys.as_mut() {
+                merge_viewport_active_keys(active_keys, keep.iter().copied());
+                self.loader.set_active_keys(active_keys.clone());
+            } else {
+                self.loader.set_active_keys(keep.clone());
+            }
 
             // Request tiles fine -> coarse so zoom-in upgrades quickly.
             let mut requested_this_frame = 0usize;
-            let max_requests_per_frame = 64usize;
+            let max_requests_per_frame = cpu_request_budget;
             for (level, _level_info, needed) in needed_per_level.iter().rev() {
                 if requested_this_frame >= max_requests_per_frame {
                     break;
@@ -17241,7 +22557,9 @@ impl OmeZarrViewerApp {
 
             // Prune stale in-flight requests so we don't keep repainting while the loader finishes
             // work that is no longer visible.
-            self.cache.prune_in_flight(&keep);
+            if !aggregate_cpu_keys {
+                self.cache.prune_in_flight(&keep);
+            }
 
             // Draw tiles coarse -> fine (fallback first, then refine).
             for (level, level_info, needed) in needed_per_level {
@@ -17276,7 +22594,9 @@ impl OmeZarrViewerApp {
 
         // If segmentation is hidden, clear any in-flight label tile requests so we don't keep
         // repainting while the background loader drains work we won't display.
-        if !self.view_plane_is_xy() || !self.cells_outlines_visible {
+        if (!self.view_plane_is_xy() || !self.cells_outlines_visible)
+            && self.viewport_label_active_keys.is_none()
+        {
             if let Some(labels_gl) = self.labels_gl.as_ref() {
                 let keep: HashSet<LabelTileKey> = HashSet::new();
                 labels_gl.prune_in_flight(&keep);
@@ -17297,7 +22617,23 @@ impl OmeZarrViewerApp {
                             .iter_mut()
                             .find(|l| l.id == id)
                         {
-                            layer.draw(ui, &self.camera, rect, visible_world);
+                            let active_keys = layer.draw(
+                                ui,
+                                &self.camera,
+                                rect,
+                                visible_world,
+                                self.smooth_pixels,
+                            );
+                            if let Some(active_keys_by_layer) =
+                                self.viewport_spatial_image_active_keys.as_mut()
+                            {
+                                active_keys_by_layer
+                                    .entry(id)
+                                    .or_default()
+                                    .extend(active_keys);
+                            } else {
+                                layer.prune_in_flight(&active_keys);
+                            }
                         }
                     }
                     LayerId::SegmentationLabels => {
@@ -17630,11 +22966,20 @@ impl OmeZarrViewerApp {
             }
         });
 
-        let screenshot = self.screenshot_pending.take();
+        let screenshot = self
+            .screenshot_pending
+            .iter()
+            .position(|pending| pending.viewport_id == *viewport_id)
+            .and_then(|index| self.screenshot_pending.remove(index))
+            .map(|pending| pending.request);
+        if let Some(request) = screenshot.as_ref() {
+            self.screenshot_in_flight
+                .insert(request.id, viewport_id.clone());
+        }
         let screenshot_active = screenshot.is_some();
 
         // HUD (disabled while capturing screenshots).
-        if !screenshot_active {
+        if !screenshot_active && self.show_hud {
             let hud = format!(
                 "level {target_level} zoom {:.3}  center ({:.0}, {:.0})",
                 self.camera.zoom_screen_per_lvl0_px,
@@ -17808,6 +23153,7 @@ impl OmeZarrViewerApp {
                 callback: Arc::new(cb),
             });
         }
+        activate_viewport
     }
 
     fn ui_active_layer_tooltip(
@@ -18043,7 +23389,11 @@ impl OmeZarrViewerApp {
                     keep.insert(*k);
                 }
             }
-            labels_gl_ref.prune_in_flight(&keep);
+            if let Some(active_keys) = self.viewport_label_active_keys.as_mut() {
+                merge_viewport_active_keys(active_keys, keep);
+            } else {
+                labels_gl_ref.prune_in_flight(&keep);
+            }
         }
 
         // Request fine -> coarse so zoom-in upgrades quickly.
@@ -18768,7 +24118,7 @@ impl OmeZarrViewerApp {
                 || self.hist_request_pending
                 || self.hist_navigation_dirty_since.is_some()))
             || self.chanmax_pending.iter().any(|pending| *pending)
-            || self.screenshot_in_flight.is_some()
+            || !self.screenshot_in_flight.is_empty()
             || self
                 .annotation_layers
                 .iter()
@@ -18786,7 +24136,11 @@ impl OmeZarrViewerApp {
             return;
         }
 
-        self.loader.set_latest_render_id(self.active_render_id);
+        if self.viewport_cpu_active_keys.is_some() {
+            self.loader.activate_render_id(self.active_render_id);
+        } else {
+            self.loader.set_latest_render_id(self.active_render_id);
+        }
         let channels = self.render_channels_for_request(level);
         for key in needed {
             if *sent >= max_per_frame {
@@ -19078,8 +24432,10 @@ impl OmeZarrViewerApp {
         let new_id = self.compute_render_id();
         if new_id != self.active_render_id {
             self.previous_render_id = Some(self.active_render_id);
+            self.previous_render_smooth_pixels = Some(self.active_render_smooth_pixels);
             self.previous_view_selection = Some(self.last_render_view_selection);
             self.active_render_id = new_id;
+            self.active_render_smooth_pixels = self.smooth_pixels;
             self.last_render_view_selection = self.committed_view_selection();
         }
     }
@@ -19091,6 +24447,7 @@ impl OmeZarrViewerApp {
         self.dataset.source.hash(&mut hasher);
         self.active_view_selection().hash(&mut hasher);
         self.channel_layer_order.hash(&mut hasher);
+        self.smooth_pixels.hash(&mut hasher);
         let groups = self.current_layer_groups();
         for &idx in &self.channel_layer_order {
             if let Some(ch) = self.channels.get(idx) {
@@ -19235,9 +24592,7 @@ impl OmeZarrViewerApp {
                     // current render epoch and, briefly, the immediately previous one so the draw
                     // path can finish a coarse->fine transition without showing obviously stale
                     // tiles from unrelated dataset/tool states.
-                    if msg.key.render_id != self.active_render_id
-                        && self.previous_render_id != Some(msg.key.render_id)
-                    {
+                    if !self.cpu_render_id_is_current(msg.key.render_id) {
                         continue;
                     }
                     self.pending.push(msg);
@@ -19254,15 +24609,16 @@ impl OmeZarrViewerApp {
             return;
         }
 
+        let pending = self.pending.drain(..).collect::<Vec<_>>();
         for TileResponse {
             key,
             width,
             height,
             rgba,
-        } in self.pending.drain(..)
+        } in pending
         {
             let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
-            let options = if self.smooth_pixels {
+            let options = if self.smooth_pixels_for_render_id(key.render_id) {
                 egui::TextureOptions::LINEAR
             } else {
                 egui::TextureOptions::NEAREST
@@ -19318,9 +24674,7 @@ impl OmeZarrViewerApp {
                     path,
                     result,
                 } => {
-                    if self.screenshot_in_flight == Some(id) {
-                        self.screenshot_in_flight = None;
-                    }
+                    self.screenshot_in_flight.remove(&id);
                     match result {
                         Ok(()) => {
                             self.set_status(format!(

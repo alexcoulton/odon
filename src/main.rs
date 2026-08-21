@@ -20,6 +20,7 @@ mod render;
 mod root_app;
 mod spatialdata;
 mod ui;
+mod viewports;
 mod xenium;
 
 use std::path::PathBuf;

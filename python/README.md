@@ -61,6 +61,21 @@ labels = app.data.register(
 layer = app.layers.add(labels, name="Cellpose", kind="labels")
 ```
 
+Single-image mode also supports a linked two-viewport comparison without
+duplicating the open document or raw caches:
+
+```python
+views = app.viewer.viewports.compare(titles=("A", "B"), ratio=0.55)
+views.left.set_visible_channels(["DAPI", "CD3"])
+views.right.set_visible_channels(["DAPI", "PanCK"])
+views.left.objects.set_style(fill_cells=True, color_property="marker_a")
+views.right.objects.set_style(fill_cells=True, color_property="marker_b")
+views.left.set_rendering(smooth_pixels=False)
+views.right.set_rendering(smooth_pixels=True)
+app.viewer.viewport_links.update(fields=["plane", "selection"])
+app.screenshots.capture_workspace("comparison.png").wait()
+```
+
 Install the `arrays` extra to use sync or async `register_numpy(...)`. It writes
 a managed temporary Zarr resource and cleans it with the session. Project-owned
 resource and layer descriptors persist in Odon project JSON.

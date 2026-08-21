@@ -15,7 +15,7 @@ This page is the guided introduction. The documentation set also includes:
   selectors, revisions, tasks, events, ownership, errors, and resource-specific
   semantics; and
 - [current Python API limitations](../advanced/python-api-limitations.md),
-  including the single-viewport and predefined-UI-host boundaries.
+  including the two-viewport milestone limit and predefined-UI-host boundaries.
 
 ## Install
 
@@ -83,6 +83,60 @@ experimental methods.
 For a vim-slime/IPython tour made of independent `# %%` cells, open
 [`examples/interactive_python_api.py`](../../examples/interactive_python_api.py).
 
+## Multi-viewport comparisons
+
+Single-image mode can contain one or two native Rust viewports. They share the
+open dataset, raw tile cache, object geometry, edits, and object selection while
+retaining independent camera, plane, channel, object, filter, overlay visibility,
+layer order, and active-layer presentation:
+
+```python
+comparison = app.viewer.viewports.compare(
+    layout="horizontal",
+    ratio=0.55,
+    titles=("Marker A", "Marker B"),
+    linked=("camera", "plane", "selection"),
+)
+comparison.left.set_visible_channels(["DAPI", "CD3"])
+comparison.right.set_visible_channels(["DAPI", "PanCK"])
+comparison.left.objects.set_style(
+    fill_cells=True, fill_opacity=0.65, color_property="marker_a"
+)
+comparison.right.objects.set_style(
+    fill_cells=True, fill_opacity=0.65, color_property="marker_b"
+)
+comparison.left.objects.set_legend([
+    {"value": "positive", "color_rgb": [255, 80, 80]}
+])
+comparison.right.objects.set_filter("area > 250")
+comparison.left.set_rendering(smooth_pixels=False, show_hud=True)
+comparison.right.set_rendering(smooth_pixels=True, show_hud=False)
+```
+
+Stable `Viewport` handles continue to address their ID when another canvas is
+active. Use `app.viewer.viewports.clone(viewport, ...)` when the source view
+must be explicit, and `viewport.fit_camera()` to fit a named canvas. Legacy
+`app.viewer`, `app.channels`, and `app.objects` calls target the active
+viewport. Configure the canonical comparison link group with
+`app.viewer.viewport_links.create(viewports=[left, right], fields=[...])`,
+`update(...)`, or `remove()`; `workspace.get_links()` and `set_links()` remain
+compatibility conveniences. Arrange the canvases with
+`set_layout("horizontal" | "vertical", ratio=...)`; capture either one
+canvas with `app.screenshots.capture(..., viewport=...)` or both with
+`app.screenshots.capture_workspace(...)`. Versioned project state restores a
+two-view comparison, while older project files migrate to one viewport.
+The planned declarative spelling
+`set_layout(split="horizontal", viewports=[left, right], ratio=...)` is also
+accepted and validates the current workspace order. Object presentation is
+available as `viewport.objects.*`; the earlier flat
+`viewport.set_object_*()` methods remain compatible aliases.
+
+Filter-sensitive analysis, measurement, selection, and export calls must name
+their provenance once two views exist: pass `viewport=...`, `filter_query=...`,
+or `use_all_objects=True`. This prevents a background script from silently
+using whichever canvas a person most recently clicked. Inspect resource-sharing
+and timing counters with `app.viewer.workspace.get()`.
+
 ## Application surface
 
 The high-level sync and async clients expose the same semantic resources. The
@@ -93,7 +147,7 @@ async names below have identical arguments and add `await` to network calls:
 | `application` | state/readiness, settings, recent projects, diagnostics, navigation, guarded close/quit |
 | `datasets` | inspect/open local OME-Zarr, TIFF, SpatialData, Xenium, HTTP and authenticated S3 sources |
 | `projects` | create/open/save, metadata, samplesheets, discovery, ROI CRUD/selection/focus, saved views, object preload |
-| `viewer` | camera, panels, interpolation, renderer readiness, scale bar, active right tab |
+| `viewer` | camera, panels, interpolation, renderer readiness, scale bar, active right tab, linked one/two-viewport workspaces |
 | `planes` | orientation/slice navigation and XY-only operation availability |
 | `channels` | visibility, active channel, colour, notes, contrast, transforms, order, groups, search and sorting |
 | `native_layers` | complete native-layer inventory, active layer, visibility, order and alignment offsets |
@@ -106,7 +160,7 @@ async names below have identical arguments and add `await` to network calls:
 | `object_exports` | enriched CSV/GeoParquet columns, scoped export and progress |
 | `mosaic` | items, selection/focus, layout, object loading and cancellation |
 | `memory` | single/mosaic RAM estimates and pin lifecycle; single-view tile worker/prefetch policy |
-| `screenshots` | viewer/window/project capture, overlays, scaling, output folder and overwrite policy |
+| `screenshots` | explicit viewport/workspace/window/project capture, overlays, scaling, output folder and overwrite policy |
 | `data`, `layers`, `ui` | external resources, extension-owned layers and declarative native UI |
 
 The checked-in `api/application-surface.json` manifest is the authoritative
@@ -345,12 +399,10 @@ payloads and queue sizes, and never executes Python inside Odon. The API remains
 experimental: method aliases, snapshot shapes, UI vocabulary, and renderer
 coverage may change before a stable v1 subset is declared.
 
-The current implementation has one native canvas and one viewer state. Mosaic
-mode places several ROI items inside that canvas rather than creating
-independent viewports. Python cannot currently create side-by-side viewers with
-different per-view presentation. See the
-[limitations page](../advanced/python-api-limitations.md) for the complete
-boundary.
+The first multi-viewport milestone intentionally permits at most two canvases
+inside a single-image viewer. Mosaic remains a separate one-canvas model for
+positioned ROI items. See the [limitations page](../advanced/python-api-limitations.md)
+for the remaining boundaries.
 
 Semantic feature families in the parity manifest are implemented. Entries
 classified as `adapter_only` or `presentation_only` cover packaging, operating-

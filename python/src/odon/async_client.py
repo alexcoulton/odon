@@ -33,6 +33,9 @@ from .async_resources import (
     AsyncS3Datasets,
     AsyncThresholds,
     AsyncViewer,
+    AsyncViewportLinks,
+    AsyncViewports,
+    AsyncViewportWorkspace,
 )
 from .errors import (
     ConnectionClosedError,
@@ -85,6 +88,12 @@ class AsyncClient:
         self.datasets.s3 = self.s3_datasets
         self.deep_links = AsyncDeepLinks(self)
         self.viewer = AsyncViewer(self)
+        self.viewports = AsyncViewports(self)
+        self.viewport_workspace = AsyncViewportWorkspace(self)
+        self.viewport_links = AsyncViewportLinks(self)
+        self.viewer.viewports = self.viewports
+        self.viewer.workspace = self.viewport_workspace
+        self.viewer.viewport_links = self.viewport_links
         self.channels = AsyncChannels(self)
         self.planes = AsyncPlanes(self)
         self.native_layers = AsyncNativeLayers(self)

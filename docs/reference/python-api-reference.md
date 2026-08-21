@@ -129,6 +129,101 @@ Access: `app.viewer`. Camera, rendering, panels, scale bar, and viewer UI state.
 | `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. |
 | `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; event: viewer.panels.changed) |
 
+### Viewport workspace
+
+Access: `app.viewer.workspace`. Native viewport layout and link configuration.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
+| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. |
+| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[Viewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; event: viewer.workspace.layout.changed) |
+| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; event: viewer.workspace.layout.changed) |
+| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. |
+| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; event: viewer.viewport_links.changed) |
+
+### Viewport links
+
+Access: `app.viewer.viewport_links`. Canonical comparison navigation link-group resource.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. |
+| `create(*, viewports: 'Iterable[Viewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; event: viewer.viewport_links.changed) |
+| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[Viewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; event: viewer.viewport_links.changed) |
+| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; event: viewer.viewport_links.changed) |
+
+### Viewports
+
+Access: `app.viewer.viewports`. Create, inspect, and address native viewports.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. |
+| `handle(viewport_id: 'str') -> 'Viewport'` | SDK-local/delegated | Inherited from delegated operation | Handle. |
+| `active() -> 'Viewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
+| `create(*, source: 'Viewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+| `clone(source: 'Viewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; event: viewer.viewports.created) |
+| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'ViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+
+### Viewport handle
+
+Access: returned by `app.viewer.viewports`. Stable handle for one viewport's navigation and presentation.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. |
+| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; event: viewer.viewports.active_changed) |
+| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
+| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image in this viewport's canvas. (mutates; event: viewer.viewports.navigation.changed) |
+| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
+| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
+| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |
+| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. |
+| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. |
+| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. |
+| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. |
+| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. |
+| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+
+### Viewport objects
+
+Access: `viewport.objects`. Object presentation and filter operations bound to a stable viewport.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get_style() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `get_filter() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `clear_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+
+### Viewport comparison
+
+Access: returned by `app.viewer.viewports.compare()`. Paired left and right viewport handles.
+
+This value type has no public methods beyond its fields.
+
 ### Channels
 
 Access: `app.channels` or `app.viewer.channels`. Channel visibility, presentation, contrast, transforms, and groups.
@@ -254,7 +349,7 @@ Access: `app.projects.views`. Saved view creation, capture, mutation, and applic
 | `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. |
 | `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. |
 | `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; event: project.views.changed) |
-| `capture(name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
+| `capture(name: 'str', *, viewport: 'Viewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
 | `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; event: project.views.changed) |
 | `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; event: project.views.changed) |
 | `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; event: project.views.applied) |
@@ -265,8 +360,9 @@ Access: `app.screenshots`. Viewer, window, and project screenshots plus retained
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `capture(path: 'str \| Path \| None' = None, *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
+| `capture(path: 'str \| Path \| None' = None, *, viewport: 'Viewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
 | `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; event: viewer.screenshot.completed) |
+| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; event: viewer.screenshot.completed) |
 | `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; event: viewer.screenshot.completed) |
 | `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. |
 | `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; event: viewer.screenshot.settings.changed) |
@@ -325,7 +421,7 @@ Access: `app.objects` or `app.viewer.objects`. Object source, styling, propertie
 | `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; event: viewer.selection.changed) |
 | `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; event: viewer.selection.changed) |
 | `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; event: viewer.selection.changed) |
-| `select_filtered(*, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply the current bounded filter result to selection with explicit set semantics. (mutates; event: viewer.selection.changed) |
+| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; event: viewer.selection.changed) |
 | `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; event: viewer.objects.focus.changed) |
 | `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; event: viewer.objects.focus.changed) |
 | `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. |
@@ -380,8 +476,8 @@ Access: `app.analysis` or `app.viewer.analysis`. Object analysis state, histogra
 | --- | --- | --- | --- |
 | `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. |
 | `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; event: viewer.analysis.changed) |
-| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
-| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
+| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
+| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
 | `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. |
 | `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; event: viewer.analysis.warmup.changed) |
 | `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; event: viewer.analysis.changed) |
@@ -395,7 +491,7 @@ Access: `app.measurements` or `app.viewer.measurements`. Polygon intensity measu
 | --- | --- | --- | --- |
 | `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. |
 | `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; event: viewer.measurements.changed) |
-| `start(*, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
+| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
 | `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; event: viewer.measurements.changed) |
 | `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. |
 
@@ -407,7 +503,7 @@ Access: `app.object_exports` or `app.objects.exports`. Column discovery and scop
 | --- | --- | --- | --- |
 | `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. |
 | `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. |
-| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
+| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
 | `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; event: exports.objects.changed) |
 | `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; event: exports.objects.changed) |
 
@@ -782,6 +878,101 @@ Access: `app.viewer`. Async viewer resource.
 | `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. |
 | `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; event: viewer.panels.changed) |
 
+### Async viewport workspace
+
+Access: `app.viewer.workspace`. Async native viewport layout and link resource.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
+| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. |
+| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[AsyncViewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; event: viewer.workspace.layout.changed) |
+| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; event: viewer.workspace.layout.changed) |
+| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. |
+| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; event: viewer.viewport_links.changed) |
+
+### Async viewport links
+
+Access: `app.viewer.viewport_links`. Async comparison navigation link-group resource.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. |
+| `create(*, viewports: 'Iterable[AsyncViewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; event: viewer.viewport_links.changed) |
+| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[AsyncViewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; event: viewer.viewport_links.changed) |
+| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; event: viewer.viewport_links.changed) |
+
+### Async viewports
+
+Access: `app.viewer.viewports`. Async native viewport collection.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. |
+| `handle(viewport_id: 'str') -> 'AsyncViewport'` | SDK-local/delegated | Inherited from delegated operation | Handle. |
+| `active() -> 'AsyncViewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
+| `create(*, source: 'AsyncViewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+| `clone(source: 'AsyncViewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; event: viewer.viewports.created) |
+| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'AsyncViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+
+### Async viewport handle
+
+Access: returned by `app.viewer.viewports`. Stable asynchronous viewport handle.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. |
+| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; event: viewer.viewports.active_changed) |
+| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
+| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image in this viewport's canvas. (mutates; event: viewer.viewports.navigation.changed) |
+| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
+| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
+| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |
+| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. |
+| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. |
+| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. |
+| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. |
+| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. |
+| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+
+### Async viewport objects
+
+Access: `viewport.objects`. Async object presentation and filter operations bound to a stable viewport.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get_style() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `get_filter() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `set_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `clear_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+
+### Async viewport comparison
+
+Access: returned by `app.viewer.viewports.compare()`. Paired asynchronous viewport handles.
+
+This value type has no public methods beyond its fields.
+
 ### Async channels
 
 Access: `app.channels`. Async channel resource.
@@ -907,7 +1098,7 @@ Access: `app.projects.views`. Async saved-view resource.
 | `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. |
 | `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. |
 | `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; event: project.views.changed) |
-| `capture(name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
+| `capture(name: 'str', *, viewport: 'AsyncViewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
 | `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; event: project.views.changed) |
 | `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; event: project.views.changed) |
 | `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; event: project.views.applied) |
@@ -918,8 +1109,9 @@ Access: `app.screenshots`. Async screenshot resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `capture(path: 'str \| Path \| None' = None, *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
+| `capture(path: 'str \| Path \| None' = None, *, viewport: 'AsyncViewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
 | `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; event: viewer.screenshot.completed) |
+| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; event: viewer.screenshot.completed) |
 | `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; event: viewer.screenshot.completed) |
 | `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. |
 | `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; event: viewer.screenshot.settings.changed) |
@@ -978,7 +1170,7 @@ Access: `app.objects`. Async object resource.
 | `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; event: viewer.selection.changed) |
 | `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; event: viewer.selection.changed) |
 | `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; event: viewer.selection.changed) |
-| `select_filtered(*, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply the current bounded filter result to selection with explicit set semantics. (mutates; event: viewer.selection.changed) |
+| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; event: viewer.selection.changed) |
 | `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; event: viewer.objects.focus.changed) |
 | `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; event: viewer.objects.focus.changed) |
 | `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. |
@@ -1033,8 +1225,8 @@ Access: `app.analysis`. Async analysis resource.
 | --- | --- | --- | --- |
 | `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. |
 | `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; event: viewer.analysis.changed) |
-| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
-| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
+| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
+| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
 | `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. |
 | `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; event: viewer.analysis.warmup.changed) |
 | `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; event: viewer.analysis.changed) |
@@ -1048,7 +1240,7 @@ Access: `app.measurements`. Async measurement resource.
 | --- | --- | --- | --- |
 | `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. |
 | `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; event: viewer.measurements.changed) |
-| `start(*, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
+| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
 | `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; event: viewer.measurements.changed) |
 | `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. |
 
@@ -1060,7 +1252,7 @@ Access: `app.object_exports`. Async object-export resource.
 | --- | --- | --- | --- |
 | `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. |
 | `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. |
-| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
+| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
 | `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; event: exports.objects.changed) |
 | `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; event: exports.objects.changed) |
 

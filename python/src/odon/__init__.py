@@ -31,6 +31,15 @@ from .async_data import AsyncDataResource
 from .async_layers import AsyncLayer
 from .data import CoordinateSpace, DataResource
 from .layers import Layer
+from .resources import Viewport, ViewportComparison, ViewportLinks, ViewportObjects, ViewportWorkspace, Viewports
+from .async_resources import (
+    AsyncViewport,
+    AsyncViewportComparison,
+    AsyncViewportLinks,
+    AsyncViewportObjects,
+    AsyncViewportWorkspace,
+    AsyncViewports,
+)
 from .extensions import run as run_extension
 from .launch import launch, launch_async
 from . import ui
@@ -39,6 +48,12 @@ __all__ = [
     "AsyncClient",
     "AsyncDataResource",
     "AsyncLayer",
+    "AsyncViewport",
+    "AsyncViewportComparison",
+    "AsyncViewportLinks",
+    "AsyncViewportObjects",
+    "AsyncViewportWorkspace",
+    "AsyncViewports",
     "Client",
     "ConnectionClosedError",
     "AuthenticationError",
@@ -67,6 +82,12 @@ __all__ = [
     "TaskCancelledError",
     "TaskFailedError",
     "UnsupportedCapabilityError",
+    "Viewport",
+    "ViewportComparison",
+    "ViewportLinks",
+    "ViewportObjects",
+    "ViewportWorkspace",
+    "Viewports",
     "WrongModeError",
     "connect",
     "connect_async",

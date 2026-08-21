@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -263,17 +264,18 @@ impl SpatialImageLayer {
         camera: &Camera,
         viewport: egui::Rect,
         visible_world: egui::Rect,
-    ) {
+        smooth_pixels: bool,
+    ) -> HashSet<RawTileKey> {
         if !self.visible {
-            return;
+            return HashSet::new();
         }
         let (Some(raw_loader), Some(tiles_gl)) = (self.raw_loader.as_ref(), self.tiles_gl.clone())
         else {
-            return;
+            return HashSet::new();
         };
         let render_channels = self.render_channels_for_request();
         if render_channels.is_empty() {
-            return;
+            return HashSet::new();
         }
 
         let inverse_point = |point: egui::Pos2| {
@@ -312,7 +314,7 @@ impl SpatialImageLayer {
             .collect();
         needed.sort_unstable_by_key(|k| (k.tile_y, k.tile_x));
 
-        let mut keep = std::collections::HashSet::new();
+        let mut keep = HashSet::new();
         let mut requested_this_frame = 0usize;
         let max_requests_per_frame = 128usize;
         for key in &needed {
@@ -336,8 +338,6 @@ impl SpatialImageLayer {
                 }
             }
         }
-        tiles_gl.prune_in_flight(&keep);
-
         let draws = needed
             .into_iter()
             .map(|key| TileDraw {
@@ -351,7 +351,7 @@ impl SpatialImageLayer {
             .filter(|draw| draw.screen_rect.intersects(viewport))
             .collect::<Vec<_>>();
         if draws.is_empty() {
-            return;
+            return keep;
         }
 
         let channels = render_channels
@@ -360,12 +360,20 @@ impl SpatialImageLayer {
             .collect::<Vec<_>>();
         let opacity = self.opacity;
         let cb = egui_glow::CallbackFn::new(move |info, painter| {
+            tiles_gl.set_smooth_pixels(smooth_pixels);
             tiles_gl.paint_overlay(info, painter, &draws, &channels, opacity);
         });
         ui.painter().add(egui::PaintCallback {
             rect: viewport,
             callback: Arc::new(cb),
         });
+        keep
+    }
+
+    pub fn prune_in_flight(&self, keep: &HashSet<RawTileKey>) {
+        if let Some(tiles_gl) = self.tiles_gl.as_ref() {
+            tiles_gl.prune_in_flight(keep);
+        }
     }
 
     fn render_channels_for_request(&self) -> Vec<RenderChannel> {

@@ -34,6 +34,25 @@ The single-image viewer has three main working areas:
 The top bar contains quick controls for fitting, plane or slice navigation,
 channel stepping, side-panel visibility, and compact contrast controls.
 
+## Compare Two Views
+
+Use the top-bar `Views` menu to split the open image side by side or top and
+bottom. The second canvas is a lightweight view of the same document: source
+I/O, raw image tiles, object geometry, edits, and cell selection are shared.
+Camera, plane, channels, object fill/property/filter, overlay visibility, and
+layer order can differ.
+
+- Click or drag a canvas to make it active; the side panels edit that view.
+- Edit the active header text to rename the view.
+- Toggle camera and plane links in `Views`; selection remains shared.
+- Adjust the split ratio, use `Swap positions`, or switch horizontal/vertical
+  layout from the same menu.
+- Close either canvas with its header `×`, or close the active canvas from the
+  `Views` menu.
+
+The first milestone permits at most two views of the same open image. Saved
+projects restore the comparison layout; older projects open as one view.
+
 ## Navigate The Canvas
 
 | Action | Control |

@@ -550,6 +550,7 @@ impl MosaicViewerApp {
             smooth_pixels: Some(self.smooth_pixels),
             show_tile_debug: Some(self.show_tile_debug),
             show_scale_bar: None,
+            show_hud: None,
             auto_level: None,
             manual_level: None,
         }

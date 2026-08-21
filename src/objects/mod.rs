@@ -184,6 +184,146 @@ enum ObjectFilterMode {
     Query,
 }
 
+/// The filter model belongs to a viewport presentation, not to the shared
+/// segmentation document. Runtime render caches are deliberately excluded and
+/// are rebuilt against the shared object/property storage when this model is
+/// activated.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ObjectViewportFilterState {
+    mode: ObjectFilterMode,
+    clauses: Vec<ObjectFilterClause>,
+    logic: ObjectFilterLogic,
+    query_text: String,
+    query_expr: Option<ObjectFilterQueryExpr>,
+    query_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ObjectViewportFilterCacheState {
+    filtered_ordered_indices: Option<Arc<Vec<usize>>>,
+    filtered_mask: Option<Arc<Vec<bool>>>,
+    filtered_render_lods: Option<Vec<ObjectRenderLod>>,
+    filtered_point_positions_world: Option<Arc<Vec<egui::Pos2>>>,
+    filtered_point_values: Option<Arc<Vec<f32>>>,
+    filtered_point_lods: Option<Arc<Vec<FeaturePointLod>>>,
+    filtered_color_groups: Option<ObjectColorGroups>,
+    filter_generation: u64,
+}
+
+impl ObjectViewportFilterCacheState {
+    pub(crate) fn empty() -> Self {
+        Self {
+            filtered_ordered_indices: None,
+            filtered_mask: None,
+            filtered_render_lods: None,
+            filtered_point_positions_world: None,
+            filtered_point_values: None,
+            filtered_point_lods: None,
+            filtered_color_groups: None,
+            filter_generation: 1,
+        }
+    }
+}
+
+impl ObjectViewportFilterState {
+    pub(crate) fn project_json(&self) -> serde_json::Value {
+        match self.mode {
+            ObjectFilterMode::Simple => serde_json::json!({
+                "mode": "simple",
+                "logic": match self.logic {
+                    ObjectFilterLogic::All => "all",
+                    ObjectFilterLogic::Any => "any",
+                },
+                "clauses": self.clauses.iter().map(|clause| serde_json::json!({
+                    "enabled": clause.enabled,
+                    "property": clause.property_key,
+                    "query": clause.query,
+                })).collect::<Vec<_>>(),
+            }),
+            ObjectFilterMode::Query => serde_json::json!({
+                "mode": "query",
+                "query": self.query_text,
+            }),
+        }
+    }
+
+    pub(crate) fn from_project_json(value: &serde_json::Value) -> Result<Self, String> {
+        let mode = value
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("simple");
+        if mode == "query" {
+            let query_text = value
+                .get("query")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let (query_expr, query_error) = if query_text.is_empty() {
+                (None, None)
+            } else {
+                match ObjectFilterQueryExpr::parse(&query_text) {
+                    Ok(expr) => (Some(expr), None),
+                    Err(error) => (None, Some(error.to_string())),
+                }
+            };
+            return Ok(Self {
+                mode: ObjectFilterMode::Query,
+                clauses: vec![ObjectFilterClause::default()],
+                logic: ObjectFilterLogic::All,
+                query_text,
+                query_expr,
+                query_error,
+            });
+        }
+        if mode != "simple" {
+            return Err("object filter mode must be 'simple' or 'query'".to_string());
+        }
+        let logic = match value
+            .get("logic")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("all")
+        {
+            "all" | "and" => ObjectFilterLogic::All,
+            "any" | "or" => ObjectFilterLogic::Any,
+            _ => return Err("object filter logic must be 'all' or 'any'".to_string()),
+        };
+        let mut clauses = value
+            .get("clauses")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|clause| {
+                let property_key = clause
+                    .get("property")
+                    .or_else(|| clause.get("property_key"))?
+                    .as_str()?
+                    .trim();
+                let query = clause.get("query")?.as_str()?.trim();
+                (!property_key.is_empty()).then(|| ObjectFilterClause {
+                    enabled: clause
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true),
+                    property_key: property_key.to_string(),
+                    query: query.to_string(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if clauses.is_empty() {
+            clauses.push(ObjectFilterClause::default());
+        }
+        Ok(Self {
+            mode: ObjectFilterMode::Simple,
+            clauses,
+            logic,
+            query_text: String::new(),
+            query_expr: None,
+            query_error: None,
+        })
+    }
+}
+
 impl Default for ObjectFilterMode {
     fn default() -> Self {
         Self::Simple
@@ -231,6 +371,7 @@ pub struct ObjectsLayer {
     lazy_parquet_source: Option<LazyParquetSource>,
     color_legend_cache: Option<ObjectColorLegendCache>,
     color_groups: Option<ObjectColorGroups>,
+    color_groups_cache: HashMap<String, ObjectColorGroups>,
     color_mode: ObjectColorMode,
     color_property_key: String,
     color_level_overrides_property_key: String,
@@ -1408,6 +1549,7 @@ impl Default for ObjectsLayer {
             lazy_parquet_source: None,
             color_legend_cache: None,
             color_groups: None,
+            color_groups_cache: HashMap::new(),
             color_mode: ObjectColorMode::Single,
             color_property_key: String::new(),
             color_level_overrides_property_key: String::new(),

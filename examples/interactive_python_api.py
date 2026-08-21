@@ -159,6 +159,79 @@ if "original_visible_channels" in globals():
 # app.viewer.set_camera(center=(1000, 750), zoom=0.5)
 
 
+# %% Create two native viewports with linked navigation.
+# Send this cell once; the first milestone intentionally allows at most two views.
+comparison = app.viewer.viewports.compare(
+    layout="horizontal",
+    ratio=0.55,
+    titles=("Property A", "Property B"),
+    linked=("camera", "plane", "selection"),
+)
+comparison.left.id, comparison.right.id
+
+
+# %% Give the two canvases independent channel presentations.
+comparison.left.set_visible_channels(["DAPI", "CD3"])
+comparison.right.set_visible_channels(["DAPI", "PanCK"])
+comparison.left.set_channel_color("CD3", [0, 255, 255])
+comparison.right.set_channel_color("PanCK", [255, 80, 180])
+comparison.left.set_rendering(smooth_pixels=False, show_hud=True)
+comparison.right.set_rendering(smooth_pixels=True, show_hud=False)
+
+
+# %% After loading segmentation properties, fill each canvas by a different column.
+# Replace the example names with columns from app.objects.list_properties().
+# comparison.left.objects.set_style(
+#     fill_cells=True, fill_opacity=0.65, color_property="property_a"
+# )
+# comparison.right.objects.set_style(
+#     fill_cells=True, fill_opacity=0.65, color_property="property_b"
+# )
+# comparison.left.objects.set_legend(
+#     [{"value": "high", "color_rgb": [255, 80, 80]}]
+# )
+
+
+# %% Object filters and native-overlay visibility can also differ per canvas.
+# comparison.left.objects.set_filter(
+#     mode="simple",
+#     clauses=[{"property": "cell_type", "query": "immune"}],
+# )
+# comparison.right.objects.set_filter("area > 250")
+left_layers = comparison.left.list_layers()
+right_layers = comparison.right.list_layers()
+pprint(left_layers, sort_dicts=False, depth=4)
+# presentation = comparison.left.get_layer("segmentation_objects")
+# comparison.right.set_layer("segmentation_objects", presentation={"visible": True})
+# comparison.left.set_layer_visibility("segmentation_labels", False)
+# comparison.right.set_active_layer("segmentation_objects")
+
+
+# %% Linked camera changes update both; unlinking enables independent navigation.
+comparison.left.set_camera(center=(256, 256), zoom=2.0)
+comparison.left.fit_camera()
+app.viewer.viewport_links.update(fields=("plane", "selection"))
+comparison.right.set_camera(center=(380, 280), zoom=3.0)
+
+
+# %% Change the arrangement, or close one view to return to the original workspace.
+app.viewer.workspace.set_layout("vertical", ratio=0.6)
+# comparison.right.remove()
+
+
+# %% Inspect sharing and live frame-planning diagnostics.
+workspace = app.viewer.workspace.get()
+pprint(workspace["shared_resources"], sort_dicts=False)
+pprint(workspace["performance"], sort_dicts=False)
+
+
+# %% In a multi-view workspace, filter-sensitive operations name their source.
+# Replace "area" with a numeric property available in this object layer.
+# app.analysis.histogram("area", viewport=comparison.left)
+# app.analysis.histogram("area", filter_query="area > 250")
+# app.analysis.histogram("area", use_all_objects=True)
+
+
 # %% Inspect layers, labels, memory controls, and screenshot configuration.
 native_layers = api_call(
     "Dataset-native layers", "viewer.native_layers.list", app.native_layers.list
@@ -301,7 +374,9 @@ for known_task in app.tasks.list(include_finished=True):
 # This example writes a PNG, so it runs only after you set the flag to True.
 if RUN_SCREENSHOT_DEMO:
     screenshot_path = Path.cwd() / "odon-python-api-demo.png"
-    screenshot_task = app.screenshots.capture(screenshot_path)
+    screenshot_task = app.screenshots.capture(
+        screenshot_path, viewport=comparison.left
+    )
     print("Started:", screenshot_task.task_id, screenshot_task.snapshot.state)
 
     def show_progress(snapshot: odon.TaskSnapshot) -> None:
@@ -310,8 +385,17 @@ if RUN_SCREENSHOT_DEMO:
     screenshot_result = screenshot_task.wait(timeout=30, progress=show_progress)
     print("Screenshot result:")
     pprint(screenshot_result, sort_dicts=False)
+
+    workspace_path = Path.cwd() / "odon-python-api-comparison.png"
+    workspace_task = app.screenshots.capture_workspace(workspace_path)
+    pprint(workspace_task.wait(timeout=30), sort_dicts=False)
 else:
     print("Set RUN_SCREENSHOT_DEMO = True and resend this cell to capture a PNG.")
+
+
+# %% Saved project views can be captured from either viewport explicitly.
+# app.projects.views.capture("Property A", viewport=comparison.left)
+# app.projects.views.capture("Property B", viewport=comparison.right)
 
 
 # %% Optional: create a synthetic NumPy label image as a live Odon layer.

@@ -4,23 +4,24 @@ The Python SDK exposes Odon's current semantic application surface, but that
 does not mean every visual or computational detail is replaceable from Python.
 This page is the explicit boundary for the current implementation.
 
-## One application canvas and one viewport
+## Two-viewport milestone limit
 
-Odon currently has one native viewer canvas. `app.viewer`, its camera, active
-plane, channel presentation, native layers, objects, masks, and overlays refer
-to that canvas. Mosaic mode positions several ROI images inside the same canvas;
-it does not create independent viewports.
+Single-image mode supports one or two native Rust viewports, arranged
+horizontally or vertically. Python can address them by stable ID and configure
+independent camera, plane, channels, object style/filter, overlay visibility,
+layer order, sampling, HUD, scale-bar, tile-debug and active-layer state. The
+split ratio is configurable from `0.1` through `0.9`. Camera and plane links are configurable;
+object selection and scientific edits remain document-shared.
 
-Consequences:
+The current boundary is deliberately two canvases. There is no 2×2 grid,
+arbitrary layout tree, detached viewport window, or cross-document split yet.
+Both canvases always show the same open document and share its source, caches,
+object geometry, edits, and selection. Mosaic mode remains a different
+one-canvas layout containing several ROI items.
 
-- Python cannot create two side-by-side native viewers in one Odon window.
-- Camera and most presentation state cannot be scoped by a `viewer_id`.
-- The same segmentation cannot currently have different per-viewport styling.
-- Linked overview/detail or raw/processed comparison views require separate
-  Odon processes or future multi-viewport support.
-
-Two Odon processes can be controlled by one Python program and synchronized
-through events, but they have separate windows, sessions, and resource caches.
+Filter-sensitive operations require an explicit viewport, standalone filter,
+or all-object choice in a two-view workspace. This is a deliberate safety
+contract, not an omitted convenience.
 
 ## Declarative UI extends predefined hosts
 
@@ -37,9 +38,9 @@ It cannot currently:
 - inject HTML, JavaScript, or CSS; or
 - intercept every native interaction before Odon handles it.
 
-A future workspace/layout API can address shell composition while keeping Rust
-responsible for native rendering. Multi-viewport support is a separate viewer-
-architecture requirement, not merely a layout feature.
+The viewport workspace controls canvas composition while Rust remains
+responsible for native rendering. It does not make the rest of the application
+shell arbitrarily dockable.
 
 ## Renderer coverage differs from descriptor coverage
 

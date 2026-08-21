@@ -90,11 +90,15 @@ class ResourceTests(unittest.TestCase):
             legend_scale=1.5,
         )
         screenshots.capture("image.png", overwrite=True)
+        screenshots.capture_workspace("comparison.png", overwrite=True)
         screenshots.set_settings(clear_output_dir=True)
         self.assertEqual(client.calls[1][1]["output_dir"], "captures")
         self.assertFalse(client.calls[1][1]["include_scale_bar"])
         self.assertTrue(client.calls[2][1]["overwrite"])
-        self.assertIsNone(client.calls[3][1]["output_dir"])
+        self.assertEqual(
+            client.calls[3][0], "viewer.workspace.screenshot.capture"
+        )
+        self.assertIsNone(client.calls[4][1]["output_dir"])
         with self.assertRaises(ValueError):
             screenshots.set_settings(output_dir="captures", clear_output_dir=True)
 
@@ -108,10 +112,14 @@ class AsyncResourceTests(unittest.IsolatedAsyncioTestCase):
         await memory.set_tile_loading(prefetch_mode="off")
         await screenshots.set_settings(include_legend=False)
         await screenshots.capture("image.png", overwrite=True)
+        await screenshots.capture_workspace("comparison.png")
         self.assertEqual(client.calls[0][0], "memory.pin")
         self.assertEqual(client.calls[1][1]["prefetch_mode"], "off")
         self.assertFalse(client.calls[2][1]["include_legend"])
         self.assertTrue(client.calls[3][1]["overwrite"])
+        self.assertEqual(
+            client.calls[4][0], "viewer.workspace.screenshot.capture"
+        )
 
 
 if __name__ == "__main__":

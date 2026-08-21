@@ -129,6 +129,88 @@ pub struct ProjectRoiViewState {
     pub ui: Option<ProjectUiState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotation_layers: Vec<ProjectAnnotationLayerState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<ProjectWorkspaceViewState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectWorkspaceViewState {
+    pub version: u32,
+    pub layout: String,
+    #[serde(default = "default_split_ratio")]
+    pub split_ratio: f32,
+    pub active_viewport_id: String,
+    #[serde(default = "default_true")]
+    pub link_camera: bool,
+    #[serde(default = "default_true")]
+    pub link_plane: bool,
+    #[serde(default = "default_true")]
+    pub link_selection: bool,
+    pub viewports: Vec<ProjectViewportViewState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProjectViewportViewState {
+    pub id: String,
+    pub title: String,
+    #[serde(default = "default_viewport_revision")]
+    pub navigation_revision: u64,
+    #[serde(default = "default_viewport_revision")]
+    pub presentation_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_groups: Option<ProjectLayerGroups>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ProjectCameraState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_level0: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_level0: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z_level0: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_order: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ProjectChannelViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_channel: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overlay_visibility: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmentation: Option<ProjectSegmentationViewState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_filter: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_width_screen_px: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_color_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_show_selection_overlay: Option<bool>,
+    /// Complete per-viewport overlay presentation. This is additive to the
+    /// typed core fields above so older workspace files remain readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<serde_json::Value>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_split_ratio() -> f32 {
+    0.5
+}
+
+fn default_viewport_revision() -> u64 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -191,6 +273,8 @@ pub struct ProjectUiState {
     pub show_tile_debug: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_scale_bar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_hud: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_level: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

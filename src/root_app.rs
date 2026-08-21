@@ -71,9 +71,10 @@ fn control_event_name(method: &str) -> &'static str {
         | "datasets.open_mosaic_samplesheet"
         | "app.navigation.show_project" => "application.mode.changed",
         "project.rois.open" => "project.active_roi.changed",
-        "viewer.screenshot.capture" | "app.screenshot.capture" | "project.screenshot.capture" => {
-            "viewer.screenshot.completed"
-        }
+        "viewer.screenshot.capture"
+        | "viewer.workspace.screenshot.capture"
+        | "app.screenshot.capture"
+        | "project.screenshot.capture" => "viewer.screenshot.completed",
         _ => "application.state.changed",
     }
 }
@@ -85,6 +86,32 @@ fn control_event_source(method: &str) -> &'static str {
         "application"
     } else {
         "viewer:active"
+    }
+}
+
+fn active_viewport_compatibility_event(method: &str) -> Option<&'static str> {
+    match method {
+        "viewer.viewports.camera.set" | "viewer.viewports.camera.fit" => {
+            Some("viewer.camera.changed")
+        }
+        "viewer.viewports.planes.set" => Some("viewer.planes.changed"),
+        "viewer.viewports.channels.set_visible"
+        | "viewer.viewports.channels.set"
+        | "viewer.viewports.channels.set_active"
+        | "viewer.viewports.channels.set_color"
+        | "viewer.viewports.channels.set_contrast"
+        | "viewer.viewports.channels.set_order"
+        | "viewer.viewports.channels.set_group" => Some("viewer.channels.changed"),
+        "viewer.viewports.rendering.set" => Some("viewer.rendering.changed"),
+        "viewer.viewports.objects.style.set"
+        | "viewer.viewports.objects.legend.set"
+        | "viewer.viewports.objects.filter.set"
+        | "viewer.viewports.objects.filter.clear"
+        | "viewer.viewports.layers.set"
+        | "viewer.viewports.layers.set_visibility"
+        | "viewer.viewports.layers.set_order"
+        | "viewer.viewports.layers.set_active" => Some("viewer.layers.changed"),
+        _ => None,
     }
 }
 
@@ -101,7 +128,9 @@ fn control_application_error(method: &str, response: &serde_json::Value) -> Opti
     }
 
     let message = find_error(response)?;
-    let kind = if message.contains("transitioning") {
+    let kind = if message.contains("revision conflict") {
+        ControlErrorKind::Conflict
+    } else if message.contains("transitioning") {
         ControlErrorKind::NotReady
     } else if message.contains("No dataset viewer")
         || message.contains("No mosaic viewer")
@@ -205,6 +234,24 @@ struct ProjectObjectPreloadEvent {
 #[derive(Debug)]
 struct ViewportScreenshotRequest {
     path: PathBuf,
+    crop_rect_points: Option<egui::Rect>,
+}
+
+fn screenshot_crop_bounds(
+    image_size: [usize; 2],
+    crop_rect_points: Option<egui::Rect>,
+    pixels_per_point: f32,
+) -> Option<(usize, usize, usize, usize)> {
+    let [width, height] = image_size;
+    let pixels_per_point = pixels_per_point.max(1e-6);
+    let (x0, y0, x1, y1) = crop_rect_points.map_or((0usize, 0usize, width, height), |rect| {
+        let x0 = (rect.min.x * pixels_per_point).floor().max(0.0) as usize;
+        let y0 = (rect.min.y * pixels_per_point).floor().max(0.0) as usize;
+        let x1 = (rect.max.x * pixels_per_point).ceil().max(0.0) as usize;
+        let y1 = (rect.max.y * pixels_per_point).ceil().max(0.0) as usize;
+        (x0.min(width), y0.min(height), x1.min(width), y1.min(height))
+    });
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
 }
 
 fn project_roi_segmentation_path(
@@ -495,13 +542,18 @@ impl RootApp {
         }
     }
 
-    fn control_observed_snapshot(&self) -> serde_json::Value {
+    fn control_observed_snapshot(&mut self) -> serde_json::Value {
+        let workspace = match &mut self.mode {
+            Mode::Single(app) => app.control_viewport_workspace_snapshot(),
+            _ => serde_json::Value::Null,
+        };
         serde_json::json!({
             "view": self.control_current_view(),
             "camera": self.control_get_camera(),
             "channels": self.control_channels(),
             "smooth": self.control_get_smooth_pixels(),
             "loading": self.control_get_loading_state(),
+            "workspace": workspace,
             "selection": match &self.mode {
                 Mode::Single(app) => app.control_object_selection_signature(),
                 _ => serde_json::Value::Null,
@@ -532,6 +584,7 @@ impl RootApp {
             ("channels", "viewer.channels.changed", "viewer:active"),
             ("smooth", "viewer.rendering.changed", "viewer:active"),
             ("loading", "viewer.readiness.changed", "viewer:active"),
+            ("workspace", "viewer.workspace.changed", "viewer:workspace"),
             ("selection", "viewer.selection.changed", "viewer:active"),
         ] {
             if previous.get(field) != snapshot.get(field) {
@@ -619,6 +672,132 @@ impl RootApp {
             "project.rois.open_selected_mosaic" => self.control_open_selected_project_mosaic(ctx),
             "viewer.channels.list" => self.control_channels(),
             "viewer.channels.list_visible" => self.control_visible_channels(),
+            "viewer.workspace.get" | "viewer.viewports.list" => {
+                self.control_viewport_operation("workspace.get", params)
+            }
+            "viewer.workspace.layout.get" => {
+                self.control_viewport_operation("workspace.layout.get", params)
+            }
+            "viewer.workspace.layout.set" => {
+                self.control_viewport_operation("workspace.layout.set", params)
+            }
+            "viewer.workspace.swap" => self.control_viewport_operation("workspace.swap", params),
+            "viewer.viewports.get" => self.control_viewport_operation("viewports.get", params),
+            "viewer.viewports.create" => {
+                self.control_viewport_operation("viewports.create", params)
+            }
+            "viewer.viewports.clone" => self.control_viewport_operation("viewports.create", params),
+            "viewer.viewports.rename" => {
+                self.control_viewport_operation("viewports.rename", params)
+            }
+            "viewer.viewports.remove" => {
+                self.control_viewport_operation("viewports.remove", params)
+            }
+            "viewer.viewports.set_active" => {
+                self.control_viewport_operation("viewports.set_active", params)
+            }
+            "viewer.viewport_links.set" => {
+                self.control_viewport_operation("viewport_links.set", params)
+            }
+            "viewer.viewport_links.get" => {
+                self.control_viewport_operation("viewport_links.get", params)
+            }
+            "viewer.viewport_links.list" => {
+                self.control_viewport_operation("viewport_links.list", params)
+            }
+            "viewer.viewport_links.create" => {
+                self.control_viewport_operation("viewport_links.create", params)
+            }
+            "viewer.viewport_links.update" => {
+                self.control_viewport_operation("viewport_links.update", params)
+            }
+            "viewer.viewport_links.remove" => {
+                self.control_viewport_operation("viewport_links.remove", params)
+            }
+            "viewer.viewports.camera.get" => {
+                self.control_viewport_operation("viewports.camera.get", params)
+            }
+            "viewer.viewports.camera.set" => {
+                self.control_viewport_operation("viewports.camera.set", params)
+            }
+            "viewer.viewports.camera.fit" => {
+                self.control_viewport_operation("viewports.camera.fit", params)
+            }
+            "viewer.viewports.planes.get" => {
+                self.control_viewport_operation("viewports.planes.get", params)
+            }
+            "viewer.viewports.planes.set" => {
+                self.control_viewport_operation("viewports.planes.set", params)
+            }
+            "viewer.viewports.channels.get" => {
+                self.control_viewport_operation("viewports.channels.get", params)
+            }
+            "viewer.viewports.channels.set_visible" => {
+                self.control_viewport_operation("viewports.channels.set_visible", params)
+            }
+            "viewer.viewports.channels.set" => {
+                self.control_viewport_operation("viewports.channels.set_visible", params)
+            }
+            "viewer.viewports.channels.set_active" => {
+                self.control_viewport_operation("viewports.channels.set_active", params)
+            }
+            "viewer.viewports.channels.set_color" => {
+                self.control_viewport_operation("viewports.channels.set_color", params)
+            }
+            "viewer.viewports.channels.set_contrast" => {
+                self.control_viewport_operation("viewports.channels.set_contrast", params)
+            }
+            "viewer.viewports.channels.set_order" => {
+                self.control_viewport_operation("viewports.channels.set_order", params)
+            }
+            "viewer.viewports.channels.list_groups" => {
+                self.control_viewport_operation("viewports.channels.list_groups", params)
+            }
+            "viewer.viewports.channels.set_group" => {
+                self.control_viewport_operation("viewports.channels.set_group", params)
+            }
+            "viewer.viewports.rendering.get" => {
+                self.control_viewport_operation("viewports.rendering.get", params)
+            }
+            "viewer.viewports.rendering.set" => {
+                self.control_viewport_operation("viewports.rendering.set", params)
+            }
+            "viewer.viewports.objects.style.get" => {
+                self.control_viewport_operation("viewports.objects.style.get", params)
+            }
+            "viewer.viewports.objects.style.set" => {
+                self.control_viewport_operation("viewports.objects.style.set", params)
+            }
+            "viewer.viewports.objects.legend.set" => {
+                self.control_viewport_operation("viewports.objects.legend.set", params)
+            }
+            "viewer.viewports.objects.filter.get" => {
+                self.control_viewport_operation("viewports.objects.filter.get", params)
+            }
+            "viewer.viewports.objects.filter.set" => {
+                self.control_viewport_operation("viewports.objects.filter.set", params)
+            }
+            "viewer.viewports.objects.filter.clear" => {
+                self.control_viewport_operation("viewports.objects.filter.clear", params)
+            }
+            "viewer.viewports.layers.list" => {
+                self.control_viewport_operation("viewports.layers.list", params)
+            }
+            "viewer.viewports.layers.get" => {
+                self.control_viewport_operation("viewports.layers.get", params)
+            }
+            "viewer.viewports.layers.set" => {
+                self.control_viewport_operation("viewports.layers.set", params)
+            }
+            "viewer.viewports.layers.set_visibility" => {
+                self.control_viewport_operation("viewports.layers.set_visibility", params)
+            }
+            "viewer.viewports.layers.set_order" => {
+                self.control_viewport_operation("viewports.layers.set_order", params)
+            }
+            "viewer.viewports.layers.set_active" => {
+                self.control_viewport_operation("viewports.layers.set_active", params)
+            }
             "viewer.planes.get" => self.control_get_plane(),
             "viewer.planes.set" => self.control_set_plane(params),
             "viewer.planes.next" => self.control_step_plane(params, true),
@@ -810,6 +989,9 @@ impl RootApp {
             "memory.tiles.get" => self.control_get_tile_loading(),
             "memory.tiles.set" => self.control_set_tile_loading(params),
             "app.screenshot.capture" => self.control_capture_window_screenshot(ctx, params),
+            "viewer.workspace.screenshot.capture" => {
+                self.control_capture_workspace_screenshot(ctx, params)
+            }
             "project.screenshot.capture" => self.control_capture_project_screenshot(ctx, params),
             "app.navigation.show_project" => self.control_show_project_page(),
             method => unreachable!("control registry admitted unknown method {method}"),
@@ -833,17 +1015,48 @@ impl RootApp {
         let event_data = response.clone();
         let _ = request.reply.send(Ok(response));
         if mutates {
+            let event_source = params
+                .get("viewport_id")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    event_data
+                        .get("viewport_id")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .map(|viewport_id| format!("viewport:{viewport_id}"))
+                .unwrap_or_else(|| control_event_source(method).to_string());
+            let primary_event = request
+                .command
+                .event_name()
+                .unwrap_or_else(|| control_event_name(method));
             request.event_hub.publish(
-                request
-                    .command
-                    .event_name()
-                    .unwrap_or_else(|| control_event_name(method)),
-                control_event_source(method),
+                primary_event,
+                &event_source,
                 revision,
-                serde_json::json!({"method": method, "result": event_data}),
-                Some(request.session_id),
-                request.request_id,
+                serde_json::json!({"method": method, "result": event_data.clone()}),
+                Some(request.session_id.clone()),
+                request.request_id.clone(),
             );
+            if event_data
+                .get("active_viewport_changed")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+                && let Some(legacy_event) = active_viewport_compatibility_event(method)
+                && legacy_event != primary_event
+            {
+                request.event_hub.publish(
+                    legacy_event,
+                    "viewer:active",
+                    revision,
+                    serde_json::json!({
+                        "method": method,
+                        "result": event_data,
+                        "caused_by_event": primary_event,
+                    }),
+                    Some(request.session_id),
+                    request.request_id,
+                );
+            }
         }
     }
 
@@ -997,7 +1210,14 @@ impl RootApp {
         let Mode::Single(app) = &mut self.mode else {
             return serde_json::json!({"error": "view capture is available in single-image mode"});
         };
-        let spec = app.control_current_project_view_spec();
+        let spec = if params.get("viewport_id").is_some() {
+            match app.control_project_view_spec_for_viewport(params) {
+                Ok(spec) => spec,
+                Err(error) => return serde_json::json!({"error": error}),
+            }
+        } else {
+            app.control_current_project_view_spec()
+        };
         app.project_space_mut()
             .save_view_preset(name.to_string(), spec);
         let index = app
@@ -1009,6 +1229,7 @@ impl RootApp {
         let preset = &app.project_space().view_presets()[index];
         serde_json::json!({
             "captured": true,
+            "viewport_id": params.get("viewport_id").cloned(),
             "view": {"index": index, "name": preset.name, "description": preset.description, "spec": preset.spec},
         })
     }
@@ -1797,6 +2018,77 @@ impl RootApp {
             Mode::Transition => {
                 serde_json::json!({"error": "Odon is currently transitioning between views."})
             }
+        }
+    }
+
+    fn control_viewport_operation(
+        &mut self,
+        operation: &str,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match &mut self.mode {
+            Mode::Single(app) => match operation {
+                "workspace.get" => app.control_viewport_workspace_snapshot(),
+                "workspace.layout.get" => app.control_get_viewport_layout(),
+                "workspace.layout.set" => app.control_set_viewport_layout(params),
+                "workspace.swap" => app.control_swap_viewports(),
+                "viewports.get" => app.control_get_viewport(params),
+                "viewports.create" => app.control_create_viewport(params),
+                "viewports.rename" => app.control_rename_viewport(params),
+                "viewports.remove" => app.control_remove_viewport(params),
+                "viewports.set_active" => app.control_set_active_viewport(params),
+                "viewport_links.set" => app.control_set_viewport_links(params),
+                "viewport_links.get" => app.control_get_viewport_links(),
+                "viewport_links.list" => app.control_list_viewport_link_groups(),
+                "viewport_links.create" => app.control_create_viewport_link_group(params),
+                "viewport_links.update" => app.control_update_viewport_link_group(params),
+                "viewport_links.remove" => app.control_remove_viewport_link_group(params),
+                "viewports.camera.get" => app.control_get_viewport_camera(params),
+                "viewports.camera.set" => app.control_set_viewport_camera(params),
+                "viewports.camera.fit" => app.control_fit_viewport_camera(params),
+                "viewports.planes.get" => app.control_get_viewport_plane(params),
+                "viewports.planes.set" => app.control_set_viewport_plane(params),
+                "viewports.channels.get" => app.control_get_viewport_channels(params),
+                "viewports.channels.set_visible" => app.control_set_viewport_channels(params),
+                "viewports.channels.set_active" => app.control_set_viewport_active_channel(params),
+                "viewports.channels.set_color" => app.control_set_viewport_channel_color(params),
+                "viewports.channels.set_contrast" => {
+                    app.control_set_viewport_channel_contrast(params)
+                }
+                "viewports.channels.set_order" => app.control_set_viewport_channel_order(params),
+                "viewports.channels.list_groups" => app.control_get_viewport_channel_groups(params),
+                "viewports.channels.set_group" => app.control_set_viewport_channel_group(params),
+                "viewports.rendering.get" => app.control_get_viewport_rendering(params),
+                "viewports.rendering.set" => app.control_set_viewport_rendering(params),
+                "viewports.objects.style.get" => app.control_get_viewport_object_style(params),
+                "viewports.objects.style.set" => app.control_set_viewport_object_style(params),
+                "viewports.objects.legend.set" => app.control_set_viewport_object_legend(params),
+                "viewports.objects.filter.get" => app.control_get_viewport_object_filter(params),
+                "viewports.objects.filter.set" => app.control_set_viewport_object_filter(params),
+                "viewports.objects.filter.clear" => {
+                    app.control_clear_viewport_object_filter(params)
+                }
+                "viewports.layers.list" => app.control_get_viewport_layers(params),
+                "viewports.layers.get" => app.control_get_viewport_layer(params),
+                "viewports.layers.set" => app.control_set_viewport_layer(params),
+                "viewports.layers.set_visibility" => {
+                    app.control_set_viewport_layer_visibility(params)
+                }
+                "viewports.layers.set_order" => app.control_set_viewport_layer_order(params),
+                "viewports.layers.set_active" => app.control_set_viewport_active_layer(params),
+                _ => serde_json::json!({
+                    "error": format!("unknown viewport operation '{operation}'"),
+                }),
+            },
+            Mode::Mosaic { .. } => serde_json::json!({
+                "error": "multi-viewport workspaces are currently available in single-image mode",
+            }),
+            Mode::Project { .. } => serde_json::json!({
+                "error": "No dataset viewer is currently open.",
+            }),
+            Mode::Transition => serde_json::json!({
+                "error": "Odon is currently transitioning between views.",
+            }),
         }
     }
 
@@ -4158,6 +4450,50 @@ impl RootApp {
         ctx: &egui::Context,
         params: &serde_json::Value,
     ) -> serde_json::Value {
+        self.control_capture_egui_screenshot(ctx, params, None, "capture_window_screenshot")
+    }
+
+    fn control_capture_workspace_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        let crop_rect = match &mut self.mode {
+            Mode::Single(app) => app.workspace_canvas_rect(),
+            Mode::Mosaic { .. } => {
+                return serde_json::json!({
+                    "error": "multi-viewport workspace screenshots are available in single-image mode"
+                });
+            }
+            Mode::Project { .. } => {
+                return serde_json::json!({"error": "No dataset viewer is currently open."});
+            }
+            Mode::Transition => {
+                return serde_json::json!({"error": "Odon is currently transitioning between views."});
+            }
+        };
+        let Some(crop_rect) = crop_rect else {
+            return serde_json::json!({"error": "workspace canvases have not been laid out yet"});
+        };
+        let mut response = self.control_capture_egui_screenshot(
+            ctx,
+            params,
+            Some(crop_rect),
+            "capture_workspace_screenshot",
+        );
+        if let Some(object) = response.as_object_mut() {
+            object.insert("scope".to_string(), serde_json::json!("workspace"));
+        }
+        response
+    }
+
+    fn control_capture_egui_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        params: &serde_json::Value,
+        crop_rect_points: Option<egui::Rect>,
+        operation_name: &str,
+    ) -> serde_json::Value {
         let Some(path) = params
             .get("path")
             .and_then(serde_json::Value::as_str)
@@ -4165,7 +4501,7 @@ impl RootApp {
             .filter(|value| !value.is_empty())
         else {
             return serde_json::json!({
-                "error": "capture_window_screenshot requires path",
+                "error": format!("{operation_name} requires path"),
             });
         };
         let path = expand_control_path(path);
@@ -4189,7 +4525,10 @@ impl RootApp {
             });
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
-            ViewportScreenshotRequest { path: path.clone() },
+            ViewportScreenshotRequest {
+                path: path.clone(),
+                crop_rect_points,
+            },
         )));
         serde_json::json!({
             "queued": true,
@@ -4231,16 +4570,32 @@ impl RootApp {
             let Ok(request) = Arc::downcast::<ViewportScreenshotRequest>(data) else {
                 continue;
             };
-            let [width, height] = image.size;
-            let mut rgba = Vec::with_capacity(width.saturating_mul(height).saturating_mul(4));
-            for pixel in &image.pixels {
-                rgba.extend_from_slice(&pixel.to_array());
+            let [width, _height] = image.size;
+            let Some((x0, y0, x1, y1)) = screenshot_crop_bounds(
+                image.size,
+                request.crop_rect_points,
+                ctx.pixels_per_point(),
+            ) else {
+                self.settings_status = "Screenshot crop was empty.".to_string();
+                continue;
+            };
+            let capture_width = x1 - x0;
+            let capture_height = y1 - y0;
+            let mut rgba = Vec::with_capacity(
+                capture_width
+                    .saturating_mul(capture_height)
+                    .saturating_mul(4),
+            );
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    rgba.extend_from_slice(&image.pixels[y * width + x].to_array());
+                }
             }
             let result = image::save_buffer(
                 &request.path,
                 &rgba,
-                width as u32,
-                height as u32,
+                capture_width as u32,
+                capture_height as u32,
                 image::ColorType::Rgba8,
             );
             match result {
@@ -7648,8 +8003,11 @@ impl eframe::App for RootApp {
             .as_ref()
             .map(OdonControlBridge::external_layers)
             .filter(|(revision, _, _)| *revision != self.control_external_revision);
-        if let Some(bridge) = self.control_bridge.as_ref() {
-            bridge.render_extension_ui(ctx, &self.control_observed_snapshot());
+        if self.control_bridge.is_some() {
+            let observed = self.control_observed_snapshot();
+            if let Some(bridge) = self.control_bridge.as_ref() {
+                bridge.render_extension_ui(ctx, &observed);
+            }
         }
         self.sync_control_manifest_to_project();
 
@@ -8112,6 +8470,72 @@ mod control_boundary_tests {
         .expect("nested application error");
         assert_eq!(nested.kind, ControlErrorKind::ResourceNotFound);
 
+        let conflict = control_application_error(
+            "viewer.viewports.camera.set",
+            &serde_json::json!({
+                "error": "viewport navigation revision conflict: expected 1, current 2"
+            }),
+        )
+        .expect("revision conflict");
+        assert_eq!(conflict.kind, ControlErrorKind::Conflict);
+
         assert!(control_application_error("get_camera", &serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn explicit_viewport_mutations_keep_active_view_legacy_event_compatibility() {
+        assert_eq!(
+            active_viewport_compatibility_event("viewer.viewports.camera.set"),
+            Some("viewer.camera.changed")
+        );
+        assert_eq!(
+            active_viewport_compatibility_event("viewer.viewports.channels.set_color"),
+            Some("viewer.channels.changed")
+        );
+        assert_eq!(
+            active_viewport_compatibility_event("viewer.viewports.objects.style.set"),
+            Some("viewer.layers.changed")
+        );
+        assert_eq!(
+            active_viewport_compatibility_event("viewer.viewports.get"),
+            None
+        );
+    }
+
+    #[test]
+    fn workspace_screenshot_crop_scales_clips_and_rejects_empty_rectangles() {
+        assert_eq!(
+            screenshot_crop_bounds(
+                [800, 600],
+                Some(egui::Rect::from_min_max(
+                    egui::pos2(10.25, 20.5),
+                    egui::pos2(110.75, 70.25),
+                )),
+                2.0,
+            ),
+            Some((20, 41, 222, 141))
+        );
+        assert_eq!(
+            screenshot_crop_bounds(
+                [100, 80],
+                Some(egui::Rect::from_min_max(
+                    egui::pos2(-20.0, -10.0),
+                    egui::pos2(200.0, 100.0),
+                )),
+                1.0,
+            ),
+            Some((0, 0, 100, 80))
+        );
+        assert_eq!(
+            screenshot_crop_bounds(
+                [100, 80],
+                Some(egui::Rect::from_min_max(
+                    egui::pos2(120.0, 5.0),
+                    egui::pos2(130.0, 10.0),
+                )),
+                1.0,
+            ),
+            None
+        );
     }
 }

@@ -1321,7 +1321,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
         ),
         method!(
             "viewer.objects.selection.select_filtered",
-            "Apply the current bounded filter result to selection with explicit set semantics.",
+            "Apply an explicitly sourced viewport filter or standalone query to selection.",
             "viewer.objects.write",
             true,
             false,
@@ -2080,6 +2080,456 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Empty
         ),
         method!(
+            "viewer.workspace.get",
+            "Get the current viewer workspace, layout, links, and viewport snapshots.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.workspace.layout.set",
+            "Set the current single or two-viewport layout.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.workspace.layout.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.workspace.layout.get",
+            "Get the current viewport workspace layout and ordered viewport IDs.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.workspace.swap",
+            "Swap the two viewport positions in the current layout.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.workspace.layout.changed"),
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.viewports.list",
+            "List native viewports and their navigation and presentation snapshots.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.viewports.get",
+            "Get one viewport by stable ID.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.create",
+            "Clone a viewport into a horizontal or vertical comparison layout.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.created"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.clone",
+            "Clone an explicit viewport into a horizontal or vertical comparison layout.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.created"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.rename",
+            "Rename a viewport.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.remove",
+            "Remove a viewport while preserving the final remaining view.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.removed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.set_active",
+            "Set the active viewport used by native panels and legacy viewer methods.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.active_changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewport_links.set",
+            "Configure camera, plane, and shared-selection links between viewports.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewport_links.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewport_links.get",
+            "Get camera, plane, and shared-selection links for the workspace.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.viewport_links.list",
+            "List the workspace's fixed comparison link group.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.viewport_links.create",
+            "Configure the fixed comparison link group for the two workspace viewports.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewport_links.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewport_links.update",
+            "Update fields in the fixed comparison link group.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewport_links.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewport_links.remove",
+            "Disable optional navigation links while retaining document-shared selection.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewport_links.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.camera.get",
+            "Get camera state for an explicit viewport.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.camera.set",
+            "Set camera state for an explicit viewport and propagate configured links.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.navigation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.camera.fit",
+            "Fit content in an explicit viewport and propagate configured camera links.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.navigation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.planes.get",
+            "Get plane state for an explicit viewport.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.planes.set",
+            "Set plane state for an explicit viewport and propagate configured links.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.navigation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.get",
+            "Get channel presentation for an explicit viewport.",
+            "viewer.channels.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_visible",
+            "Set visible channels for an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set",
+            "Set the visible channel collection for an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_active",
+            "Set the active channel in an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_color",
+            "Set channel color in an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_contrast",
+            "Set channel contrast in an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_order",
+            "Set channel order in an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.list_groups",
+            "List channel-group presentation for an explicit viewport.",
+            "viewer.channels.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.channels.set_group",
+            "Set channel-group membership and color presentation in an explicit viewport.",
+            "viewer.channels.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.style.get",
+            "Get object presentation for an explicit viewport.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.rendering.get",
+            "Get sampling, scale-bar, HUD, and tile-debug preferences for an explicit viewport.",
+            "viewer.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.rendering.set",
+            "Set sampling, scale-bar, HUD, and tile-debug preferences for an explicit viewport.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.style.set",
+            "Set independent object presentation for an explicit viewport.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.legend.set",
+            "Set independent object-property palette entries for an explicit viewport.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.filter.get",
+            "Get the independent segmentation-object filter for an explicit viewport.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.filter.set",
+            "Set an independent segmentation-object filter for an explicit viewport.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.objects.filter.clear",
+            "Clear the segmentation-object filter for an explicit viewport.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.list",
+            "List channels and overlays with presentation state for an explicit viewport.",
+            "viewer.layers.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.get",
+            "Get one native layer and its complete presentation for an explicit viewport.",
+            "viewer.layers.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.set",
+            "Set one native layer's independent presentation in an explicit viewport.",
+            "viewer.layers.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.set_visibility",
+            "Set native-layer visibility in an explicit viewport.",
+            "viewer.layers.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.set_order",
+            "Set native-layer order in an explicit viewport.",
+            "viewer.layers.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.viewports.layers.set_active",
+            "Set the active native layer in an explicit viewport.",
+            "viewer.layers.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
             "viewer.ui.set_right_tab",
             "Set the single-view right tab.",
             "viewer.write",
@@ -2277,6 +2727,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             Some("viewer.screenshot.completed"),
             VIEWER_MODES,
+            CaptureScreenshot
+        ),
+        method!(
+            "viewer.workspace.screenshot.capture",
+            "Capture the composed multi-viewport canvas workspace.",
+            "viewer.screenshot",
+            true,
+            true,
+            Some("viewer.screenshot.completed"),
+            SINGLE_MODE,
             CaptureScreenshot
         ),
         method!(
@@ -3250,7 +3710,11 @@ fn request_schema(shape: RequestShape) -> Value {
             "oneOf": [{"required": ["url"]}, {"required": ["request"]}],
             "additionalProperties": false,
         }),
-        RequestShape::Object => json!({"type": "object"}),
+        RequestShape::Object => json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true,
+        }),
     }
 }
 
@@ -3262,6 +3726,137 @@ fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
         properties.insert(
             "if_revision".to_string(),
             json!({"type": "integer", "minimum": 0}),
+        );
+    }
+    let explicit_viewport_method = descriptor.name.starts_with("viewer.viewports.")
+        && !matches!(
+            descriptor.name,
+            "viewer.viewports.list" | "viewer.viewports.create"
+        );
+    if explicit_viewport_method {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.insert(
+                "viewport_id".to_string(),
+                json!({"type": "string", "minLength": 1, "maxLength": 128}),
+            );
+        }
+        schema["required"] = json!(["viewport_id"]);
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.viewports.camera.set"
+            | "viewer.viewports.camera.fit"
+            | "viewer.viewports.planes.set"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "if_navigation_revision".to_string(),
+            json!({"type": "integer", "minimum": 1}),
+        );
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.workspace.layout.set" | "viewer.viewports.create" | "viewer.viewports.clone"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "ratio".to_string(),
+            json!({"type": "number", "minimum": 0.1, "maximum": 0.9}),
+        );
+        if descriptor.name == "viewer.workspace.layout.set" {
+            properties.insert(
+                "viewports".to_string(),
+                json!({
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": true
+                }),
+            );
+        }
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.viewport_links.create"
+            | "viewer.viewport_links.update"
+            | "viewer.viewport_links.remove"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "link_group_id".to_string(),
+            json!({"type": "string", "const": "comparison-navigation"}),
+        );
+        properties.insert(
+            "viewports".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                "minItems": 2,
+                "maxItems": 2,
+                "uniqueItems": true
+            }),
+        );
+        properties.insert(
+            "fields".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "string", "enum": ["camera", "plane", "selection"]},
+                "uniqueItems": true
+            }),
+        );
+        if descriptor.name == "viewer.viewport_links.create" {
+            schema["required"] = json!(["viewports", "fields"]);
+        } else if descriptor.name == "viewer.viewport_links.update" {
+            schema["required"] = json!(["fields"]);
+        }
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.objects.selection.select_filtered"
+            | "viewer.analysis.histogram"
+            | "viewer.analysis.suggest_thresholds"
+            | "viewer.measurements.start"
+            | "exports.objects.start"
+            | "exports.objects.export_csv"
+            | "exports.objects.export_geoparquet"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "viewport_id".to_string(),
+            json!({"type": "string", "minLength": 1, "maxLength": 128}),
+        );
+        properties.insert("filter_query".to_string(), json!({"type": "string"}));
+        properties.insert("use_all_objects".to_string(), json!({"type": "boolean"}));
+        properties.insert(
+            "use_active_viewport_filter".to_string(),
+            json!({"type": "boolean"}),
+        );
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.viewports.rename"
+            | "viewer.viewports.channels.set_visible"
+            | "viewer.viewports.channels.set"
+            | "viewer.viewports.channels.set_active"
+            | "viewer.viewports.channels.set_color"
+            | "viewer.viewports.channels.set_contrast"
+            | "viewer.viewports.channels.set_order"
+            | "viewer.viewports.channels.set_group"
+            | "viewer.viewports.rendering.set"
+            | "viewer.viewports.objects.style.set"
+            | "viewer.viewports.objects.legend.set"
+            | "viewer.viewports.objects.filter.set"
+            | "viewer.viewports.objects.filter.clear"
+            | "viewer.viewports.layers.set_visibility"
+            | "viewer.viewports.layers.set"
+            | "viewer.viewports.layers.set_order"
+            | "viewer.viewports.layers.set_active"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "if_presentation_revision".to_string(),
+            json!({"type": "integer", "minimum": 1}),
         );
     }
     schema
@@ -3339,5 +3934,82 @@ mod tests {
             .find(|method| method["method"] == "viewer.camera.get")
             .unwrap();
         assert_eq!(camera["reason"], "not_ready");
+    }
+
+    #[test]
+    fn multi_viewport_registry_contracts_expose_ids_revisions_events_and_modes() {
+        let camera = method("viewer.viewports.camera.set").unwrap();
+        assert!(camera.mutates);
+        assert_eq!(camera.event, Some("viewer.viewports.navigation.changed"));
+        assert_eq!(camera.available_in, SINGLE_MODE);
+        let camera_schema = request_schema_for(camera);
+        assert_eq!(camera_schema["required"], json!(["viewport_id"]));
+        assert_eq!(
+            camera_schema["properties"]["if_navigation_revision"]["minimum"],
+            1
+        );
+
+        let style = method("viewer.viewports.objects.style.set").unwrap();
+        assert_eq!(style.event, Some("viewer.viewports.presentation.changed"));
+        let style_schema = request_schema_for(style);
+        assert_eq!(
+            style_schema["properties"]["if_presentation_revision"]["minimum"],
+            1
+        );
+
+        let links = request_schema_for(method("viewer.viewport_links.create").unwrap());
+        assert_eq!(links["required"], json!(["viewports", "fields"]));
+        assert_eq!(links["properties"]["viewports"]["minItems"], 2);
+
+        for name in [
+            "viewer.workspace.get",
+            "viewer.workspace.layout.get",
+            "viewer.workspace.layout.set",
+            "viewer.workspace.swap",
+            "viewer.viewports.list",
+            "viewer.viewports.get",
+            "viewer.viewports.create",
+            "viewer.viewports.clone",
+            "viewer.viewports.rename",
+            "viewer.viewports.remove",
+            "viewer.viewports.set_active",
+            "viewer.viewport_links.set",
+            "viewer.viewport_links.get",
+            "viewer.viewport_links.list",
+            "viewer.viewport_links.create",
+            "viewer.viewport_links.update",
+            "viewer.viewport_links.remove",
+            "viewer.viewports.camera.get",
+            "viewer.viewports.camera.set",
+            "viewer.viewports.camera.fit",
+            "viewer.viewports.planes.get",
+            "viewer.viewports.planes.set",
+            "viewer.viewports.channels.get",
+            "viewer.viewports.channels.set_visible",
+            "viewer.viewports.channels.set",
+            "viewer.viewports.channels.set_active",
+            "viewer.viewports.channels.set_color",
+            "viewer.viewports.channels.set_contrast",
+            "viewer.viewports.channels.set_order",
+            "viewer.viewports.channels.list_groups",
+            "viewer.viewports.channels.set_group",
+            "viewer.viewports.rendering.get",
+            "viewer.viewports.rendering.set",
+            "viewer.viewports.objects.style.get",
+            "viewer.viewports.objects.style.set",
+            "viewer.viewports.objects.legend.set",
+            "viewer.viewports.objects.filter.get",
+            "viewer.viewports.objects.filter.set",
+            "viewer.viewports.objects.filter.clear",
+            "viewer.viewports.layers.list",
+            "viewer.viewports.layers.get",
+            "viewer.viewports.layers.set",
+            "viewer.viewports.layers.set_visibility",
+            "viewer.viewports.layers.set_order",
+            "viewer.viewports.layers.set_active",
+            "viewer.workspace.screenshot.capture",
+        ] {
+            assert!(method(name).is_some(), "missing registry method {name}");
+        }
     }
 }

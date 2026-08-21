@@ -25,6 +25,55 @@ impl TextureFilter {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct GlCapabilityState {
+    blend: bool,
+    depth_test: bool,
+    cull_face: bool,
+    blend_src_rgb: u32,
+    blend_dst_rgb: u32,
+    blend_src_alpha: u32,
+    blend_dst_alpha: u32,
+}
+
+unsafe fn capture_gl_capabilities(gl: &glow::Context) -> GlCapabilityState {
+    GlCapabilityState {
+        blend: unsafe { gl.get_parameter_bool(glow::BLEND) },
+        depth_test: unsafe { gl.get_parameter_bool(glow::DEPTH_TEST) },
+        cull_face: unsafe { gl.get_parameter_bool(glow::CULL_FACE) },
+        blend_src_rgb: unsafe { gl.get_parameter_i32(glow::BLEND_SRC_RGB) } as u32,
+        blend_dst_rgb: unsafe { gl.get_parameter_i32(glow::BLEND_DST_RGB) } as u32,
+        blend_src_alpha: unsafe { gl.get_parameter_i32(glow::BLEND_SRC_ALPHA) } as u32,
+        blend_dst_alpha: unsafe { gl.get_parameter_i32(glow::BLEND_DST_ALPHA) } as u32,
+    }
+}
+
+unsafe fn restore_gl_capabilities(gl: &glow::Context, state: GlCapabilityState) {
+    unsafe {
+        if state.blend {
+            gl.enable(glow::BLEND);
+        } else {
+            gl.disable(glow::BLEND);
+        }
+        if state.depth_test {
+            gl.enable(glow::DEPTH_TEST);
+        } else {
+            gl.disable(glow::DEPTH_TEST);
+        }
+        if state.cull_face {
+            gl.enable(glow::CULL_FACE);
+        } else {
+            gl.disable(glow::CULL_FACE);
+        }
+        gl.blend_func_separate(
+            state.blend_src_rgb,
+            state.blend_dst_rgb,
+            state.blend_src_alpha,
+            state.blend_dst_alpha,
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct TileDraw {
     pub view: ViewPlaneSelection,
     pub fallback_view: Option<ViewPlaneSelection>,
@@ -115,6 +164,10 @@ impl TilesGl {
         self.inner.lock().cache.in_flight_len()
     }
 
+    pub fn len(&self) -> usize {
+        self.inner.lock().cache.len()
+    }
+
     pub fn capacity(&self) -> usize {
         self.inner.lock().cache.capacity()
     }
@@ -186,11 +239,13 @@ impl TilesGl {
         let mut prev_viewport = [0i32; 4];
         let mut prev_scissor = [0i32; 4];
         let prev_scissor_enabled;
+        let previous_capabilities;
         unsafe {
             let gl = gl.as_ref();
             gl.get_parameter_i32_slice(glow::VIEWPORT, &mut prev_viewport);
             gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut prev_scissor);
             prev_scissor_enabled = gl.get_parameter_bool(glow::SCISSOR_TEST);
+            previous_capabilities = capture_gl_capabilities(gl);
         }
 
         unsafe {
@@ -332,6 +387,7 @@ impl TilesGl {
             gl_ref.bind_vertex_array(None);
             gl_ref.bind_buffer(glow::ARRAY_BUFFER, None);
             gl_ref.use_program(None);
+            restore_gl_capabilities(gl_ref, previous_capabilities);
         }
     }
 
@@ -373,11 +429,13 @@ impl TilesGl {
         let mut prev_viewport = [0i32; 4];
         let mut prev_scissor = [0i32; 4];
         let prev_scissor_enabled;
+        let previous_capabilities;
         unsafe {
             let gl = gl.as_ref();
             gl.get_parameter_i32_slice(glow::VIEWPORT, &mut prev_viewport);
             gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut prev_scissor);
             prev_scissor_enabled = gl.get_parameter_bool(glow::SCISSOR_TEST);
+            previous_capabilities = capture_gl_capabilities(gl);
         }
 
         unsafe {
@@ -505,6 +563,7 @@ impl TilesGl {
             gl_ref.bind_vertex_array(None);
             gl_ref.bind_buffer(glow::ARRAY_BUFFER, None);
             gl_ref.use_program(None);
+            restore_gl_capabilities(gl_ref, previous_capabilities);
         }
     }
 
@@ -552,11 +611,13 @@ impl TilesGl {
         let mut prev_viewport = [0i32; 4];
         let mut prev_scissor = [0i32; 4];
         let prev_scissor_enabled;
+        let previous_capabilities;
         unsafe {
             let gl = gl.as_ref();
             gl.get_parameter_i32_slice(glow::VIEWPORT, &mut prev_viewport);
             gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut prev_scissor);
             prev_scissor_enabled = gl.get_parameter_bool(glow::SCISSOR_TEST);
+            previous_capabilities = capture_gl_capabilities(gl);
         }
 
         unsafe {
@@ -696,6 +757,7 @@ impl TilesGl {
             gl_ref.bind_vertex_array(None);
             gl_ref.bind_buffer(glow::ARRAY_BUFFER, None);
             gl_ref.use_program(None);
+            restore_gl_capabilities(gl_ref, previous_capabilities);
         }
     }
 }

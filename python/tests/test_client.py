@@ -87,8 +87,14 @@ class _ControlHandler(socketserver.StreamRequestHandler):
                         "sequence": 1,
                         "revision": 7,
                         "source": "viewer:active",
-                        "data": {"zoom": 2.0},
+                        "data": {
+                            "zoom": 2.0,
+                            "viewport_id": "viewport-1",
+                            "affected_viewport_ids": ["viewport-1", "viewport-2"],
+                            "link_transaction_id": "viewport-1-8",
+                        },
                         "initiating_session_id": "another-session",
+                        "initiating_request_id": 99,
                     },
                 }
             elif method == "tasks.start":
@@ -214,6 +220,7 @@ class ClientTests(unittest.TestCase):
         with odon.connect(self.host, self.port) as client:
             self.assertEqual(client.hello.protocol_version, 1)
             self.assertIn("viewer.read", client.hello.capabilities)
+            self.assertIs(client.viewer.viewport_links, client.viewport_links)
             camera = client.viewer.get_camera()
             self.assertEqual(camera["camera"]["center_world_lvl0"], [10.0, 20.0])
             changed = client.viewer.set_camera(
@@ -245,6 +252,14 @@ class ClientTests(unittest.TestCase):
             event = client.events.next(timeout=1)
             self.assertEqual(event.name, "viewer.camera.changed")
             self.assertEqual(event.revision, 7)
+            self.assertEqual(event.data["viewport_id"], "viewport-1")
+            self.assertEqual(
+                event.data["affected_viewport_ids"],
+                ["viewport-1", "viewport-2"],
+            )
+            self.assertEqual(event.data["link_transaction_id"], "viewport-1-8")
+            self.assertEqual(event.initiating_session_id, "another-session")
+            self.assertEqual(event.initiating_request_id, 99)
             deadline = threading.Event()
             for _ in range(100):
                 if received:
@@ -363,6 +378,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_context_and_calls(self) -> None:
         async with odon.connect_async(self.host, self.port) as client:
+            self.assertIs(client.viewer.viewport_links, client.viewport_links)
             camera, changed = await asyncio.gather(
                 client.viewer.get_camera(),
                 client.viewer.set_camera(center=(1, 2), zoom=3, if_revision=23),

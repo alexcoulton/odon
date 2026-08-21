@@ -17,6 +17,61 @@ def _with_revision(params: Mapping[str, Any], if_revision: int | None) -> dict[s
     return result
 
 
+def _with_viewport_revision(
+    params: Mapping[str, Any],
+    if_revision: int | None,
+    *,
+    navigation: int | None = None,
+    presentation: int | None = None,
+) -> dict[str, Any]:
+    result = _with_revision(params, if_revision)
+    if navigation is not None:
+        result["if_navigation_revision"] = navigation
+    if presentation is not None:
+        result["if_presentation_revision"] = presentation
+    return result
+
+
+def _next_control_revision(result: Any) -> int | None:
+    """Extract the global revision returned by the control protocol."""
+
+    if not isinstance(result, Mapping):
+        return None
+    control = result.get("_control")
+    if not isinstance(control, Mapping):
+        return None
+    revision = control.get("revision")
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
+
+
+def _filter_source(
+    *,
+    viewport_id: str | None = None,
+    filter_query: str | None = None,
+    use_all_objects: bool = False,
+    use_active_viewport_filter: bool = False,
+) -> dict[str, Any]:
+    selected = sum(
+        (
+            viewport_id is not None,
+            filter_query is not None,
+            use_all_objects,
+            use_active_viewport_filter,
+        )
+    )
+    if selected > 1:
+        raise ValueError("choose exactly one filter source")
+    if viewport_id is not None:
+        return {"viewport_id": viewport_id}
+    if filter_query is not None:
+        return {"filter_query": filter_query}
+    if use_all_objects:
+        return {"use_all_objects": True}
+    if use_active_viewport_filter:
+        return {"use_active_viewport_filter": True}
+    return {}
+
+
 class AsyncApplication:
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
@@ -443,6 +498,822 @@ class AsyncViewer:
         return await self._client.call(
             "viewer.panels.set", _with_revision(params, if_revision)
         )
+
+
+class AsyncViewport:
+    """A stable asynchronous handle to one native Odon viewport."""
+
+    def __init__(self, client: "AsyncClient", viewport_id: str) -> None:
+        self._client = client
+        self.id = viewport_id
+        self.objects = AsyncViewportObjects(self)
+
+    async def get(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.get", {"viewport_id": self.id}
+        )
+
+    async def set_active(self, *, if_revision: int | None = None) -> Any:
+        return await self._client.call(
+            "viewer.viewports.set_active",
+            _with_revision({"viewport_id": self.id}, if_revision),
+        )
+
+    async def rename(
+        self,
+        title: str,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.rename",
+            _with_viewport_revision(
+                {"viewport_id": self.id, "title": title},
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def remove(self, *, if_revision: int | None = None) -> Any:
+        return await self._client.call(
+            "viewer.viewports.remove",
+            _with_revision({"viewport_id": self.id}, if_revision),
+        )
+
+    async def get_camera(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.camera.get", {"viewport_id": self.id}
+        )
+
+    async def set_camera(
+        self,
+        *,
+        center: Sequence[float] | None = None,
+        zoom: float | None = None,
+        if_revision: int | None = None,
+        if_navigation_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"viewport_id": self.id}
+        if center is not None:
+            if len(center) != 2:
+                raise ValueError("center must contain exactly two coordinates")
+            params["center_world_lvl0"] = [float(center[0]), float(center[1])]
+        if zoom is not None:
+            params["zoom"] = float(zoom)
+        return await self._client.call(
+            "viewer.viewports.camera.set",
+            _with_viewport_revision(
+                params, if_revision, navigation=if_navigation_revision
+            ),
+        )
+
+    async def fit_camera(
+        self,
+        *,
+        if_revision: int | None = None,
+        if_navigation_revision: int | None = None,
+    ) -> Any:
+        """Fit the image in this viewport's canvas."""
+        return await self._client.call(
+            "viewer.viewports.camera.fit",
+            _with_viewport_revision(
+                {"viewport_id": self.id},
+                if_revision,
+                navigation=if_navigation_revision,
+            ),
+        )
+
+    async def get_plane(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.planes.get", {"viewport_id": self.id}
+        )
+
+    async def set_plane(
+        self,
+        *,
+        mode: str | None = None,
+        slice: int | None = None,
+        if_revision: int | None = None,
+        if_navigation_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"viewport_id": self.id}
+        if mode is not None:
+            params["mode"] = mode
+        if slice is not None:
+            params["slice"] = slice
+        return await self._client.call(
+            "viewer.viewports.planes.set",
+            _with_viewport_revision(
+                params, if_revision, navigation=if_navigation_revision
+            ),
+        )
+
+    async def list_channels(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.get", {"viewport_id": self.id}
+        )
+
+    async def set_visible_channels(
+        self,
+        channels: Iterable[str | int],
+        *,
+        mode: str = "only",
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.set_visible",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "channels": list(channels),
+                    "mode": mode,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_channels(
+        self,
+        channels: Iterable[str | int],
+        *,
+        mode: str = "only",
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        """Set the viewport's visible channel collection via the canonical API."""
+        return await self._client.call(
+            "viewer.viewports.channels.set",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "channels": list(channels),
+                    "mode": mode,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_active_channel(
+        self,
+        channel: str | int,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.set_active",
+            _with_viewport_revision(
+                {"viewport_id": self.id, "channel": channel},
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_channel_color(
+        self,
+        channel: str | int,
+        color_rgb: Iterable[int],
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.set_color",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "channel": channel,
+                    "color_rgb": list(color_rgb),
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_channel_contrast(
+        self,
+        channel: str | int,
+        minimum: float,
+        maximum: float,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.set_contrast",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "channel": channel,
+                    "min": minimum,
+                    "max": maximum,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_channel_order(
+        self,
+        channels: Iterable[str | int],
+        *,
+        mode: str = "exact",
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.set_order",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "channels": list(channels),
+                    "mode": mode,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def list_channel_groups(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.channels.list_groups",
+            {"viewport_id": self.id},
+        )
+
+    async def set_channel_group(
+        self,
+        channels: Iterable[str | int],
+        *,
+        group: str | None = None,
+        group_id: int | None = None,
+        color_rgb: Iterable[int] | None = None,
+        inherit_color: bool = True,
+        replace_group_members: bool = False,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {
+            "viewport_id": self.id,
+            "channels": list(channels),
+            "inherit_color": inherit_color,
+            "replace_group_members": replace_group_members,
+        }
+        if group is not None:
+            params["group"] = group
+        if group_id is not None:
+            params["group_id"] = group_id
+        if color_rgb is not None:
+            params["color_rgb"] = list(color_rgb)
+        return await self._client.call(
+            "viewer.viewports.channels.set_group",
+            _with_viewport_revision(
+                params,
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def get_object_style(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.objects.style.get", {"viewport_id": self.id}
+        )
+
+    async def set_object_style(
+        self,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+        **style: Any,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.objects.style.set",
+            _with_viewport_revision(
+                {"viewport_id": self.id, **style},
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_object_legend(
+        self,
+        entries: Iterable[Mapping[str, Any]],
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        """Set per-value colours/visibility for this viewport's object property."""
+        return await self._client.call(
+            "viewer.viewports.objects.legend.set",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "entries": [dict(entry) for entry in entries],
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def get_object_filter(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.objects.filter.get", {"viewport_id": self.id}
+        )
+
+    async def set_object_filter(
+        self,
+        query: str | None = None,
+        *,
+        mode: str | None = None,
+        clauses: Iterable[Mapping[str, Any]] | None = None,
+        logic: str | None = None,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"viewport_id": self.id}
+        if query is not None:
+            params["query"] = query
+        if mode is not None:
+            params["mode"] = mode
+        if clauses is not None:
+            params["clauses"] = [dict(clause) for clause in clauses]
+        if logic is not None:
+            params["logic"] = logic
+        return await self._client.call(
+            "viewer.viewports.objects.filter.set",
+            _with_viewport_revision(
+                params, if_revision, presentation=if_presentation_revision
+            ),
+        )
+
+    async def clear_object_filter(
+        self,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.objects.filter.clear",
+            _with_viewport_revision(
+                {"viewport_id": self.id},
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def get_rendering(self) -> Any:
+        """Return this viewport's independent display preferences."""
+        return await self._client.call(
+            "viewer.viewports.rendering.get", {"viewport_id": self.id}
+        )
+
+    async def set_rendering(
+        self,
+        *,
+        smooth_pixels: bool | None = None,
+        show_scale_bar: bool | None = None,
+        show_hud: bool | None = None,
+        show_tile_debug: bool | None = None,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        """Set independent sampling and decoration preferences for this viewport."""
+        params: dict[str, Any] = {"viewport_id": self.id}
+        for name, value in (
+            ("smooth_pixels", smooth_pixels),
+            ("show_scale_bar", show_scale_bar),
+            ("show_hud", show_hud),
+            ("show_tile_debug", show_tile_debug),
+        ):
+            if value is not None:
+                params[name] = value
+        return await self._client.call(
+            "viewer.viewports.rendering.set",
+            _with_viewport_revision(
+                params, if_revision, presentation=if_presentation_revision
+            ),
+        )
+
+    async def list_layers(self) -> Any:
+        return await self._client.call(
+            "viewer.viewports.layers.list", {"viewport_id": self.id}
+        )
+
+    async def get_layer(self, layer_id: str) -> Any:
+        """Return one layer and its presentation in this viewport."""
+        return await self._client.call(
+            "viewer.viewports.layers.get",
+            {"viewport_id": self.id, "layer_id": layer_id},
+        )
+
+    async def set_layer(
+        self,
+        layer_id: str,
+        presentation: Mapping[str, Any] | None = None,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+        **changes: Any,
+    ) -> Any:
+        """Update one layer's independent presentation in this viewport."""
+        payload = dict(presentation or {})
+        payload.update(changes)
+        return await self._client.call(
+            "viewer.viewports.layers.set",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "layer_id": layer_id,
+                    "presentation": payload,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_layer_visibility(
+        self,
+        layer_id: str,
+        visible: bool,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.layers.set_visibility",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "layer_id": layer_id,
+                    "visible": visible,
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_layer_order(
+        self,
+        stack: str,
+        layers: Iterable[str],
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.layers.set_order",
+            _with_viewport_revision(
+                {
+                    "viewport_id": self.id,
+                    "stack": stack,
+                    "layers": list(layers),
+                },
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+    async def set_active_layer(
+        self,
+        layer_id: str,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewports.layers.set_active",
+            _with_viewport_revision(
+                {"viewport_id": self.id, "layer_id": layer_id},
+                if_revision,
+                presentation=if_presentation_revision,
+            ),
+        )
+
+
+class AsyncViewportObjects:
+    """Async object presentation/filter resource bound to a stable viewport."""
+
+    def __init__(self, viewport: AsyncViewport) -> None:
+        self._viewport = viewport
+
+    async def get_style(self) -> Any:
+        return await self._viewport.get_object_style()
+
+    async def set_style(
+        self,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+        **style: Any,
+    ) -> Any:
+        return await self._viewport.set_object_style(
+            if_revision=if_revision,
+            if_presentation_revision=if_presentation_revision,
+            **style,
+        )
+
+    async def set_legend(
+        self,
+        entries: Iterable[Mapping[str, Any]],
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._viewport.set_object_legend(
+            entries,
+            if_revision=if_revision,
+            if_presentation_revision=if_presentation_revision,
+        )
+
+    async def get_filter(self) -> Any:
+        return await self._viewport.get_object_filter()
+
+    async def set_filter(
+        self,
+        query: str | None = None,
+        *,
+        mode: str | None = None,
+        clauses: Iterable[Mapping[str, Any]] | None = None,
+        logic: str | None = None,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._viewport.set_object_filter(
+            query,
+            mode=mode,
+            clauses=clauses,
+            logic=logic,
+            if_revision=if_revision,
+            if_presentation_revision=if_presentation_revision,
+        )
+
+    async def clear_filter(
+        self,
+        *,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        return await self._viewport.clear_object_filter(
+            if_revision=if_revision,
+            if_presentation_revision=if_presentation_revision,
+        )
+
+
+class AsyncViewportComparison:
+    def __init__(self, left: AsyncViewport, right: AsyncViewport) -> None:
+        self.left = left
+        self.right = right
+        self.viewports = (left, right)
+
+
+class AsyncViewportWorkspace:
+    def __init__(self, client: "AsyncClient") -> None:
+        self._client = client
+
+    async def get(self) -> Any:
+        return await self._client.call("viewer.workspace.get")
+
+    async def get_layout(self) -> Any:
+        return await self._client.call("viewer.workspace.layout.get")
+
+    async def set_layout(
+        self,
+        layout: str | None = None,
+        *,
+        split: str | None = None,
+        viewports: Iterable[AsyncViewport | str] | None = None,
+        ratio: float | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        if layout is None:
+            layout = split
+        elif split is not None and split != layout:
+            raise ValueError("layout and split must agree when both are provided")
+        if layout is None:
+            raise ValueError("layout or split is required")
+        params: dict[str, Any] = {"layout": layout}
+        if viewports is not None:
+            params["viewports"] = [
+                item.id if isinstance(item, AsyncViewport) else item
+                for item in viewports
+            ]
+        if ratio is not None:
+            params["ratio"] = ratio
+        return await self._client.call(
+            "viewer.workspace.layout.set",
+            _with_revision(params, if_revision),
+        )
+
+    async def swap(self, *, if_revision: int | None = None) -> Any:
+        return await self._client.call(
+            "viewer.workspace.swap", _with_revision({}, if_revision)
+        )
+
+    async def get_links(self) -> Any:
+        return await self._client.call("viewer.viewport_links.get")
+
+    async def set_links(
+        self,
+        *,
+        camera: bool | None = None,
+        plane: bool | None = None,
+        selection: bool | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        params = {
+            key: value
+            for key, value in {
+                "camera": camera,
+                "plane": plane,
+                "selection": selection,
+            }.items()
+            if value is not None
+        }
+        return await self._client.call(
+            "viewer.viewport_links.set", _with_revision(params, if_revision)
+        )
+
+
+class AsyncViewportLinks:
+    """Async canonical resource for the fixed comparison link group."""
+
+    def __init__(self, client: "AsyncClient") -> None:
+        self._client = client
+
+    @staticmethod
+    def _fields(fields: Iterable[str]) -> list[str]:
+        result = list(dict.fromkeys(fields))
+        unknown = set(result).difference({"camera", "plane", "selection"})
+        if unknown:
+            raise ValueError(f"unknown linked fields: {sorted(unknown)}")
+        if "selection" not in result:
+            result.append("selection")
+        return result
+
+    @staticmethod
+    def _viewport_ids(viewports: Iterable[AsyncViewport | str]) -> list[str]:
+        return [
+            item.id if isinstance(item, AsyncViewport) else item for item in viewports
+        ]
+
+    async def list(self) -> Any:
+        return await self._client.call("viewer.viewport_links.list")
+
+    async def create(
+        self,
+        *,
+        viewports: Iterable[AsyncViewport | str],
+        fields: Iterable[str] = ("camera", "plane", "selection"),
+        link_group_id: str = "comparison-navigation",
+        if_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewport_links.create",
+            _with_revision(
+                {
+                    "link_group_id": link_group_id,
+                    "viewports": self._viewport_ids(viewports),
+                    "fields": self._fields(fields),
+                },
+                if_revision,
+            ),
+        )
+
+    async def update(
+        self,
+        *,
+        fields: Iterable[str],
+        viewports: Iterable[AsyncViewport | str] | None = None,
+        link_group_id: str = "comparison-navigation",
+        if_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {
+            "link_group_id": link_group_id,
+            "fields": self._fields(fields),
+        }
+        if viewports is not None:
+            params["viewports"] = self._viewport_ids(viewports)
+        return await self._client.call(
+            "viewer.viewport_links.update", _with_revision(params, if_revision)
+        )
+
+    async def remove(
+        self,
+        link_group_id: str = "comparison-navigation",
+        *,
+        if_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.viewport_links.remove",
+            _with_revision({"link_group_id": link_group_id}, if_revision),
+        )
+
+
+class AsyncViewports:
+    def __init__(self, client: "AsyncClient") -> None:
+        self._client = client
+
+    async def list(self) -> Any:
+        return await self._client.call("viewer.viewports.list")
+
+    def handle(self, viewport_id: str) -> AsyncViewport:
+        return AsyncViewport(self._client, viewport_id)
+
+    async def active(self) -> AsyncViewport:
+        workspace = await self._client.call("viewer.workspace.get")
+        return self.handle(str(workspace["active_viewport_id"]))
+
+    async def create(
+        self,
+        *,
+        source: AsyncViewport | str | None = None,
+        title: str | None = None,
+        layout: str = "horizontal",
+        ratio: float | None = None,
+        activate: bool = True,
+        if_revision: int | None = None,
+    ) -> AsyncViewport:
+        params: dict[str, Any] = {"layout": layout, "activate": activate}
+        if ratio is not None:
+            params["ratio"] = ratio
+        if source is not None:
+            params["source_viewport_id"] = (
+                source.id if isinstance(source, AsyncViewport) else source
+            )
+        if title is not None:
+            params["title"] = title
+        result = await self._client.call(
+            "viewer.viewports.create", _with_revision(params, if_revision)
+        )
+        return self.handle(str(result["viewport_id"]))
+
+    async def clone(
+        self,
+        source: AsyncViewport | str,
+        *,
+        title: str | None = None,
+        layout: str = "horizontal",
+        ratio: float | None = None,
+        activate: bool = True,
+        if_revision: int | None = None,
+    ) -> AsyncViewport:
+        """Clone an explicit viewport into the second workspace slot."""
+        params: dict[str, Any] = {
+            "viewport_id": source.id if isinstance(source, AsyncViewport) else source,
+            "layout": layout,
+            "activate": activate,
+        }
+        if ratio is not None:
+            params["ratio"] = ratio
+        if title is not None:
+            params["title"] = title
+        result = await self._client.call(
+            "viewer.viewports.clone", _with_revision(params, if_revision)
+        )
+        return self.handle(str(result["viewport_id"]))
+
+    async def compare(
+        self,
+        *,
+        layout: str = "horizontal",
+        ratio: float = 0.5,
+        titles: Sequence[str] = ("View 1", "View 2"),
+        linked: Iterable[str] = ("camera", "plane", "selection"),
+        if_revision: int | None = None,
+    ) -> AsyncViewportComparison:
+        if len(titles) != 2:
+            raise ValueError("titles must contain exactly two values")
+        fields = list(dict.fromkeys(linked))
+        unknown = set(fields).difference({"camera", "plane", "selection"})
+        if unknown:
+            raise ValueError(f"unknown linked fields: {sorted(unknown)}")
+        left = await self.active()
+        renamed = await left.rename(titles[0], if_revision=if_revision)
+        next_revision = _next_control_revision(renamed)
+        created = await self._client.call(
+            "viewer.viewports.clone",
+            _with_revision(
+                {
+                    "viewport_id": left.id,
+                    "title": titles[1],
+                    "layout": layout,
+                    "ratio": ratio,
+                    "activate": True,
+                },
+                next_revision,
+            ),
+        )
+        right = self.handle(str(created["viewport_id"]))
+        next_revision = _next_control_revision(created)
+        await AsyncViewportLinks(self._client).create(
+            viewports=[left, right],
+            fields=fields,
+            if_revision=next_revision,
+        )
+        return AsyncViewportComparison(left, right)
 
 
 class AsyncChannels:
@@ -1017,10 +1888,21 @@ class AsyncProjectViews:
             "project.views.create", _with_revision(params, if_revision)
         )
 
-    async def capture(self, name: str, *, if_revision: int | None = None) -> Any:
+    async def capture(
+        self,
+        name: str,
+        *,
+        viewport: AsyncViewport | str | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"name": name}
+        if viewport is not None:
+            params["viewport_id"] = (
+                viewport.id if isinstance(viewport, AsyncViewport) else viewport
+            )
         return await self._client.call(
             "project.views.capture",
-            _with_revision({"name": name}, if_revision),
+            _with_revision(params, if_revision),
         )
 
     async def rename(
@@ -1058,10 +1940,15 @@ class AsyncScreenshots:
         self,
         path: str | Path | None = None,
         *,
+        viewport: AsyncViewport | str | None = None,
         overwrite: bool = False,
         if_revision: int | None = None,
     ) -> Any:
         params = {} if path is None else {"path": str(path)}
+        if viewport is not None:
+            params["viewport_id"] = (
+                viewport.id if isinstance(viewport, AsyncViewport) else viewport
+            )
         params["overwrite"] = overwrite
         return await self._client.tasks.start(
             "viewer.screenshot.capture",
@@ -1082,6 +1969,21 @@ class AsyncScreenshots:
             "app.screenshot.capture",
             _with_revision(params, if_revision),
             label="Capture Odon window",
+        )
+
+    async def capture_workspace(
+        self,
+        path: str | Path,
+        *,
+        overwrite: bool = False,
+        if_revision: int | None = None,
+    ) -> Any:
+        return await self._client.tasks.start(
+            "viewer.workspace.screenshot.capture",
+            _with_revision(
+                {"path": str(path), "overwrite": overwrite}, if_revision
+            ),
+            label="Capture viewport workspace",
         )
 
     async def capture_project(
@@ -1448,12 +2350,28 @@ class AsyncObjects:
         self,
         *,
         mode: str = "replace",
+        viewport_id: str | None = None,
+        filter_query: str | None = None,
+        use_all_objects: bool = False,
+        use_active_viewport_filter: bool = False,
         if_revision: int | None = None,
         **selector: Any,
     ) -> Any:
         return await self._client.call(
             "viewer.objects.selection.select_filtered",
-            _with_revision({**selector, "mode": mode}, if_revision),
+            _with_revision(
+                {
+                    **selector,
+                    **_filter_source(
+                        viewport_id=viewport_id,
+                        filter_query=filter_query,
+                        use_all_objects=use_all_objects,
+                        use_active_viewport_filter=use_active_viewport_filter,
+                    ),
+                    "mode": mode,
+                },
+                if_revision,
+            ),
         )
 
     async def focus(
@@ -1808,11 +2726,65 @@ class AsyncAnalysis:
         params = {**_object_target(target, layer_id), "state": dict(state)}
         return await self._client.call("viewer.analysis.set", _with_revision(params, if_revision))
 
-    async def histogram(self, property: str, *, bins: int = 128, transform: str = "none", target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.analysis.histogram", {**_object_target(target, layer_id), "property": property, "bins": bins, "transform": transform})
+    async def histogram(
+        self,
+        property: str,
+        *,
+        bins: int = 128,
+        transform: str = "none",
+        target: str = "objects",
+        layer_id: int | None = None,
+        viewport_id: str | None = None,
+        filter_query: str | None = None,
+        use_all_objects: bool = False,
+        use_active_viewport_filter: bool = False,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.analysis.histogram",
+            {
+                **_object_target(target, layer_id),
+                **_filter_source(
+                    viewport_id=viewport_id,
+                    filter_query=filter_query,
+                    use_all_objects=use_all_objects,
+                    use_active_viewport_filter=use_active_viewport_filter,
+                ),
+                "property": property,
+                "bins": bins,
+                "transform": transform,
+            },
+        )
 
-    async def suggest_thresholds(self, property: str, *, method: str = "quantiles", count: int = 3, transform: str = "none", target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.analysis.suggest_thresholds", {**_object_target(target, layer_id), "property": property, "method": method, "count": count, "transform": transform})
+    async def suggest_thresholds(
+        self,
+        property: str,
+        *,
+        method: str = "quantiles",
+        count: int = 3,
+        transform: str = "none",
+        target: str = "objects",
+        layer_id: int | None = None,
+        viewport_id: str | None = None,
+        filter_query: str | None = None,
+        use_all_objects: bool = False,
+        use_active_viewport_filter: bool = False,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.analysis.suggest_thresholds",
+            {
+                **_object_target(target, layer_id),
+                **_filter_source(
+                    viewport_id=viewport_id,
+                    filter_query=filter_query,
+                    use_all_objects=use_all_objects,
+                    use_active_viewport_filter=use_active_viewport_filter,
+                ),
+                "property": property,
+                "method": method,
+                "count": count,
+                "transform": transform,
+            },
+        )
 
     async def get_warmup(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
         return await self._client.call("viewer.analysis.warmup.get", _object_target(target, layer_id))
@@ -1842,10 +2814,28 @@ class AsyncMeasurements:
                 params[key] = value
         return await self._client.call("viewer.measurements.configure", _with_revision(params, if_revision))
 
-    async def start(self, *, if_revision: int | None = None, **configuration: Any) -> Any:
+    async def start(
+        self,
+        *,
+        viewport_id: str | None = None,
+        filter_query: str | None = None,
+        use_all_objects: bool = False,
+        use_active_viewport_filter: bool = False,
+        if_revision: int | None = None,
+        **configuration: Any,
+    ) -> Any:
         target = str(configuration.pop("target", "objects"))
         layer_id = configuration.pop("layer_id", None)
-        params = {**_object_target(target, layer_id), **configuration}
+        params = {
+            **_object_target(target, layer_id),
+            **_filter_source(
+                viewport_id=viewport_id,
+                filter_query=filter_query,
+                use_all_objects=use_all_objects,
+                use_active_viewport_filter=use_active_viewport_filter,
+            ),
+            **configuration,
+        }
         return await self._client.tasks.start("viewer.measurements.start", _with_revision(params, if_revision), label="Measure polygon intensities")
 
     async def cancel(self, *, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
@@ -1865,8 +2855,34 @@ class AsyncObjectExports:
     async def get_state(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
         return await self._client.call("exports.objects.get_state", _object_target(target, layer_id))
 
-    async def export(self, path: str | Path, *, format: str | None = None, scope: str = "all", columns: Iterable[str] | None = None, overwrite: bool = False, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
-        params: dict[str, Any] = {**_object_target(target, layer_id), "path": str(path), "scope": scope, "overwrite": overwrite}
+    async def export(
+        self,
+        path: str | Path,
+        *,
+        format: str | None = None,
+        scope: str = "all",
+        columns: Iterable[str] | None = None,
+        overwrite: bool = False,
+        target: str = "objects",
+        layer_id: int | None = None,
+        viewport_id: str | None = None,
+        filter_query: str | None = None,
+        use_all_objects: bool = False,
+        use_active_viewport_filter: bool = False,
+        if_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {
+            **_object_target(target, layer_id),
+            **_filter_source(
+                viewport_id=viewport_id,
+                filter_query=filter_query,
+                use_all_objects=use_all_objects,
+                use_active_viewport_filter=use_active_viewport_filter,
+            ),
+            "path": str(path),
+            "scope": scope,
+            "overwrite": overwrite,
+        }
         if format is not None:
             params["format"] = format
         if columns is not None:
@@ -1887,7 +2903,20 @@ class AsyncObjectExports:
         layer_id = options.pop("layer_id", None)
         if_revision = options.pop("if_revision", None)
         columns = options.pop("columns", None)
-        params: dict[str, Any] = {**_object_target(target, layer_id), "path": str(path), **options}
+        filter_source = _filter_source(
+            viewport_id=options.pop("viewport_id", None),
+            filter_query=options.pop("filter_query", None),
+            use_all_objects=bool(options.pop("use_all_objects", False)),
+            use_active_viewport_filter=bool(
+                options.pop("use_active_viewport_filter", False)
+            ),
+        )
+        params: dict[str, Any] = {
+            **_object_target(target, layer_id),
+            **filter_source,
+            "path": str(path),
+            **options,
+        }
         if columns is not None:
             params["columns"] = list(columns)
         return _with_revision(params, if_revision)

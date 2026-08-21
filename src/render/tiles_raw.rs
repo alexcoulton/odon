@@ -118,6 +118,10 @@ impl<T> RawTileCache<T> {
         self.in_flight.len()
     }
 
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
     pub fn capacity(&self) -> usize {
         self.cache.cap().get()
     }
@@ -363,6 +367,12 @@ fn raw_tile_loader_thread(
                 height,
                 start.elapsed()
             );
+        }
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
         }
         let _ = tx_rsp.send(RawTileWorkerResponse::Tile(RawTileResponse {
             key: req.key,

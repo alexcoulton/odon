@@ -225,8 +225,16 @@ impl ObjectsLayer {
                                 egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
                             items.push(ObjectFillGlDrawItem {
                                 data: ObjectFillGlDrawData {
-                                    cache_id: object_render_cache_id_usize(0x4a20, group_idx),
-                                    state_cache_id: object_render_cache_id_usize(0x4a21, group_idx),
+                                    cache_id: object_property_render_cache_id(
+                                        0x4a20,
+                                        &color_groups.property_key,
+                                        group_idx,
+                                    ),
+                                    state_cache_id: object_property_render_cache_id(
+                                        0x4a21,
+                                        &color_groups.property_key,
+                                        group_idx,
+                                    ),
                                     generation: self.generation,
                                     vertices_local: Arc::clone(&fill_mesh.vertices_local),
                                     object_count: fill_mesh.object_count,
@@ -427,9 +435,10 @@ impl ObjectsLayer {
                                 [choose_lod_index(&group.lods, dataset_long_side_screen_px)];
                             items.push(LineBinsGlDrawItem {
                                 data: LineBinsGlDrawData {
-                                    cache_id: object_render_cache_id(
+                                    cache_id: object_property_render_cache_id(
                                         0x4a00 | u32::from(lod.lod),
-                                        group_idx as u64,
+                                        &color_groups.property_key,
+                                        group_idx,
                                     ),
                                     generation: group.fill_generation,
                                     bins: Arc::clone(&group_lod.bins),
@@ -2237,6 +2246,14 @@ fn object_render_cache_id_usize(namespace: u32, index: usize) -> u64 {
     object_render_cache_id(namespace, index.min(u32::MAX as usize) as u64)
 }
 
+fn object_property_render_cache_id(namespace: u32, property_key: &str, index: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    namespace.hash(&mut hasher);
+    property_key.hash(&mut hasher);
+    index.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl ObjectFillMesh {
     fn bin_range_for_local_rect(&self, rect: egui::Rect) -> (usize, usize, usize, usize) {
         rect_bins(rect, self.origin, self.bin_size, self.bins_w, self.bins_h)
@@ -2774,6 +2791,11 @@ mod rectangle_selection_tests {
         let new_bin_98 = object_render_cache_id(0x4a80, 98);
         let new_bin_226 = object_render_cache_id(0x4a80, 226);
         assert_ne!(new_bin_98, new_bin_226);
+        assert_ne!(
+            object_property_render_cache_id(0x4a20, "marker_a", 0),
+            object_property_render_cache_id(0x4a20, "marker_b", 0),
+            "simultaneous viewport styles need distinct GPU state caches"
+        );
     }
 
     #[test]

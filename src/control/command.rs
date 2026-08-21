@@ -121,6 +121,7 @@ struct SetCameraRequest {
 #[serde(deny_unknown_fields)]
 struct CaptureScreenshotRequest {
     path: Option<String>,
+    viewport_id: Option<String>,
     #[serde(default)]
     overwrite: bool,
 }
@@ -753,6 +754,7 @@ fn validate_params(method: &str, shape: RequestShape, params: &Value) -> Result<
                     "path must not be empty",
                 ));
             }
+            let _ = request.viewport_id;
             let _ = request.overwrite;
         }
         RequestShape::AppSettings => {

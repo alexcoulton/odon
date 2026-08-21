@@ -4,7 +4,6 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, anyhow};
 use crossbeam_channel::{Receiver, Sender};
@@ -20,7 +19,8 @@ use crate::imaging::histogram::{
     HistogramLoaderHandle, HistogramRequest, HistogramResponse, HistogramStats,
 };
 use crate::render::tiles::{
-    RenderChannel, TileKey, TileLoaderHandle, TileRequest, TileResponse, TileWorkerResponse,
+    CpuDecodedTileCache, DecodedTile, DecodedTileKey, RenderChannel, TileKey, TileLoaderHandle,
+    TileRequest, TileResponse, TileWorkerResponse,
 };
 use crate::render::tiles_raw::{
     RawTileKey, RawTileLoaderHandle, RawTileRequest, RawTileResponse, RawTileWorkerResponse,
@@ -1464,6 +1464,12 @@ fn tiff_raw_tile_loader_thread(
                 height
             );
         }
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
+        }
         let _ = tx_rsp.send(RawTileWorkerResponse::Tile(RawTileResponse {
             key: req.key,
             width,
@@ -1486,15 +1492,17 @@ pub fn spawn_tiff_tile_loader(
     let (tx_req, rx_req) = crossbeam_channel::unbounded::<TileRequest>();
     let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<TileWorkerResponse>();
     let threads = worker_threads.max(1);
-    let latest_render_id = Arc::new(AtomicU64::new(0));
+    let active_render_ids = Arc::new(Mutex::new(HashSet::new()));
     let active_keys = Arc::new(Mutex::new(HashSet::new()));
+    let decoded_tiles = CpuDecodedTileCache::new(8192);
 
     for worker_idx in 0..threads {
         let pyramid = Arc::clone(&pyramid);
         let rx_req = rx_req.clone();
         let tx_rsp = tx_rsp.clone();
-        let latest_render_id = Arc::clone(&latest_render_id);
+        let active_render_ids = Arc::clone(&active_render_ids);
         let active_keys = Arc::clone(&active_keys);
+        let decoded_tiles = Arc::clone(&decoded_tiles);
         std::thread::Builder::new()
             .name(format!("tiff-tile-loader-{worker_idx}"))
             .spawn(move || {
@@ -1503,8 +1511,9 @@ pub fn spawn_tiff_tile_loader(
                     dims_yx,
                     rx_req,
                     tx_rsp,
-                    latest_render_id,
+                    active_render_ids,
                     active_keys,
+                    decoded_tiles,
                 ) {
                     eprintln!("tiff tile loader worker {worker_idx} exited: {err:?}");
                 }
@@ -1512,12 +1521,13 @@ pub fn spawn_tiff_tile_loader(
             .context("spawn tiff tile loader")?;
     }
 
-    Ok(TileLoaderHandle {
-        tx: tx_req,
-        rx: rx_rsp,
-        latest_render_id,
+    Ok(TileLoaderHandle::with_decoded_tiles(
+        tx_req,
+        rx_rsp,
+        active_render_ids,
         active_keys,
-    })
+        decoded_tiles,
+    ))
 }
 
 fn tiff_tile_loader_thread(
@@ -1525,8 +1535,9 @@ fn tiff_tile_loader_thread(
     _dims_yx: (usize, usize),
     rx_req: Receiver<TileRequest>,
     tx_rsp: Sender<TileWorkerResponse>,
-    latest_render_id: Arc<AtomicU64>,
+    active_render_ids: Arc<Mutex<HashSet<u64>>>,
     active_keys: Arc<Mutex<HashSet<TileKey>>>,
+    decoded_tiles: Arc<CpuDecodedTileCache>,
 ) -> anyhow::Result<()> {
     // Each request may need several channel chunks, which are decoded separately
     // and then composited into one RGBA tile. Failures are reported per tile so a
@@ -1539,8 +1550,10 @@ fn tiff_tile_loader_thread(
     let mut ok_count: u64 = 0;
     let mut saw_req = false;
     for req in rx_req.iter() {
-        let latest = latest_render_id.load(Ordering::Relaxed);
-        if latest != 0 && req.key.render_id != latest {
+        if let Ok(active) = active_render_ids.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key.render_id)
+        {
             continue;
         }
         if let Ok(active) = active_keys.lock()
@@ -1584,16 +1597,31 @@ fn tiff_tile_loader_thread(
         let mut failed = false;
 
         for ch in &channels {
-            let decoded = decode_tiff_channel_chunk(
-                &mut dec,
-                &mut current_ifd,
-                lvl,
+            let decoded_key = DecodedTileKey {
+                view: req.key.view,
+                level,
                 tile_y,
                 tile_x,
-                ch.index as usize,
-            );
-            let (w, h, data_u16) = match decoded {
-                Ok(v) => v,
+                channel: ch.index,
+            };
+            let decoded = decoded_tiles.get_or_decode(decoded_key, || {
+                decode_tiff_channel_chunk(
+                    &mut dec,
+                    &mut current_ifd,
+                    lvl,
+                    tile_y,
+                    tile_x,
+                    ch.index as usize,
+                )
+                .map(|(width, height, values)| DecodedTile {
+                    width,
+                    height,
+                    values: Arc::new(values),
+                })
+                .map_err(|error| error.to_string())
+            });
+            let decoded = match decoded {
+                Ok(value) => value,
                 Err(err) => {
                     err_count += 1;
                     failed = true;
@@ -1613,17 +1641,17 @@ fn tiff_tile_loader_thread(
                 }
             };
             if acc.is_empty() {
-                width = w;
-                height = h;
+                width = decoded.width;
+                height = decoded.height;
                 acc.resize(width.saturating_mul(height).saturating_mul(3), 0.0);
-            } else if width != w || height != h {
+            } else if width != decoded.width || height != decoded.height {
                 failed = true;
                 break;
             }
 
             let (w0, w1) = ch.window;
             let denom = (w1 - w0).max(1.0);
-            for (i, &val) in data_u16.iter().enumerate() {
+            for (i, &val) in decoded.values.iter().enumerate() {
                 let t = ((val as f32 - w0) / denom).clamp(0.0, 1.0);
                 acc[i * 3 + 0] += t * ch.color_rgb[0];
                 acc[i * 3 + 1] += t * ch.color_rgb[1];
@@ -1651,6 +1679,19 @@ fn tiff_tile_loader_thread(
             rgba[i * 4 + 1] = (acc[i * 3 + 1].clamp(0.0, 1.0) * 255.0).round() as u8;
             rgba[i * 4 + 2] = (acc[i * 3 + 2].clamp(0.0, 1.0) * 255.0).round() as u8;
             rgba[i * 4 + 3] = 255;
+        }
+
+        if let Ok(active) = active_render_ids.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key.render_id)
+        {
+            continue;
+        }
+        if let Ok(active) = active_keys.lock()
+            && !active.is_empty()
+            && !active.contains(&req.key)
+        {
+            continue;
         }
 
         let _ = tx_rsp.send(TileWorkerResponse::Tile(TileResponse {
@@ -1841,9 +1882,12 @@ fn tiff_channel_max_loader_thread(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
     use std::fs::{self, File};
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     use tiff::encoder::{TiffEncoder, colortype};
     use tiff::tags::Tag;
@@ -1851,7 +1895,10 @@ mod tests {
     use super::{
         TiffChannelLayout, TiffPlaneSelection, TiffPyramid, decode_tiff_channel_chunk,
         ome_channel_ifd_order, ome_multichannel_plane_index, open_decoder, parse_ome_xml,
+        spawn_tiff_tile_loader,
     };
+    use crate::imaging::view_plane::{ViewPlaneMode, ViewPlaneSelection};
+    use crate::render::tiles::{RenderChannel, TileKey, TileRequest, TileWorkerResponse};
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -1921,6 +1968,72 @@ mod tests {
             decode_channel(&path, &pyramid, 0),
             pixels.iter().map(|&value| value as u16).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn composited_tiff_loader_shares_decode_across_viewport_presentations() {
+        let dir = TestTiffDir::new();
+        let path = dir.file("shared-decode.tif");
+        let pixels = (0..48).map(|value| value as u8).collect::<Vec<_>>();
+        let file = File::create(&path).expect("create grayscale TIFF");
+        TiffEncoder::new(file)
+            .expect("create TIFF encoder")
+            .new_image::<colortype::Gray8>(8, 6)
+            .expect("create grayscale image")
+            .write_data(&pixels)
+            .expect("write grayscale image");
+        let pyramid = Arc::new(
+            TiffPyramid::open_with_selection(&path, TiffPlaneSelection { z: 0, t: 0 })
+                .expect("open generated grayscale TIFF"),
+        );
+        let loader = spawn_tiff_tile_loader(pyramid, (6, 8), 1).expect("spawn TIFF loader");
+        let left = TileKey {
+            render_id: 51,
+            view: ViewPlaneSelection {
+                mode: ViewPlaneMode::Xy,
+                slice_level0: 0,
+            },
+            level: 0,
+            tile_y: 0,
+            tile_x: 0,
+        };
+        let right = TileKey {
+            render_id: 52,
+            ..left
+        };
+        loader.set_active_render_ids(HashSet::from([left.render_id, right.render_id]));
+        loader.set_active_keys(HashSet::from([left, right]));
+        for (key, color_rgb) in [(left, [1.0, 0.0, 0.0]), (right, [0.0, 1.0, 0.0])] {
+            loader
+                .tx
+                .send(TileRequest {
+                    key,
+                    channels: vec![RenderChannel {
+                        index: 0,
+                        color_rgb,
+                        window: (0.0, 255.0),
+                    }],
+                })
+                .expect("queue viewport tile");
+        }
+
+        let mut responses = HashMap::new();
+        for _ in 0..2 {
+            let response = loader
+                .rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("tile completion");
+            let TileWorkerResponse::Tile(tile) = response else {
+                panic!("expected composited tile");
+            };
+            responses.insert(tile.key.render_id, tile.rgba);
+        }
+        assert_ne!(responses[&left.render_id], responses[&right.render_id]);
+        let stats = loader.stats();
+        assert_eq!(stats.decode_requests, 2);
+        assert_eq!(stats.source_reads, 1);
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(stats.decoded_cache_entries, 1);
     }
 
     #[test]

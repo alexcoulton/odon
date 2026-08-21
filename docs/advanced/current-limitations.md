@@ -3,7 +3,7 @@
 This page lists the main constraints a user should know before treating `odon` as a general-purpose spatial viewer.
 
 For control and extension-specific boundaries—including the current
-single-viewport model—see [Current Python API limitations](python-api-limitations.md).
+two-viewport limit—see [Current Python API limitations](python-api-limitations.md).
 
 ## Viewer Model
 
