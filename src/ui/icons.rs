@@ -16,6 +16,8 @@ pub enum Icon {
     Points,
     Text,
     Sort,
+    Edit,
+    Confirm,
 }
 
 const ICONS_FAMILY: &str = "icons";
@@ -97,6 +99,8 @@ pub fn try_install_fontawesome(ctx: &egui::Context) -> bool {
         Icon::Points,
         Icon::Text,
         Icon::Sort,
+        Icon::Edit,
+        Icon::Confirm,
     ] {
         if let Some(ch) = resolve_fontawesome_glyph(&css, icon) {
             glyphs.insert(icon, ch);
@@ -253,6 +257,8 @@ fn resolve_fontawesome_glyph(css: &str, icon: Icon) -> Option<char> {
         Icon::Points => &["fa-braille", "fa-circle-dot", "fa-dot-circle"],
         Icon::Text => &["fa-font", "fa-i-cursor", "fa-text-height"],
         Icon::Sort => &["fa-sort", "fa-arrow-down-wide-short", "fa-arrow-down-a-z"],
+        Icon::Edit => &["fa-pen", "fa-pencil", "fa-pen-to-square", "fa-edit"],
+        Icon::Confirm => &["fa-check"],
     };
 
     for name in candidates {
@@ -392,7 +398,37 @@ pub fn paint_icon_in_rect(
         Icon::Points => paint_points(p, rect, stroke),
         Icon::Text => paint_text(p, rect, stroke),
         Icon::Sort => paint_sort(p, rect, stroke),
+        Icon::Edit => paint_edit(p, rect, stroke),
+        Icon::Confirm => paint_confirm(p, rect, stroke),
     }
+}
+
+fn paint_edit(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+    let r = rect.shrink(1.5);
+    let lower_left = egui::pos2(r.left() + r.width() * 0.20, r.top() + r.height() * 0.78);
+    let upper_right = egui::pos2(r.left() + r.width() * 0.72, r.top() + r.height() * 0.26);
+    let offset = egui::vec2(r.width() * 0.10, r.height() * 0.10);
+    let tip = egui::pos2(r.left() + r.width() * 0.87, r.top() + r.height() * 0.11);
+
+    p.add(egui::Shape::closed_line(
+        vec![
+            lower_left - offset,
+            upper_right - offset,
+            tip,
+            upper_right + offset,
+            lower_left + offset,
+        ],
+        stroke,
+    ));
+    p.line_segment([lower_left - offset, lower_left + offset], stroke);
+}
+
+fn paint_confirm(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {
+    let r = rect.shrink(1.0);
+    let start = egui::pos2(r.left() + r.width() * 0.14, r.top() + r.height() * 0.52);
+    let middle = egui::pos2(r.left() + r.width() * 0.40, r.top() + r.height() * 0.76);
+    let end = egui::pos2(r.left() + r.width() * 0.86, r.top() + r.height() * 0.22);
+    p.add(egui::Shape::line(vec![start, middle, end], stroke));
 }
 
 fn paint_select(p: &egui::Painter, rect: egui::Rect, stroke: egui::Stroke) {

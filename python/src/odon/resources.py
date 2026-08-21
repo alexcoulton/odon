@@ -426,6 +426,7 @@ class Viewer:
         return self._client.call("viewer.camera.set", _with_revision(params, if_revision))
 
     def fit(self, *, if_revision: int | None = None) -> Any:
+        """Fit content, waiting for Rust to finish the first canvas layout if needed."""
         return self._client.call("viewer.camera.fit", _with_revision({}, if_revision))
 
     def zoom_in(
@@ -560,7 +561,7 @@ class Viewport:
         if_revision: int | None = None,
         if_navigation_revision: int | None = None,
     ) -> Any:
-        """Fit the image in this viewport's canvas."""
+        """Fit the image, waiting for Rust to lay out this viewport if needed."""
         return self._client.call(
             "viewer.viewports.camera.fit",
             _with_viewport_revision(

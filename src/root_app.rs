@@ -1,8 +1,8 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
-use std::{collections::HashMap, collections::HashSet};
 
 use eframe::egui;
 
@@ -130,7 +130,10 @@ fn control_application_error(method: &str, response: &serde_json::Value) -> Opti
     let message = find_error(response)?;
     let kind = if message.contains("revision conflict") {
         ControlErrorKind::Conflict
-    } else if message.contains("transitioning") {
+    } else if message.contains("transitioning")
+        || message.contains("canvas viewport is available yet")
+        || message.contains("canvases have not been laid out yet")
+    {
         ControlErrorKind::NotReady
     } else if message.contains("No dataset viewer")
         || message.contains("No mosaic viewer")
@@ -164,6 +167,51 @@ fn control_application_error(method: &str, response: &serde_json::Value) -> Opti
             "application_response": response,
         })),
     )
+}
+
+const CONTROL_CANVAS_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ControlCanvasTarget {
+    ActiveViewer,
+    SingleViewport(String),
+    SingleWorkspace,
+    MosaicViewer,
+}
+
+fn control_canvas_target(method: &str, params: &serde_json::Value) -> Option<ControlCanvasTarget> {
+    let viewport_target = || {
+        params
+            .get("viewport_id")
+            .and_then(serde_json::Value::as_str)
+            .map(|viewport_id| ControlCanvasTarget::SingleViewport(viewport_id.to_string()))
+            .unwrap_or(ControlCanvasTarget::ActiveViewer)
+    };
+    match method {
+        "viewer.camera.fit" => Some(ControlCanvasTarget::ActiveViewer),
+        "viewer.viewports.camera.fit" => params
+            .get("viewport_id")
+            .and_then(serde_json::Value::as_str)
+            .map(|viewport_id| ControlCanvasTarget::SingleViewport(viewport_id.to_string())),
+        "viewer.objects.query_view" | "viewer.screenshot.capture" => Some(viewport_target()),
+        "viewer.workspace.screenshot.capture" => Some(ControlCanvasTarget::SingleWorkspace),
+        "mosaic.focus.fit" | "mosaic.fit_all" => Some(ControlCanvasTarget::MosaicViewer),
+        "mosaic.focus.set" | "mosaic.focus.next" | "mosaic.focus.previous"
+            if params
+                .get("fit")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true) =>
+        {
+            Some(ControlCanvasTarget::MosaicViewer)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct DeferredControlRequest {
+    request: OdonControlRequest,
+    waiting_since: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -421,6 +469,7 @@ pub struct RootApp {
     control_observed_state: Option<serde_json::Value>,
     control_mutated_this_frame: bool,
     control_last_observed_at: Instant,
+    deferred_control_requests: VecDeque<DeferredControlRequest>,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
@@ -538,7 +587,80 @@ impl RootApp {
             }
         }
         for request in requests {
-            self.reply_to_control_request(ctx, request);
+            if self.control_request_canvas_ready(&request) {
+                self.reply_to_control_request(ctx, request);
+            } else {
+                self.deferred_control_requests
+                    .push_back(DeferredControlRequest {
+                        request,
+                        waiting_since: Instant::now(),
+                    });
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    fn control_request_canvas_ready(&self, request: &OdonControlRequest) -> bool {
+        let Some(target) =
+            control_canvas_target(request.command.method(), request.command.params())
+        else {
+            return true;
+        };
+        match (target, &self.mode) {
+            (ControlCanvasTarget::ActiveViewer, Mode::Single(app)) => {
+                app.control_active_canvas_ready()
+            }
+            (ControlCanvasTarget::ActiveViewer, Mode::Mosaic { mosaic, .. }) => {
+                mosaic.control_canvas_ready()
+            }
+            (ControlCanvasTarget::SingleViewport(viewport_id), Mode::Single(app)) => app
+                .control_viewport_canvas_ready(&viewport_id)
+                .unwrap_or(true),
+            (ControlCanvasTarget::SingleWorkspace, Mode::Single(app)) => {
+                app.control_workspace_canvas_ready()
+            }
+            (ControlCanvasTarget::MosaicViewer, Mode::Mosaic { mosaic, .. }) => {
+                mosaic.control_canvas_ready()
+            }
+            // Wrong-mode and invalid-resource errors should be returned immediately rather than
+            // waiting for a readiness condition that can never become true.
+            _ => true,
+        }
+    }
+
+    fn process_deferred_control_requests(&mut self, ctx: &egui::Context) {
+        if self.deferred_control_requests.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut waiting = VecDeque::new();
+        while let Some(deferred) = self.deferred_control_requests.pop_front() {
+            let cancelled = deferred
+                .request
+                .task_id
+                .as_deref()
+                .and_then(|task_id| deferred.request.task_registry.get(task_id).ok())
+                .is_some_and(|task| task.state == TaskState::Cancelled);
+            if cancelled || self.control_request_canvas_ready(&deferred.request) {
+                self.reply_to_control_request(ctx, deferred.request);
+                ctx.request_repaint();
+            } else if now.duration_since(deferred.waiting_since) >= CONTROL_CANVAS_WAIT_TIMEOUT {
+                let method = deferred.request.command.method().to_string();
+                let _ = deferred.request.reply.send(Err(ControlError::new(
+                    ControlErrorKind::NotReady,
+                    format!("timed out waiting for Odon to lay out a canvas for {method}"),
+                )
+                .with_data(serde_json::json!({
+                    "method": method,
+                    "timeout_seconds": CONTROL_CANVAS_WAIT_TIMEOUT.as_secs(),
+                }))));
+            } else {
+                waiting.push_back(deferred);
+            }
+        }
+        self.deferred_control_requests = waiting;
+        if !self.deferred_control_requests.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
 
@@ -6624,6 +6746,7 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -6688,6 +6811,7 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -6752,6 +6876,7 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -8435,6 +8560,10 @@ impl eframe::App for RootApp {
         if back_to_single {
             self.switch_mosaic_to_single(ctx);
         }
+        // Canvas-dependent control calls are deliberately completed after this frame's layout.
+        // This makes a successful reply mean the requested geometry operation was actually
+        // applied, even when the request arrived before the first viewer frame.
+        self.process_deferred_control_requests(ctx);
         self.publish_observed_control_changes();
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
     }
@@ -8479,7 +8608,51 @@ mod control_boundary_tests {
         .expect("revision conflict");
         assert_eq!(conflict.kind, ControlErrorKind::Conflict);
 
+        let not_ready = control_application_error(
+            "viewer.viewports.camera.fit",
+            &serde_json::json!({
+                "viewport_id": "viewport-1",
+                "result": {"error": "No canvas viewport is available yet."}
+            }),
+        )
+        .expect("nested canvas readiness error");
+        assert_eq!(not_ready.kind, ControlErrorKind::NotReady);
+
         assert!(control_application_error("get_camera", &serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn canvas_dependent_commands_are_classified_for_deferred_execution() {
+        assert_eq!(
+            control_canvas_target("viewer.camera.fit", &serde_json::json!({})),
+            Some(ControlCanvasTarget::ActiveViewer)
+        );
+        assert_eq!(
+            control_canvas_target(
+                "viewer.viewports.camera.fit",
+                &serde_json::json!({"viewport_id": "viewport-2"}),
+            ),
+            Some(ControlCanvasTarget::SingleViewport(
+                "viewport-2".to_string()
+            ))
+        );
+        assert_eq!(
+            control_canvas_target(
+                "viewer.objects.query_view",
+                &serde_json::json!({"viewport_id": "viewport-1"}),
+            ),
+            Some(ControlCanvasTarget::SingleViewport(
+                "viewport-1".to_string()
+            ))
+        );
+        assert_eq!(
+            control_canvas_target("mosaic.focus.next", &serde_json::json!({"fit": false}),),
+            None
+        );
+        assert_eq!(
+            control_canvas_target("viewer.channels.list", &serde_json::json!({})),
+            None
+        );
     }
 
     #[test]

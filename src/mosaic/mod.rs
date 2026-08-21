@@ -922,6 +922,7 @@ impl MosaicViewerApp {
 
         serde_json::json!({
             "busy": !reasons.is_empty(),
+            "canvas_ready": self.control_canvas_ready(),
             "reasons": reasons,
             "top_right_spinner": {
                 "visible": image_tiles_busy || segmentation_busy || self.seg_geojson_pending_visible,
@@ -940,6 +941,17 @@ impl MosaicViewerApp {
                 "pending": screenshot_pending,
                 "in_flight": screenshot_in_flight,
             },
+        })
+    }
+
+    pub fn control_canvas_ready(&self) -> bool {
+        self.last_canvas_rect.is_some_and(|rect| {
+            rect.min.x.is_finite()
+                && rect.min.y.is_finite()
+                && rect.max.x.is_finite()
+                && rect.max.y.is_finite()
+                && rect.width() > 0.0
+                && rect.height() > 0.0
         })
     }
 

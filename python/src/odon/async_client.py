@@ -322,12 +322,16 @@ class _AsyncConnector:
         timeout: float,
         token: str | None,
         instance: Instance | str | None,
+        client_name: str,
+        client_version: str,
     ) -> None:
         self._host = host
         self._port = port
         self._timeout = timeout
         self._token = token
         self._instance = instance
+        self._client_name = client_name
+        self._client_version = client_version
         self._client: AsyncClient | None = None
 
     def __await__(self):
@@ -341,6 +345,8 @@ class _AsyncConnector:
                 timeout=self._timeout,
                 token=self._token,
                 instance=self._instance,
+                client_name=self._client_name,
+                client_version=self._client_version,
             )
         return self._client
 
@@ -359,7 +365,17 @@ def connect_async(
     timeout: float = 10.0,
     token: str | None = None,
     instance: Instance | str | None = None,
+    client_name: str = "odon-client",
+    client_version: str = "0.1.0",
 ) -> _AsyncConnector:
     """Return an awaitable and async-context-manager connection factory."""
 
-    return _AsyncConnector(host, port, timeout, token, instance)
+    return _AsyncConnector(
+        host,
+        port,
+        timeout,
+        token,
+        instance,
+        client_name,
+        client_version,
+    )

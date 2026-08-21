@@ -3475,6 +3475,7 @@ mod control_characterization_tests {
     #[test]
     fn explicit_camera_fit_uses_target_canvas_and_propagates_one_link_transaction() {
         let mut app = fixture_app();
+        let expected_center = app.image_world_rect_lvl0().center();
         let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
             .as_str()
             .unwrap()
@@ -3501,6 +3502,11 @@ mod control_characterization_tests {
             "viewport_id": left,
         }));
         assert!(fitted.get("error").is_none(), "{fitted:#}");
+        assert!(fitted["result"].get("error").is_none(), "{fitted:#}");
+        assert_eq!(
+            fitted["result"]["center_world_lvl0"],
+            serde_json::json!([expected_center.x, expected_center.y])
+        );
         assert_eq!(
             fitted["affected_viewport_ids"],
             serde_json::json!([left, right])
@@ -3519,6 +3525,83 @@ mod control_characterization_tests {
         assert_eq!(
             left_camera["result"]["zoom_screen_per_lvl0_px"],
             right_camera["result"]["zoom_screen_per_lvl0_px"]
+        );
+    }
+
+    #[test]
+    fn rapid_comparison_waits_for_layout_then_fits_a_restored_off_image_camera() {
+        let mut app = fixture_app();
+        let expected_center = app.image_world_rect_lvl0().center();
+        let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let right = app.control_create_viewport(&serde_json::json!({
+            "viewport_id": left,
+            "layout": "horizontal",
+        }))["viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let viewport_ids = app
+            .viewport_workspace
+            .as_ref()
+            .unwrap()
+            .viewports()
+            .iter()
+            .map(|viewport| viewport.id.clone())
+            .collect::<Vec<_>>();
+        for viewport_id in viewport_ids {
+            let viewport = app
+                .viewport_workspace
+                .as_mut()
+                .unwrap()
+                .get_mut(&viewport_id)
+                .unwrap();
+            viewport.state.camera.center_world_lvl0 = egui::pos2(40_000.0, 8_000.0);
+            viewport.state.camera.zoom_screen_per_lvl0_px = 0.01;
+            viewport.state.last_canvas_rect = None;
+        }
+        let active_state = app
+            .viewport_workspace
+            .as_ref()
+            .unwrap()
+            .active()
+            .state
+            .clone();
+        active_state.apply(&mut app);
+        assert!(!app.control_workspace_canvas_ready());
+        assert_eq!(app.control_viewport_canvas_ready(&left), Some(false));
+
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        });
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            app.ui_viewport_workspace(ui, &ctx);
+        });
+        let _ = ctx.end_pass();
+
+        assert!(app.control_workspace_canvas_ready());
+        let fitted = app.control_fit_viewport_camera(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        assert!(fitted["result"].get("error").is_none(), "{fitted:#}");
+        assert_eq!(
+            fitted["result"]["center_world_lvl0"],
+            serde_json::json!([expected_center.x, expected_center.y])
+        );
+        let right_camera = app.control_get_viewport_camera(&serde_json::json!({
+            "viewport_id": right,
+        }));
+        assert_eq!(
+            right_camera["result"]["center_world_lvl0"],
+            fitted["result"]["center_world_lvl0"]
         );
     }
 
@@ -4176,6 +4259,42 @@ mod control_characterization_tests {
         assert!(canvases[1].left() - canvases[0].right() < 30.0);
         let content_width = canvases[0].width() + canvases[1].width();
         assert!((canvases[0].width() / content_width - 0.55).abs() < 0.01);
+
+        let before_activation = canvases;
+        let activated = app.control_set_active_viewport(&serde_json::json!({
+            "viewport_id": left,
+        }));
+        assert!(activated.get("error").is_none(), "{activated:#}");
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        });
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            app.ui_viewport_workspace(ui, &ctx);
+        });
+        let _ = ctx.end_pass();
+
+        let after_activation = app
+            .viewport_workspace
+            .as_ref()
+            .unwrap()
+            .viewports()
+            .iter()
+            .map(|viewport| viewport.state.last_canvas_rect.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(before_activation.len(), after_activation.len());
+        for (before, after) in before_activation.iter().zip(&after_activation) {
+            assert!(
+                (before.top() - after.top()).abs() <= f32::EPSILON
+                    && (before.bottom() - after.bottom()).abs() <= f32::EPSILON
+                    && (before.left() - after.left()).abs() <= f32::EPSILON
+                    && (before.right() - after.right()).abs() <= f32::EPSILON,
+                "activating a viewport must not resize its header or canvas: before={before:?}, after={after:?}"
+            );
+        }
     }
 
     #[test]
@@ -6663,6 +6782,38 @@ impl OmeZarrViewerApp {
         })
     }
 
+    fn control_canvas_rect_ready(rect: Option<egui::Rect>) -> bool {
+        rect.is_some_and(|rect| {
+            rect.min.x.is_finite()
+                && rect.min.y.is_finite()
+                && rect.max.x.is_finite()
+                && rect.max.y.is_finite()
+                && rect.width() > 0.0
+                && rect.height() > 0.0
+        })
+    }
+
+    pub fn control_active_canvas_ready(&self) -> bool {
+        Self::control_canvas_rect_ready(self.last_canvas_rect)
+    }
+
+    pub fn control_viewport_canvas_ready(&self, viewport_id: &str) -> Option<bool> {
+        let viewport_id = ViewportId::new(viewport_id).ok()?;
+        let viewport = self.viewport_workspace.as_ref()?.get(&viewport_id)?;
+        Some(Self::control_canvas_rect_ready(
+            viewport.state.last_canvas_rect,
+        ))
+    }
+
+    pub fn control_workspace_canvas_ready(&self) -> bool {
+        self.viewport_workspace.as_ref().is_some_and(|workspace| {
+            !workspace.viewports().is_empty()
+                && workspace.viewports().iter().all(|viewport| {
+                    Self::control_canvas_rect_ready(viewport.state.last_canvas_rect)
+                })
+        })
+    }
+
     pub fn workspace_canvas_rect(&mut self) -> Option<egui::Rect> {
         self.sync_runtime_to_active_viewport();
         self.viewport_workspace
@@ -8564,12 +8715,19 @@ impl OmeZarrViewerApp {
     pub fn control_loading_state_snapshot(&self) -> serde_json::Value {
         let scene_reasons = self.scene_busy_debug_reasons();
         let async_reasons = self.async_ui_debug_reasons();
+        let active_canvas_ready = self.control_active_canvas_ready();
+        let workspace_canvas_ready = self.control_workspace_canvas_ready();
         let busy = self.is_loading_scene()
             || !async_reasons.is_empty()
             || !self.screenshot_pending.is_empty()
             || !self.screenshot_in_flight.is_empty();
         serde_json::json!({
             "busy": busy,
+            "canvas_ready": workspace_canvas_ready,
+            "canvas": {
+                "active_ready": active_canvas_ready,
+                "workspace_ready": workspace_canvas_ready,
+            },
             "indicator_text": self.loading_indicator_text(),
             "scene_reasons": scene_reasons,
             "async_reasons": async_reasons,
@@ -21287,37 +21445,102 @@ impl OmeZarrViewerApp {
         let mut activate = false;
         let mut renamed_title = None;
         let mut close_requested = false;
-        ui.horizontal(|ui| {
-            if is_active {
-                ui.label("●");
-                let mut edited = title.clone();
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut edited)
-                        .desired_width(120.0)
-                        .hint_text("Viewport name"),
-                );
-                if response.changed() && !edited.trim().is_empty() {
-                    renamed_title = Some(edited);
-                }
+        let header_height = ui.spacing().interact_size.y + 2.0;
+        let indicator_width = 12.0;
+        let title_width = 120.0;
+        let title_edit_id = egui::Id::new(("viewport-title-edit", viewport_id.as_str()));
+        let title_focus_id = egui::Id::new(("viewport-title-focus", viewport_id.as_str()));
+        let editing_title = ctx.data(|data| data.get_temp::<bool>(title_edit_id).unwrap_or(false));
+        let (header_rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), header_height),
+            egui::Sense::hover(),
+        );
+        let mut header_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(header_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let (indicator_rect, _) = header_ui.allocate_exact_size(
+            egui::vec2(indicator_width, header_height),
+            egui::Sense::hover(),
+        );
+        if is_active && header_ui.is_rect_visible(indicator_rect) {
+            header_ui.painter().circle_filled(
+                indicator_rect.center(),
+                3.0,
+                header_ui.visuals().selection.stroke.color,
+            );
+        }
+        if editing_title {
+            let mut edited = title.clone();
+            let response = header_ui.add_sized(
+                [title_width, header_height],
+                egui::TextEdit::singleline(&mut edited).hint_text("Viewport name"),
+            );
+            let focus_pending =
+                ctx.data(|data| data.get_temp::<bool>(title_focus_id).unwrap_or(false));
+            if focus_pending {
+                response.request_focus();
+                ctx.data_mut(|data| data.insert_temp(title_focus_id, false));
+            }
+            if response.changed() && !edited.trim().is_empty() {
+                renamed_title = Some(edited);
+            }
+            let keyboard_finished = response.has_focus()
+                && header_ui.input(|input| {
+                    input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Escape)
+                });
+            let edit_finished =
+                icon_button(&mut header_ui, Icon::Confirm, false, egui::Sense::click())
+                    .on_hover_text("Finish renaming")
+                    .clicked();
+            if response.lost_focus() || keyboard_finished || edit_finished {
+                ctx.data_mut(|data| data.insert_temp(title_edit_id, false));
+            }
+        } else {
+            let title_text = if is_active {
+                egui::RichText::new(title).strong()
             } else {
-                activate |= ui
-                    .selectable_label(false, title)
-                    .on_hover_text("Make this the active viewport")
+                egui::RichText::new(title)
+            };
+            let title_response = header_ui
+                .add_sized(
+                    [title_width, header_height],
+                    egui::Label::new(title_text)
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(if is_active {
+                    "Double-click to rename this viewport"
+                } else {
+                    "Make this the active viewport"
+                });
+            activate |= title_response.clicked();
+            let edit_requested = title_response.double_clicked()
+                || icon_button(&mut header_ui, Icon::Edit, false, egui::Sense::click())
+                    .on_hover_text("Rename this viewport")
                     .clicked();
+            if edit_requested {
+                activate = true;
+                ctx.data_mut(|data| {
+                    data.insert_temp(title_edit_id, true);
+                    data.insert_temp(title_focus_id, true);
+                });
+                ctx.request_repaint();
             }
-            if workspace.links().camera {
-                ui.small("camera linked");
-            }
-            if workspace.links().plane && self.view_plane_modes().len() > 1 {
-                ui.small("plane linked");
-            }
-            if workspace.len() > 1 {
-                close_requested = ui
-                    .small_button("×")
-                    .on_hover_text("Close this viewport")
-                    .clicked();
-            }
-        });
+        }
+        if workspace.links().camera {
+            header_ui.small("camera linked");
+        }
+        if workspace.links().plane && self.view_plane_modes().len() > 1 {
+            header_ui.small("plane linked");
+        }
+        if workspace.len() > 1 {
+            close_requested = header_ui
+                .small_button("×")
+                .on_hover_text("Close this viewport")
+                .clicked();
+        }
         if let Some(title) = renamed_title {
             if workspace.rename(viewport_id, title).unwrap_or(false) {
                 let _ = workspace.bump_presentation_revision(viewport_id);

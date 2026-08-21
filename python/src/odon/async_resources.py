@@ -430,6 +430,7 @@ class AsyncViewer:
         )
 
     async def fit(self, *, if_revision: int | None = None) -> Any:
+        """Fit content after Rust has completed the first canvas layout."""
         return await self._client.call("viewer.camera.fit", _with_revision({}, if_revision))
 
     async def zoom_in(
@@ -574,7 +575,7 @@ class AsyncViewport:
         if_revision: int | None = None,
         if_navigation_revision: int | None = None,
     ) -> Any:
-        """Fit the image in this viewport's canvas."""
+        """Fit the image after Rust has laid out this viewport."""
         return await self._client.call(
             "viewer.viewports.camera.fit",
             _with_viewport_revision(

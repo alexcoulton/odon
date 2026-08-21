@@ -36,6 +36,15 @@ class _ControlHandler(socketserver.StreamRequestHandler):
                     self.wfile.write((json.dumps(response) + "\n").encode())
                     self.wfile.flush()
                     return
+                expected_client = getattr(self.server, "expected_client", None)
+                if (
+                    expected_client is not None
+                    and request["params"].get("client") != expected_client
+                ):
+                    response = self._error(request_id, "INVALID_CLIENT", -32602)
+                    self.wfile.write((json.dumps(response) + "\n").encode())
+                    self.wfile.flush()
+                    return
                 hello_complete = True
                 response: dict[str, Any] = {
                     "jsonrpc": "2.0",
@@ -200,6 +209,7 @@ class _Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
     expected_token: str | None = None
+    expected_client: dict[str, str] | None = None
 
 
 class ClientTests(unittest.TestCase):
@@ -237,6 +247,22 @@ class ClientTests(unittest.TestCase):
         with odon.connect(self.host, self.port) as client:
             result = client.call("custom.method", {"value": 7})
             self.assertEqual(result["params"]["value"], 7)
+
+    def test_connect_forwards_custom_client_identity(self) -> None:
+        self.server.expected_client = {
+            "name": "odon-two-viewer-demo",
+            "version": "demo-1",
+        }
+        try:
+            with odon.connect(
+                self.host,
+                self.port,
+                client_name="odon-two-viewer-demo",
+                client_version="demo-1",
+            ) as client:
+                self.assertEqual(client.hello.instance_id, "test-instance")
+        finally:
+            self.server.expected_client = None
 
     def test_close_finishes_cleanup_after_server_disconnects(self) -> None:
         client = odon.connect(self.host, self.port)
@@ -393,6 +419,22 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.hello.app_name, "odon")
         finally:
             await client.close()
+
+    async def test_connect_async_forwards_custom_client_identity(self) -> None:
+        self.server.expected_client = {
+            "name": "odon-async-demo",
+            "version": "demo-2",
+        }
+        try:
+            async with odon.connect_async(
+                self.host,
+                self.port,
+                client_name="odon-async-demo",
+                client_version="demo-2",
+            ) as client:
+                self.assertEqual(client.hello.instance_id, "test-instance")
+        finally:
+            self.server.expected_client = None
 
     async def test_async_close_finishes_cleanup_after_server_disconnects(self) -> None:
         client = await odon.connect_async(self.host, self.port)

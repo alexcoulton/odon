@@ -17,8 +17,8 @@ mode. Availability is still capability- and readiness-checked at runtime.
 
 | Function | Contract |
 | --- | --- |
-| `odon.client.connect(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None) -> 'Client'` | Connect synchronously to a running Odon instance. |
-| `odon.async_client.connect_async(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None) -> '_AsyncConnector'` | Create an asynchronous Odon connection context. |
+| `odon.client.connect(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> 'Client'` | Connect synchronously to a running Odon instance. |
+| `odon.async_client.connect_async(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> '_AsyncConnector'` | Create an asynchronous Odon connection context. |
 | `odon.discovery.list_instances(*, clean_stale: 'bool' = True) -> 'list[Instance]'` | List discoverable authenticated local Odon instances. |
 | `odon.discovery.select_instance(instance: 'Instance \| str \| None' = None) -> 'Instance'` | Resolve an instance selector or require an unambiguous instance. |
 | `odon.launch.launch(executable: 'str \| Path', args: 'Sequence[str]' = (), *, timeout: 'float' = 20.0, env: 'Mapping[str, str] \| None' = None, terminate_on_failure: 'bool' = True) -> 'Client'` | Launch an installed Odon executable and connect synchronously. |
@@ -117,7 +117,7 @@ Access: `app.viewer`. Camera, rendering, panels, scale bar, and viewer UI state.
 | `get_state() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Get state. |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; event: viewer.camera.changed) |
-| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content to the viewport. (mutates; event: viewer.camera.changed) |
+| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content, waiting for Rust to finish the first canvas layout if needed. (mutates; event: viewer.camera.changed) |
 | `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; event: viewer.camera.changed) |
 | `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; event: viewer.camera.changed) |
 | `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
@@ -178,7 +178,7 @@ Access: returned by `app.viewer.viewports`. Stable handle for one viewport's nav
 | `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
 | `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image in this viewport's canvas. (mutates; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image, waiting for Rust to lay out this viewport if needed. (mutates; event: viewer.viewports.navigation.changed) |
 | `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
 | `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
 | `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |
@@ -866,7 +866,7 @@ Access: `app.viewer`. Async viewer resource.
 | `get_state() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Get state. |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; event: viewer.camera.changed) |
-| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content to the viewport. (mutates; event: viewer.camera.changed) |
+| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content after Rust has completed the first canvas layout. (mutates; event: viewer.camera.changed) |
 | `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; event: viewer.camera.changed) |
 | `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; event: viewer.camera.changed) |
 | `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
@@ -927,7 +927,7 @@ Access: returned by `app.viewer.viewports`. Stable asynchronous viewport handle.
 | `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
 | `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image in this viewport's canvas. (mutates; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image after Rust has laid out this viewport. (mutates; event: viewer.viewports.navigation.changed) |
 | `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
 | `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
 | `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |

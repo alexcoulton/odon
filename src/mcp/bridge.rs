@@ -1540,18 +1540,29 @@ fn wait_for_application_ready(
                 "Odon closed during a readiness check",
             )
         })??;
-        let mode_matches = state.get("mode").and_then(Value::as_str) == Some(expected_mode);
-        let busy = state
-            .get("loading")
-            .and_then(|loading| loading.get("busy"))
-            .and_then(Value::as_bool)
-            .or_else(|| state.get("busy").and_then(Value::as_bool))
-            .unwrap_or(true);
-        if mode_matches && !busy {
+        if application_state_is_ready(&state, expected_mode) {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn application_state_is_ready(state: &Value, expected_mode: &str) -> bool {
+    let mode_matches = state.get("mode").and_then(Value::as_str) == Some(expected_mode);
+    let busy = state
+        .get("loading")
+        .and_then(|loading| loading.get("busy"))
+        .and_then(Value::as_bool)
+        .or_else(|| state.get("busy").and_then(Value::as_bool))
+        .unwrap_or(true);
+    let canvas_ready = expected_mode == "project"
+        || state
+            .get("loading")
+            .and_then(|loading| loading.get("canvas_ready"))
+            .and_then(Value::as_bool)
+            .or_else(|| state.get("canvas_ready").and_then(Value::as_bool))
+            .unwrap_or(false);
+    mode_matches && !busy && canvas_ready
 }
 
 fn wait_for_output_path(
@@ -2156,5 +2167,32 @@ mod tests {
             }),
         );
         assert_eq!(contribution["result"]["extension_id"], "org.example.test");
+    }
+
+    #[test]
+    fn application_readiness_requires_a_laid_out_viewer_canvas() {
+        let loading_without_canvas = json!({
+            "mode": "single",
+            "loading": {"busy": false, "canvas_ready": false},
+        });
+        assert!(!application_state_is_ready(
+            &loading_without_canvas,
+            "single"
+        ));
+
+        let ready = json!({
+            "mode": "single",
+            "loading": {"busy": false, "canvas_ready": true},
+        });
+        assert!(application_state_is_ready(&ready, "single"));
+
+        let still_loading = json!({
+            "mode": "single",
+            "loading": {"busy": true, "canvas_ready": true},
+        });
+        assert!(!application_state_is_ready(&still_loading, "single"));
+
+        let project = json!({"mode": "project", "busy": false});
+        assert!(application_state_is_ready(&project, "project"));
     }
 }

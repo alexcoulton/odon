@@ -304,7 +304,17 @@ def connect(
     timeout: float = 10.0,
     token: str | None = None,
     instance: Instance | str | None = None,
+    client_name: str = "odon-client",
+    client_version: str = "0.1.0",
 ) -> Client:
     """Connect to a running Odon instance."""
 
-    return Client(host, port, timeout=timeout, token=token, instance=instance)
+    return Client(
+        host,
+        port,
+        timeout=timeout,
+        token=token,
+        instance=instance,
+        client_name=client_name,
+        client_version=client_version,
+    )
