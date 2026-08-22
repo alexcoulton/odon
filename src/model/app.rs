@@ -13,7 +13,8 @@ use crate::data::project_config::{
 };
 use crate::deep_link::{
     DeepLinkChannelColor, DeepLinkChannelContrast, DeepLinkChannelOrder,
-    DeepLinkObjectFilterClause, DeepLinkObjectFilterLogic, DeepLinkRequest,
+    DeepLinkObjectFilterClause, DeepLinkObjectFilterLogic, DeepLinkRequest, object_filter_model,
+    object_segmentation_requested, requested_bundled_label,
 };
 use crate::settings::AppSettings;
 use crate::viewports::{ViewportId, ViewportLayout, ViewportLinks, ViewportWorkspace};
@@ -201,6 +202,8 @@ pub struct AppModel {
     dataset_inspection_operation_generation: u64,
     remote_listing_operation_generation: u64,
     deep_link_resolve_operation_generation: u64,
+    deep_link_apply_operation_generation: u64,
+    deep_link_apply_pending: bool,
     project_operation_generation: u64,
     project_operation_pending: bool,
     project_object_preload: ProjectObjectPreloadCatalog,
@@ -255,6 +258,22 @@ pub struct ChannelIntensitySpec {
     pub ranges: Vec<Range<u64>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeepLinkApplyGuard {
+    pub(crate) project_load_generation: u64,
+    pub(crate) project_config_generation: u64,
+    pub(crate) document_generation: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct DeepLinkCurrentResources {
+    pub(crate) source_key: String,
+    pub(crate) object: Option<Arc<ControlObjectResource>>,
+    pub(crate) label_available: Vec<String>,
+    pub(crate) label_loaded: Option<String>,
+    pub(crate) label: Option<Arc<ControlLabelResource>>,
+}
+
 impl AppModel {
     pub fn project() -> Self {
         Self {
@@ -269,6 +288,8 @@ impl AppModel {
             dataset_inspection_operation_generation: 0,
             remote_listing_operation_generation: 0,
             deep_link_resolve_operation_generation: 0,
+            deep_link_apply_operation_generation: 0,
+            deep_link_apply_pending: false,
             project_operation_generation: 0,
             project_operation_pending: false,
             project_object_preload: ProjectObjectPreloadCatalog::default(),
@@ -299,6 +320,17 @@ impl AppModel {
 
     pub fn project_snapshot(&self) -> ProjectModelSnapshot {
         self.project.snapshot()
+    }
+
+    pub(crate) fn deep_link_current_resources(&self) -> Option<DeepLinkCurrentResources> {
+        let dataset = self.dataset.as_ref()?;
+        Some(DeepLinkCurrentResources {
+            source_key: dataset.descriptor.source.source_key(),
+            object: dataset.object_resource.clone(),
+            label_available: dataset.label_available.clone(),
+            label_loaded: dataset.label_loaded.clone(),
+            label: dataset.label_resource.clone(),
+        })
     }
 
     pub(crate) fn project_object_preload_scan(
@@ -464,6 +496,7 @@ impl AppModel {
         scope: &ProjectObjectPreloadScope,
         description: impl Into<String>,
     ) -> u64 {
+        self.cancel_pending_deep_link_apply("Superseded by project ROI open");
         self.project_roi_open_generation = self.project_roi_open_generation.wrapping_add(1).max(1);
         self.project_roi_open_pending = true;
         self.readiness.begin(
@@ -590,6 +623,103 @@ impl AppModel {
         Ok(Some(document_generation))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn install_deep_link_apply_for_generation(
+        &mut self,
+        operation_generation: u64,
+        guard: DeepLinkApplyGuard,
+        project: ProjectModelSnapshot,
+        roi: &ProjectRoi,
+        reuse_current: bool,
+        descriptor: DocumentDescriptor,
+        label_available: Vec<String>,
+        label_resource: Option<Arc<ControlLabelResource>>,
+        object_resource: Option<Arc<ControlObjectResource>>,
+        saved_view: Option<&Value>,
+        request: &DeepLinkRequest,
+        object_filter: Option<ControlObjectFilterResult>,
+    ) -> Result<Option<(u64, Vec<String>)>, ControlError> {
+        if !self.deep_link_apply_is_current(operation_generation, guard) {
+            return Ok(None);
+        }
+
+        // The caller applies this to a clone. Project replacement, document/resource install,
+        // saved-view restoration, and all deep-link presentation changes therefore commit as one
+        // retained transaction or not at all.
+        self.deep_link_apply_pending = false;
+        if reuse_current {
+            if self.dataset()?.descriptor.source.source_key() != descriptor.source.source_key() {
+                return Err(ControlError::new(
+                    ControlErrorKind::Conflict,
+                    "the current document changed during deep-link reuse",
+                ));
+            }
+            if let Some(resource) = label_resource {
+                self.install_label_resource_immediate(resource, label_available)?;
+            }
+            if let Some(resource) = object_resource {
+                let already_installed = self
+                    .dataset()?
+                    .object_resource
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &resource));
+                if !already_installed {
+                    self.install_object_resource_immediate(resource)?;
+                }
+            }
+            self.project.activate_roi(roi)?;
+            let notes = self.apply_deep_link_to_current_dataset(request, object_filter)?;
+            self.sync_current_dataset_view_to_project()?;
+            self.readiness.finish(
+                OperationKind::DeepLinkApply,
+                operation_generation,
+                "Deep link applied",
+            );
+            return Ok(Some((self.document_generation, notes)));
+        }
+        self.project.replace(project);
+        self.project_initialized = true;
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        let scope = self.project_object_preload.scope();
+        let document_generation = self.begin_dataset_open(roi.source_display());
+        if !self.install_document_for_generation(
+            document_generation,
+            descriptor,
+            label_available,
+            label_resource,
+        ) {
+            return Err(ControlError::new(
+                ControlErrorKind::Conflict,
+                "deep-link document generation changed during installation",
+            ));
+        }
+        {
+            let dataset = self.dataset_mut()?;
+            dataset.masks.replace(roi.mask_layers.clone(), None);
+            Self::sync_mask_native_layers(dataset);
+        }
+        if let Some(resource) = object_resource {
+            if let Some(path) = super::project_roi_segmentation_path(&project, roi) {
+                self.project_object_preload
+                    .remember_resource(&scope, path, Arc::clone(&resource));
+            }
+            self.install_object_resource_immediate(resource)?;
+        }
+        if let Some(view) = saved_view {
+            self.restore_project_roi_view(view)?;
+        }
+        self.project.activate_roi(roi)?;
+        let notes = self.apply_deep_link_to_current_dataset(request, object_filter)?;
+        self.sync_current_dataset_view_to_project()?;
+        self.readiness.finish(
+            OperationKind::DeepLinkApply,
+            operation_generation,
+            "Deep link applied",
+        );
+        Ok(Some((document_generation, notes)))
+    }
+
     fn install_object_resource_immediate(
         &mut self,
         resource: Arc<ControlObjectResource>,
@@ -609,6 +739,41 @@ impl AppModel {
             self.object_resource_generation,
             "Ready",
         );
+        Ok(())
+    }
+
+    fn install_label_resource_immediate(
+        &mut self,
+        resource: Arc<ControlLabelResource>,
+        mut available: Vec<String>,
+    ) -> Result<(), ControlError> {
+        let name = resource.dataset.label_name.clone();
+        if !available.contains(&name) {
+            available.push(name.clone());
+        }
+        available.sort();
+        available.dedup();
+        let label_generation = {
+            let dataset = self.dataset_mut()?;
+            dataset.label_generation = dataset.label_generation.wrapping_add(1).max(1);
+            dataset.label_available = available;
+            dataset.label_selected = name.clone();
+            dataset.label_loaded = Some(name.clone());
+            dataset.label_resource = Some(resource);
+            dataset.label_pending = false;
+            dataset.label_actor_owned = true;
+            dataset.label_status = format!("Loaded labels/{name}.");
+            for viewport in dataset.workspace.viewports_mut() {
+                viewport.state.segmentation_labels_visible = true;
+                viewport
+                    .state
+                    .native_layers
+                    .set_segmentation_labels(true, true);
+            }
+            dataset.label_generation
+        };
+        self.readiness
+            .mark_ready(OperationKind::Labels, label_generation, "Ready");
         Ok(())
     }
 
@@ -840,6 +1005,106 @@ impl AppModel {
         })
     }
 
+    fn apply_deep_link_to_current_dataset(
+        &mut self,
+        request: &DeepLinkRequest,
+        object_filter: Option<ControlObjectFilterResult>,
+    ) -> Result<Vec<String>, ControlError> {
+        let dataset = self.dataset_mut()?;
+        let viewport_id = dataset.workspace.active_id().clone();
+        let before = dataset.workspace.active().state.clone();
+        let object_resource = dataset.object_resource.clone();
+        let abs_max = dataset.descriptor.abs_max.max(1.0);
+        let requested_label = requested_bundled_label(request);
+        let object_requested = object_segmentation_requested(request);
+        let suppress_labels = object_requested
+            || request.load_segmentation_labels == Some(false)
+            || request
+                .segmentation_source
+                .as_deref()
+                .or(request.segmentation.as_deref())
+                .is_some_and(|source| normalize_deep_link_term(source) == "none");
+
+        if let Some(label) = requested_label.as_deref() {
+            if dataset.label_loaded.as_deref() != Some(label) {
+                return Err(ControlError::new(
+                    ControlErrorKind::ResourceNotFound,
+                    format!("labels/{label} was not loaded by the deep-link transaction"),
+                ));
+            }
+            dataset.label_selected = label.to_string();
+            dataset.label_status = format!("Loaded labels/{label} from deep link.");
+        }
+
+        let notes = {
+            let viewport = &mut dataset.workspace.active_mut().state;
+            let notes = apply_deep_link_viewport(
+                viewport,
+                request,
+                object_resource.as_deref(),
+                object_filter,
+                abs_max,
+            )?;
+            if requested_label.is_some() {
+                viewport.segmentation_labels_visible = true;
+                viewport.native_layers.set_segmentation_labels(true, true);
+                let _ = viewport.native_layers.set_active("segmentation_labels");
+            } else if suppress_labels {
+                viewport.segmentation_labels_visible = false;
+                if viewport.native_layers.get("segmentation_labels").is_some() {
+                    let _ = viewport
+                        .native_layers
+                        .set_visibility("segmentation_labels", false);
+                }
+            }
+            if object_requested {
+                viewport.objects["visible"] = Value::Bool(true);
+                viewport.segmentation_geojson_visible = object_resource.is_some();
+                viewport
+                    .native_layers
+                    .set_primary_objects(object_resource.is_some());
+                if object_resource.is_some() {
+                    let _ = viewport.native_layers.set_active("segmentation_objects");
+                }
+            }
+            notes
+        };
+        let after = dataset.workspace.active().state.clone();
+        if after.center != before.center || after.zoom != before.zoom {
+            let _ = dataset.workspace.bump_navigation_revision(&viewport_id);
+            if dataset.workspace.links().camera {
+                propagate_camera(&mut dataset.workspace, &viewport_id, &after);
+            }
+        }
+        if presentation_changed(&before, &after) {
+            let _ = dataset.workspace.bump_presentation_revision(&viewport_id);
+        }
+        Ok(notes)
+    }
+
+    fn sync_current_dataset_view_to_project(&mut self) -> Result<(), ControlError> {
+        let dataset = self.dataset()?;
+        let source_key = dataset.descriptor.source.source_key();
+        let workspace = project_workspace_view_json(&dataset.workspace);
+        let active = &dataset.workspace.active().state;
+        let view = json!({
+            "channel_order":active.channel_order,
+            "channels":active.channels.iter().map(project_channel_view_json).collect::<Vec<_>>(),
+            "active_channel":active.active_channel,
+            "segmentation":project_segmentation_view_json(dataset, active),
+            "analysis":{"show_selection_overlay":active.objects.get("show_selection_overlay").cloned().unwrap_or(Value::Bool(true))},
+            "camera":{"center_world_lvl0":active.center,"zoom_screen_per_lvl0_px":active.zoom},
+            "object_filter":active.objects.get("filter").cloned().unwrap_or_else(default_object_filter_model),
+            "object_visible":active.objects.get("visible").cloned().unwrap_or(Value::Bool(false)),
+            "object_opacity":active.objects.get("opacity").cloned().unwrap_or(json!(0.75_f32)),
+            "object_width_screen_px":active.objects.get("width_screen_px").cloned().unwrap_or(json!(1.25_f32)),
+            "object_color_rgb":active.objects.get("color_rgb").cloned().unwrap_or(json!([255,255,255])),
+            "object_show_selection_overlay":active.objects.get("show_selection_overlay").cloned().unwrap_or(Value::Bool(true)),
+            "workspace":workspace,
+        });
+        self.project.set_roi_view_state_json(&source_key, view)
+    }
+
     pub fn prepare_lifecycle_project_save(&mut self) -> Result<(Value, u64), ControlError> {
         if self
             .dataset
@@ -1041,6 +1306,7 @@ impl AppModel {
     }
 
     pub fn begin_project_operation(&mut self, description: impl Into<String>) -> u64 {
+        self.cancel_pending_deep_link_apply("Superseded by project transaction");
         if self.project_roi_open_pending {
             let generation = self.project_roi_open_generation;
             self.project_roi_open_pending = false;
@@ -3305,6 +3571,7 @@ impl AppModel {
     }
 
     pub fn set_mode(&mut self, mode: ModelMode) {
+        self.cancel_pending_deep_link_apply("Superseded by application mode change");
         self.project_roi_open_pending = false;
         self.mode = mode;
         if mode != ModelMode::Single {
@@ -3353,6 +3620,7 @@ impl AppModel {
     }
 
     pub fn begin_dataset_open(&mut self, source: impl Into<String>) -> u64 {
+        self.cancel_pending_deep_link_apply("Superseded by newer document request");
         if self.project_roi_open_pending {
             let generation = self.project_roi_open_generation;
             self.project_roi_open_pending = false;
@@ -3506,6 +3774,101 @@ impl AppModel {
     ) -> bool {
         self.readiness
             .cancel_scoped(OperationKind::DeepLinkResolve, scope, generation, status)
+    }
+
+    pub(crate) fn begin_deep_link_apply(
+        &mut self,
+        description: impl Into<String>,
+    ) -> (u64, DeepLinkApplyGuard) {
+        if self.deep_link_apply_pending {
+            self.readiness.cancel(
+                OperationKind::DeepLinkApply,
+                self.deep_link_apply_operation_generation,
+                "Superseded by a newer deep link",
+            );
+        }
+        self.deep_link_apply_operation_generation = self
+            .deep_link_apply_operation_generation
+            .wrapping_add(1)
+            .max(1);
+        self.deep_link_apply_pending = true;
+        self.readiness.begin(
+            OperationKind::DeepLinkApply,
+            self.deep_link_apply_operation_generation,
+            description,
+        );
+        let project = self.project_snapshot();
+        (
+            self.deep_link_apply_operation_generation,
+            DeepLinkApplyGuard {
+                project_load_generation: project.load_generation,
+                project_config_generation: project.config_generation,
+                document_generation: self.document_generation,
+            },
+        )
+    }
+
+    pub(crate) fn deep_link_apply_is_current(
+        &self,
+        generation: u64,
+        guard: DeepLinkApplyGuard,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.deep_link_apply_pending
+            && self.deep_link_apply_operation_generation == generation
+            && project.load_generation == guard.project_load_generation
+            && project.config_generation == guard.project_config_generation
+            && self.document_generation == guard.document_generation
+            && self
+                .readiness
+                .is_pending(OperationKind::DeepLinkApply, generation)
+    }
+
+    pub(crate) fn fail_deep_link_apply(
+        &mut self,
+        generation: u64,
+        guard: DeepLinkApplyGuard,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.deep_link_apply_is_current(generation, guard) {
+            return false;
+        }
+        self.deep_link_apply_pending = false;
+        self.readiness
+            .fail(OperationKind::DeepLinkApply, generation, message);
+        true
+    }
+
+    pub(crate) fn cancel_deep_link_apply(
+        &mut self,
+        generation: u64,
+        guard: DeepLinkApplyGuard,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.deep_link_apply_is_current(generation, guard) {
+            return false;
+        }
+        self.deep_link_apply_pending = false;
+        self.readiness
+            .cancel(OperationKind::DeepLinkApply, generation, message);
+        true
+    }
+
+    pub(crate) fn supersede_deep_link_apply(&mut self, generation: u64, message: &str) {
+        if self.deep_link_apply_pending && self.deep_link_apply_operation_generation == generation {
+            self.deep_link_apply_pending = false;
+            self.readiness
+                .cancel(OperationKind::DeepLinkApply, generation, message);
+        }
+    }
+
+    pub(crate) fn cancel_pending_deep_link_apply(&mut self, message: &str) {
+        if self.deep_link_apply_pending {
+            let generation = self.deep_link_apply_operation_generation;
+            self.deep_link_apply_pending = false;
+            self.readiness
+                .cancel(OperationKind::DeepLinkApply, generation, message);
+        }
     }
 
     pub fn fail_dataset_open(&mut self, message: impl Into<String>) {
@@ -6685,6 +7048,20 @@ fn overlay_project_viewport(
     channel_count: usize,
 ) -> Result<Value, ControlError> {
     let mut projected = base.clone();
+    if let Some(presentation) = saved.get("presentation") {
+        for name in [
+            "channel_groups",
+            "channel_sort",
+            "objects",
+            "object_overlay_visibility",
+            "native_layers",
+            "rendering",
+        ] {
+            if let Some(value) = presentation.get(name) {
+                projected[name] = value.clone();
+            }
+        }
+    }
     for (saved_name, projected_name) in [
         ("id", "viewport_id"),
         ("title", "title"),
@@ -7901,6 +8278,502 @@ fn apply_object_legend_patch(objects: &mut Value, params: &Value) -> Result<(), 
     );
     object.insert("color_property".to_string(), Value::String(property));
     Ok(())
+}
+
+fn apply_deep_link_viewport(
+    viewport: &mut ViewportModel,
+    request: &DeepLinkRequest,
+    object_resource: Option<&ControlObjectResource>,
+    object_filter: Option<ControlObjectFilterResult>,
+    abs_max: f32,
+) -> Result<Vec<String>, ControlError> {
+    let mut notes = Vec::new();
+    let active_terms = if request.channel_alternatives.is_empty() {
+        request.channel.iter().cloned().collect::<Vec<_>>()
+    } else {
+        request.channel_alternatives.clone()
+    };
+    if !active_terms.is_empty() {
+        if let Some(index) = find_deep_link_channel(&viewport.channels, &active_terms) {
+            viewport.active_channel = index;
+            viewport.channels[index].visible = true;
+        } else {
+            notes.push(format!(
+                "channel '{}' was not found",
+                active_terms.join("' or '")
+            ));
+        }
+    }
+
+    let visible_groups = deep_link_channel_term_groups(
+        &request.visible_channels,
+        &request.visible_channel_alternatives,
+    );
+    let mut visible_indices = Vec::new();
+    if !visible_groups.is_empty() {
+        for channel in &mut viewport.channels {
+            channel.visible = false;
+        }
+        for terms in &visible_groups {
+            if let Some(index) = find_deep_link_channel(&viewport.channels, terms) {
+                if !visible_indices.contains(&index) {
+                    visible_indices.push(index);
+                }
+                viewport.channels[index].visible = true;
+            } else {
+                notes.push(format!(
+                    "visible channel '{}' was not found",
+                    terms.join("' or '")
+                ));
+            }
+        }
+        if request.group_visible_channels || request.visible_channel_group.is_some() {
+            if visible_indices.is_empty() {
+                notes.push("no visible channels were available to group".to_string());
+            } else {
+                let name = request
+                    .visible_channel_group
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Deep link channels");
+                let group_id = ensure_model_channel_group(
+                    &mut viewport.channel_groups,
+                    None,
+                    Some(name),
+                    request.visible_channel_group_color,
+                );
+                viewport
+                    .channel_groups
+                    .channel_members
+                    .retain(|_, member| member.group_id != group_id);
+                for index in &visible_indices {
+                    viewport.channel_groups.channel_members.insert(
+                        viewport.channels[*index].name.clone(),
+                        ProjectChannelGroupMember {
+                            group_id,
+                            inherit_color: true,
+                        },
+                    );
+                }
+            }
+        }
+        if request.channel_order == Some(DeepLinkChannelOrder::Listed)
+            && !visible_indices.is_empty()
+        {
+            viewport.channel_order = visible_indices
+                .iter()
+                .copied()
+                .chain(
+                    viewport
+                        .channel_order
+                        .iter()
+                        .copied()
+                        .filter(|index| !visible_indices.contains(index)),
+                )
+                .collect();
+        }
+    }
+
+    for terms in deep_link_channel_term_groups(
+        &request.hidden_channels,
+        &request.hidden_channel_alternatives,
+    ) {
+        if let Some(index) = find_deep_link_channel(&viewport.channels, &terms) {
+            viewport.channels[index].visible = false;
+        } else {
+            notes.push(format!(
+                "hidden channel '{}' was not found",
+                terms.join("' or '")
+            ));
+        }
+    }
+
+    for requested in &request.channel_colors {
+        if let Some(index) =
+            find_deep_link_channel(&viewport.channels, std::slice::from_ref(&requested.channel))
+        {
+            viewport.channels[index].color_rgb = requested.color_rgb;
+            if let Some(member) = viewport
+                .channel_groups
+                .channel_members
+                .get_mut(&viewport.channels[index].name)
+            {
+                member.inherit_color = false;
+            }
+        } else {
+            notes.push(format!(
+                "channel colour target '{}' was not found",
+                requested.channel
+            ));
+        }
+    }
+
+    if request.contrast_min.is_some() || request.contrast_max.is_some() {
+        let index = viewport
+            .active_channel
+            .min(viewport.channels.len().saturating_sub(1));
+        if let Some(channel) = viewport.channels.get_mut(index) {
+            let (old_min, old_max) = channel.window.unwrap_or((0.0, abs_max));
+            let min = request.contrast_min.unwrap_or(old_min).clamp(0.0, abs_max);
+            let max = request.contrast_max.unwrap_or(old_max).clamp(0.0, abs_max);
+            if min.is_finite() && max.is_finite() && max > min {
+                channel.window = Some((min, max));
+            } else {
+                notes.push(format!(
+                    "contrast limits for channel '{}' were invalid",
+                    channel.name
+                ));
+            }
+        }
+    }
+    for contrast in &request.channel_contrasts {
+        if let Some(index) =
+            find_deep_link_channel(&viewport.channels, std::slice::from_ref(&contrast.channel))
+        {
+            let min = contrast.min.clamp(0.0, abs_max);
+            let max = contrast.max.clamp(0.0, abs_max);
+            if min.is_finite() && max.is_finite() && max > min {
+                viewport.channels[index].window = Some((min, max));
+            } else {
+                notes.push(format!(
+                    "contrast limits for channel '{}' were invalid",
+                    contrast.channel
+                ));
+            }
+        } else {
+            notes.push(format!(
+                "contrast channel '{}' was not found",
+                contrast.channel
+            ));
+        }
+    }
+
+    if !viewport.objects.is_object() {
+        viewport.objects = default_object_snapshot();
+    }
+    if let Some(property) = request.cell_color_by.as_deref() {
+        viewport.objects["color_property"] = Value::String(property.to_string());
+        viewport.objects["fill_cells"] = Value::Bool(request.fill_cells.unwrap_or(true));
+    } else if let Some(fill) = request.fill_cells {
+        viewport.objects["fill_cells"] = Value::Bool(fill);
+    }
+    if let Some(show) = request.show_selection_overlay {
+        viewport.objects["show_selection_overlay"] = Value::Bool(show);
+    }
+    if let Some(fast) = request.fast_object_rendering {
+        viewport.objects["fast_rendering"] = Value::Bool(fast);
+    }
+    apply_deep_link_object_legend(viewport, request, object_resource);
+
+    if let Some(result) = object_filter {
+        viewport.objects["filter"] = result.model;
+        viewport.object_filter_indices = result.matching_indices;
+        viewport.object_filter_active = result.active;
+        viewport.object_filter_revision = viewport.object_filter_revision.wrapping_add(1).max(1);
+    } else if let Some(model) = object_filter_model(request) {
+        viewport.objects["filter"] = model;
+        viewport.object_filter_indices = Arc::new(Vec::new());
+        viewport.object_filter_active = false;
+        viewport.object_filter_revision = viewport.object_filter_revision.wrapping_add(1).max(1);
+        if object_resource.is_none() {
+            notes.push("object filter was retained but object data is unavailable".to_string());
+        }
+    }
+
+    if let Some(center) = request.center_world {
+        if !center.iter().all(|value| value.is_finite()) {
+            return Err(invalid("deep-link camera center must be finite"));
+        }
+        viewport.center = center;
+    }
+    if let Some(zoom) = request.zoom {
+        if !zoom.is_finite() || zoom <= 0.0 {
+            return Err(invalid("deep-link camera zoom must be positive and finite"));
+        }
+        viewport.zoom = zoom;
+    }
+    Ok(notes)
+}
+
+fn find_deep_link_channel(channels: &[ModelChannel], terms: &[String]) -> Option<usize> {
+    for term in terms {
+        let needle = normalize_deep_link_term(term);
+        if needle.is_empty() {
+            continue;
+        }
+        if let Some(index) = channels
+            .iter()
+            .position(|channel| normalize_deep_link_term(&channel.name) == needle)
+        {
+            return Some(index);
+        }
+        if let Some(index) = channels.iter().position(|channel| {
+            normalize_deep_link_term(marker_from_channel_label(&channel.name)) == needle
+        }) {
+            return Some(index);
+        }
+        let marker_matches = channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| {
+                deep_link_marker_alias_matches(term, marker_from_channel_label(&channel.name))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if marker_matches.len() == 1 {
+            return marker_matches.first().copied();
+        }
+        let contains = channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| {
+                normalize_deep_link_term(&channel.name)
+                    .contains(&needle)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if contains.len() == 1 {
+            return contains.first().copied();
+        }
+    }
+    None
+}
+
+fn normalize_deep_link_term(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
+}
+
+fn marker_from_channel_label(value: &str) -> &str {
+    let marker = value
+        .split_once(" - ")
+        .map(|(_, marker)| marker)
+        .unwrap_or(value)
+        .trim();
+    marker
+        .split_once(" (")
+        .map(|(marker, _)| marker)
+        .or_else(|| marker.split_once(" [").map(|(marker, _)| marker))
+        .unwrap_or(marker)
+        .trim()
+}
+
+fn deep_link_marker_alias_matches(requested: &str, candidate: &str) -> bool {
+    let requested = normalize_deep_link_term(requested);
+    let candidate = normalize_deep_link_term(candidate);
+    if requested.is_empty() || candidate.is_empty() {
+        return false;
+    }
+    if requested == candidate {
+        return true;
+    }
+    let Some((requested_digits, requested_suffix)) = deep_link_cd_marker_suffix(&requested) else {
+        return false;
+    };
+    let Some((candidate_digits, candidate_suffix)) = deep_link_cd_marker_suffix(&candidate) else {
+        return false;
+    };
+    requested_digits == candidate_digits
+        && if requested_suffix.is_empty() {
+            candidate_suffix
+                .chars()
+                .next()
+                .is_none_or(|ch| ch.is_ascii_alphabetic())
+        } else {
+            requested_suffix == candidate_suffix
+        }
+}
+
+fn deep_link_cd_marker_suffix(value: &str) -> Option<(&str, &str)> {
+    let rest = value.strip_prefix("cd")?;
+    let digits = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    (digits > 0).then(|| rest.split_at(digits))
+}
+
+fn deep_link_channel_term_groups(raw: &[String], alternatives: &[Vec<String>]) -> Vec<Vec<String>> {
+    let mut groups = alternatives
+        .iter()
+        .filter_map(|terms| {
+            let terms = terms
+                .iter()
+                .map(|term| term.trim())
+                .filter(|term| !term.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (!terms.is_empty()).then_some(terms)
+        })
+        .collect::<Vec<_>>();
+    groups.extend(
+        raw.iter()
+            .map(|term| term.trim())
+            .filter(|term| !term.is_empty())
+            .map(|term| vec![term.to_string()]),
+    );
+    groups
+}
+
+fn apply_deep_link_object_legend(
+    viewport: &mut ViewportModel,
+    request: &DeepLinkRequest,
+    resource: Option<&ControlObjectResource>,
+) {
+    let property = request
+        .cell_color_by
+        .as_deref()
+        .or_else(|| {
+            viewport
+                .objects
+                .get("color_property")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|property| !property.is_empty());
+    let Some(property) = property else {
+        return;
+    };
+    let mut values = resource
+        .into_iter()
+        .flat_map(|resource| resource.features.iter())
+        .filter_map(|feature| feature.properties.get(property))
+        .filter_map(object_value_label)
+        .collect::<Vec<_>>();
+    values.extend(request.visible_cell_types.iter().cloned());
+    values.extend(request.hidden_cell_types.iter().cloned());
+    values.extend(
+        request
+            .object_level_colors
+            .iter()
+            .map(|entry| entry.value.clone()),
+    );
+    values.sort();
+    values.dedup();
+    let visible = request
+        .visible_cell_types
+        .iter()
+        .map(|value| normalize_deep_link_term(value))
+        .collect::<HashSet<_>>();
+    let hidden = request
+        .hidden_cell_types
+        .iter()
+        .map(|value| normalize_deep_link_term(value))
+        .collect::<HashSet<_>>();
+    let colors = request
+        .object_level_colors
+        .iter()
+        .map(|entry| (normalize_deep_link_term(&entry.value), entry.color_rgb))
+        .collect::<HashMap<_, _>>();
+    let overrides = viewport
+        .objects
+        .as_object_mut()
+        .expect("deep-link object presentation is normalized")
+        .entry("color_level_overrides")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("object legend overrides are an object");
+    for value in values {
+        let normalized = normalize_deep_link_term(&value);
+        let style = overrides
+            .entry(value)
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("object legend style is an object");
+        if !visible.is_empty() || !hidden.is_empty() {
+            style.insert(
+                "visible".to_string(),
+                Value::Bool(
+                    (visible.is_empty() || visible.contains(&normalized))
+                        && !hidden.contains(&normalized),
+                ),
+            );
+        }
+        if let Some(color) = colors.get(&normalized) {
+            style.insert("color_rgb".to_string(), json!(color));
+        }
+    }
+}
+
+fn object_value_label(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn project_channel_view_json(channel: &ModelChannel) -> Value {
+    json!({
+        "name":channel.name,
+        "visible":channel.visible,
+        "color_rgb":channel.color_rgb,
+        "window":channel.window.map(|(min,max)| [min,max]),
+        "offset_world":channel.offset_world,
+        "scale":channel.scale,
+        "rotation_rad":channel.rotation_rad,
+        "note":channel.note,
+    })
+}
+
+fn project_segmentation_view_json(dataset: &DatasetModel, viewport: &ViewportModel) -> Value {
+    json!({
+        "label_name":dataset.label_loaded.as_ref().unwrap_or(&dataset.label_selected),
+        "object_display":{
+            "color_property_key":viewport.objects.get("color_property").cloned().unwrap_or(Value::Null),
+            "color_level_overrides":viewport.objects.get("color_level_overrides").cloned().unwrap_or_else(|| json!({})),
+            "fill_cells":viewport.objects.get("fill_cells").cloned().unwrap_or(Value::Bool(false)),
+            "fill_opacity":viewport.objects.get("fill_opacity").cloned().unwrap_or(json!(0.30_f32)),
+            "selected_fill_opacity":viewport.objects.get("selected_fill_opacity").cloned().unwrap_or(json!(0.70_f32)),
+            "fast_rendering":viewport.objects.get("fast_rendering").cloned().unwrap_or(Value::Bool(true)),
+        },
+    })
+}
+
+fn project_workspace_view_json(workspace: &ViewportWorkspace<ViewportModel>) -> Value {
+    let active = workspace.active_id();
+    json!({
+        "version":1,
+        "layout":workspace.layout().as_str(),
+        "split_ratio":workspace.split_ratio(),
+        "active_viewport_id":active.as_str(),
+        "link_camera":workspace.links().camera,
+        "link_plane":workspace.links().plane,
+        "link_selection":workspace.links().selection,
+        "viewports":workspace.viewports().iter().map(|slot| {
+            let viewport = &slot.state;
+            let plane_slice = current_plane_slice(viewport);
+            let (x,y,z) = match viewport.plane_mode.as_str() {
+                "yz" => (Some(plane_slice), None, None),
+                "xz" => (None, Some(plane_slice), None),
+                _ => (None, None, Some(plane_slice)),
+            };
+            json!({
+                "id":slot.id.as_str(),
+                "title":slot.title,
+                "navigation_revision":slot.navigation_revision,
+                "presentation_revision":slot.presentation_revision,
+                "camera":{"center_world_lvl0":viewport.center,"zoom_screen_per_lvl0_px":viewport.zoom},
+                "plane_mode":viewport.plane_mode,
+                "x_level0":x,
+                "y_level0":y,
+                "z_level0":z,
+                "channel_order":viewport.channel_order,
+                "channels":viewport.channels.iter().map(project_channel_view_json).collect::<Vec<_>>(),
+                "active_channel":viewport.active_channel,
+                "object_filter":viewport.objects.get("filter").cloned().unwrap_or_else(default_object_filter_model),
+                "object_visible":viewport.objects.get("visible").cloned().unwrap_or(Value::Bool(false)),
+                "object_opacity":viewport.objects.get("opacity").cloned().unwrap_or(json!(0.75_f32)),
+                "object_width_screen_px":viewport.objects.get("width_screen_px").cloned().unwrap_or(json!(1.25_f32)),
+                "object_color_rgb":viewport.objects.get("color_rgb").cloned().unwrap_or(json!([255,255,255])),
+                "object_show_selection_overlay":viewport.objects.get("show_selection_overlay").cloned().unwrap_or(Value::Bool(true)),
+                "presentation":viewport_json(slot, slot.id == *active),
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 fn default_object_snapshot() -> Value {

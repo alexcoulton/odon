@@ -59,6 +59,31 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::DeepLinkApply {
+                            operation_generation,
+                            guard,
+                            request,
+                            spec,
+                        } => {
+                            let result = apply_deep_link_on_worker(
+                                spec,
+                                object_loader.as_deref(),
+                                dataset_inspector.as_ref(),
+                                remote_backend.as_ref(),
+                                alternate_backend.as_ref(),
+                            );
+                            if completions
+                                .send(LoadCompletion::DeepLinkApply {
+                                    operation_generation,
+                                    guard,
+                                    request,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::OmeZarr {
                             generation,
                             request,
@@ -735,7 +760,7 @@ fn preload_project_objects(
     })
 }
 
-fn open_project_roi_on_worker(
+pub(super) fn open_project_roi_on_worker(
     spec: ProjectRoiOpenSpec,
     object_loader: Option<&dyn ObjectResourceLoader>,
     dataset_inspector: &dyn DatasetInspector,
@@ -749,6 +774,7 @@ fn open_project_roi_on_worker(
         object_path,
         cached_object,
         s3_session,
+        requested_label,
     } = spec;
     let mut label_available = Vec::new();
     let mut label_resource = None;
@@ -837,7 +863,8 @@ fn open_project_roi_on_worker(
     };
 
     if opened.descriptor.kind == crate::data::document::DocumentKind::OmeZarr
-        && let Some(selected) = saved_project_label_name(saved_view.as_ref())
+        && let Some(selected) =
+            requested_label.or_else(|| saved_project_label_name(saved_view.as_ref()))
     {
         if !label_available.contains(&selected) {
             label_available.push(selected.clone());
@@ -880,6 +907,7 @@ fn open_project_roi_on_worker(
         label_resource,
         object_resource,
         s3_session_generation,
+        reuse_current: false,
     })
 }
 

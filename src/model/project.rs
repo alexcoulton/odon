@@ -72,6 +72,29 @@ impl ProjectModel {
         Ok(())
     }
 
+    pub(crate) fn set_roi_view_state_json(
+        &mut self,
+        source_key: &str,
+        view: Value,
+    ) -> Result<(), ControlError> {
+        let state = self
+            .snapshot
+            .state
+            .as_object_mut()
+            .ok_or_else(|| invalid("project state must be an object"))?;
+        let views = state
+            .entry("roi_views")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| invalid("project ROI view state must be an object"))?;
+        if views.get(source_key) == Some(&view) {
+            return Ok(());
+        }
+        views.insert(source_key.to_string(), view);
+        self.mark_structural_change();
+        Ok(())
+    }
+
     pub(crate) fn replace(&mut self, mut snapshot: ProjectModelSnapshot) {
         normalize_snapshot_shape(&mut snapshot);
         self.snapshot = snapshot;

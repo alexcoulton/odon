@@ -148,6 +148,7 @@ fn spawn_test_actor_with_alternate(
 mod alternate_datasets;
 mod backpressure;
 mod dataset_inspection;
+mod deep_link_apply;
 mod deep_link_resolution;
 mod deep_link_state;
 mod events;

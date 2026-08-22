@@ -84,6 +84,7 @@ impl RemoteSessionState {
 
     fn invalidate_dependent_work(&mut self, model: &mut AppModel, reason: &str) {
         model.cancel_pending_remote_listings(reason);
+        model.cancel_pending_deep_link_apply(reason);
         if let Some(generation) = self.pending_s3_open_generation.take() {
             model.fail_dataset_open_for_generation(generation, reason);
         }

@@ -5,6 +5,23 @@ pub(super) struct DeepLinkResolveWorkerResult {
     pub(super) resolution: Result<DeepLinkResolution, String>,
 }
 
+pub(super) struct DeepLinkApplySpec {
+    pub(super) deep_link: DeepLinkRequest,
+    pub(super) current_project: ProjectModelSnapshot,
+    pub(super) cached_object: Option<(PathBuf, Arc<ControlObjectResource>)>,
+    pub(super) s3_session: Option<(u64, crate::data::remote_store::S3SessionCredentials)>,
+    pub(super) current_document: Option<ControlOpenedDocument>,
+    pub(super) current_resources: Option<DeepLinkCurrentResources>,
+}
+
+pub(super) struct DeepLinkApplyWorkerResult {
+    pub(super) deep_link: DeepLinkRequest,
+    pub(super) project: ProjectModelSnapshot,
+    pub(super) project_source: String,
+    pub(super) opened: ProjectRoiOpenWorkerResult,
+    pub(super) object_filter: Option<ControlObjectFilterResult>,
+}
+
 pub(super) struct ProjectObjectPreloadWorkerResult {
     pub(super) sources: Vec<ProjectObjectPreloadSource>,
     pub(super) resources: Vec<(PathBuf, ControlObjectResource)>,
@@ -18,6 +35,7 @@ pub(super) struct ProjectRoiOpenSpec {
     pub(super) object_path: Option<PathBuf>,
     pub(super) cached_object: Option<Arc<ControlObjectResource>>,
     pub(super) s3_session: Option<(u64, crate::data::remote_store::S3SessionCredentials)>,
+    pub(super) requested_label: Option<String>,
 }
 
 pub(super) struct ProjectRoiOpenWorkerResult {
@@ -28,6 +46,7 @@ pub(super) struct ProjectRoiOpenWorkerResult {
     pub(super) label_resource: Option<ControlLabelResource>,
     pub(super) object_resource: Option<Arc<ControlObjectResource>>,
     pub(super) s3_session_generation: Option<u64>,
+    pub(super) reuse_current: bool,
 }
 
 pub(super) enum LoadCompletion {
@@ -42,6 +61,12 @@ pub(super) enum LoadCompletion {
         operation_scope: String,
         request: OdonControlRequest,
         result: DeepLinkResolveWorkerResult,
+    },
+    DeepLinkApply {
+        operation_generation: u64,
+        guard: DeepLinkApplyGuard,
+        request: OdonControlRequest,
+        result: anyhow::Result<DeepLinkApplyWorkerResult>,
     },
     OmeZarr {
         generation: u64,
@@ -237,6 +262,7 @@ impl LoadCompletion {
         match self {
             Self::DatasetInspect { .. }
             | Self::DeepLinkResolve { .. }
+            | Self::DeepLinkApply { .. }
             | Self::OmeZarr { .. }
             | Self::Tiff { .. }
             | Self::SpatialData { .. }
@@ -277,6 +303,12 @@ pub(super) enum LoadJob {
         request: OdonControlRequest,
         deep_link: DeepLinkRequest,
         current_project: ProjectModelSnapshot,
+    },
+    DeepLinkApply {
+        operation_generation: u64,
+        guard: DeepLinkApplyGuard,
+        request: OdonControlRequest,
+        spec: DeepLinkApplySpec,
     },
     OmeZarr {
         generation: u64,

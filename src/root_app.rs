@@ -1559,7 +1559,6 @@ impl RootApp {
             "deep_links.resolve" => self.control_resolve_deep_link(params),
             "deep_links.filters.get" => self.control_get_deep_link_filters(params),
             "deep_links.generate" => self.control_generate_deep_link(params),
-            "deep_links.apply" => self.control_apply_deep_link(params),
             "datasets.open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, params),
             "project.save" => self.control_save_project(),
             "project.views.list" => self.control_list_project_views(),
@@ -5642,27 +5641,6 @@ impl RootApp {
         })
     }
 
-    fn control_apply_deep_link(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let request = match self.deep_link_request_from_params(params) {
-            Ok(request) => request,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let (request, resolution) = match self.prepare_deep_link_request(request) {
-            Ok(prepared) => prepared,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let url = request.to_url();
-        self.pending_deep_link = Some(request.clone());
-        serde_json::json!({
-            "queued": true,
-            "settled": false,
-            "url": url,
-            "request": request,
-            "resolution": resolution,
-            "note": "Application occurs during the next UI update and may initiate a longer load.",
-        })
-    }
-
     fn control_open_project(&mut self, params: &serde_json::Value) -> serde_json::Value {
         let Some(path) = params
             .get("path")
@@ -6893,7 +6871,15 @@ impl RootApp {
     }
 
     pub fn queue_deep_link(&mut self, request: DeepLinkRequest) {
-        self.pending_deep_link = Some(request);
+        if self.control_bridge.is_some() {
+            self.pending_native_control_intents
+                .push_back(NativeControlIntent {
+                    method: "deep_links.apply",
+                    params: serde_json::json!({"request":request}),
+                });
+        } else {
+            self.pending_deep_link = Some(request);
+        }
     }
 
     pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>) {
@@ -7596,7 +7582,15 @@ impl eframe::App for RootApp {
             let mut received_deep_link = false;
             while let Ok(request) = rx.try_recv() {
                 log_warn!("deep_link: received {:?}", request);
-                self.pending_deep_link = Some(request);
+                if self.control_bridge.is_some() {
+                    self.pending_native_control_intents
+                        .push_back(NativeControlIntent {
+                            method: "deep_links.apply",
+                            params: serde_json::json!({"request":request}),
+                        });
+                } else {
+                    self.pending_deep_link = Some(request);
+                }
                 received_deep_link = true;
             }
             if received_deep_link {
@@ -7619,6 +7613,15 @@ impl eframe::App for RootApp {
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
         let mut native_menu_control_intents = Vec::new();
 
+        if self.control_bridge.is_some()
+            && let Some(request) = self.pending_deep_link.take()
+        {
+            self.pending_native_control_intents
+                .push_back(NativeControlIntent {
+                    method: "deep_links.apply",
+                    params: serde_json::json!({"request":request}),
+                });
+        }
         if let Some(req) = self.pending_deep_link.take() {
             let mut req = req;
             let deep_link_started = Instant::now();
@@ -8073,9 +8076,17 @@ impl eframe::App for RootApp {
                                 }
                             }
                             ProjectSpaceAction::OpenView(roi, spec) => {
-                                let req = spec.to_deep_link_request(None);
-                                let ps = std::mem::take(project_space);
-                                open_project_roi = Some((roi, ps, Some(req)));
+                                let mut req = spec.to_deep_link_request(None);
+                                req.roi = Some(roi.id.clone());
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "deep_links.apply",
+                                        params: serde_json::json!({"request":req}),
+                                    });
+                                } else {
+                                    let ps = std::mem::take(project_space);
+                                    open_project_roi = Some((roi, ps, Some(req)));
+                                }
                             }
                             ProjectSpaceAction::OpenProject(path) => {
                                 if self.control_bridge.is_some() {
@@ -8146,9 +8157,17 @@ impl eframe::App for RootApp {
                             }
                         }
                         ProjectSpaceAction::OpenView(roi, spec) => {
-                            let req = spec.to_deep_link_request(None);
-                            let ps = std::mem::take(project_space);
-                            open_project_roi = Some((roi, ps, Some(req)));
+                            let mut req = spec.to_deep_link_request(None);
+                            req.roi = Some(roi.id.clone());
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "deep_links.apply",
+                                    params: serde_json::json!({"request":req}),
+                                });
+                            } else {
+                                let ps = std::mem::take(project_space);
+                                open_project_roi = Some((roi, ps, Some(req)));
+                            }
                         }
                         ProjectSpaceAction::OpenProject(path) => {
                             if self.control_bridge.is_some() {
@@ -8256,8 +8275,14 @@ impl eframe::App for RootApp {
                             }
                         }
                         ViewerRequest::OpenProjectRoiView(roi, spec) => {
-                            let req = spec.to_deep_link_request(None);
-                            if app.is_viewing_project_roi(&roi) {
+                            let mut req = spec.to_deep_link_request(None);
+                            req.roi = Some(roi.id.clone());
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "deep_links.apply",
+                                    params: serde_json::json!({"request":req}),
+                                });
+                            } else if app.is_viewing_project_roi(&roi) {
                                 app.apply_deep_link_request(&req);
                             } else {
                                 let ps = app.take_project_space();
@@ -8360,9 +8385,17 @@ impl eframe::App for RootApp {
                             }
                         }
                         MosaicRequest::OpenProjectRoiView(roi, spec) => {
-                            let req = spec.to_deep_link_request(None);
-                            let ps = mosaic.take_project_space();
-                            open_project_roi = Some((roi, ps, Some(req)));
+                            let mut req = spec.to_deep_link_request(None);
+                            req.roi = Some(roi.id.clone());
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "deep_links.apply",
+                                    params: serde_json::json!({"request":req}),
+                                });
+                            } else {
+                                let ps = mosaic.take_project_space();
+                                open_project_roi = Some((roi, ps, Some(req)));
+                            }
                         }
                         MosaicRequest::OpenProject(path) => {
                             if self.control_bridge.is_some() {

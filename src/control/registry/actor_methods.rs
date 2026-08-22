@@ -28,6 +28,7 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "datasets.s3.list",
     "deep_links.parse",
     "deep_links.resolve",
+    "deep_links.apply",
     "deep_links.filters.get",
     "deep_links.generate",
     "project.open",

@@ -39,15 +39,16 @@ use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
 use crate::deep_link::{
-    DeepLinkRequest, DeepLinkResolution, apply_example_defaults, resolve_example_project_path,
-    resolve_roi_target,
+    DeepLinkRequest, DeepLinkResolution, apply_example_defaults, object_filter_model,
+    requested_bundled_label, resolve_example_project_path, resolve_roi_target,
 };
 use crate::mcp::OdonControlRequest;
 use crate::model::{
     AppModel, ChannelIntensitySpec, ControlLabelResource, ControlObjectFilterResult,
-    ControlObjectResource, LabelZarrDataset, ModelMode, ObjectResourceLoader, ProjectModelSnapshot,
-    ProjectObjectPreloadScope, ProjectObjectPreloadSettings, ProjectObjectPreloadSource,
-    SettingsMutationOutcome, discover_label_names_local,
+    ControlObjectResource, DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset,
+    ModelMode, ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, SettingsMutationOutcome,
+    discover_label_names_local, project_roi_segmentation_path,
 };
 use crate::settings::AppSettings;
 
@@ -92,13 +93,15 @@ use datasets::{
     begin_xenium_load,
 };
 use deep_links::{
-    begin_deep_link_resolution, deep_link_resolution_response, resolve_deep_link_on_worker,
+    apply_deep_link_on_worker, begin_deep_link_application, begin_deep_link_resolution,
+    deep_link_resolution_response, resolve_deep_link_on_worker,
 };
 pub use diagnostics::ActorDiagnostics;
 use dispatch::dispatch_request;
 use jobs::{
-    CompletionDomain, DeepLinkResolveWorkerResult, LoadCompletion, LoadJob,
-    ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult,
+    CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult, DeepLinkResolveWorkerResult,
+    LoadCompletion, LoadJob, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
+    ProjectRoiOpenWorkerResult,
 };
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
@@ -126,7 +129,7 @@ pub use runtime::{
     ActorModelUpdate, ControlActorChannels, spawn_control_actor,
     spawn_control_actor_with_object_loader, spawn_control_actor_with_services,
 };
-use worker::spawn_resource_workers;
+use worker::{open_project_roi_on_worker, spawn_resource_workers};
 
 const ACTOR_QUEUE_CAPACITY: usize = 256;
 const WORKER_COMPLETION_CAPACITY: usize = 64;

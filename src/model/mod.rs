@@ -14,6 +14,7 @@ pub use app::{
     AppModel, ChannelIntensitySpec, ModelDispatch, ModelMode, SettingsMutationOutcome,
     SettingsSaveOperation,
 };
+pub(crate) use app::{DeepLinkApplyGuard, DeepLinkCurrentResources};
 pub use labels::{ControlLabelResource, LabelZarrDataset, discover_label_names_local};
 pub(crate) use masks::{MaskModel, load_geojson_mask_polylines};
 pub use objects::{

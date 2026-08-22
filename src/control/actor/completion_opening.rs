@@ -6,8 +6,10 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         model,
         render_document,
         remote_session,
+        resource_registry,
         presentation_tx,
         presentation_coalesce_rx,
+        load_job_tx,
         wake_ui,
         diagnostics,
         ..
@@ -74,6 +76,228 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 deep_link_resolution_response(result.request, result.resolution),
                 diagnostics,
             );
+        }
+        LoadCompletion::DeepLinkApply {
+            operation_generation,
+            guard,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_deep_link_apply(
+                    operation_generation,
+                    guard,
+                    "Deep-link application was cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "deep-link application");
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    if result
+                        .opened
+                        .s3_session_generation
+                        .is_some_and(|generation| !remote_session.is_current(generation))
+                    {
+                        model.supersede_deep_link_apply(
+                            operation_generation,
+                            "S3 session changed during deep-link application",
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "S3 session changed during deep-link application",
+                            ),
+                        );
+                        return;
+                    }
+                    let DeepLinkApplyWorkerResult {
+                        deep_link,
+                        project,
+                        project_source,
+                        opened,
+                        object_filter,
+                    } = result;
+                    let ProjectRoiOpenWorkerResult {
+                        opened,
+                        roi,
+                        saved_view,
+                        label_available,
+                        label_resource,
+                        object_resource,
+                        reuse_current,
+                        ..
+                    } = opened;
+                    let descriptor = opened.descriptor.clone();
+                    let kind = match descriptor.kind {
+                        crate::data::document::DocumentKind::OmeZarr => "ome_zarr",
+                        crate::data::document::DocumentKind::Tiff => "tiff",
+                        crate::data::document::DocumentKind::SpatialData => "spatialdata",
+                        crate::data::document::DocumentKind::Xenium => "xenium",
+                    };
+                    let mut candidate = model.clone();
+                    let installed = candidate.install_deep_link_apply_for_generation(
+                        operation_generation,
+                        guard,
+                        project,
+                        &roi,
+                        reuse_current,
+                        descriptor,
+                        label_available,
+                        label_resource.map(Arc::new),
+                        object_resource,
+                        saved_view.as_ref(),
+                        &deep_link,
+                        object_filter,
+                    );
+                    match installed {
+                        Ok(Some((document_generation, notes))) => {
+                            let project = candidate.project_snapshot();
+                            if let Err(error) = resource_registry.replace_project_manifest(
+                                &project.config.control_resources,
+                                &project.config.control_layers,
+                            ) {
+                                model.fail_deep_link_apply(
+                                    operation_generation,
+                                    guard,
+                                    error.message.clone(),
+                                );
+                                reject_actor_request(request, diagnostics, error);
+                                return;
+                            }
+                            let roi_id = roi.id.clone();
+                            let source = roi.source_display();
+                            let project_path = project.saved_path.clone();
+                            *model = candidate;
+                            *render_document = Some(Arc::new(RenderDocument {
+                                generation: document_generation,
+                                opened,
+                            }));
+                            if project_source == "project_file"
+                                && let Some(path) = project_path
+                            {
+                                enqueue_recent_project_persistence(
+                                    model,
+                                    path,
+                                    load_job_tx,
+                                    diagnostics,
+                                );
+                            }
+                            publish_projection(
+                                model,
+                                render_document.clone(),
+                                presentation_tx,
+                                presentation_coalesce_rx,
+                                wake_ui,
+                                diagnostics,
+                            );
+                            finish_request(
+                                request,
+                                json!({
+                                    "applied":true,
+                                    "settled":true,
+                                    "url":deep_link.to_url(),
+                                    "request":deep_link,
+                                    "resolution":{
+                                        "project_source":project_source,
+                                        "project_path":project.saved_path,
+                                        "roi":roi,
+                                    },
+                                    "opened":{
+                                        "mode":"single",
+                                        "kind":kind,
+                                        "roi":roi_id,
+                                        "source":source,
+                                        "reused_document":reuse_current,
+                                    },
+                                    "notes":notes,
+                                    "model_ready":true,
+                                    "resources_ready":true,
+                                    "presentation_ready":false,
+                                }),
+                                diagnostics,
+                            );
+                        }
+                        Ok(None) => {
+                            model.supersede_deep_link_apply(
+                                operation_generation,
+                                "Deep-link application was superseded",
+                            );
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "deep-link application was superseded by newer state",
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            if model.fail_deep_link_apply(
+                                operation_generation,
+                                guard,
+                                error.message.clone(),
+                            ) {
+                                publish_projection(
+                                    model,
+                                    render_document.clone(),
+                                    presentation_tx,
+                                    presentation_coalesce_rx,
+                                    wake_ui,
+                                    diagnostics,
+                                );
+                                reject_actor_request(request, diagnostics, error);
+                            } else {
+                                model.supersede_deep_link_apply(
+                                    operation_generation,
+                                    "Deep-link application was superseded",
+                                );
+                                reject_actor_request(
+                                    request,
+                                    diagnostics,
+                                    ControlError::new(
+                                        ControlErrorKind::Conflict,
+                                        "deep-link application was superseded by newer state",
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("failed to apply deep link: {error}");
+                    if model.fail_deep_link_apply(operation_generation, guard, message.clone()) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        model.supersede_deep_link_apply(
+                            operation_generation,
+                            "Deep-link application was superseded",
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed deep-link application was superseded by newer state",
+                            ),
+                        );
+                    }
+                }
+            }
         }
         LoadCompletion::OmeZarr {
             generation,

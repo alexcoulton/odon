@@ -271,6 +271,25 @@ fn project_roi_open_supports_http_and_s3_sources_without_a_ui_frame() {
     assert_eq!(opened_s3["roi"], "s3-roi");
     assert!(!opened_s3.to_string().contains("session-access"));
     assert!(!opened_s3.to_string().contains("session-secret"));
+
+    let (deep_link, deep_link_rx) = request(
+        "deep_links.apply",
+        json!({"request":{
+            "roi":"s3-roi",
+            "channel":"DAPI",
+            "center_world":[7.0,9.0],
+            "zoom":2.0
+        }}),
+    );
+    channels.request_tx.send(deep_link).unwrap();
+    let applied = deep_link_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(applied["settled"], true);
+    assert_eq!(applied["resolution"]["roi"]["id"], "s3-roi");
+    assert!(!applied.to_string().contains("session-access"));
+    assert!(!applied.to_string().contains("session-secret"));
     assert_eq!(channels.legacy_rx.len(), 0);
 }
 
@@ -510,5 +529,93 @@ fn clearing_a_session_prevents_a_stale_s3_document_install() {
             .unwrap()["mode"],
         "project"
     );
+    assert_eq!(channels.legacy_rx.len(), 0);
+}
+
+#[test]
+fn clearing_a_session_prevents_a_stale_s3_deep_link_commit() {
+    let (started_tx, started_rx) = crossbeam_channel::bounded(1);
+    let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let backend: Arc<dyn RemoteDatasetBackend> = Arc::new(BlockingS3OpenBackend {
+        fixture: fixture.clone(),
+        started: started_tx,
+        release: Mutex::new(release_rx),
+    });
+    let channels = spawn_test_actor_with_remote(backend);
+    let (initial, initial_rx) = request("datasets.open_ome_zarr", json!({"path":fixture.clone()}));
+    channels.request_tx.send(initial).unwrap();
+    initial_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+
+    let mut roi = ProjectRoi {
+        id: "s3-deep-link".to_string(),
+        ..ProjectRoi::default()
+    };
+    roi.set_dataset_source(DatasetSource::S3 {
+        endpoint: "https://objects.example.test".to_string(),
+        region: "auto".to_string(),
+        bucket: "images".to_string(),
+        prefix: "study/deep-link.ome.zarr".to_string(),
+    });
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapProject(ProjectModelSnapshot {
+            config: ProjectConfig {
+                rois: vec![roi.clone()],
+                ..ProjectConfig::default()
+            },
+            state: json!({"browser":{},"roi_views":{}}),
+            rois: vec![roi],
+            load_generation: 1,
+            config_generation: 1,
+            ..ProjectModelSnapshot::default()
+        }))
+        .unwrap();
+    let (sync, sync_rx) = request("app.get_state", json!({}));
+    channels.request_tx.send(sync).unwrap();
+    sync_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let (configure, configure_rx) = request(
+        "datasets.s3.configure_session",
+        json!({
+            "endpoint":"https://objects.example.test",
+            "region":"auto",
+            "bucket":"images",
+            "access_key":"access",
+            "secret_key":"secret",
+        }),
+    );
+    channels.request_tx.send(configure).unwrap();
+    configure_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    let (apply, apply_rx) = request(
+        "deep_links.apply",
+        json!({"request":{"roi":"s3-deep-link","channel":"DAPI"}}),
+    );
+    channels.request_tx.send(apply).unwrap();
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let (clear, clear_rx) = request("datasets.s3.clear_session", json!({}));
+    channels.request_tx.send(clear).unwrap();
+    clear_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("session clear remains responsive")
+        .unwrap();
+    release_tx.send(()).unwrap();
+    let stale = apply_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(stale.kind, ControlErrorKind::Conflict);
+
+    let projection = channels.presentation_rx.try_recv().unwrap();
+    assert_eq!(projection.document.unwrap().path(), Some(fixture.as_path()));
     assert_eq!(channels.legacy_rx.len(), 0);
 }

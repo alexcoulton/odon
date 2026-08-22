@@ -102,6 +102,7 @@ pub(super) fn begin_project_roi_open(
         object_path,
         cached_object,
         s3_session,
+        requested_label: None,
     };
     match load_job_tx.try_send(LoadJob::ProjectRoiOpen {
         operation_generation,

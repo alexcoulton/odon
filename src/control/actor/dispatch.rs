@@ -150,6 +150,18 @@ pub(super) fn dispatch_request(
         begin_deep_link_resolution(model, request, load_job_tx, diagnostics);
         return;
     }
+    if request.command.method() == "deep_links.apply" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_deep_link_application(
+            model,
+            remote_session,
+            request,
+            load_job_tx,
+            render_document,
+            diagnostics,
+        );
+        return;
+    }
     if request.command.method() == "viewer.channels.intensity_stats" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_channel_intensity(model, request, load_job_tx, render_document, diagnostics);
