@@ -78,6 +78,16 @@ impl MosaicGeoJsonSegmentationOverlay {
         self.samplesheet_dir = dir;
     }
 
+    pub fn samplesheet_dir(&self) -> Option<PathBuf> {
+        self.samplesheet_dir.clone()
+    }
+
+    pub fn segmentation_path(&self, item_id: usize) -> Option<PathBuf> {
+        self.items
+            .get(&item_id)
+            .and_then(|state| state.seg_path.clone())
+    }
+
     pub fn discover_from_meta(&mut self, item_id: usize, meta: &HashMap<String, String>) {
         let Some(raw) = meta.get("segpath") else {
             return;
@@ -130,6 +140,34 @@ impl MosaicGeoJsonSegmentationOverlay {
             self.force_repaint_frames = self.force_repaint_frames.max(4);
         }
         installed
+    }
+
+    pub fn install_control_resource(
+        &mut self,
+        item_id: usize,
+        resource: &odon::model::ControlObjectResource,
+    ) -> bool {
+        let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
+            return false;
+        };
+        let style = self.shared_style();
+        let color_level_overrides = self.current_color_level_overrides().clone();
+        let Some(state) = self.items.get_mut(&item_id) else {
+            return false;
+        };
+        let mut layer = ObjectsLayer::default();
+        apply_style(
+            &mut layer,
+            style,
+            Some(self.color_property_key.as_str()),
+            &color_level_overrides,
+        );
+        layer.install_preloaded(preloaded);
+        state.status = format!("Using actor-loaded objects: {}", resource.source.display());
+        state.layer = Some(layer);
+        self.visible = true;
+        self.force_repaint_frames = self.force_repaint_frames.max(4);
+        true
     }
 
     pub fn is_busy(&self) -> bool {

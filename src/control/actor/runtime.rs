@@ -21,6 +21,10 @@ pub enum ActorModelUpdate {
         path: PathBuf,
     },
     BootstrapMode(ModelMode),
+    BootstrapMosaic {
+        resource: ControlMosaicResource,
+        state: Value,
+    },
     BootstrapProject(ProjectModelSnapshot),
     BootstrapSettings {
         settings: AppSettings,
@@ -232,6 +236,14 @@ fn apply_model_update(
                 *render_document = None;
             }
             model.bootstrap_mode_from_renderer(mode);
+        }
+        ActorModelUpdate::BootstrapMosaic { resource, state } => {
+            *render_document = None;
+            if let Err(error) = model.bootstrap_mosaic_from_renderer(resource, &state) {
+                eprintln!(
+                    "could not bootstrap control actor from mosaic renderer state: {error:?}"
+                );
+            }
         }
         ActorModelUpdate::BootstrapProject(snapshot) => {
             model.bootstrap_project_from_renderer(snapshot);

@@ -23,6 +23,8 @@ pub(crate) enum OperationKind {
     Analysis,
     Measurement,
     ObjectExport,
+    Mosaic,
+    MosaicObjects,
 }
 
 impl OperationKind {
@@ -47,6 +49,8 @@ impl OperationKind {
             Self::Analysis => "analysis",
             Self::Measurement => "measurement",
             Self::ObjectExport => "object_export",
+            Self::Mosaic => "mosaic",
+            Self::MosaicObjects => "mosaic_objects",
         }
     }
 }

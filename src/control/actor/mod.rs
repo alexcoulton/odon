@@ -45,9 +45,10 @@ use crate::deep_link::{
 use crate::mcp::OdonControlRequest;
 use crate::model::{
     AnalysisResourceSpec, AppModel, ChannelIntensitySpec, ControlLabelResource,
-    ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
-    ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
-    LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
+    ControlMosaicItemResource, ControlMosaicResource, ControlObjectFilterResult,
+    ControlObjectResource, ControlPinnedLevelResource, ControlThresholdPreviewResource,
+    DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric,
+    MeasurementSpec, MemoryPinSpec, ModelMode, MosaicObjectLoadResult, MosaicObjectLoadSpec,
     ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader,
     ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
     ProjectObjectPreloadSource, ScreenshotPreferences, SettingsMutationOutcome,
@@ -64,6 +65,7 @@ mod channel_io;
 mod channels;
 mod completion;
 mod completion_masks;
+mod completion_mosaic;
 mod completion_objects;
 mod completion_opening;
 mod completion_project;
@@ -77,6 +79,7 @@ mod mask_io;
 mod masks;
 mod measurements;
 mod memory;
+mod mosaics;
 mod object_exports;
 mod objects;
 mod project_io;
@@ -116,13 +119,17 @@ use dispatch::dispatch_request;
 use jobs::{
     AnalysisComputeKind, CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult,
     DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MemoryPinWorkerOutcome,
-    MemoryPinWorkerResult, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
-    ProjectRoiOpenWorkerResult,
+    MemoryPinWorkerResult, MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult,
+    ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult,
 };
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
 use measurements::begin_measurement;
 use memory::begin_memory_pin;
+use mosaics::{
+    begin_mosaic_object_load, begin_mosaic_open, load_mosaic_objects_on_worker,
+    open_mosaic_project_on_worker, open_mosaic_samplesheet_on_worker,
+};
 use object_exports::begin_object_export;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
 use project_io::{

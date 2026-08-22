@@ -22,10 +22,11 @@ use crate::viewports::{ViewportId, ViewportLayout, ViewportLinks, ViewportWorksp
 use super::layers::NativeLayersModel;
 use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
-    AnalysisModel, ControlLabelResource, ControlObjectFilterResult, ControlObjectResource,
-    ControlPinnedLevelResource, ControlThresholdPreviewResource, LabelZarrDataset, MaskModel,
-    MeasurementMetric, MeasurementModel, ObjectExportFormat, ObjectExportModel, ObjectExportResult,
-    ObjectExportSpec, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
+    AnalysisModel, ControlLabelResource, ControlMosaicResource, ControlObjectFilterResult,
+    ControlObjectResource, ControlPinnedLevelResource, ControlThresholdPreviewResource,
+    LabelZarrDataset, MaskModel, MeasurementMetric, MeasurementModel, MosaicModel,
+    MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportModel,
+    ObjectExportResult, ObjectExportSpec, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
     ProjectObjectPreloadCatalog, ProjectObjectPreloadProjection, ProjectObjectPreloadScope,
     ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ReadinessModel,
     ScreenshotPreferences, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
@@ -236,6 +237,9 @@ pub struct AppModel {
     analysis: AnalysisModel,
     measurement: MeasurementModel,
     object_export: ObjectExportModel,
+    mosaic: MosaicModel,
+    mosaic_operation_generation: u64,
+    mosaic_operation_pending: bool,
     measured_viewports: HashSet<ViewportId>,
     renderer_gpu_available: bool,
 }
@@ -403,6 +407,9 @@ impl AppModel {
             analysis: AnalysisModel::default(),
             measurement: MeasurementModel::default(),
             object_export: ObjectExportModel::default(),
+            mosaic: MosaicModel::default(),
+            mosaic_operation_generation: 0,
+            mosaic_operation_pending: false,
             measured_viewports: HashSet::new(),
             renderer_gpu_available: false,
         }
@@ -414,6 +421,160 @@ impl AppModel {
 
     pub fn project_snapshot(&self) -> ProjectModelSnapshot {
         self.project.snapshot()
+    }
+
+    pub(crate) fn begin_mosaic_open(&mut self, source: impl Into<String>) -> u64 {
+        self.mosaic_operation_generation = self.mosaic_operation_generation.wrapping_add(1).max(1);
+        self.mosaic_operation_pending = true;
+        self.readiness.begin(
+            OperationKind::Mosaic,
+            self.mosaic_operation_generation,
+            format!("Opening mosaic {}", source.into()),
+        );
+        self.mosaic_operation_generation
+    }
+
+    pub fn bootstrap_mosaic_from_renderer(
+        &mut self,
+        mut resource: ControlMosaicResource,
+        state: &Value,
+    ) -> Result<(), ControlError> {
+        let generation = resource.generation.max(1);
+        resource.generation = generation;
+        self.mosaic.install_resource(Arc::new(resource));
+        self.mosaic.restore_renderer_state(state)?;
+        self.mosaic_operation_generation = generation;
+        self.mosaic_operation_pending = false;
+        self.mode = ModelMode::Mosaic;
+        self.dataset = None;
+        self.readiness
+            .mark_ready(OperationKind::Mosaic, generation, "Mosaic resources ready");
+        Ok(())
+    }
+
+    pub(crate) fn install_mosaic_for_generation(
+        &mut self,
+        generation: u64,
+        mut resource: ControlMosaicResource,
+    ) -> bool {
+        if generation != self.mosaic_operation_generation || !self.mosaic_operation_pending {
+            return false;
+        }
+        resource.generation = generation;
+        self.mosaic.install_resource(Arc::new(resource));
+        self.mosaic_operation_pending = false;
+        self.mode = ModelMode::Mosaic;
+        self.dataset = None;
+        self.readiness
+            .finish(OperationKind::Mosaic, generation, "Mosaic resources ready");
+        true
+    }
+
+    pub(crate) fn fail_mosaic_open(&mut self, generation: u64, message: impl Into<String>) -> bool {
+        if generation != self.mosaic_operation_generation || !self.mosaic_operation_pending {
+            return false;
+        }
+        self.mosaic_operation_pending = false;
+        self.readiness
+            .fail(OperationKind::Mosaic, generation, message)
+    }
+
+    pub(crate) fn cancel_mosaic_open(
+        &mut self,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if generation != self.mosaic_operation_generation || !self.mosaic_operation_pending {
+            return false;
+        }
+        self.mosaic_operation_pending = false;
+        self.readiness
+            .cancel(OperationKind::Mosaic, generation, message)
+    }
+
+    pub(crate) fn mosaic_resource(&self) -> Option<Arc<ControlMosaicResource>> {
+        self.mosaic.resource()
+    }
+
+    pub(crate) fn mosaic_resource_generation(&self) -> u64 {
+        self.mosaic.resource_generation()
+    }
+
+    pub(crate) fn mosaic_projection_state(&self) -> Value {
+        self.mosaic.projection_state()
+    }
+
+    pub(crate) fn mosaic_object_resources(&self) -> Vec<(usize, Arc<ControlObjectResource>)> {
+        self.mosaic.object_resources()
+    }
+
+    pub(crate) fn prepare_mosaic_object_load(
+        &mut self,
+        params: &Value,
+    ) -> Result<MosaicObjectLoadSpec, ControlError> {
+        let downsample_factor = params
+            .get("downsample_factor")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        let spec = self.mosaic.prepare_object_load(downsample_factor)?;
+        self.readiness.begin(
+            OperationKind::MosaicObjects,
+            spec.operation_generation,
+            format!("Loading objects for {} mosaic ROI(s)", spec.items.len()),
+        );
+        Ok(spec)
+    }
+
+    pub(crate) fn finish_mosaic_object_load(
+        &mut self,
+        spec: &MosaicObjectLoadSpec,
+        result: MosaicObjectLoadResult,
+    ) -> Option<Value> {
+        let response = self.mosaic.finish_object_load(spec, result)?;
+        let cancelled = response["cancelled"].as_bool() == Some(true);
+        if cancelled {
+            self.readiness.cancel(
+                OperationKind::MosaicObjects,
+                spec.operation_generation,
+                "Mosaic object loading cancelled",
+            );
+        } else {
+            self.readiness.finish(
+                OperationKind::MosaicObjects,
+                spec.operation_generation,
+                "Mosaic object resources ready",
+            );
+        }
+        Some(response)
+    }
+
+    pub(crate) fn fail_mosaic_object_load(
+        &mut self,
+        spec: &MosaicObjectLoadSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        let message = message.into();
+        if !self.mosaic.fail_object_load(spec, message.clone()) {
+            return false;
+        }
+        self.readiness.fail(
+            OperationKind::MosaicObjects,
+            spec.operation_generation,
+            message,
+        )
+    }
+
+    pub(crate) fn cancel_mosaic_object_load(&mut self) -> Result<Value, ControlError> {
+        let generation = self.mosaic.object_operation_generation();
+        let response = self.mosaic.cancel_object_load_response()?;
+        if generation > 0 {
+            self.readiness.cancel(
+                OperationKind::MosaicObjects,
+                generation,
+                "Mosaic object loading cancelled",
+            );
+        }
+        Ok(response)
     }
 
     pub(crate) fn deep_link_current_resources(&self) -> Option<DeepLinkCurrentResources> {
@@ -6168,6 +6329,21 @@ impl AppModel {
                 | "viewer.masks.persistence.sync"
                 | "viewer.viewports.rendering.get"
                 | "viewer.viewports.rendering.set"
+                | "mosaic.ui.set_right_tab"
+                | "mosaic.layout.configure"
+                | "mosaic.get_state"
+                | "mosaic.items.list"
+                | "mosaic.selection.get"
+                | "mosaic.selection.set"
+                | "mosaic.selection.clear"
+                | "mosaic.focus.get"
+                | "mosaic.focus.set"
+                | "mosaic.focus.next"
+                | "mosaic.focus.previous"
+                | "mosaic.focus.fit"
+                | "mosaic.focus.clear"
+                | "mosaic.fit_all"
+                | "mosaic.objects.get_state"
         );
         if !supported {
             return None;
@@ -6180,7 +6356,21 @@ impl AppModel {
         }
         if method == "app.get_state" {
             if self.mode == ModelMode::Mosaic {
-                return None;
+                return Some(self.mosaic.snapshot().map(|mosaic| ModelDispatch {
+                    response: json!({
+                        "mode":"mosaic",
+                        "view":{
+                            "roi_count":mosaic["roi_count"],
+                            "focused_roi":mosaic["focused"]["roi_id"],
+                            "channel_count":self.mosaic.projection_state()["channels"]
+                                .as_array()
+                                .map_or(0, Vec::len),
+                        },
+                        "mosaic":mosaic,
+                        "project":self.project.rois_json(),
+                    }),
+                    present: false,
+                }));
             }
             return Some(Ok(ModelDispatch {
                 response: self.application_state(),
@@ -6253,6 +6443,46 @@ impl AppModel {
                 present: false,
             }));
         }
+        if method.starts_with("mosaic.") {
+            if self.mode != ModelMode::Mosaic {
+                return Some(Err(ControlError::new(
+                    ControlErrorKind::WrongMode,
+                    "No mosaic viewer is currently open",
+                )));
+            }
+            let response = self.mosaic.dispatch(method, params).unwrap_or_else(|| {
+                Err(ControlError::new(
+                    ControlErrorKind::MethodNotFound,
+                    format!("unsupported mosaic model method '{method}'"),
+                ))
+            });
+            let response = response.map(|result| {
+                let response = match method {
+                    "mosaic.ui.set_right_tab" => json!({"mode":"mosaic","tab":result}),
+                    "mosaic.layout.configure" => json!({"mode":"mosaic","layout":result}),
+                    "mosaic.get_state" => json!({"mode":"mosaic","mosaic":result}),
+                    "mosaic.items.list" => json!({"mode":"mosaic","result":result}),
+                    "mosaic.selection.get" | "mosaic.selection.set" | "mosaic.selection.clear" => {
+                        json!({"mode":"mosaic","selection":result})
+                    }
+                    "mosaic.focus.get" => json!({"mode":"mosaic","focused":result}),
+                    "mosaic.objects.get_state" => json!({"mode":"mosaic","objects":result}),
+                    _ => json!({"mode":"mosaic","result":result}),
+                };
+                ModelDispatch {
+                    response,
+                    present: !matches!(
+                        method,
+                        "mosaic.get_state"
+                            | "mosaic.items.list"
+                            | "mosaic.selection.get"
+                            | "mosaic.focus.get"
+                            | "mosaic.objects.get_state"
+                    ),
+                }
+            });
+            return Some(response);
+        }
         if matches!(method, "project.views.capture" | "project.views.apply")
             && self.project_operation_pending
         {
@@ -6313,6 +6543,11 @@ impl AppModel {
                     | "project.views.get"
             );
             return Some(result.map(|response| ModelDispatch { response, present }));
+        }
+        if self.mode == ModelMode::Mosaic {
+            if let Some(result) = self.mosaic.dispatch_shared(method, params) {
+                return Some(result.map(|(response, present)| ModelDispatch { response, present }));
+            }
         }
         if matches!(self.mode, ModelMode::Project | ModelMode::Mosaic) {
             return None;

@@ -319,6 +319,183 @@ fn project_native_control_intents(
     intents
 }
 
+fn mosaic_native_control_intents(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> Vec<NativeControlIntent> {
+    let mut intents = Vec::new();
+    if before.get("right_tab") != after.get("right_tab") {
+        intents.push(NativeControlIntent {
+            method: "mosaic.ui.set_right_tab",
+            params: serde_json::json!({"tab":after["right_tab"]}),
+        });
+    }
+    if before.get("layout") != after.get("layout") {
+        intents.push(NativeControlIntent {
+            method: "mosaic.layout.configure",
+            params: after["layout"].clone(),
+        });
+    }
+    let selected_ids = |state: &serde_json::Value| {
+        state["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["selected"].as_bool() == Some(true))
+            .filter_map(|item| item["roi_id"].as_str())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let before_selection = selected_ids(before);
+    let after_selection = selected_ids(after);
+    if before_selection != after_selection {
+        intents.push(NativeControlIntent {
+            method: "mosaic.selection.set",
+            params: serde_json::json!({"mode":"replace","ids":after_selection}),
+        });
+    }
+    let focused = |state: &serde_json::Value| {
+        state["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["focused"].as_bool() == Some(true))
+            .and_then(|item| item["roi_id"].as_str())
+            .map(str::to_string)
+    };
+    let before_focus = focused(before);
+    let after_focus = focused(after);
+    if before_focus != after_focus {
+        if let Some(roi_id) = after_focus {
+            intents.push(NativeControlIntent {
+                method: "mosaic.focus.set",
+                params: serde_json::json!({"roi_id":roi_id,"fit":false}),
+            });
+        } else {
+            intents.push(NativeControlIntent {
+                method: "mosaic.focus.clear",
+                params: serde_json::json!({}),
+            });
+        }
+    }
+    if before.get("camera") != after.get("camera") {
+        intents.push(NativeControlIntent {
+            method: "viewer.camera.set",
+            params: after["camera"].clone(),
+        });
+    }
+    if before.get("panels") != after.get("panels") {
+        intents.push(NativeControlIntent {
+            method: "viewer.panels.set",
+            params: after["panels"].clone(),
+        });
+    }
+    if before.get("smooth_pixels") != after.get("smooth_pixels") {
+        intents.push(NativeControlIntent {
+            method: "viewer.rendering.set_smooth_pixels",
+            params: serde_json::json!({"smooth":after["smooth_pixels"]}),
+        });
+    }
+
+    let before_channels = before["channels"].as_array().cloned().unwrap_or_default();
+    let after_channels = after["channels"].as_array().cloned().unwrap_or_default();
+    let active_index = |channels: &[serde_json::Value]| {
+        channels
+            .iter()
+            .find(|channel| channel["active"].as_bool() == Some(true))
+            .and_then(|channel| channel["index"].as_u64())
+    };
+    if active_index(&before_channels) != active_index(&after_channels)
+        && let Some(index) = active_index(&after_channels)
+    {
+        intents.push(NativeControlIntent {
+            method: "viewer.channels.set_active",
+            params: serde_json::json!({"index":index}),
+        });
+    }
+    let visible = |channels: &[serde_json::Value]| {
+        channels
+            .iter()
+            .filter(|channel| channel["visible"].as_bool() == Some(true))
+            .filter_map(|channel| channel["index"].as_u64())
+            .collect::<Vec<_>>()
+    };
+    let before_visible = visible(&before_channels);
+    let after_visible = visible(&after_channels);
+    if before_visible != after_visible {
+        intents.push(NativeControlIntent {
+            method: "viewer.channels.set_visible",
+            params: serde_json::json!({"channels":after_visible,"mode":"only"}),
+        });
+    }
+    for channel in &after_channels {
+        let Some(index) = channel["index"].as_u64() else {
+            continue;
+        };
+        let previous = before_channels
+            .iter()
+            .find(|candidate| candidate["index"].as_u64() == Some(index));
+        if previous.and_then(|channel| channel.get("color_rgb")) != channel.get("color_rgb") {
+            intents.push(NativeControlIntent {
+                method: "viewer.channels.set_color",
+                params: serde_json::json!({"index":index,"color_rgb":channel["color_rgb"]}),
+            });
+        }
+        if previous.and_then(|channel| channel.get("window")) != channel.get("window")
+            && let Some(window) = channel["window"]
+                .as_array()
+                .filter(|window| window.len() == 2)
+        {
+            intents.push(NativeControlIntent {
+                method: "viewer.channels.set_contrast",
+                params: serde_json::json!({"index":index,"min":window[0],"max":window[1]}),
+            });
+        }
+        if previous.and_then(|channel| channel.get("note")) != channel.get("note") {
+            intents.push(NativeControlIntent {
+                method: "viewer.channels.set_note",
+                params: serde_json::json!({"index":index,"note":channel["note"]}),
+            });
+        }
+    }
+    if before.get("channel_order") != after.get("channel_order") {
+        intents.push(NativeControlIntent {
+            method: "viewer.channels.set_order",
+            params: serde_json::json!({"order":after["channel_order"]}),
+        });
+    }
+    if before.get("objects_visible") != after.get("objects_visible") {
+        intents.push(NativeControlIntent {
+            method: "viewer.objects.set_visibility",
+            params: serde_json::json!({"target":"objects","visible":after["objects_visible"]}),
+        });
+    }
+    if before.get("fast_object_rendering") != after.get("fast_object_rendering") {
+        intents.push(NativeControlIntent {
+            method: "viewer.objects.rendering.set_fast",
+            params: serde_json::json!({"enabled":after["fast_object_rendering"]}),
+        });
+    }
+    let before_requested = before["object_load"]["requested_count"]
+        .as_u64()
+        .unwrap_or(0);
+    let after_requested = after["object_load"]["requested_count"]
+        .as_u64()
+        .unwrap_or(0);
+    if before_requested == 0 && after_requested > 0 {
+        intents.push(NativeControlIntent {
+            method: "mosaic.objects.load_selected",
+            params: serde_json::json!({}),
+        });
+    } else if before_requested > 0 && after_requested == 0 {
+        intents.push(NativeControlIntent {
+            method: "mosaic.objects.cancel_load",
+            params: serde_json::json!({}),
+        });
+    }
+    intents
+}
+
 fn control_event_source(method: &str) -> &'static str {
     if method.starts_with("project.") {
         "project:active"
@@ -649,7 +826,7 @@ impl RootApp {
         match &self.mode {
             Mode::Single(app) => format!("single:{}", app.control_actor_source_key()),
             Mode::Project { .. } => "project".to_string(),
-            Mode::Mosaic { .. } => "mosaic".to_string(),
+            Mode::Mosaic { mosaic, .. } => mosaic.control_actor_signature(),
             Mode::Transition => "transition".to_string(),
         }
     }
@@ -676,7 +853,10 @@ impl RootApp {
                     .unwrap_or_else(|| PathBuf::from(app.control_actor_source_key())),
             ),
             Mode::Project { .. } => bridge.bootstrap_model_mode(ModelMode::Project),
-            Mode::Mosaic { .. } => bridge.bootstrap_model_mode(ModelMode::Mosaic),
+            Mode::Mosaic { mosaic, .. } => bridge.bootstrap_mosaic_model(
+                mosaic.control_actor_resource(),
+                mosaic.control_actor_semantic_snapshot(),
+            ),
             Mode::Transition => bridge.bootstrap_model_mode(ModelMode::Transition),
         }
         if let Some(snapshot) = project_snapshot {
@@ -965,15 +1145,79 @@ impl RootApp {
             return true;
         }
         if projection.mode == ModelMode::Mosaic {
-            let Mode::Mosaic { mosaic, .. } = &mut self.mode else {
-                log_warn!("actor project projection expected an active mosaic renderer");
-                return false;
-            };
-            mosaic
-                .project_space_mut()
-                .apply_control_actor_project_projection(&projection.project);
+            let needs_renderer = !matches!(
+                &self.mode,
+                Mode::Mosaic { mosaic, .. }
+                    if mosaic.control_actor_generation() == projection.mosaic_resource_generation
+            );
+            if needs_renderer {
+                let Some(resource) = projection.mosaic_resource.as_ref() else {
+                    log_warn!(
+                        "actor mosaic projection generation {} has no resource",
+                        projection.mosaic_resource_generation
+                    );
+                    return false;
+                };
+                if resource.generation != projection.mosaic_resource_generation {
+                    log_warn!("actor mosaic projection and resource generations disagree");
+                    return false;
+                }
+                let previous = std::mem::replace(&mut self.mode, Mode::Transition);
+                let (mut project_space, ret) = match previous {
+                    Mode::Project { project_space } => {
+                        (project_space, ReturnToSingleState { dataset_root: None })
+                    }
+                    Mode::Single(mut app) => {
+                        let dataset_root = app.current_local_dataset_root();
+                        (
+                            app.take_project_space(),
+                            ReturnToSingleState { dataset_root },
+                        )
+                    }
+                    Mode::Mosaic { mut mosaic, ret } => (mosaic.take_project_space(), ret),
+                    Mode::Transition => (
+                        ProjectSpace::default(),
+                        ReturnToSingleState { dataset_root: None },
+                    ),
+                };
+                project_space.apply_control_actor_project_projection(&projection.project);
+                let mut mosaic =
+                    match MosaicViewerApp::from_control_resource(ctx, self.gpu_available, resource)
+                    {
+                        Ok(mosaic) => mosaic,
+                        Err(error) => {
+                            log_warn!("could not realize actor mosaic renderer: {error}");
+                            self.mode = Mode::Project { project_space };
+                            return false;
+                        }
+                    };
+                self.configure_mosaic_app(&mut mosaic);
+                mosaic.set_project_space(project_space);
+                if let Err(error) = mosaic.apply_control_actor_state(
+                    &projection.mosaic_state,
+                    &projection.mosaic_object_resources,
+                ) {
+                    log_warn!("could not apply actor mosaic state: {error}");
+                    self.mode = Mode::Project {
+                        project_space: mosaic.take_project_space(),
+                    };
+                    return false;
+                }
+                self.mode = Mode::Mosaic { mosaic, ret };
+            } else if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
+                mosaic
+                    .project_space_mut()
+                    .apply_control_actor_project_projection(&projection.project);
+                if let Err(error) = mosaic.apply_control_actor_state(
+                    &projection.mosaic_state,
+                    &projection.mosaic_object_resources,
+                ) {
+                    log_warn!("could not apply actor mosaic state: {error}");
+                    return false;
+                }
+            }
             self.control_document_generation_applied = projection.document_generation;
-            self.control_actor_mode_signature = Some("mosaic".to_string());
+            self.control_actor_mode_signature = Some(self.control_actor_mode_signature());
             return true;
         }
         if projection.mode != ModelMode::Single {
@@ -8082,6 +8326,10 @@ impl eframe::App for RootApp {
                     Mode::Single(app) => Some(app.control_native_layers_projection_snapshot()),
                     _ => None,
                 });
+        let native_mosaic_before = self.control_bridge.as_ref().and_then(|_| match &self.mode {
+            Mode::Mosaic { mosaic, .. } => Some(mosaic.control_actor_semantic_snapshot()),
+            _ => None,
+        });
         let mut native_control_intents = Vec::new();
         match &mut self.mode {
             Mode::Project { project_space } => {
@@ -8542,6 +8790,12 @@ impl eframe::App for RootApp {
                 .map(ProjectSpace::control_actor_project_delta_snapshot),
         ) {
             native_control_intents.extend(project_native_control_intents(before, &after));
+        }
+        if let (Some(before), Mode::Mosaic { mosaic, .. }) =
+            (native_mosaic_before.as_ref(), &self.mode)
+        {
+            let after = mosaic.control_actor_semantic_snapshot();
+            native_control_intents.extend(mosaic_native_control_intents(before, &after));
         }
 
         if self.control_bridge.is_some()

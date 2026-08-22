@@ -216,6 +216,16 @@ impl OdonControlBridge {
             .send(crate::control::actor::ActorModelUpdate::BootstrapMode(mode));
     }
 
+    pub fn bootstrap_mosaic_model(
+        &self,
+        resource: crate::model::ControlMosaicResource,
+        state: Value,
+    ) {
+        let _ = self
+            .actor_model_tx
+            .send(crate::control::actor::ActorModelUpdate::BootstrapMosaic { resource, state });
+    }
+
     pub fn bootstrap_project_model(&self, snapshot: crate::model::ProjectModelSnapshot) {
         let _ =
             self.actor_model_tx

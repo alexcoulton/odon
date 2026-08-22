@@ -542,6 +542,71 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::MosaicSamplesheet {
+                            generation,
+                            request,
+                            path,
+                        } => {
+                            let columns = request
+                                .command
+                                .params()
+                                .get("columns")
+                                .or_else(|| request.command.params().get("cols"))
+                                .and_then(Value::as_u64)
+                                .and_then(|columns| usize::try_from(columns).ok())
+                                .filter(|columns| *columns > 0);
+                            let result =
+                                open_mosaic_samplesheet_on_worker(generation, &path, columns);
+                            if completions
+                                .send(LoadCompletion::MosaicOpen {
+                                    generation,
+                                    request,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::MosaicProject {
+                            generation,
+                            request,
+                            rois,
+                            project_dir,
+                            s3_session,
+                        } => {
+                            let result = open_mosaic_project_on_worker(
+                                generation,
+                                rois,
+                                project_dir,
+                                s3_session,
+                                remote_backend.as_ref(),
+                            );
+                            if completions
+                                .send(LoadCompletion::MosaicOpen {
+                                    generation,
+                                    request,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::MosaicObjects { request, spec } => {
+                            let result =
+                                load_mosaic_objects_on_worker(&spec, object_loader.as_deref());
+                            if completions
+                                .send(LoadCompletion::MosaicObjects {
+                                    request,
+                                    spec,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::SamplesheetInspect {
                             request,
                             path,

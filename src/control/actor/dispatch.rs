@@ -145,6 +145,50 @@ pub(super) fn dispatch_request(
         begin_dataset_inspection(model, request, load_job_tx, diagnostics);
         return;
     }
+    if matches!(
+        request.command.method(),
+        "datasets.open_mosaic_samplesheet" | "project.rois.open_selected_mosaic"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_mosaic_open(model, remote_session, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "mosaic.objects.load_selected" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_mosaic_object_load(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if request.command.method() == "mosaic.objects.cancel_load" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        match model.cancel_mosaic_object_load() {
+            Ok(response) => {
+                publish_projection(
+                    model,
+                    render_document.clone(),
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                );
+                finish_request(
+                    request,
+                    json!({"mode":"mosaic","result":response}),
+                    diagnostics,
+                );
+            }
+            Err(error) => reject_actor_request(request, diagnostics, error),
+        }
+        return;
+    }
     if request.command.method() == "deep_links.resolve" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_deep_link_resolution(model, request, load_job_tx, diagnostics);

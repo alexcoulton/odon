@@ -7,6 +7,7 @@ mod layers;
 mod masks;
 mod measurement;
 mod memory;
+mod mosaic;
 mod object_export;
 mod objects;
 mod project;
@@ -33,6 +34,8 @@ pub use memory::{
     ControlPinnedLevelResource, TileLoadingPolicy, TilePrefetchAggressiveness, TilePrefetchMode,
 };
 pub(crate) use memory::{PinnedMemoryModel, SystemMemorySnapshot, TileLoadingModel};
+pub use mosaic::{ControlMosaicItemResource, ControlMosaicResource};
+pub(crate) use mosaic::{MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec};
 pub(crate) use object_export::{
     ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
     object_export_columns, write_object_export,

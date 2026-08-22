@@ -70,6 +70,11 @@ pub(super) struct ProjectRoiOpenWorkerResult {
     pub(super) reuse_current: bool,
 }
 
+pub(super) struct MosaicOpenWorkerResult {
+    pub(super) resource: ControlMosaicResource,
+    pub(super) s3_session_generation: Option<u64>,
+}
+
 pub(super) enum LoadCompletion {
     DatasetInspect {
         operation_generation: u64,
@@ -233,6 +238,16 @@ pub(super) enum LoadCompletion {
         spec: ObjectExportSpec,
         result: anyhow::Result<ObjectExportResult>,
     },
+    MosaicOpen {
+        generation: u64,
+        request: OdonControlRequest,
+        result: anyhow::Result<MosaicOpenWorkerResult>,
+    },
+    MosaicObjects {
+        request: OdonControlRequest,
+        spec: MosaicObjectLoadSpec,
+        result: anyhow::Result<MosaicObjectLoadResult>,
+    },
     SamplesheetInspect {
         request: OdonControlRequest,
         result: Value,
@@ -330,6 +345,7 @@ pub(super) enum CompletionDomain {
     Resources,
     Objects,
     Masks,
+    Mosaic,
 }
 
 impl LoadCompletion {
@@ -372,6 +388,7 @@ impl LoadCompletion {
                 CompletionDomain::Objects
             }
             Self::MaskImport { .. } | Self::MaskExport { .. } => CompletionDomain::Masks,
+            Self::MosaicOpen { .. } | Self::MosaicObjects { .. } => CompletionDomain::Mosaic,
         }
     }
 }
@@ -521,6 +538,22 @@ pub(super) enum LoadJob {
     ObjectExport {
         request: OdonControlRequest,
         spec: ObjectExportSpec,
+    },
+    MosaicSamplesheet {
+        generation: u64,
+        request: OdonControlRequest,
+        path: PathBuf,
+    },
+    MosaicProject {
+        generation: u64,
+        request: OdonControlRequest,
+        rois: Vec<ProjectRoi>,
+        project_dir: Option<PathBuf>,
+        s3_session: Option<(u64, crate::data::remote_store::S3SessionCredentials)>,
+    },
+    MosaicObjects {
+        request: OdonControlRequest,
+        spec: MosaicObjectLoadSpec,
     },
     SamplesheetInspect {
         request: OdonControlRequest,

@@ -146,10 +146,8 @@ pub fn execution_owner(
     }
     if mode == "mosaic"
         && (descriptor.name.starts_with("viewer.") || descriptor.name.starts_with("memory."))
+        && !is_actor_owned_mosaic_shared_method(descriptor.name)
     {
-        return ExecutionOwner::LegacyUi;
-    }
-    if mode == "mosaic" && descriptor.name == "app.get_state" {
         return ExecutionOwner::LegacyUi;
     }
     if is_parameter_routed_primary_object_method(descriptor.name)
@@ -173,6 +171,9 @@ pub fn execution_route_summary(descriptor: &MethodDescriptor) -> &'static str {
     }
     if is_parameter_routed_primary_object_method(descriptor.name)
         || descriptor.name == "project.views.apply"
+        || ((descriptor.name.starts_with("viewer.") || descriptor.name.starts_with("memory."))
+            && descriptor.available_in.contains(&"mosaic")
+            && !is_actor_owned_mosaic_shared_method(descriptor.name))
     {
         "hybrid"
     } else {
@@ -212,8 +213,8 @@ pub fn execution_route_json(descriptor: &MethodDescriptor) -> Value {
             } else if !actor_capable
                 || (mode == "mosaic"
                     && (descriptor.name.starts_with("viewer.")
-                        || descriptor.name.starts_with("memory.")
-                        || descriptor.name == "app.get_state"))
+                        || descriptor.name.starts_with("memory."))
+                    && !is_actor_owned_mosaic_shared_method(descriptor.name))
             {
                 ExecutionOwner::LegacyUi
             } else {
@@ -277,6 +278,37 @@ pub fn is_parameter_routed_primary_object_method(method: &str) -> bool {
             | "exports.objects.start"
             | "exports.objects.export_csv"
             | "exports.objects.export_geoparquet"
+    )
+}
+
+pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
+    matches!(
+        method,
+        "app.get_state"
+            | "viewer.channels.list"
+            | "viewer.channels.list_visible"
+            | "viewer.channels.get_active"
+            | "viewer.channels.set_active"
+            | "viewer.channels.set_visible"
+            | "viewer.channels.get_contrast"
+            | "viewer.channels.set_contrast"
+            | "viewer.channels.set_color"
+            | "viewer.channels.set_note"
+            | "viewer.channels.set_order"
+            | "viewer.camera.get"
+            | "viewer.camera.set"
+            | "viewer.camera.zoom_in"
+            | "viewer.camera.zoom_out"
+            | "viewer.camera.fit"
+            | "viewer.panels.get"
+            | "viewer.panels.set"
+            | "viewer.rendering.get_smooth_pixels"
+            | "viewer.rendering.set_smooth_pixels"
+            | "viewer.rendering.get_state"
+            | "viewer.objects.get_visibility"
+            | "viewer.objects.set_visibility"
+            | "viewer.objects.rendering.get_fast"
+            | "viewer.objects.rendering.set_fast"
     )
 }
 
@@ -896,7 +928,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             false,
             Some("viewer.channels.changed"),
             VIEWER_MODES,
-            NativeLayerSelector
+            Object
         ),
         method!(
             "viewer.channels.set_visible",
@@ -4237,7 +4269,7 @@ mod tests {
         );
         assert_eq!(
             execution_owner(camera, "mosaic", &json!({}), false),
-            ExecutionOwner::LegacyUi
+            ExecutionOwner::Actor
         );
         let selection = method("viewer.objects.get_selection").unwrap();
         assert_eq!(
@@ -4260,8 +4292,8 @@ mod tests {
         );
         let route = execution_route_json(camera);
         assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
-        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
-        assert_eq!(execution_route_summary(camera), "actor");
+        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "actor");
+        assert_eq!(execution_route_summary(camera), "hybrid");
 
         let memory = method("memory.pin").unwrap();
         assert_eq!(
@@ -4275,6 +4307,19 @@ mod tests {
         let route = execution_route_json(memory);
         assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
         assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
+    }
+
+    #[test]
+    fn report_remaining_mosaic_legacy_routes() {
+        let legacy = METHODS
+            .iter()
+            .filter(|descriptor| descriptor.available_in.contains(&"mosaic"))
+            .filter(|descriptor| {
+                execution_owner(descriptor, "mosaic", &json!({}), false) == ExecutionOwner::LegacyUi
+            })
+            .map(|descriptor| descriptor.name)
+            .collect::<Vec<_>>();
+        println!("remaining mosaic legacy routes: {legacy:?}");
     }
 
     #[test]

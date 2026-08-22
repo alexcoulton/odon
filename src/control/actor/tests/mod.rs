@@ -170,6 +170,7 @@ mod lifecycle;
 mod masks;
 mod measurements;
 mod memory;
+mod mosaics;
 mod object_exports;
 mod objects;
 mod project_preload;
