@@ -203,10 +203,7 @@ fn channel_and_view_controls_preserve_external_semantics() {
         "odon-control-screenshot-{}.png",
         std::process::id()
     ));
-    let screenshot = app.control_capture_screenshot(&serde_json::json!({
-        "path": screenshot_path
-    }));
-    assert_eq!(screenshot["queued"], true);
+    app.request_screenshot_png(screenshot_path);
     assert_eq!(
         app.screenshot_pending
             .front()

@@ -27,6 +27,13 @@ pub struct ScreenshotRequest {
     pub id: u64,
     pub path: PathBuf,
     pub settings: ScreenshotSettings,
+    pub presentation: Option<PresentationScreenshotReply>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PresentationScreenshotReply {
+    pub capture_id: u64,
+    pub tx: Sender<odon::control::actor::PresentationCaptureCompletion>,
 }
 
 #[derive(Debug)]

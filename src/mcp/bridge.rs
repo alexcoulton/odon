@@ -24,6 +24,8 @@ pub struct OdonControlBridge {
     rx: Receiver<OdonControlRequest>,
     tx: Sender<OdonControlRequest>,
     presentation_rx: Receiver<crate::control::actor::RenderProjection>,
+    presentation_capture_rx: Receiver<crate::control::actor::PresentationCaptureRequest>,
+    presentation_completion_tx: Sender<crate::control::actor::PresentationCaptureCompletion>,
     platform_effect_rx: Receiver<crate::control::actor::PlatformEffect>,
     actor_model_tx: Sender<crate::control::actor::ActorModelUpdate>,
     local_addr: SocketAddr,
@@ -143,6 +145,8 @@ impl OdonControlBridge {
         let tx = actor.request_tx;
         let rx = actor.legacy_rx;
         let presentation_rx = actor.presentation_rx;
+        let presentation_capture_rx = actor.presentation_capture_rx;
+        let presentation_completion_tx = actor.presentation_completion_tx;
         let platform_effect_rx = actor.platform_effect_rx;
         let actor_model_tx = actor.model_tx;
         thread::Builder::new()
@@ -156,6 +160,8 @@ impl OdonControlBridge {
             rx,
             tx,
             presentation_rx,
+            presentation_capture_rx,
+            presentation_completion_tx,
             platform_effect_rx,
             actor_model_tx,
             local_addr,
@@ -179,6 +185,21 @@ impl OdonControlBridge {
 
     pub fn pending_presentation_len(&self) -> usize {
         self.presentation_rx.len()
+    }
+
+    pub fn try_recv_presentation_capture(
+        &self,
+    ) -> Result<
+        crate::control::actor::PresentationCaptureRequest,
+        crossbeam_channel::TryRecvError,
+    > {
+        self.presentation_capture_rx.try_recv()
+    }
+
+    pub fn presentation_completion_sender(
+        &self,
+    ) -> Sender<crate::control::actor::PresentationCaptureCompletion> {
+        self.presentation_completion_tx.clone()
     }
 
     pub fn try_recv_platform_effect(
@@ -259,10 +280,19 @@ impl OdonControlBridge {
             .is_ok()
     }
 
-    pub fn report_viewport_geometry(&self, viewport_id: String, width: f32, height: f32) -> bool {
+    pub fn report_viewport_geometry(
+        &self,
+        viewport_id: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
         self.actor_model_tx
             .try_send(crate::control::actor::ActorModelUpdate::ViewportGeometry {
                 viewport_id,
+                x,
+                y,
                 width,
                 height,
             })

@@ -4,6 +4,8 @@ pub struct ControlActorChannels {
     pub request_tx: Sender<OdonControlRequest>,
     pub legacy_rx: Receiver<OdonControlRequest>,
     pub presentation_rx: Receiver<RenderProjection>,
+    pub presentation_capture_rx: Receiver<PresentationCaptureRequest>,
+    pub presentation_completion_tx: Sender<PresentationCaptureCompletion>,
     pub platform_effect_rx: Receiver<PlatformEffect>,
     pub model_tx: Sender<ActorModelUpdate>,
     pub task_service: TaskServiceHandle,
@@ -38,9 +40,22 @@ pub enum ActorModelUpdate {
     PresentationApplied(u64),
     ViewportGeometry {
         viewport_id: String,
+        x: f32,
+        y: f32,
         width: f32,
         height: f32,
     },
+}
+
+impl ActorModelUpdate {
+    fn allowed_during_presentation_barrier(&self) -> bool {
+        matches!(
+            self,
+            Self::RendererCapabilities { .. }
+                | Self::PresentationApplied(_)
+                | Self::ViewportGeometry { .. }
+        )
+    }
 }
 
 pub fn spawn_control_actor(
@@ -82,9 +97,13 @@ pub fn spawn_control_actor_with_services(
     // solely to replace a stale queued projection when the UI is occluded.
     let (presentation_tx, presentation_rx) = crossbeam_channel::bounded(1);
     let presentation_coalesce_rx = presentation_rx.clone();
+    let (presentation_capture_tx, presentation_capture_rx) = crossbeam_channel::bounded(1);
+    let (presentation_completion_tx, presentation_completion_rx) =
+        crossbeam_channel::bounded(ACTOR_QUEUE_CAPACITY);
     let (load_tx, load_rx) = crossbeam_channel::bounded(WORKER_COMPLETION_CAPACITY);
     let (load_job_tx, load_job_rx) = crossbeam_channel::bounded::<LoadJob>(LOAD_JOB_CAPACITY);
-    let (model_tx, model_rx) = crossbeam_channel::bounded(ACTOR_QUEUE_CAPACITY);
+    let (model_tx, model_rx) =
+        crossbeam_channel::bounded::<ActorModelUpdate>(ACTOR_QUEUE_CAPACITY);
     let (platform_effect_tx, platform_effect_rx) = crossbeam_channel::bounded(8);
     let task_registry =
         task_registry.unwrap_or_else(|| TaskRegistry::shared(crate::control::EventHub::shared()));
@@ -117,13 +136,75 @@ pub fn spawn_control_actor_with_services(
                     let mut model = AppModel::project();
                     let mut render_document = None;
                     let mut remote_session = RemoteSessionState::default();
+                    let mut presentation_captures = PresentationCaptureManager::default();
+                    let mut deferred_requests = VecDeque::new();
+                    let mut deferred_completions = VecDeque::new();
+                    let mut deferred_model_updates = VecDeque::new();
+                    let maintenance_tick = crossbeam_channel::tick(Duration::from_secs(1));
                     loop {
+                        if !presentation_captures.barrier_active() {
+                            if let Some(update) = deferred_model_updates.pop_front() {
+                                apply_model_update(
+                                    &mut model,
+                                    &mut render_document,
+                                    update,
+                                    &diagnostics,
+                                );
+                                continue;
+                            }
+                            if let Some(completion) = deferred_completions.pop_front() {
+                                finish_load(
+                                    &mut model,
+                                    &mut render_document,
+                                    completion,
+                                    &mut remote_session,
+                                    &resource_registry,
+                                    &presentation_tx,
+                                    &presentation_coalesce_rx,
+                                    &platform_effect_tx,
+                                    &load_job_tx,
+                                    &wake_ui,
+                                    &diagnostics,
+                                );
+                                continue;
+                            }
+                            if let Some(request) = deferred_requests.pop_front() {
+                                dispatch_request(
+                                    &mut model,
+                                    request,
+                                    &legacy_tx,
+                                    &presentation_tx,
+                                    &presentation_coalesce_rx,
+                                    &platform_effect_tx,
+                                    &load_job_tx,
+                                    &mut presentation_captures,
+                                    &presentation_capture_tx,
+                                    &render_document,
+                                    &mut remote_session,
+                                    &resource_registry,
+                                    &wake_ui,
+                                    &diagnostics,
+                                );
+                                continue;
+                            }
+                        }
                         while let Ok(update) = model_rx.try_recv() {
+                            if presentation_captures.barrier_active()
+                                && !update.allowed_during_presentation_barrier()
+                            {
+                                deferred_model_updates.push_back(update);
+                                continue;
+                            }
                             apply_model_update(
                                 &mut model,
                                 &mut render_document,
                                 update,
                                 &diagnostics,
+                            );
+                            presentation_captures.release_presentable(
+                                model.presented_projection_revision(),
+                                &presentation_capture_tx,
+                                &wake_ui,
                             );
                         }
                         crossbeam_channel::select! {
@@ -134,6 +215,21 @@ pub fn spawn_control_actor_with_services(
                             recv(request_rx) -> request => {
                                 let Ok(request) = request else { break; };
                                 diagnostics.record_queue_wait(request.command.queue_age());
+                                if presentation_captures.barrier_active() && request.command.mutates() {
+                                    if deferred_requests.len() >= ACTOR_QUEUE_CAPACITY {
+                                        reject_actor_request(
+                                            request,
+                                            &diagnostics,
+                                            ControlError::new(
+                                                ControlErrorKind::NotReady,
+                                                "the actor mutation queue is full while waiting for screenshot presentation",
+                                            ),
+                                        );
+                                    } else {
+                                        deferred_requests.push_back(request);
+                                    }
+                                    continue;
+                                }
                                 dispatch_request(
                                     &mut model,
                                     request,
@@ -142,6 +238,8 @@ pub fn spawn_control_actor_with_services(
                                     &presentation_coalesce_rx,
                                     &platform_effect_tx,
                                     &load_job_tx,
+                                    &mut presentation_captures,
+                                    &presentation_capture_tx,
                                     &render_document,
                                     &mut remote_session,
                                     &resource_registry,
@@ -151,6 +249,12 @@ pub fn spawn_control_actor_with_services(
                             }
                             recv(load_rx) -> completion => {
                                 let Ok(completion) = completion else { break; };
+                                if presentation_captures.barrier_active()
+                                    && !completion.allowed_during_presentation_barrier()
+                                {
+                                    deferred_completions.push_back(completion);
+                                    continue;
+                                }
                                 finish_load(
                                     &mut model,
                                     &mut render_document,
@@ -165,14 +269,37 @@ pub fn spawn_control_actor_with_services(
                                     &diagnostics,
                                 );
                             }
+                            recv(presentation_completion_rx) -> completion => {
+                                let Ok(completion) = completion else { break; };
+                                presentation_captures.receive_pixels(
+                                    &mut model,
+                                    completion,
+                                    &load_job_tx,
+                                    &diagnostics,
+                                );
+                            }
                             recv(model_rx) -> update => {
                                 let Ok(update) = update else { break; };
+                                if presentation_captures.barrier_active()
+                                    && !update.allowed_during_presentation_barrier()
+                                {
+                                    deferred_model_updates.push_back(update);
+                                    continue;
+                                }
                                 apply_model_update(
                                     &mut model,
                                     &mut render_document,
                                     update,
                                     &diagnostics,
                                 );
+                                presentation_captures.release_presentable(
+                                    model.presented_projection_revision(),
+                                    &presentation_capture_tx,
+                                    &wake_ui,
+                                );
+                            }
+                            recv(maintenance_tick) -> _ => {
+                                presentation_captures.sweep(&mut model, &diagnostics);
                             }
                         }
                     }
@@ -188,6 +315,8 @@ pub fn spawn_control_actor_with_services(
         request_tx,
         legacy_rx,
         presentation_rx,
+        presentation_capture_rx,
+        presentation_completion_tx,
         platform_effect_rx,
         model_tx,
         task_service,
@@ -267,8 +396,10 @@ fn apply_model_update(
         }
         ActorModelUpdate::ViewportGeometry {
             viewport_id,
+            x,
+            y,
             width,
             height,
-        } => model.report_viewport_geometry(&viewport_id, width, height),
+        } => model.report_viewport_geometry(&viewport_id, x, y, width, height),
     }
 }

@@ -49,6 +49,7 @@ pub(super) fn finish_load(
         CompletionDomain::Objects => completion_objects::finish(completion, context),
         CompletionDomain::Masks => completion_masks::finish(completion, context),
         CompletionDomain::Mosaic => completion_mosaic::finish(completion, context),
+        CompletionDomain::Presentation => completion_presentation::finish(completion, context),
     }
 }
 

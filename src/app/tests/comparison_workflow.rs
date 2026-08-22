@@ -127,16 +127,14 @@ fn motivating_two_property_comparison_runs_end_to_end_on_one_document() {
         viewport(&right)["camera"]["center_world_lvl0"]
     );
 
-    let left_shot = app.control_capture_screenshot(&serde_json::json!({
-        "viewport_id": left,
-        "path": std::env::temp_dir().join("odon-acceptance-left.png"),
-    }));
-    let right_shot = app.control_capture_screenshot(&serde_json::json!({
-        "viewport_id": right,
-        "path": std::env::temp_dir().join("odon-acceptance-right.png"),
-    }));
-    assert_eq!(left_shot["queued"], true);
-    assert_eq!(right_shot["queued"], true);
+    app.request_screenshot_png_for_viewport(
+        std::env::temp_dir().join("odon-acceptance-left.png"),
+        ViewportId::new(&left).unwrap(),
+    );
+    app.request_screenshot_png_for_viewport(
+        std::env::temp_dir().join("odon-acceptance-right.png"),
+        ViewportId::new(&right).unwrap(),
+    );
 
     let level = app.dataset.levels.last().unwrap();
     let view = ViewPlaneSelection {

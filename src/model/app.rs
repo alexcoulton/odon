@@ -32,6 +32,7 @@ use super::{
     ScreenshotPreferences, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
     TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, object_export_columns,
     parse_world_points, parse_world_rect, project_object_preload_candidates,
+    project_roi_segmentation_path,
 };
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
@@ -99,6 +100,7 @@ struct ViewportModel {
     center: [f32; 2],
     zoom: f32,
     logical_size: [f32; 2],
+    screen_origin: [f32; 2],
     plane_mode: String,
     plane_slices: [u64; 3],
     channels: Vec<ModelChannel>,
@@ -127,6 +129,7 @@ impl ViewportModel {
             center: [0.0, 0.0],
             zoom: 1.0,
             logical_size: DEFAULT_LOGICAL_CANVAS,
+            screen_origin: [0.0, 0.0],
             plane_mode: "xy".to_string(),
             plane_slices: [0, 0, 0],
             channels: channels.iter().map(ModelChannel::from).collect(),
@@ -209,6 +212,8 @@ pub struct AppModel {
     deep_link_resolve_operation_generation: u64,
     deep_link_apply_operation_generation: u64,
     deep_link_apply_pending: bool,
+    project_view_apply_generation: u64,
+    project_view_apply_pending: bool,
     project_operation_generation: u64,
     project_operation_pending: bool,
     project_object_preload: ProjectObjectPreloadCatalog,
@@ -363,6 +368,16 @@ pub(crate) struct DeepLinkCurrentResources {
     pub(crate) label: Option<Arc<ControlLabelResource>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ProjectViewApplySpec {
+    pub(crate) operation_generation: u64,
+    pub(crate) document_generation: u64,
+    pub(crate) project_config_generation: u64,
+    pub(crate) params: Value,
+    pub(crate) object_path: Option<PathBuf>,
+    pub(crate) label_name: Option<String>,
+}
+
 impl AppModel {
     pub fn project() -> Self {
         Self {
@@ -379,6 +394,8 @@ impl AppModel {
             deep_link_resolve_operation_generation: 0,
             deep_link_apply_operation_generation: 0,
             deep_link_apply_pending: false,
+            project_view_apply_generation: 0,
+            project_view_apply_pending: false,
             project_operation_generation: 0,
             project_operation_pending: false,
             project_object_preload: ProjectObjectPreloadCatalog::default(),
@@ -3623,29 +3640,167 @@ impl AppModel {
         self.labels_snapshot()
     }
 
-    pub(crate) fn project_view_apply_requires_legacy(&mut self, params: &Value) -> bool {
-        let Ok(view) = self.project.dispatch("project.views.get", params) else {
-            return false;
-        };
+    pub(crate) fn prepare_project_view_apply_resources(
+        &mut self,
+        params: &Value,
+    ) -> Result<Option<ProjectViewApplySpec>, ControlError> {
+        let view = self.project.dispatch("project.views.get", params)?;
         let spec = view.get("spec").unwrap_or(&Value::Null);
-        let Some(dataset) = self.dataset.as_ref() else {
-            return false;
-        };
+        let dataset = self.dataset()?;
         let needs_objects = spec
             .get("segmentation_source")
             .and_then(Value::as_str)
             .is_some_and(|source| !source.trim().is_empty())
             && spec.get("load_labels").and_then(Value::as_bool) != Some(true);
         let needs_labels = spec.get("load_labels").and_then(Value::as_bool) == Some(true);
-        (needs_objects && dataset.object_resource.is_none())
-            || (needs_labels
-                && dataset
-                    .workspace
-                    .active()
-                    .state
-                    .native_layers
-                    .get("segmentation_labels")
-                    .is_none())
+        let load_objects = needs_objects && dataset.object_resource.is_none();
+        let load_labels = needs_labels && dataset.label_resource.is_none();
+        if !load_objects && !load_labels {
+            return Ok(None);
+        }
+
+        let project = self.project_snapshot();
+        let current_source_key = dataset.descriptor.source.source_key();
+        let active_roi = project
+            .focused_source_key
+            .as_deref()
+            .and_then(|focused| {
+                project
+                    .rois
+                    .iter()
+                    .find(|roi| roi.source_key().as_deref() == Some(focused))
+            })
+            .or_else(|| {
+                project
+                    .rois
+                    .iter()
+                    .find(|roi| roi.source_key().as_deref() == Some(current_source_key.as_str()))
+            });
+        let object_path = if load_objects {
+            let roi = active_roi.ok_or_else(|| {
+                ControlError::new(
+                    ControlErrorKind::ResourceNotFound,
+                    "saved view requests object segmentation but the current dataset has no project ROI",
+                )
+            })?;
+            Some(project_roi_segmentation_path(&project, roi).ok_or_else(|| {
+                ControlError::new(
+                    ControlErrorKind::ResourceNotFound,
+                    "saved view requests object segmentation but the current ROI has no segmentation source",
+                )
+            })?)
+        } else {
+            None
+        };
+        let label_name = if load_labels {
+            let selected = dataset.label_selected.trim();
+            let name = if selected.is_empty() {
+                dataset.label_available.first().map(String::as_str)
+            } else {
+                Some(selected)
+            }
+            .ok_or_else(|| {
+                ControlError::new(
+                    ControlErrorKind::ResourceNotFound,
+                    "saved view requests labels but this dataset has no label groups",
+                )
+            })?;
+            Some(name.to_string())
+        } else {
+            None
+        };
+
+        if self.project_view_apply_pending {
+            self.readiness.cancel(
+                OperationKind::ProjectViewApply,
+                self.project_view_apply_generation,
+                "Superseded by a newer saved-view application",
+            );
+        }
+        self.project_view_apply_generation =
+            self.project_view_apply_generation.wrapping_add(1).max(1);
+        self.project_view_apply_pending = true;
+        self.readiness.begin(
+            OperationKind::ProjectViewApply,
+            self.project_view_apply_generation,
+            "Loading saved-view resources",
+        );
+        Ok(Some(ProjectViewApplySpec {
+            operation_generation: self.project_view_apply_generation,
+            document_generation: self.document_generation,
+            project_config_generation: project.config_generation,
+            params: params.clone(),
+            object_path,
+            label_name,
+        }))
+    }
+
+    fn project_view_apply_is_current(&self, spec: &ProjectViewApplySpec) -> bool {
+        self.project_view_apply_pending
+            && self.project_view_apply_generation == spec.operation_generation
+            && self.document_generation == spec.document_generation
+            && self.project_snapshot().config_generation == spec.project_config_generation
+            && self
+                .readiness
+                .is_pending(OperationKind::ProjectViewApply, spec.operation_generation)
+    }
+
+    pub(crate) fn install_project_view_apply_resources(
+        &mut self,
+        spec: &ProjectViewApplySpec,
+        object_resource: Option<Arc<ControlObjectResource>>,
+        label_resource: Option<Arc<ControlLabelResource>>,
+    ) -> Result<Option<Value>, ControlError> {
+        if !self.project_view_apply_is_current(spec) {
+            return Ok(None);
+        }
+        if let Some(resource) = object_resource {
+            self.install_object_resource_immediate(resource)?;
+        }
+        if let Some(resource) = label_resource {
+            let available = self.dataset()?.label_available.clone();
+            self.install_label_resource_immediate(resource, available)?;
+        }
+        let response = self.apply_project_view(&spec.params)?;
+        self.project_view_apply_pending = false;
+        self.readiness.finish(
+            OperationKind::ProjectViewApply,
+            spec.operation_generation,
+            "Saved view applied",
+        );
+        Ok(Some(response))
+    }
+
+    pub(crate) fn fail_project_view_apply(
+        &mut self,
+        spec: &ProjectViewApplySpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.project_view_apply_is_current(spec) {
+            return false;
+        }
+        self.project_view_apply_pending = false;
+        self.readiness.fail(
+            OperationKind::ProjectViewApply,
+            spec.operation_generation,
+            message,
+        )
+    }
+
+    pub(crate) fn cancel_project_view_apply(
+        &mut self,
+        spec: &ProjectViewApplySpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.project_view_apply_is_current(spec) {
+            return false;
+        }
+        self.project_view_apply_pending = false;
+        self.readiness.cancel(
+            OperationKind::ProjectViewApply,
+            spec.operation_generation,
+            message,
+        )
     }
 
     pub fn mask_generation(&self) -> Result<(u64, u64), ControlError> {
@@ -4196,7 +4351,7 @@ impl AppModel {
     fn object_selection_query_rect(&self, params: &Value) -> Result<Value, ControlError> {
         Self::require_primary_object_target(params)?;
         let limit = bounded_limit(params, 200)?;
-        let rect = parse_world_rect(params)?;
+        let rect = self.object_world_rect(params)?;
         let resource = self.required_object_resource("viewer.objects.query_rect")?;
         let visible = self.object_query_filter(params)?;
         Ok(json!({
@@ -4209,7 +4364,7 @@ impl AppModel {
     fn object_selection_select_rect(&mut self, params: &Value) -> Result<Value, ControlError> {
         Self::require_primary_object_target(params)?;
         let limit = bounded_limit(params, 200)?;
-        let rect = parse_world_rect(params)?;
+        let rect = self.object_world_rect(params)?;
         let resource = Arc::new(
             self.required_object_resource("viewer.objects.select_rect")?
                 .clone(),
@@ -4222,6 +4377,43 @@ impl AppModel {
             params,
             limit,
         )
+    }
+
+    fn object_world_rect(&self, params: &Value) -> Result<[f32; 4], ControlError> {
+        let Some(values) = params.get("screen_rect").and_then(Value::as_array) else {
+            return parse_world_rect(params);
+        };
+        if values.len() != 4 {
+            return Err(invalid("screen_rect must contain four finite numbers"));
+        }
+        let mut screen = [0.0_f32; 4];
+        for (index, value) in values.iter().enumerate() {
+            screen[index] = value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| invalid("screen_rect must contain four finite numbers"))?
+                as f32;
+        }
+        let viewport = self.selection_viewport(params)?;
+        let zoom = viewport.zoom.max(0.000_01);
+        let screen_center = [
+            viewport.screen_origin[0] + viewport.logical_size[0] * 0.5,
+            viewport.screen_origin[1] + viewport.logical_size[1] * 0.5,
+        ];
+        let first = [
+            viewport.center[0] + (screen[0] - screen_center[0]) / zoom,
+            viewport.center[1] + (screen[1] - screen_center[1]) / zoom,
+        ];
+        let second = [
+            viewport.center[0] + (screen[2] - screen_center[0]) / zoom,
+            viewport.center[1] + (screen[3] - screen_center[1]) / zoom,
+        ];
+        Ok([
+            first[0].min(second[0]),
+            first[1].min(second[1]),
+            first[0].max(second[0]),
+            first[1].max(second[1]),
+        ])
     }
 
     fn object_selection_query_lasso(&self, params: &Value) -> Result<Value, ControlError> {
@@ -5386,8 +5578,21 @@ impl AppModel {
         self.presented_projection_revision = self.presented_projection_revision.max(revision);
     }
 
-    pub fn report_viewport_geometry(&mut self, viewport_id: &str, width: f32, height: f32) {
-        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+    pub fn report_viewport_geometry(
+        &mut self,
+        viewport_id: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+        {
             return;
         }
         let Ok(id) = ViewportId::new(viewport_id) else {
@@ -5396,6 +5601,7 @@ impl AppModel {
         if let Some(dataset) = self.dataset.as_mut()
             && let Some(viewport) = dataset.workspace.get_mut(&id)
         {
+            viewport.state.screen_origin = [x, y];
             viewport.state.logical_size = [width, height];
             self.measured_viewports.insert(id);
             if dataset
@@ -6040,6 +6246,7 @@ impl AppModel {
                 center: [0.0, 0.0],
                 zoom: 1.0,
                 logical_size: DEFAULT_LOGICAL_CANVAS,
+                screen_origin: [0.0, 0.0],
                 plane_mode: "xy".to_string(),
                 plane_slices: [0, 0, 0],
                 channels: default_channels.clone(),
@@ -10268,7 +10475,12 @@ fn control_camera_json(viewport: &ViewportModel) -> Value {
         "center_world_lvl0": viewport.center,
         "zoom_screen_per_lvl0_px": viewport.zoom,
         "viewport": {
-            "screen_rect": [0.0, 0.0, viewport.logical_size[0], viewport.logical_size[1]],
+            "screen_rect": [
+                viewport.screen_origin[0],
+                viewport.screen_origin[1],
+                viewport.screen_origin[0] + viewport.logical_size[0],
+                viewport.screen_origin[1] + viewport.logical_size[1]
+            ],
             "visible_world_lvl0": [
                 viewport.center[0] - half_world[0],
                 viewport.center[1] - half_world[1],
@@ -11624,7 +11836,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        model.report_viewport_geometry(&left, 1200.0, 800.0);
+        model.report_viewport_geometry(&left, 0.0, 0.0, 1200.0, 800.0);
         let right = model
             .dispatch(
                 "viewer.viewports.clone",
@@ -11669,7 +11881,7 @@ mod tests {
         let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
         let mut model = AppModel::project();
         model.install_dataset(&dataset);
-        model.report_viewport_geometry("viewport-1", 1234.0, 777.0);
+        model.report_viewport_geometry("viewport-1", 0.0, 0.0, 1234.0, 777.0);
         assert_eq!(
             model.loading_state()["loading"]["geometry"]["source"],
             "observed"
@@ -11692,7 +11904,7 @@ mod tests {
         let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
         let mut model = AppModel::project();
         model.install_dataset(&dataset);
-        model.report_viewport_geometry("viewport-1", 1000.0, 700.0);
+        model.report_viewport_geometry("viewport-1", 0.0, 0.0, 1000.0, 700.0);
 
         let hidden = model
             .dispatch("viewer.panels.set", &json!({"left":false,"right":false}))

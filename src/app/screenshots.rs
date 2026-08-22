@@ -153,11 +153,57 @@ impl OmeZarrViewerApp {
                     id,
                     path,
                     settings: self.screenshot_settings,
+                    presentation: None,
                 },
             });
         // Avoid capturing floating dialogs over the canvas.
         self.screenshot_settings_open = false;
         self.set_status("Capturing screenshot...".to_string());
+    }
+
+    pub fn request_actor_screenshot(
+        &mut self,
+        capture_id: u64,
+        viewport_id: Option<&str>,
+        preferences: &odon::model::ScreenshotPreferences,
+        tx: crossbeam_channel::Sender<odon::control::actor::PresentationCaptureCompletion>,
+    ) -> anyhow::Result<()> {
+        let workspace = self
+            .viewport_workspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("viewer workspace is not initialized"))?;
+        let viewport_id = match viewport_id {
+            Some(id) => ViewportId::new(id)?,
+            None => workspace.active_id().clone(),
+        };
+        anyhow::ensure!(
+            workspace.get(&viewport_id).is_some(),
+            "viewport '{viewport_id}' was not found"
+        );
+        let id = self.screenshot_next_id;
+        self.screenshot_next_id = self.screenshot_next_id.wrapping_add(1).max(1);
+        self.screenshot_pending.push_back(PendingViewportScreenshot {
+            viewport_id,
+            request: ScreenshotRequest {
+                id,
+                path: PathBuf::new(),
+                settings: ScreenshotSettings {
+                    include_scale_bar: preferences.include_scale_bar(),
+                    include_legend: preferences.include_legend(),
+                    scale_bar_scale: preferences.scale_bar_scale(),
+                    legend_scale: preferences.legend_scale(),
+                },
+                presentation: Some(
+                    crate::app_support::screenshot::PresentationScreenshotReply {
+                        capture_id,
+                        tx,
+                    },
+                ),
+            },
+        });
+        self.screenshot_settings_open = false;
+        self.set_status("Capturing actor-requested screenshot...");
+        Ok(())
     }
 
     pub(super) fn request_quick_screenshot_png_for_viewport(

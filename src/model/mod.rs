@@ -20,7 +20,7 @@ mod threshold;
 pub(crate) use analysis::AnalysisModel;
 pub(crate) use app::{
     AnalysisResourceSpec, DeepLinkApplyGuard, DeepLinkCurrentResources, MeasurementSpec,
-    MemoryPinSpec, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
+    MemoryPinSpec, ProjectViewApplySpec, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
     ThresholdPreviewRecomputeSpec,
 };
 pub use app::{

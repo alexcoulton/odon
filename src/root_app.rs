@@ -32,7 +32,10 @@ use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::{TiffPlaneSelection, TiffPyramid, discover_xenium_explorer};
 use crate::{log_debug, log_info, log_warn};
-use odon::control::actor::RenderProjection;
+use odon::control::actor::{
+    PresentationCaptureCompletion, PresentationCaptureScope, PresentationPixels,
+    RenderProjection,
+};
 use odon::control::{ControlError, ControlErrorKind, TaskState};
 use odon::mcp::{OdonControlBridge, OdonControlRequest};
 use odon::model::{
@@ -769,8 +772,16 @@ fn settings_help_button(ui: &mut egui::Ui, text: &'static str) {
 
 #[derive(Debug)]
 struct ViewportScreenshotRequest {
-    path: PathBuf,
+    destination: ViewportScreenshotDestination,
     crop_rect_points: Option<egui::Rect>,
+}
+
+#[derive(Debug)]
+enum ViewportScreenshotDestination {
+    Presentation {
+        capture_id: u64,
+        tx: crossbeam_channel::Sender<PresentationCaptureCompletion>,
+    },
 }
 
 fn screenshot_crop_bounds(
@@ -951,8 +962,8 @@ impl RootApp {
         let (Some(bridge), Mode::Single(app)) = (self.control_bridge.as_ref(), &self.mode) else {
             return;
         };
-        for (viewport_id, width, height) in app.control_actor_viewport_geometry() {
-            let _ = bridge.report_viewport_geometry(viewport_id, width, height);
+        for (viewport_id, x, y, width, height) in app.control_actor_viewport_geometry() {
+            let _ = bridge.report_viewport_geometry(viewport_id, x, y, width, height);
         }
     }
 
@@ -1145,6 +1156,102 @@ impl RootApp {
                 );
             } else {
                 self.control_projection_gap = true;
+            }
+        }
+    }
+
+    fn process_control_presentation_captures(&mut self, ctx: &egui::Context) {
+        let Some(bridge) = self.control_bridge.as_ref() else {
+            return;
+        };
+        let completion_tx = bridge.presentation_completion_sender();
+        let mut requests = Vec::new();
+        while let Ok(request) = bridge.try_recv_presentation_capture() {
+            requests.push(request);
+        }
+        for request in requests {
+            let capture_id = request.capture_id;
+            let result = match request.scope {
+                PresentationCaptureScope::Viewer { viewport_id } => match &mut self.mode {
+                    Mode::Single(app) if request.mode == ModelMode::Single => app
+                        .request_actor_screenshot(
+                            capture_id,
+                            viewport_id.as_deref(),
+                            &request.screenshot_preferences,
+                            completion_tx.clone(),
+                        )
+                        .map_err(|error| error.to_string()),
+                    Mode::Mosaic { mosaic, .. } if request.mode == ModelMode::Mosaic => mosaic
+                        .request_actor_screenshot(
+                            capture_id,
+                            &request.screenshot_preferences,
+                            completion_tx.clone(),
+                        )
+                        .map_err(|error| error.to_string()),
+                    _ => Err(format!(
+                        "renderer mode changed before viewer capture {} could run",
+                        request.desired_projection_revision
+                    )),
+                },
+                PresentationCaptureScope::Workspace => match &mut self.mode {
+                    Mode::Single(app) if request.mode == ModelMode::Single => {
+                        match app.workspace_canvas_rect() {
+                            Some(crop_rect_points) => {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                                    egui::UserData::new(ViewportScreenshotRequest {
+                                        destination:
+                                            ViewportScreenshotDestination::Presentation {
+                                                capture_id,
+                                                tx: completion_tx.clone(),
+                                            },
+                                        crop_rect_points: Some(crop_rect_points),
+                                    }),
+                                ));
+                                Ok(())
+                            }
+                            None => Err(
+                                "workspace canvases have not been laid out yet".to_string(),
+                            ),
+                        }
+                    }
+                    _ => Err("workspace capture requires the single-image renderer".to_string()),
+                },
+                PresentationCaptureScope::Window => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::new(ViewportScreenshotRequest {
+                            destination: ViewportScreenshotDestination::Presentation {
+                                capture_id,
+                                tx: completion_tx.clone(),
+                            },
+                            crop_rect_points: None,
+                        }),
+                    ));
+                    Ok(())
+                }
+                PresentationCaptureScope::Project => {
+                    if matches!(self.mode, Mode::Project { .. }) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                            egui::UserData::new(ViewportScreenshotRequest {
+                                destination: ViewportScreenshotDestination::Presentation {
+                                    capture_id,
+                                    tx: completion_tx.clone(),
+                                },
+                                crop_rect_points: None,
+                            }),
+                        ));
+                        Ok(())
+                    } else {
+                        Err("project capture projection was not realized by the renderer".to_string())
+                    }
+                }
+            };
+            if let Err(message) = result {
+                let _ = completion_tx.send(PresentationCaptureCompletion {
+                    capture_id,
+                    result: Err(message),
+                });
+            } else {
+                ctx.request_repaint();
             }
         }
     }
@@ -2077,7 +2184,6 @@ impl RootApp {
             "mosaic.objects.get_state" => self.control_get_mosaic_object_state(),
             "mosaic.objects.load_selected" => self.control_load_selected_mosaic_objects(),
             "mosaic.objects.cancel_load" => self.control_cancel_mosaic_object_load(),
-            "viewer.screenshot.capture" => self.control_capture_screenshot(params),
             "viewer.screenshot.settings.get" => self.control_get_screenshot_settings(),
             "viewer.screenshot.settings.set" => self.control_set_screenshot_settings(params),
             "app.settings.get" => self.control_get_app_settings(),
@@ -2096,11 +2202,6 @@ impl RootApp {
             "memory.unpin_all" => self.control_unpin_all_memory(),
             "memory.tiles.get" => self.control_get_tile_loading(),
             "memory.tiles.set" => self.control_set_tile_loading(params),
-            "app.screenshot.capture" => self.control_capture_window_screenshot(ctx, params),
-            "viewer.workspace.screenshot.capture" => {
-                self.control_capture_workspace_screenshot(ctx, params)
-            }
-            "project.screenshot.capture" => self.control_capture_project_screenshot(ctx, params),
             "app.navigation.show_project" => self.control_show_project_page(),
             method => unreachable!("control registry admitted unknown method {method}"),
         };
@@ -5394,158 +5495,6 @@ impl RootApp {
         }
     }
 
-    fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let mut normalized = params.clone();
-        if let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) {
-            let path = expand_control_path(raw_path);
-            let overwrite = params
-                .get("overwrite")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if path.exists() && !overwrite {
-                return serde_json::json!({"error": "destination exists; pass overwrite=true to replace it"});
-            }
-            if let Some(parent) = path.parent()
-                && !parent.as_os_str().is_empty()
-                && let Err(error) = std::fs::create_dir_all(parent)
-            {
-                return serde_json::json!({"error": format!("failed to create screenshot directory: {error}")});
-            }
-            if let Some(object) = normalized.as_object_mut() {
-                object.insert(
-                    "path".to_string(),
-                    serde_json::json!(path.to_string_lossy()),
-                );
-            }
-        }
-        match &mut self.mode {
-            Mode::Single(app) => serde_json::json!({
-                "mode": "single",
-                "screenshot": app.control_capture_screenshot(&normalized),
-            }),
-            Mode::Mosaic { mosaic, .. } => serde_json::json!({
-                "mode": "mosaic",
-                "screenshot": mosaic.control_capture_screenshot(&normalized),
-            }),
-            Mode::Project { .. } => serde_json::json!({
-                "error": "No dataset viewer is currently open.",
-            }),
-            Mode::Transition => serde_json::json!({
-                "error": "Odon is currently transitioning between views.",
-            }),
-        }
-    }
-
-    fn control_capture_window_screenshot(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_capture_egui_screenshot(ctx, params, None, "capture_window_screenshot")
-    }
-
-    fn control_capture_workspace_screenshot(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let crop_rect = match &mut self.mode {
-            Mode::Single(app) => app.workspace_canvas_rect(),
-            Mode::Mosaic { .. } => {
-                return serde_json::json!({
-                    "error": "multi-viewport workspace screenshots are available in single-image mode"
-                });
-            }
-            Mode::Project { .. } => {
-                return serde_json::json!({"error": "No dataset viewer is currently open."});
-            }
-            Mode::Transition => {
-                return serde_json::json!({"error": "Odon is currently transitioning between views."});
-            }
-        };
-        let Some(crop_rect) = crop_rect else {
-            return serde_json::json!({"error": "workspace canvases have not been laid out yet"});
-        };
-        let mut response = self.control_capture_egui_screenshot(
-            ctx,
-            params,
-            Some(crop_rect),
-            "capture_workspace_screenshot",
-        );
-        if let Some(object) = response.as_object_mut() {
-            object.insert("scope".to_string(), serde_json::json!("workspace"));
-        }
-        response
-    }
-
-    fn control_capture_egui_screenshot(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-        crop_rect_points: Option<egui::Rect>,
-        operation_name: &str,
-    ) -> serde_json::Value {
-        let Some(path) = params
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return serde_json::json!({
-                "error": format!("{operation_name} requires path"),
-            });
-        };
-        let path = expand_control_path(path);
-        let overwrite = params
-            .get("overwrite")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if path.exists() && !overwrite {
-            return serde_json::json!({
-                "error": "destination exists; pass overwrite=true to replace it",
-                "path": path.to_string_lossy(),
-            });
-        }
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-            && let Err(err) = std::fs::create_dir_all(parent)
-        {
-            return serde_json::json!({
-                "error": format!("Failed to create screenshot directory: {err}"),
-                "path": path.to_string_lossy(),
-            });
-        }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
-            ViewportScreenshotRequest {
-                path: path.clone(),
-                crop_rect_points,
-            },
-        )));
-        serde_json::json!({
-            "queued": true,
-            "path": path.to_string_lossy(),
-        })
-    }
-
-    fn control_capture_project_screenshot(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let project = self.control_show_project_page();
-        if project.get("error").is_some() {
-            return project;
-        }
-        let screenshot = self.control_capture_window_screenshot(ctx, params);
-        if screenshot.get("error").is_some() {
-            return screenshot;
-        }
-        serde_json::json!({
-            "project": project,
-            "screenshot": screenshot,
-        })
-    }
-
     fn handle_viewport_screenshot_events(&mut self, ctx: &egui::Context) {
         let events = ctx.input(|input| input.events.clone());
         for event in events {
@@ -5568,6 +5517,12 @@ impl RootApp {
                 ctx.pixels_per_point(),
             ) else {
                 self.settings_status = "Screenshot crop was empty.".to_string();
+                let ViewportScreenshotDestination::Presentation { capture_id, tx } =
+                    &request.destination;
+                let _ = tx.send(PresentationCaptureCompletion {
+                    capture_id: *capture_id,
+                    result: Err("screenshot crop was empty".to_string()),
+                });
                 continue;
             };
             let capture_width = x1 - x0;
@@ -5582,22 +5537,17 @@ impl RootApp {
                     rgba.extend_from_slice(&image.pixels[y * width + x].to_array());
                 }
             }
-            let result = image::save_buffer(
-                &request.path,
-                &rgba,
-                capture_width as u32,
-                capture_height as u32,
-                image::ColorType::Rgba8,
-            );
-            match result {
-                Ok(()) => {
-                    self.settings_status =
-                        format!("Saved window screenshot to {}.", request.path.display());
-                }
-                Err(err) => {
-                    self.settings_status = format!("Window screenshot failed: {err}");
-                }
-            }
+            let ViewportScreenshotDestination::Presentation { capture_id, tx } =
+                &request.destination;
+            let _ = tx.send(PresentationCaptureCompletion {
+                capture_id: *capture_id,
+                result: Ok(PresentationPixels {
+                    width: capture_width,
+                    height: capture_height,
+                    rgba,
+                    bottom_up: false,
+                }),
+            });
         }
     }
 
@@ -7968,6 +7918,7 @@ impl eframe::App for RootApp {
         self.handle_viewport_screenshot_events(ctx);
         self.control_mutated_this_frame = false;
         self.process_control_presentations(ctx);
+        self.process_control_presentation_captures(ctx);
         self.process_control_platform_effects(ctx);
         self.process_control_requests(ctx);
         if let Some(rx) = self.deep_link_rx.as_ref() {

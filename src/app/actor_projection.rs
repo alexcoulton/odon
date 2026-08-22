@@ -1051,7 +1051,7 @@ impl OmeZarrViewerApp {
         Ok(())
     }
 
-    pub fn control_actor_viewport_geometry(&self) -> Vec<(String, f32, f32)> {
+    pub fn control_actor_viewport_geometry(&self) -> Vec<(String, f32, f32, f32, f32)> {
         self.viewport_workspace
             .as_ref()
             .into_iter()
@@ -1065,6 +1065,8 @@ impl OmeZarrViewerApp {
                     .then(|| {
                         (
                             viewport.id.as_str().to_string(),
+                            rect.min.x,
+                            rect.min.y,
                             rect.width(),
                             rect.height(),
                         )

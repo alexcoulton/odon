@@ -6,7 +6,7 @@
 //! domain modules prepare their own work. Renderer projections and diagnostics have independent
 //! modules, while actor-capability metadata is owned by the control registry.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -51,7 +51,8 @@ use crate::model::{
     MeasurementSpec, MemoryPinSpec, ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec,
     MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult,
     ObjectExportSpec, ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ScreenshotPreferences,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ProjectViewApplySpec,
+    ScreenshotPreferences,
     SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
     ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
     discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
@@ -69,6 +70,7 @@ mod completion_mosaic;
 mod completion_objects;
 mod completion_opening;
 mod completion_project;
+mod completion_presentation;
 mod completion_resources;
 mod datasets;
 mod deep_links;
@@ -85,6 +87,8 @@ mod objects;
 mod project_io;
 mod project_preload;
 mod project_roi;
+mod project_views;
+mod presentation;
 mod projection;
 mod projects;
 mod remote;
@@ -121,7 +125,7 @@ use jobs::{
     DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MemoryPinWorkerOutcome,
     MemoryPinWorkerResult, MosaicMemoryPinWorkerOutcome, MosaicMemoryPinWorkerResult,
     MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
-    ProjectRoiOpenWorkerResult,
+    ProjectRoiOpenWorkerResult, ProjectViewApplyWorkerResult,
 };
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
@@ -140,6 +144,12 @@ use project_io::{
 };
 use project_preload::{begin_project_object_preload, begin_project_object_source_scan};
 use project_roi::begin_project_roi_open;
+use project_views::begin_project_view_apply;
+use presentation::{PresentationCaptureManager, ScreenshotWriteSpec};
+pub use presentation::{
+    PresentationCaptureCompletion, PresentationCaptureRequest, PresentationCaptureScope,
+    PresentationPixels,
+};
 use projection::publish_projection;
 pub use projection::{PlatformEffect, RenderDocument, RenderProjection};
 use projects::{

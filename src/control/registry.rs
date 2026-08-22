@@ -136,7 +136,7 @@ pub fn execution_owner(
     descriptor: &MethodDescriptor,
     mode: &str,
     params: &Value,
-    project_view_requires_resource_load: bool,
+    _project_view_requires_resource_load: bool,
 ) -> ExecutionOwner {
     if !descriptor.available_in.contains(&mode) {
         return ExecutionOwner::Unavailable;
@@ -151,14 +151,11 @@ pub fn execution_owner(
         return ExecutionOwner::LegacyUi;
     }
     if is_parameter_routed_primary_object_method(descriptor.name)
-        && (matches!(
+        && matches!(
             params.get("target").and_then(Value::as_str),
             Some("active" | "spatial_shape")
-        ) || params.get("screen_rect").is_some())
+        )
     {
-        return ExecutionOwner::LegacyUi;
-    }
-    if descriptor.name == "project.views.apply" && project_view_requires_resource_load {
         return ExecutionOwner::LegacyUi;
     }
     ExecutionOwner::Actor
@@ -170,7 +167,6 @@ pub fn execution_route_summary(descriptor: &MethodDescriptor) -> &'static str {
         return "legacy_ui";
     }
     if is_parameter_routed_primary_object_method(descriptor.name)
-        || descriptor.name == "project.views.apply"
         || ((descriptor.name.starts_with("viewer.") || descriptor.name.starts_with("memory."))
             && descriptor.available_in.contains(&"mosaic")
             && !is_actor_owned_mosaic_shared_method(descriptor.name))
@@ -184,23 +180,10 @@ pub fn execution_route_summary(descriptor: &MethodDescriptor) -> &'static str {
 pub fn execution_route_json(descriptor: &MethodDescriptor) -> Value {
     let actor_capable = ACTOR_CAPABLE_METHODS.contains(&descriptor.name);
     let variants = if is_parameter_routed_primary_object_method(descriptor.name) {
-        json!([
-            {
-                "when":{"target":["active","spatial_shape"]},
-                "owner":"legacy_ui",
-                "reason":"renderer-owned object target"
-            },
-            {
-                "when":{"screen_rect":"present"},
-                "owner":"legacy_ui",
-                "reason":"screen-space query requires renderer state"
-            }
-        ])
-    } else if descriptor.name == "project.views.apply" {
         json!([{
-            "when":{"required_project_resources":"not_loaded"},
+            "when":{"target":["active","spatial_shape"]},
             "owner":"legacy_ui",
-            "reason":"saved-view resource loading has not yet migrated"
+            "reason":"renderer-owned object target"
         }])
     } else {
         json!([])
@@ -320,6 +303,7 @@ pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
             | "viewer.objects.rendering.set_fast"
             | "viewer.screenshot.settings.get"
             | "viewer.screenshot.settings.set"
+            | "viewer.screenshot.capture"
             | "memory.get"
             | "memory.pin"
             | "memory.unpin"
@@ -4325,7 +4309,7 @@ mod tests {
     }
 
     #[test]
-    fn report_remaining_mosaic_legacy_routes() {
+    fn mosaic_has_no_legacy_control_routes() {
         let legacy = METHODS
             .iter()
             .filter(|descriptor| descriptor.available_in.contains(&"mosaic"))
@@ -4334,14 +4318,7 @@ mod tests {
             })
             .map(|descriptor| descriptor.name)
             .collect::<Vec<_>>();
-        assert_eq!(
-            legacy,
-            vec![
-                "viewer.screenshot.capture",
-                "app.screenshot.capture",
-                "project.screenshot.capture",
-            ]
-        );
+        assert!(legacy.is_empty(), "legacy mosaic routes remain: {legacy:?}");
     }
 
     #[test]

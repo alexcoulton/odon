@@ -84,6 +84,11 @@ pub(super) struct ProjectRoiOpenWorkerResult {
     pub(super) reuse_current: bool,
 }
 
+pub(super) struct ProjectViewApplyWorkerResult {
+    pub(super) object_resource: Option<Arc<ControlObjectResource>>,
+    pub(super) label_resource: Option<Arc<ControlLabelResource>>,
+}
+
 pub(super) struct MosaicOpenWorkerResult {
     pub(super) resource: ControlMosaicResource,
     pub(super) s3_session_generation: Option<u64>,
@@ -203,6 +208,16 @@ pub(super) enum LoadCompletion {
         request: OdonControlRequest,
         preferences: ScreenshotPreferences,
         result: anyhow::Result<()>,
+    },
+    ScreenshotWrite {
+        request: OdonControlRequest,
+        spec: ScreenshotWriteSpec,
+        result: anyhow::Result<u64>,
+    },
+    ProjectViewApply {
+        request: OdonControlRequest,
+        spec: ProjectViewApplySpec,
+        result: anyhow::Result<ProjectViewApplyWorkerResult>,
     },
     MemoryPin {
         request: OdonControlRequest,
@@ -365,9 +380,14 @@ pub(super) enum CompletionDomain {
     Objects,
     Masks,
     Mosaic,
+    Presentation,
 }
 
 impl LoadCompletion {
+    pub(super) const fn allowed_during_presentation_barrier(&self) -> bool {
+        matches!(self, Self::ScreenshotWrite { .. })
+    }
+
     pub(super) const fn domain(&self) -> CompletionDomain {
         match self {
             Self::DatasetInspect { .. }
@@ -392,6 +412,7 @@ impl LoadCompletion {
             | Self::ProjectDiscovery { .. }
             | Self::ProjectObjectSourceScan { .. }
             | Self::ProjectObjectPreload { .. } => CompletionDomain::Project,
+            Self::ProjectViewApply { .. } => CompletionDomain::Project,
             Self::ObjectResource { .. }
             | Self::Labels { .. }
             | Self::MemoryPin { .. }
@@ -410,6 +431,7 @@ impl LoadCompletion {
             Self::MosaicOpen { .. } | Self::MosaicObjects { .. } | Self::MosaicMemoryPin { .. } => {
                 CompletionDomain::Mosaic
             }
+            Self::ScreenshotWrite { .. } => CompletionDomain::Presentation,
         }
     }
 }
@@ -514,6 +536,16 @@ pub(super) enum LoadJob {
         generation: u64,
         request: OdonControlRequest,
         preferences: ScreenshotPreferences,
+    },
+    ScreenshotWrite {
+        request: OdonControlRequest,
+        spec: ScreenshotWriteSpec,
+        pixels: PresentationPixels,
+    },
+    ProjectViewApply {
+        request: OdonControlRequest,
+        spec: ProjectViewApplySpec,
+        document: Arc<RenderDocument>,
     },
     MemoryPin {
         request: OdonControlRequest,

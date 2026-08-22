@@ -195,6 +195,60 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
     assert_eq!(queried["objects"]["query"]["match_count"], 1);
     assert_eq!(queried["objects"]["query"]["matches"][0]["id"], "cell-a");
 
+    let (camera, camera_rx) = request(
+        "viewer.camera.set",
+        json!({"center_world_lvl0":[50.0,50.0],"zoom_screen_per_lvl0_px":2.0}),
+    );
+    channels.request_tx.send(camera).unwrap();
+    camera_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    channels
+        .model_tx
+        .send(ActorModelUpdate::ViewportGeometry {
+            viewport_id: "viewport-1".to_string(),
+            x: 100.0,
+            y: 200.0,
+            width: 200.0,
+            height: 100.0,
+        })
+        .unwrap();
+    let mut observed_screen_rect = Value::Null;
+    for _ in 0..100 {
+        let (camera, response) = request("viewer.camera.get", json!({}));
+        channels.request_tx.send(camera).unwrap();
+        let value = response
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        if value["camera"]["viewport"]["screen_rect"] == json!([100.0, 200.0, 300.0, 300.0]) {
+            observed_screen_rect = value;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        observed_screen_rect["camera"]["viewport"]["screen_rect"],
+        json!([100.0, 200.0, 300.0, 300.0])
+    );
+    let (screen_query, screen_query_rx) = request(
+        "viewer.objects.query_rect",
+        json!({
+            "target":"segmentation_objects",
+            "viewport_id":"viewport-1",
+            "screen_rect":[98.0,148.0,122.0,172.0],
+        }),
+    );
+    channels.request_tx.send(screen_query).unwrap();
+    let screen_query = screen_query_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(screen_query["objects"]["query"]["match_count"], 1);
+    assert_eq!(screen_query["objects"]["query"]["matches"][0]["id"], "cell-a");
+    assert_eq!(channels.legacy_rx.len(), 0);
+
     let (focus, focus_rx) = request(
         "viewer.objects.focus.set",
         json!({"target":"segmentation_objects","id":"cell-b","fit":false}),

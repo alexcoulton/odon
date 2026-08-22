@@ -398,6 +398,82 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::ProjectViewApply {
+            request,
+            spec,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_project_view_apply(
+                    &spec,
+                    "Saved-view application was cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "saved-view application");
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    let mut candidate = model.clone();
+                    match candidate.install_project_view_apply_resources(
+                        &spec,
+                        result.object_resource,
+                        result.label_resource,
+                    ) {
+                        Ok(Some(response)) => {
+                            *model = candidate;
+                            publish_projection(
+                                model,
+                                render_document.clone(),
+                                presentation_tx,
+                                presentation_coalesce_rx,
+                                wake_ui,
+                                diagnostics,
+                            );
+                            finish_request(request, response, diagnostics);
+                        }
+                        Ok(None) => {
+                            diagnostics
+                                .stale_worker_completions
+                                .fetch_add(1, Ordering::Relaxed);
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "saved-view application was superseded by newer state",
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            model.fail_project_view_apply(&spec, error.message.clone());
+                            reject_actor_request(request, diagnostics, error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("saved-view resource loading failed: {error}");
+                    if model.fail_project_view_apply(&spec, &message) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed saved-view application was superseded by newer state",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         LoadCompletion::SamplesheetInspect { request, result } => {
             if request_is_cancelled(&request) {
                 reject_cancelled_request(request, diagnostics, "samplesheet inspection");

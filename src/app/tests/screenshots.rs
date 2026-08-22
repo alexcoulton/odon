@@ -12,16 +12,14 @@ fn viewport_screenshot_queue_keeps_targets_independent_and_cleans_removed_view()
         .as_str()
         .unwrap()
         .to_string();
-    let first = app.control_capture_screenshot(&serde_json::json!({
-        "viewport_id": left,
-        "path": std::env::temp_dir().join("odon-left-viewport.png"),
-    }));
-    let second = app.control_capture_screenshot(&serde_json::json!({
-        "viewport_id": right,
-        "path": std::env::temp_dir().join("odon-right-viewport.png"),
-    }));
-    assert_eq!(first["queued"], true);
-    assert_eq!(second["queued"], true);
+    app.request_screenshot_png_for_viewport(
+        std::env::temp_dir().join("odon-left-viewport.png"),
+        ViewportId::new(&left).unwrap(),
+    );
+    app.request_screenshot_png_for_viewport(
+        std::env::temp_dir().join("odon-right-viewport.png"),
+        ViewportId::new(&right).unwrap(),
+    );
     assert_eq!(app.screenshot_pending.len(), 2);
     assert_eq!(app.screenshot_pending[0].viewport_id.as_str(), left);
     assert_eq!(app.screenshot_pending[1].viewport_id.as_str(), right);

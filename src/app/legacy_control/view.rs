@@ -341,60 +341,6 @@ impl OmeZarrViewerApp {
         self.control_camera_snapshot()
     }
 
-    pub fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let target = match params
-            .get("viewport_id")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some(value) => match ViewportId::new(value) {
-                Ok(id)
-                    if self
-                        .viewport_workspace
-                        .as_ref()
-                        .is_some_and(|workspace| workspace.get(&id).is_some()) =>
-                {
-                    id
-                }
-                Ok(id) => {
-                    return serde_json::json!({"error": format!("viewport '{id}' was not found")});
-                }
-                Err(error) => return serde_json::json!({"error": error.to_string()}),
-            },
-            None => match self
-                .viewport_workspace
-                .as_ref()
-                .map(|workspace| workspace.active_id().clone())
-            {
-                Some(id) => id,
-                None => {
-                    return serde_json::json!({"error": "viewer workspace is not initialized"});
-                }
-            },
-        };
-        if let Some(path) = params
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let path = PathBuf::from(path);
-            self.request_screenshot_png_for_viewport(path.clone(), target.clone());
-            return serde_json::json!({
-                "queued": true,
-                "path": path.to_string_lossy(),
-                "viewport_id": target.as_str(),
-            });
-        }
-        match self.request_quick_screenshot_png_for_viewport(target.clone()) {
-            Ok(path) => serde_json::json!({
-                "queued": true,
-                "path": path.to_string_lossy(),
-                "viewport_id": target.as_str(),
-            }),
-            Err(err) => serde_json::json!({"error": format!("{err}")}),
-        }
-    }
-
     pub(in crate::app) fn control_channel_index_from_params(
         &self,
         params: &serde_json::Value,

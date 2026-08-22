@@ -1811,29 +1811,6 @@ impl MosaicViewerApp {
         })
     }
 
-    pub fn control_capture_screenshot(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        if let Some(path) = params
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let path = PathBuf::from(path);
-            self.request_screenshot_png(path.clone());
-            return serde_json::json!({
-                "queued": true,
-                "path": path.to_string_lossy(),
-            });
-        }
-        match self.request_quick_screenshot_png() {
-            Ok(path) => serde_json::json!({
-                "queued": true,
-                "path": path.to_string_lossy(),
-            }),
-            Err(err) => serde_json::json!({"error": format!("{err}")}),
-        }
-    }
-
     fn control_channel_index_from_params(
         &self,
         params: &serde_json::Value,
@@ -2571,10 +2548,41 @@ impl MosaicViewerApp {
             id,
             path,
             settings: self.screenshot_settings,
+            presentation: None,
         });
         self.screenshot_in_flight = Some(id);
         self.screenshot_settings_open = false;
         self.status = "Capturing screenshot...".to_string();
+    }
+
+    pub fn request_actor_screenshot(
+        &mut self,
+        capture_id: u64,
+        preferences: &odon::model::ScreenshotPreferences,
+        tx: crossbeam_channel::Sender<odon::control::actor::PresentationCaptureCompletion>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.screenshot_pending.is_none(),
+            "the mosaic renderer already has a pending screenshot"
+        );
+        let id = self.screenshot_next_id;
+        self.screenshot_next_id = self.screenshot_next_id.wrapping_add(1).max(1);
+        self.screenshot_pending = Some(ScreenshotRequest {
+            id,
+            path: PathBuf::new(),
+            settings: ScreenshotSettings {
+                include_scale_bar: false,
+                include_legend: preferences.include_legend(),
+                scale_bar_scale: preferences.scale_bar_scale(),
+                legend_scale: preferences.legend_scale(),
+            },
+            presentation: Some(
+                crate::app_support::screenshot::PresentationScreenshotReply { capture_id, tx },
+            ),
+        });
+        self.screenshot_settings_open = false;
+        self.status = "Capturing actor-requested screenshot...".to_string();
+        Ok(())
     }
 
     pub fn request_quick_screenshot_png(&mut self) -> anyhow::Result<PathBuf> {
@@ -7419,6 +7427,7 @@ impl MosaicViewerApp {
             let tx = self.screenshot_worker.tx.clone();
             let id = spec.id;
             let path = spec.path.clone();
+            let presentation = spec.presentation.clone();
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
                 let viewport = info.viewport_in_pixels();
                 let x_px = viewport.left_px;
@@ -7427,6 +7436,14 @@ impl MosaicViewerApp {
                 let h_px = viewport.height_px;
 
                 if w_px <= 0 || h_px <= 0 {
+                    if let Some(reply) = presentation.as_ref() {
+                        let _ = reply.tx.send(
+                            odon::control::actor::PresentationCaptureCompletion {
+                                capture_id: reply.capture_id,
+                                result: Err("mosaic capture rectangle is empty".to_string()),
+                            },
+                        );
+                    }
                     return;
                 }
 
@@ -7445,13 +7462,27 @@ impl MosaicViewerApp {
                         glow::PixelPackData::Slice(Some(rgba.as_mut_slice())),
                     );
                 }
-                let _ = tx.send(ScreenshotWorkerMsg::SavePng {
-                    id,
-                    path: path.clone(),
-                    width: w_px as usize,
-                    height: h_px as usize,
-                    rgba_bottom_up: rgba,
-                });
+                if let Some(reply) = presentation.as_ref() {
+                    let _ = reply.tx.send(
+                        odon::control::actor::PresentationCaptureCompletion {
+                            capture_id: reply.capture_id,
+                            result: Ok(odon::control::actor::PresentationPixels {
+                                width: w_px as usize,
+                                height: h_px as usize,
+                                rgba,
+                                bottom_up: true,
+                            }),
+                        },
+                    );
+                } else {
+                    let _ = tx.send(ScreenshotWorkerMsg::SavePng {
+                        id,
+                        path: path.clone(),
+                        width: w_px as usize,
+                        height: h_px as usize,
+                        rgba_bottom_up: rgba,
+                    });
+                }
             });
             ui.painter().add(egui::PaintCallback {
                 rect,

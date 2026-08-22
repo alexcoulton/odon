@@ -8,6 +8,8 @@ pub(super) fn dispatch_request(
     presentation_coalesce_rx: &Receiver<RenderProjection>,
     platform_effect_tx: &Sender<PlatformEffect>,
     load_job_tx: &Sender<LoadJob>,
+    presentation_captures: &mut PresentationCaptureManager,
+    presentation_capture_tx: &Sender<PresentationCaptureRequest>,
     render_document: &Option<Arc<RenderDocument>>,
     remote_session: &mut RemoteSessionState,
     resource_registry: &ResourceRegistry,
@@ -43,20 +45,61 @@ pub(super) fn dispatch_request(
         return;
     }
 
-    let project_view_requires_resource_load = request.command.method() == "project.views.apply"
-        && model.project_view_apply_requires_legacy(request.command.params());
     let routes_to_legacy =
         crate::control::registry::method(request.command.method()).is_some_and(|descriptor| {
             crate::control::registry::execution_owner(
                 descriptor,
                 mode,
                 request.command.params(),
-                project_view_requires_resource_load,
+                false,
             ) == ExecutionOwner::LegacyUi
         });
     if routes_to_legacy {
         forward_legacy_request(request, legacy_tx, wake_ui, diagnostics);
         return;
+    }
+
+    if matches!(
+        request.command.method(),
+        "viewer.screenshot.capture"
+            | "viewer.workspace.screenshot.capture"
+            | "app.screenshot.capture"
+            | "project.screenshot.capture"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        presentation_captures.begin(
+            model,
+            request,
+            render_document,
+            presentation_tx,
+            presentation_coalesce_rx,
+            presentation_capture_tx,
+            wake_ui,
+            diagnostics,
+        );
+        return;
+    }
+
+    if request.command.method() == "project.views.apply" {
+        match model.prepare_project_view_apply_resources(request.command.params()) {
+            Ok(Some(spec)) => {
+                diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+                begin_project_view_apply(
+                    model,
+                    request,
+                    spec,
+                    load_job_tx,
+                    render_document,
+                    diagnostics,
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                reject_actor_request(request, diagnostics, error);
+                return;
+            }
+        }
     }
 
     if matches!(

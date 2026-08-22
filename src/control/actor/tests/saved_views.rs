@@ -113,14 +113,92 @@ fn saved_view_capture_and_apply_complete_without_a_ui_frame() {
     let (apply_resource_view, apply_resource_view_rx) =
         request("project.views.apply", json!({"name":"Needs object load"}));
     channels.request_tx.send(apply_resource_view).unwrap();
-    let legacy = channels
-        .legacy_rx
+    assert_eq!(
+        apply_resource_view_rx
         .recv_timeout(Duration::from_secs(1))
-        .expect("resource-loading view apply remains an explicit hybrid route");
-    assert_eq!(legacy.command.method(), "project.views.apply");
-    legacy.reply.send(Ok(json!({"applied":true}))).unwrap();
-    apply_resource_view_rx
+        .unwrap()
+        .unwrap_err()
+        .kind,
+        ControlErrorKind::ResourceNotFound
+    );
+    assert_eq!(channels.legacy_rx.len(), 0);
+}
+
+#[test]
+fn saved_view_resource_load_is_one_actor_worker_transaction() {
+    let channels = spawn_test_actor_with_objects();
+    let dataset_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let object_path = std::env::temp_dir().join(format!(
+        "odon-saved-view-objects-{}",
+        std::process::id()
+    ));
+    let mut roi = ProjectRoi {
+        id: "roi-a".to_string(),
+        display_name: Some("ROI A".to_string()),
+        segpath: Some(object_path),
+        ..ProjectRoi::default()
+    };
+    roi.set_dataset_source(crate::data::dataset_source::DatasetSource::Local(dataset_path));
+    let source_key = roi.source_key().unwrap();
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapProject(ProjectModelSnapshot {
+            config: ProjectConfig {
+                rois: vec![roi.clone()],
+                ..ProjectConfig::default()
+            },
+            rois: vec![roi],
+            focused_source_key: Some(source_key.clone()),
+            selected_source_keys: vec![source_key],
+            saved_path: Some(std::env::temp_dir().join("saved-view-project.odon.json")),
+            config_generation: 1,
+            ..ProjectModelSnapshot::default()
+        }))
+        .unwrap();
+    let (open, open_response) = request("project.rois.open", json!({"roi":"roi-a"}));
+    channels.request_tx.send(open).unwrap();
+    open_response
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    let (clear, clear_response) = request("viewer.objects.source.clear", json!({}));
+    channels.request_tx.send(clear).unwrap();
+    clear_response
         .recv_timeout(Duration::from_secs(1))
         .unwrap()
         .unwrap();
+    let (create, create_response) = request(
+        "project.views.create",
+        json!({
+            "name":"Reload objects",
+            "spec":{"segmentation_source":"geoparquet","fill_cells":true},
+        }),
+    );
+    channels.request_tx.send(create).unwrap();
+    create_response
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    let (apply, apply_response) =
+        request("project.views.apply", json!({"name":"Reload objects"}));
+    channels.request_tx.send(apply).unwrap();
+    assert_eq!(
+        apply_response
+            .recv_timeout(Duration::from_secs(3))
+            .expect("saved-view worker transaction")
+            .unwrap()["applied"],
+        true
+    );
+    let (objects, objects_response) = request("viewer.objects.get_state", json!({}));
+    channels.request_tx.send(objects).unwrap();
+    assert_eq!(
+        objects_response
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap()["state"]["object_count"],
+        2
+    );
+    assert_eq!(channels.legacy_rx.len(), 0);
 }
