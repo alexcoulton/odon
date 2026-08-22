@@ -4995,6 +4995,26 @@ pub fn load_control_object_resource_with_options(
     let Some(options) = options else {
         return load_control_object_resource(path, downsample_factor);
     };
+    if let Some(preload) = options.get("project_preload") {
+        let mode = match preload
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("full_geometry")
+        {
+            "full_geometry" => ObjectPreloadMode::FullGeometry,
+            "centroid_points" => ObjectPreloadMode::CentroidPoints,
+            other => anyhow::bail!("unknown project object preload mode '{other}'"),
+        };
+        let settings = ObjectPreloadSettings {
+            mode,
+            lazy_properties: preload
+                .get("lazy_properties")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+        };
+        let preloaded = preload_objects_from_path(path.clone(), downsample_factor, settings)?;
+        return control_resource_from_preloaded(path, downsample_factor, preloaded);
+    }
     let property_columns = options
         .get("property_columns")
         .and_then(serde_json::Value::as_array)

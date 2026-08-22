@@ -486,6 +486,125 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 ),
             }
         }
+        LoadCompletion::ProjectObjectSourceScan {
+            scope,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                reject_cancelled_request(request, diagnostics, "project object source scan");
+                return;
+            }
+            match result {
+                Ok(sources) => {
+                    if !model.install_project_object_preload_sources(&scope, sources) {
+                        reject_stale_project_worker(
+                            request,
+                            diagnostics,
+                            "project object source scan",
+                        );
+                        return;
+                    }
+                    let response = match request.command.method() {
+                        "project.objects.preload.get" => model.project_object_preload_snapshot(),
+                        "project.objects.preload.list_sources" => {
+                            let offset = request
+                                .command
+                                .params()
+                                .get("offset")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0) as usize;
+                            let limit = request
+                                .command
+                                .params()
+                                .get("limit")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(200) as usize;
+                            model.project_object_preload_sources_snapshot(offset, limit)
+                        }
+                        _ => unreachable!("source scan has a preload inspection request"),
+                    };
+                    finish_request(request, response, diagnostics);
+                }
+                Err(error) => reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::new(
+                        ControlErrorKind::Application,
+                        format!("project object source scan failed: {error}"),
+                    ),
+                ),
+            }
+        }
+        LoadCompletion::ProjectObjectPreload {
+            generation,
+            scope,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_project_object_preload(
+                    &scope,
+                    generation,
+                    "Project object preload cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "project object preload");
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    let failed = result.failures.len();
+                    let failure_details = result
+                        .failures
+                        .iter()
+                        .map(|(path, error)| json!({"path":path.to_string_lossy(),"error":error}))
+                        .collect::<Vec<_>>();
+                    if model.finish_project_object_preload(
+                        &scope,
+                        generation,
+                        result.sources,
+                        result.resources,
+                        failed,
+                    ) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        finish_request(
+                            request,
+                            json!({
+                                "started": true,
+                                "completed": true,
+                                "failures": failure_details,
+                                "preload": model.project_object_preload_snapshot(),
+                                "model_ready": true,
+                                "resources_ready": true,
+                                "presentation_ready": false,
+                            }),
+                            diagnostics,
+                        );
+                    } else {
+                        reject_stale_project_worker(request, diagnostics, "project object preload");
+                    }
+                }
+                Err(error) => {
+                    let message = format!("project object preload failed: {error}");
+                    if model.fail_project_object_preload(&scope, generation, message.clone()) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        reject_stale_project_worker(request, diagnostics, "project object preload");
+                    }
+                }
+            }
+        }
         _ => unreachable!("completion domain mismatch"),
     }
 }

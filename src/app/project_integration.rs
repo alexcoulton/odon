@@ -175,6 +175,14 @@ impl OmeZarrViewerApp {
         self.auto_load_project_roi_segmentation();
     }
 
+    /// Install the actor's projected project shell without starting renderer-owned resource
+    /// loads. The same render projection immediately installs saved workspace, masks, labels, and
+    /// objects from actor-owned immutable handles.
+    pub fn set_project_space_from_actor(&mut self, project_space: ProjectSpace) {
+        self.project_space = project_space;
+        self.project_cfg_seen = u64::MAX;
+    }
+
     pub fn set_remote_runtime(&mut self, runtime: Option<Arc<tokio::runtime::Runtime>>) {
         self.remote_runtime = runtime;
     }

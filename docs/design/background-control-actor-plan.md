@@ -2,12 +2,12 @@
 
 Status: implementation in progress. The original local OME-Zarr/two-viewport background-safety
 slice is implemented and has automated no-frame coverage. The broader application-surface
-migration is 200 of 261 registered application methods, leaving 61. Mode- and target-aware route
+migration is 205 of 261 registered application methods, leaving 56. Mode- and target-aware route
 metadata, scoped readiness, application settings/recent projects, lifecycle decisions, dataset
 inspection, and deep-link parsing/resolution/filter/generation are now actor-owned. The control
 actor has also been reorganized into a small façade with dedicated runtime, dispatch, worker,
 completion, projection, diagnostics, domain, and test modules. The main remaining work is
-alternate document opening, project-resource transactions, retained compute tasks, mosaic
+alternate-document subresources, transactional deep-link application, retained compute tasks, mosaic
 state, explicit presentation tasks, duplicate renderer-owned semantic state, and real platform
 occlusion acceptance. Before those migrations continue, the former 27,951-line `src/app.rs` has
 also been converted into a responsibility-based `src/app/` module tree with an explicit legacy
@@ -119,23 +119,24 @@ The background-safe first vertical slice is now implemented in
   presentation wait separately. The method catalog now declares execution
   class and readiness requirements.
 
-The compatibility dispatcher remains for alternate dataset kinds, project-resource opening,
-compute/export domains, mosaic control, and renderer-specific pixel operations. Native UI
+The compatibility dispatcher remains for remaining alternate-dataset subresources, deep-link
+application, compute/export domains, mosaic control, and renderer-specific pixel operations. Native UI
 commits for the migrated viewport fields now submit the same typed actor
 commands after an optimistic renderer-local interaction; Phase 7 must still
 remove the duplicate semantic storage and extend that command-only boundary to
 the remaining domains. Cross-platform manual covered/minimized/Space
 acceptance also remains outstanding.
 
-As of this revision, 216 commands are listed as actor-capable: 200 of the 261
+As of this revision, 221 commands are listed as actor-capable: 205 of the 261
 application-registry methods, 15 of the 34 protocol-service methods, plus the actor-only
-method-availability query. This count is diagnostic, not a completion metric: 61 application
+method-availability query. This count is diagnostic, not a completion metric: 56 application
 methods remain outside the actor list, and some listed methods are still hybrid or fall back by
-mode or target. The other 24 protocol
+mode or target. The other 19 protocol
 services (handshake, event/task management, and declarative-UI registries) already execute outside
 the render loop but have not all been folded into the canonical actor. Major remaining domains
-include project ROI/resource opening, alternate local datasets, threshold computation, analysis,
-measurements, exports, memory control, mosaic, and explicit presentation tasks.
+include the remaining alternate-dataset subresources, transactional deep-link application,
+threshold computation, analysis, measurements, exports, memory control, mosaic, and explicit
+presentation tasks.
 
 ## Updated Execution Plan (Authoritative)
 
@@ -173,20 +174,20 @@ recorded before Gate A is declared complete.
 
 ### Current method ledger
 
-The registry currently contains 261 application methods. The actor list contains 200 of them;
-61 remain. The remaining inventory is fixed by registry family as follows. The two mosaic-opening
+The registry currently contains 261 application methods. The actor list contains 205 of them;
+56 remain. The remaining inventory is fixed by registry family as follows. The two mosaic-opening
 methods are shown with the mosaic workstream because they depend on the canonical mosaic model,
 even though their registry names live under `project.*` and `datasets.*`.
 
 | Remaining workstream | Methods | Count |
 | --- | --- | ---: |
-| Project resources and deep-link transactions | `project.objects.preload.*`, `project.rois.open`, `deep_links.apply` | 6 |
+| Project resources and deep-link transactions | `deep_links.apply` | 1 |
 | Single-view resource and compute domains | screenshot settings, `memory.*`, threshold preview, analysis, measurements, and object exports | 32 |
 | Mosaic semantic state and resources | `mosaic.*`, `project.rois.open_selected_mosaic`, `datasets.open_mosaic_samplesheet` | 19 |
 | Pixel presentation and capture | viewer/workspace/application/project screenshot capture | 4 |
-| **Total** |  | **61** |
+| **Total** |  | **56** |
 
-The 191-method actor count must not be interpreted as 191 methods being universally complete.
+The 205-method actor count must not be interpreted as 205 methods being universally complete.
 For example, a method may execute in the actor for a primary single-image target but use the
 compatibility path for a SpatialData shape or mosaic. Diagnostics and documentation therefore
 need a route matrix rather than one static label per method.
@@ -319,7 +320,7 @@ explicit and prevents the broad method waves from building on another global-bus
 | 10 | Wave 2B deep-link resolution | Complete | Current, external, and example-project resolution works without frames |
 | 11 | Wave 2C remote sessions and remote OME-Zarr | Complete | HTTP/S3 list/open no-frame tests cover cancellation, stale work, and credential redaction; native single-open uses the same actor commands |
 | 12 | Wave 2D TIFF/SpatialData/Xenium adapters | In progress | All three opens are actor-routed and reach primary-document readiness without a frame; selected SpatialData/Xenium subresources still need typed actor-owned preparation |
-| 13 | Wave 2E project preload and ROI-open transaction | Pending | ROI open installs its document and required resources before replying; stale work is rejected |
+| 13 | Wave 2E project preload and ROI-open transaction | Complete | Actor-owned preload resources are shared with atomic local/HTTP/S3 ROI opens; failure, cancellation, and stale completion retain the prior document |
 | 14 | Wave 2F transactional deep-link apply | Pending | External project/ROI/view application completes atomically with frames paused |
 | 15 | Wave 3 retained compute/resources | Pending | Threshold, analysis, measurement, memory, and export tasks progress and cancel without frames |
 | 16 | Wave 4 canonical mosaic and mosaic opening | Pending | Complete mosaic state and resource workflow executes with frames paused |
@@ -335,7 +336,7 @@ independently reviewable.
 
 Three numbers must be reported separately throughout implementation:
 
-- **registry coverage:** currently 200/261 application methods actor-capable;
+- **registry coverage:** currently 205/261 application methods actor-capable;
 - **route coverage:** the supported mode/target routes that are actor-owned; the evaluator exists,
   and the verifier must now enumerate and count its declared variants; and
 - **acceptance coverage:** commands proven to complete under paused frames and real OS occlusion.
@@ -495,6 +496,13 @@ document.
 
 Methods: `project.objects.preload.get`, `project.objects.preload.list_sources`,
 `project.objects.preload.start`, `project.objects.preload.clear`, and `project.rois.open`.
+
+Status: complete. The preload catalog is keyed by saved-project/load/resource identity, filesystem
+inspection and parsing run on bounded workers, native UI uses the same actor commands, and renderer
+caches are populated only from immutable projections. ROI open retains the prior document until
+the selected local/HTTP/S3 source, saved labels, object resource, masks, and persisted view state
+can commit together. Shared preload handles avoid reparsing; task cancellation, explicit clear,
+project/source supersession, and late worker completions are generation guarded.
 
 - add an actor-owned preload catalog keyed by project/resource identity and project generation;
 - share immutable object resources between preload results and the document install path instead of

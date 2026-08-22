@@ -364,7 +364,7 @@
       "permissions": ["project.read", "project.write"],
       "python_sync": ["odon.resources:ProjectRois.list", "odon.resources:ProjectRois.get", "odon.resources:ProjectRois.add", "odon.resources:ProjectRois.update", "odon.resources:ProjectRois.remove", "odon.resources:ProjectRois.reorder", "odon.resources:ProjectRois.get_selection", "odon.resources:ProjectRois.select", "odon.resources:ProjectRois.focus", "odon.resources:ProjectRois.next", "odon.resources:ProjectRois.previous", "odon.resources:ProjectRois.open", "odon.resources:ProjectRois.open_selected_mosaic"],
       "python_async": ["odon.async_resources:AsyncProjectRois.list", "odon.async_resources:AsyncProjectRois.get", "odon.async_resources:AsyncProjectRois.add", "odon.async_resources:AsyncProjectRois.update", "odon.async_resources:AsyncProjectRois.remove", "odon.async_resources:AsyncProjectRois.reorder", "odon.async_resources:AsyncProjectRois.get_selection", "odon.async_resources:AsyncProjectRois.select", "odon.async_resources:AsyncProjectRois.focus", "odon.async_resources:AsyncProjectRois.next", "odon.async_resources:AsyncProjectRois.previous", "odon.async_resources:AsyncProjectRois.open", "odon.async_resources:AsyncProjectRois.open_selected_mosaic"],
-      "tests": ["rust:project_roi_control"]
+      "tests": ["rust:project_roi_control", "rust:project_roi_open_commits_document_resources_and_saved_view_without_a_frame", "rust:failed_project_roi_open_retains_the_previous_usable_document", "rust:cancelled_project_roi_open_cannot_replace_the_previous_document", "rust:superseding_dataset_open_rejects_a_late_project_roi_completion", "rust:project_roi_open_supports_http_and_s3_sources_without_a_ui_frame"]
     },
     {
       "id": "MOS-02.layout",
@@ -572,8 +572,8 @@
       "permissions": ["project.objects.read", "project.objects.write"],
       "python_sync": ["odon.resources:ProjectObjects.get_preload", "odon.resources:ProjectObjects.list_preload_sources", "odon.resources:ProjectObjects.preload", "odon.resources:ProjectObjects.clear_preload"],
       "python_async": ["odon.async_resources:AsyncProjectObjects.get_preload", "odon.async_resources:AsyncProjectObjects.list_preload_sources", "odon.async_resources:AsyncProjectObjects.preload", "odon.async_resources:AsyncProjectObjects.clear_preload"],
-      "tests": ["python:test_project_object_preload_wrappers"],
-      "notes": "Preload tasks report progress until the background loader settles and cooperative task cancellation clears the active preload/cache. Segmentation search roots are managed through project.update_metadata."
+      "tests": ["python:test_project_object_preload_wrappers", "rust:project_object_preload_completes_and_projects_shared_resources_without_a_frame", "rust:clearing_project_object_preload_rejects_its_late_worker_completion"],
+      "notes": "The actor-owned preload catalog shares immutable object resources with retained ROI-open transactions. Bounded workers report task progress; cancellation, clear, and project/resource generation changes reject late results without requiring a GUI frame. Segmentation search roots are managed through project.update_metadata."
     },
     {
       "id": "SHEET-01.inspect-import",

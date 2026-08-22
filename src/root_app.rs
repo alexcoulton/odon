@@ -35,7 +35,9 @@ use crate::{log_debug, log_info, log_warn};
 use odon::control::actor::RenderProjection;
 use odon::control::{ControlError, ControlErrorKind, TaskState};
 use odon::mcp::{OdonControlBridge, OdonControlRequest};
-use odon::model::{ModelMode, ProjectModelSnapshot};
+use odon::model::{
+    ModelMode, ProjectModelSnapshot, ProjectObjectPreloadMode, ProjectObjectPreloadProjection,
+};
 use rfd::FileDialog;
 
 fn control_event_name(method: &str) -> &'static str {
@@ -513,13 +515,6 @@ fn settings_help_button(ui: &mut egui::Ui, text: &'static str) {
     let _ = ui.small_button("?").on_hover_text(text);
 }
 
-struct ProjectObjectPreloadEvent {
-    path: PathBuf,
-    settings: ObjectPreloadSettings,
-    result: Result<PreloadedObjectLayer, String>,
-    finished: bool,
-}
-
 #[derive(Debug)]
 struct ViewportScreenshotRequest {
     path: PathBuf,
@@ -566,27 +561,9 @@ fn apply_example_defaults(req: &mut DeepLinkRequest, example: &str) {
     crate::deep_link::apply_example_defaults(req, example);
 }
 
-fn project_object_segmentation_paths(project_space: &ProjectSpace) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut paths = Vec::new();
-    for roi in &project_space.config().rois {
-        let Some(path) = project_roi_segmentation_path(project_space, roi) else {
-            continue;
-        };
-        let supported = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "parquet" | "geoparquet"))
-            .unwrap_or(false);
-        if supported && path.exists() && seen.insert(path.clone()) {
-            paths.push(path);
-        }
-    }
-    paths
-}
-
 fn project_object_cache_ui_state(
-    project_space: &ProjectSpace,
+    available_count: usize,
+    on_disk_bytes: u64,
     cached: usize,
     total: usize,
     done: usize,
@@ -594,13 +571,8 @@ fn project_object_cache_ui_state(
     loading: bool,
     cached_settings: ObjectPreloadSettings,
 ) -> ProjectObjectCacheUiState {
-    let paths = project_object_segmentation_paths(project_space);
-    let on_disk_bytes = paths
-        .iter()
-        .filter_map(|path| path.metadata().ok().map(|meta| meta.len()))
-        .sum::<u64>();
     ProjectObjectCacheUiState {
-        available_count: paths.len(),
+        available_count,
         on_disk_bytes,
         cached,
         total,
@@ -629,13 +601,14 @@ pub struct RootApp {
     pending_control_open_root: Option<PathBuf>,
     pending_deep_link: Option<DeepLinkRequest>,
     deep_link_rx: Option<Receiver<DeepLinkRequest>>,
-    object_preload_project: Option<PathBuf>,
-    object_preload_rx: Option<Receiver<ProjectObjectPreloadEvent>>,
     object_preload_cache: HashMap<(PathBuf, ObjectPreloadSettings), Arc<PreloadedObjectLayer>>,
     object_preload_settings: ObjectPreloadSettings,
+    object_preload_available_count: usize,
+    object_preload_on_disk_bytes: u64,
     object_preload_total: usize,
     object_preload_done: usize,
     object_preload_failed: usize,
+    object_preload_loading: bool,
     view_show_scale_bar: bool,
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
@@ -943,6 +916,7 @@ impl RootApp {
             self.app_settings = projection.settings.clone();
             self.apply_app_settings_to_mode();
         }
+        self.apply_project_object_preload_projection(&projection.project_object_preload);
         if projection.mode == ModelMode::Project {
             let mut project_space = match &mut self.mode {
                 Mode::Project { project_space } => std::mem::take(project_space),
@@ -1120,7 +1094,7 @@ impl RootApp {
             };
             app.set_remote_runtime(document.opened.resource.runtime_guard());
             self.configure_single_app(&mut app);
-            app.set_project_space(project_space);
+            app.set_project_space_from_actor(project_space);
             self.mode = Mode::Single(app);
             self.control_document_generation_applied = projection.document_generation;
             self.control_actor_mode_signature = Some(format!(
@@ -1137,6 +1111,66 @@ impl RootApp {
             projection.object_resource.as_ref(),
             projection.label_resource.as_ref(),
         )
+    }
+
+    fn apply_project_object_preload_projection(
+        &mut self,
+        projection: &ProjectObjectPreloadProjection,
+    ) {
+        let mode = match projection.settings.mode {
+            ProjectObjectPreloadMode::FullGeometry => ObjectPreloadMode::FullGeometry,
+            ProjectObjectPreloadMode::CentroidPoints => ObjectPreloadMode::CentroidPoints,
+        };
+        let settings = ObjectPreloadSettings {
+            mode,
+            lazy_properties: projection.settings.lazy_properties,
+        };
+        self.object_preload_settings = settings;
+        self.object_preload_available_count =
+            projection.state["available_count"].as_u64().unwrap_or(0) as usize;
+        self.object_preload_on_disk_bytes = projection.state["on_disk_bytes"].as_u64().unwrap_or(0);
+        self.object_preload_total = projection.state["total"].as_u64().unwrap_or(0) as usize;
+        self.object_preload_done = projection.state["done"].as_u64().unwrap_or(0) as usize;
+        self.object_preload_failed = projection.state["failed"].as_u64().unwrap_or(0) as usize;
+        self.object_preload_loading = projection.state["loading"].as_bool().unwrap_or(false);
+        self.object_preload_cache.clear();
+        for (path, resource) in projection.resources.iter() {
+            let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
+                continue;
+            };
+            self.object_preload_cache
+                .insert((path.clone(), settings), Arc::new(preloaded.clone()));
+        }
+
+        match &mut self.mode {
+            Mode::Mosaic { mosaic, .. } => {
+                let cached = self
+                    .object_preload_cache
+                    .iter()
+                    .filter_map(|((path, cached_settings), preloaded)| {
+                        (*cached_settings == settings)
+                            .then_some((path.clone(), Arc::clone(preloaded)))
+                    })
+                    .collect::<Vec<_>>();
+                mosaic.install_preloaded_project_segmentations(&cached);
+            }
+            Mode::Single(app) => {
+                let matching = app
+                    .project_space()
+                    .rois()
+                    .iter()
+                    .find(|roi| app.is_viewing_project_roi(roi))
+                    .and_then(|roi| {
+                        project_roi_segmentation_path(app.project_space(), roi)
+                            .and_then(|path| self.object_preload_cache.get(&(path, settings)))
+                    })
+                    .cloned();
+                if let Some(preloaded) = matching {
+                    app.install_preloaded_project_segmentation(&preloaded);
+                }
+            }
+            Mode::Project { .. } | Mode::Transition => {}
+        }
     }
 
     fn apply_control_projection_workspace(
@@ -1351,12 +1385,6 @@ impl RootApp {
             "project.samplesheets.import" => self.control_import_samplesheet(params),
             "project.samplesheets.export" => self.control_export_samplesheet(params),
             "project.discovery.add_root" => self.control_add_discovery_root(params),
-            "project.objects.preload.get" => self.control_get_project_object_preload(),
-            "project.objects.preload.list_sources" => {
-                self.control_list_project_object_preload_sources(params)
-            }
-            "project.objects.preload.start" => self.control_start_project_object_preload(params),
-            "project.objects.preload.clear" => self.control_clear_project_object_preload(),
             "project.rois.get" => self.control_get_project_roi(params),
             "project.rois.add" => self.control_add_project_roi(params),
             "project.rois.update" => self.control_update_project_roi(params),
@@ -1533,7 +1561,6 @@ impl RootApp {
             "deep_links.generate" => self.control_generate_deep_link(params),
             "deep_links.apply" => self.control_apply_deep_link(params),
             "datasets.open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, params),
-            "project.rois.open" => self.control_open_roi(params),
             "project.save" => self.control_save_project(),
             "project.views.list" => self.control_list_project_views(),
             "project.views.get" => self.control_get_project_view(params),
@@ -2313,124 +2340,6 @@ impl RootApp {
             ObjectPreloadMode::FullGeometry => "full_geometry",
             ObjectPreloadMode::CentroidPoints => "centroid_points",
         }
-    }
-
-    fn control_get_project_object_preload(&self) -> serde_json::Value {
-        let Some(project_space) = self.current_project_space() else {
-            return serde_json::json!({"error": "Odon is currently transitioning between views."});
-        };
-        let state = project_object_cache_ui_state(
-            project_space,
-            self.object_preload_cache.len(),
-            self.object_preload_total,
-            self.object_preload_done,
-            self.object_preload_failed,
-            self.object_preload_rx.is_some(),
-            self.object_preload_settings,
-        );
-        serde_json::json!({
-            "available_count": state.available_count,
-            "on_disk_bytes": state.on_disk_bytes,
-            "cached": state.cached,
-            "total": state.total,
-            "done": state.done,
-            "failed": state.failed,
-            "loading": state.loading,
-            "settings": {
-                "mode": Self::object_preload_mode_key(state.cached_settings.mode),
-                "lazy_properties": state.cached_settings.lazy_properties,
-            },
-            "project_path": project_space.saved_project_path().map(|path| path.to_string_lossy().to_string()),
-        })
-    }
-
-    fn control_list_project_object_preload_sources(
-        &self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let Some(project_space) = self.current_project_space() else {
-            return serde_json::json!({"error": "Odon is currently transitioning between views."});
-        };
-        let paths = project_object_segmentation_paths(project_space);
-        let offset = params
-            .get("offset")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
-        let limit = params
-            .get("limit")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(200) as usize;
-        let total = paths.len();
-        let sources = paths
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|path| {
-                serde_json::json!({
-                    "path": path.to_string_lossy(),
-                    "bytes": path.metadata().ok().map(|metadata| metadata.len()),
-                    "cached": self.object_preload_cache.contains_key(&(path.clone(), self.object_preload_settings)),
-                })
-            })
-            .collect::<Vec<_>>();
-        serde_json::json!({
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset.saturating_add(sources.len()) < total,
-            "sources": sources,
-        })
-    }
-
-    fn control_start_project_object_preload(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        if self.object_preload_rx.is_some() {
-            return serde_json::json!({"error": "project object preload is already running"});
-        }
-        let mode = match params
-            .get("mode")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("full_geometry")
-        {
-            "full_geometry" => ObjectPreloadMode::FullGeometry,
-            "centroid_points" => ObjectPreloadMode::CentroidPoints,
-            _ => return serde_json::json!({"error": "unknown object preload mode"}),
-        };
-        let settings = ObjectPreloadSettings {
-            mode,
-            lazy_properties: params
-                .get("lazy_properties")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true),
-        };
-        let Some(project_space) = self.current_project_space().cloned() else {
-            return serde_json::json!({"error": "Odon is currently transitioning between views."});
-        };
-        if project_space.saved_project_path().is_none() {
-            return serde_json::json!({"error": "save the project before preloading object segmentations"});
-        }
-        if project_object_segmentation_paths(&project_space).is_empty() {
-            return serde_json::json!({"error": "project has no preload-eligible Parquet or GeoParquet segmentation paths"});
-        }
-        self.start_project_object_preload(&project_space, settings);
-        serde_json::json!({
-            "started": self.object_preload_rx.is_some(),
-            "preload": self.control_get_project_object_preload(),
-        })
-    }
-
-    fn control_clear_project_object_preload(&mut self) -> serde_json::Value {
-        let removed = self.object_preload_cache.len();
-        let cancelled = self.object_preload_rx.is_some();
-        self.clear_project_object_preload();
-        serde_json::json!({
-            "cleared": true,
-            "removed": removed,
-            "cancelled": cancelled,
-            "preload": self.control_get_project_object_preload(),
-        })
     }
 
     fn control_get_project_roi(&self, params: &serde_json::Value) -> serde_json::Value {
@@ -5861,41 +5770,6 @@ impl RootApp {
         })
     }
 
-    fn control_open_roi(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let roi = params
-            .get("roi")
-            .or_else(|| params.get("id"))
-            .or_else(|| params.get("name"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let Some(roi) = roi else {
-            return serde_json::json!({"error": "open_roi requires roi, id, or name"});
-        };
-        let sample = params
-            .get("sample")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let Some(project_space) = self.current_project_space() else {
-            return serde_json::json!({"error": "No project is currently loaded."});
-        };
-        match project_space.roi_for_link_target(Some(roi), sample) {
-            Ok(_) => {
-                let mut request = DeepLinkRequest::default();
-                request.roi = Some(roi.to_string());
-                request.sample = sample.map(str::to_string);
-                self.pending_deep_link = Some(request);
-                serde_json::json!({
-                    "queued": true,
-                    "roi": roi,
-                    "sample": sample,
-                })
-            }
-            Err(error) => serde_json::json!({"error": error}),
-        }
-    }
-
     fn control_save_project(&mut self) -> serde_json::Value {
         self.sync_control_manifest_to_project();
         match &mut self.mode {
@@ -6819,13 +6693,14 @@ impl RootApp {
             pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
-            object_preload_project: None,
-            object_preload_rx: None,
             object_preload_cache: HashMap::new(),
             object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_available_count: 0,
+            object_preload_on_disk_bytes: 0,
             object_preload_total: 0,
             object_preload_done: 0,
             object_preload_failed: 0,
+            object_preload_loading: false,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -6892,13 +6767,14 @@ impl RootApp {
             pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
-            object_preload_project: None,
-            object_preload_rx: None,
             object_preload_cache: HashMap::new(),
             object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_available_count: 0,
+            object_preload_on_disk_bytes: 0,
             object_preload_total: 0,
             object_preload_done: 0,
             object_preload_failed: 0,
+            object_preload_loading: false,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -6965,13 +6841,14 @@ impl RootApp {
             pending_control_open_root: None,
             pending_deep_link: None,
             deep_link_rx: None,
-            object_preload_project: None,
-            object_preload_rx: None,
             object_preload_cache: HashMap::new(),
             object_preload_settings: ObjectPreloadSettings::default(),
+            object_preload_available_count: 0,
+            object_preload_on_disk_bytes: 0,
             object_preload_total: 0,
             object_preload_done: 0,
             object_preload_failed: 0,
+            object_preload_loading: false,
             view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -7021,136 +6898,6 @@ impl RootApp {
 
     pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>) {
         self.deep_link_rx = Some(rx);
-    }
-
-    fn poll_project_object_preload(&mut self) {
-        let Some(rx) = self.object_preload_rx.take() else {
-            return;
-        };
-        let mut keep_rx = true;
-        while let Ok(event) = rx.try_recv() {
-            self.object_preload_done = self.object_preload_done.saturating_add(1);
-            match event.result {
-                Ok(preloaded) => {
-                    log_warn!(
-                        "project preload: cached {} ({}) object segmentation {}",
-                        event.settings.mode.label(),
-                        event.settings.property_label(),
-                        event.path.display()
-                    );
-                    let preloaded = Arc::new(preloaded);
-                    self.object_preload_cache
-                        .insert((event.path.clone(), event.settings), preloaded.clone());
-                    if event.settings == self.object_preload_settings
-                        && let Mode::Mosaic { mosaic, .. } = &mut self.mode
-                    {
-                        let installed = mosaic.install_preloaded_project_segmentations(&[(
-                            event.path.clone(),
-                            preloaded,
-                        )]);
-                        if installed > 0 {
-                            log_warn!(
-                                "project preload: installed cached object segmentation for {installed} visible mosaic ROI(s)"
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    self.object_preload_failed = self.object_preload_failed.saturating_add(1);
-                    log_warn!(
-                        "project preload: failed object segmentation {}: {err}",
-                        event.path.display()
-                    );
-                }
-            }
-            if event.finished {
-                keep_rx = false;
-                log_warn!(
-                    "project preload: finished ({} cached object segmentation(s))",
-                    self.object_preload_cache.len()
-                );
-            }
-        }
-        if keep_rx {
-            self.object_preload_rx = Some(rx);
-        }
-    }
-
-    fn sync_project_object_preload_scope(&mut self, project_path: Option<PathBuf>) {
-        if self.object_preload_project == project_path {
-            return;
-        }
-        self.object_preload_project = project_path;
-        self.object_preload_rx = None;
-        self.object_preload_cache.clear();
-        self.object_preload_settings = ObjectPreloadSettings::default();
-        self.object_preload_total = 0;
-        self.object_preload_done = 0;
-        self.object_preload_failed = 0;
-    }
-
-    fn start_project_object_preload(
-        &mut self,
-        project_space: &ProjectSpace,
-        settings: ObjectPreloadSettings,
-    ) {
-        let Some(project_path) = project_space.saved_project_path() else {
-            return;
-        };
-
-        let paths = project_object_segmentation_paths(project_space);
-        self.object_preload_project = Some(project_path);
-        self.object_preload_rx = None;
-        self.object_preload_cache.clear();
-        self.object_preload_settings = settings;
-        self.object_preload_total = paths.len();
-        self.object_preload_done = 0;
-        self.object_preload_failed = 0;
-        if paths.is_empty() {
-            return;
-        }
-
-        let total = paths.len();
-        let (tx, rx) = std::sync::mpsc::channel::<ProjectObjectPreloadEvent>();
-        self.object_preload_rx = Some(rx);
-        log_warn!(
-            "project preload: starting {total} {} ({}) object segmentation(s)",
-            settings.mode.label(),
-            settings.property_label()
-        );
-        if let Err(err) = std::thread::Builder::new()
-            .name("odon-project-object-preload".to_string())
-            .spawn(move || {
-                for (idx, path) in paths.into_iter().enumerate() {
-                    let result =
-                        crate::objects::preload_objects_from_path(path.clone(), 1.0, settings)
-                            .map_err(|err| err.to_string());
-                    if tx
-                        .send(ProjectObjectPreloadEvent {
-                            path,
-                            settings,
-                            result,
-                            finished: idx + 1 == total,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-        {
-            log_warn!("project preload: failed to start background thread: {err}");
-            self.object_preload_rx = None;
-            self.object_preload_total = 0;
-        }
-    }
-
-    fn clear_project_object_preload(&mut self) {
-        self.object_preload_rx = None;
-        self.object_preload_cache.clear();
-        self.object_preload_total = 0;
-        self.object_preload_done = 0;
-        self.object_preload_failed = 0;
     }
 
     fn cached_project_object_layer(
@@ -7859,18 +7606,6 @@ impl eframe::App for RootApp {
                 ));
             }
         }
-        self.poll_project_object_preload();
-        if self.object_preload_rx.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-        let current_project_path = match &self.mode {
-            Mode::Project { project_space } => project_space.saved_project_path(),
-            Mode::Single(app) => app.project_space().saved_project_path(),
-            Mode::Mosaic { mosaic, .. } => mosaic.project_space().saved_project_path(),
-            Mode::Transition => None,
-        };
-        self.sync_project_object_preload_scope(current_project_path);
-
         let open_mosaic: Option<Vec<PathBuf>> = None;
         let mut open_remote_s3_mosaic: Option<(Vec<crate::app::S3DatasetSelection>, ProjectSpace)> =
             None;
@@ -8235,10 +7970,12 @@ impl eframe::App for RootApp {
         }
 
         let object_preload_cached = self.object_preload_cache.len();
+        let object_preload_available_count = self.object_preload_available_count;
+        let object_preload_on_disk_bytes = self.object_preload_on_disk_bytes;
         let object_preload_total = self.object_preload_total;
         let object_preload_done = self.object_preload_done;
         let object_preload_failed = self.object_preload_failed;
-        let object_preload_loading = self.object_preload_rx.is_some();
+        let object_preload_loading = self.object_preload_loading;
         let object_preload_settings = self.object_preload_settings;
         let mut object_preload_start = None;
         let mut object_preload_clear = false;
@@ -8312,7 +8049,8 @@ impl eframe::App for RootApp {
                 });
                 egui::CentralPanel::default().show(ctx, |ui| {
                     project_space.set_object_cache_ui_state(project_object_cache_ui_state(
-                        project_space,
+                        object_preload_available_count,
+                        object_preload_on_disk_bytes,
                         object_preload_cached,
                         object_preload_total,
                         object_preload_done,
@@ -8324,8 +8062,15 @@ impl eframe::App for RootApp {
                     if let Some(action) = action {
                         match action {
                             ProjectSpaceAction::Open(roi) => {
-                                let ps = std::mem::take(project_space);
-                                open_project_roi = Some((roi, ps, None));
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.rois.open",
+                                        params: serde_json::json!({"roi":roi.id}),
+                                    });
+                                } else {
+                                    let ps = std::mem::take(project_space);
+                                    open_project_roi = Some((roi, ps, None));
+                                }
                             }
                             ProjectSpaceAction::OpenView(roi, spec) => {
                                 let req = spec.to_deep_link_request(None);
@@ -8390,8 +8135,15 @@ impl eframe::App for RootApp {
                 if let Some(action) = project_space.ui_floating_windows(ctx, false) {
                     match action {
                         ProjectSpaceAction::Open(roi) => {
-                            let ps = std::mem::take(project_space);
-                            open_project_roi = Some((roi, ps, None));
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.rois.open",
+                                    params: serde_json::json!({"roi":roi.id}),
+                                });
+                            } else {
+                                let ps = std::mem::take(project_space);
+                                open_project_roi = Some((roi, ps, None));
+                            }
                         }
                         ProjectSpaceAction::OpenView(roi, spec) => {
                             let req = spec.to_deep_link_request(None);
@@ -8469,7 +8221,8 @@ impl eframe::App for RootApp {
                 app.project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
                 app.set_project_object_cache_ui_state(project_object_cache_ui_state(
-                    app.project_space(),
+                    object_preload_available_count,
+                    object_preload_on_disk_bytes,
                     object_preload_cached,
                     object_preload_total,
                     object_preload_done,
@@ -8492,8 +8245,15 @@ impl eframe::App for RootApp {
                 if let Some(req) = app.take_request() {
                     match req {
                         ViewerRequest::OpenProjectRoi(roi) => {
-                            let ps = app.take_project_space();
-                            open_project_roi = Some((roi, ps, None));
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.rois.open",
+                                    params: serde_json::json!({"roi":roi.id}),
+                                });
+                            } else {
+                                let ps = app.take_project_space();
+                                open_project_roi = Some((roi, ps, None));
+                            }
                         }
                         ViewerRequest::OpenProjectRoiView(roi, spec) => {
                             let req = spec.to_deep_link_request(None);
@@ -8558,7 +8318,8 @@ impl eframe::App for RootApp {
                     .project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
                 mosaic.set_project_object_cache_ui_state(project_object_cache_ui_state(
-                    mosaic.project_space(),
+                    object_preload_available_count,
+                    object_preload_on_disk_bytes,
                     object_preload_cached,
                     object_preload_total,
                     object_preload_done,
@@ -8588,8 +8349,15 @@ impl eframe::App for RootApp {
                             back_to_single = true;
                         }
                         MosaicRequest::OpenProjectRoi(roi) => {
-                            let ps = mosaic.take_project_space();
-                            open_project_roi = Some((roi, ps, None));
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.rois.open",
+                                    params: serde_json::json!({"roi":roi.id}),
+                                });
+                            } else {
+                                let ps = mosaic.take_project_space();
+                                open_project_roi = Some((roi, ps, None));
+                            }
                         }
                         MosaicRequest::OpenProjectRoiView(roi, spec) => {
                             let req = spec.to_deep_link_request(None);
@@ -8649,6 +8417,24 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Transition => {}
+        }
+
+        if self.control_bridge.is_some() {
+            if let Some((_, settings)) = object_preload_start.take() {
+                native_menu_control_intents.push(NativeControlIntent {
+                    method: "project.objects.preload.start",
+                    params: serde_json::json!({
+                        "mode": Self::object_preload_mode_key(settings.mode),
+                        "lazy_properties": settings.lazy_properties,
+                    }),
+                });
+            }
+            if object_preload_clear {
+                native_menu_control_intents.push(NativeControlIntent {
+                    method: "project.objects.preload.clear",
+                    params: serde_json::json!({}),
+                });
+            }
         }
 
         if let (Some(before), Some(after)) = (
@@ -8713,13 +8499,6 @@ impl eframe::App for RootApp {
 
         if matches!(self.mode, Mode::Project { .. }) {
             self.ui_spatial_open_dialog(ctx);
-        }
-
-        if let Some((project_space, mode)) = object_preload_start {
-            self.start_project_object_preload(&project_space, mode);
-        }
-        if object_preload_clear {
-            self.clear_project_object_preload();
         }
 
         self.ui_settings_dialog(ctx);

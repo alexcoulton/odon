@@ -46,6 +46,7 @@ use crate::mcp::OdonControlRequest;
 use crate::model::{
     AppModel, ChannelIntensitySpec, ControlLabelResource, ControlObjectFilterResult,
     ControlObjectResource, LabelZarrDataset, ModelMode, ObjectResourceLoader, ProjectModelSnapshot,
+    ProjectObjectPreloadScope, ProjectObjectPreloadSettings, ProjectObjectPreloadSource,
     SettingsMutationOutcome, discover_label_names_local,
 };
 use crate::settings::AppSettings;
@@ -68,6 +69,8 @@ mod mask_io;
 mod masks;
 mod objects;
 mod project_io;
+mod project_preload;
+mod project_roi;
 mod projection;
 mod projects;
 mod remote;
@@ -93,7 +96,10 @@ use deep_links::{
 };
 pub use diagnostics::ActorDiagnostics;
 use dispatch::dispatch_request;
-use jobs::{CompletionDomain, DeepLinkResolveWorkerResult, LoadCompletion, LoadJob};
+use jobs::{
+    CompletionDomain, DeepLinkResolveWorkerResult, LoadCompletion, LoadJob,
+    ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult,
+};
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
@@ -101,6 +107,8 @@ use project_io::{
     discover_omezarr_roots_under, export_samplesheet_rois, import_samplesheet_rois,
     inspect_samplesheet, read_project_file,
 };
+use project_preload::{begin_project_object_preload, begin_project_object_source_scan};
+use project_roi::begin_project_roi_open;
 use projection::publish_projection;
 pub use projection::{PlatformEffect, RenderDocument, RenderProjection};
 use projects::{

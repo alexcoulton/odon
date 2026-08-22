@@ -41,10 +41,7 @@ mod measurements;
 mod render;
 
 use self::analysis::SimpleHistogram;
-pub use self::core::{
-    load_control_object_resource, load_control_object_resource_with_options,
-    preload_objects_from_path,
-};
+pub use self::core::{load_control_object_resource, load_control_object_resource_with_options};
 use self::filter_query::ObjectFilterQueryExpr;
 pub(crate) use self::geojson::GeoJsonSegmentationLayer;
 use self::render::property_scalar_value;

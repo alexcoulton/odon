@@ -2053,10 +2053,12 @@ mod tests {
         let missing = read_json(&mut reader);
         assert_eq!(missing, json!({"ok": false, "error": "missing method"}));
 
+        // Use a legacy UI-routed method here: actor-owned methods intentionally
+        // bypass `bridge.try_recv()` and are covered by the actor bridge tests.
         writeln!(
             stream,
             "{}",
-            json!({"method": "project.objects.preload.get", "params": {}})
+            json!({"method": "app.screenshot.capture", "params": {}})
         )
         .expect("write valid request");
         stream.flush().expect("flush valid request");
@@ -2070,7 +2072,7 @@ mod tests {
                 Err(error) => panic!("bridge request not delivered: {error}"),
             }
         };
-        assert_eq!(request.command.method(), "project.objects.preload.get");
+        assert_eq!(request.command.method(), "app.screenshot.capture");
         assert_eq!(request.command.params(), &json!({}));
         request
             .reply
@@ -2168,16 +2170,18 @@ mod tests {
         stream.flush().expect("flush hello");
         assert_eq!(read_json(&mut reader)["id"], 1);
 
+        // These remain UI-routed so this test can exercise concurrent legacy
+        // request delivery independently of actor execution.
         writeln!(
             stream,
             "{}",
-            json!({"jsonrpc": "2.0", "id": 2, "method": "project.objects.preload.get", "params": {}})
+            json!({"jsonrpc": "2.0", "id": 2, "method": "app.screenshot.capture", "params": {}})
         )
         .expect("write first request");
         writeln!(
             stream,
             "{}",
-            json!({"jsonrpc": "2.0", "id": 3, "method": "project.objects.preload.list_sources", "params": {}})
+            json!({"jsonrpc": "2.0", "id": 3, "method": "project.screenshot.capture", "params": {}})
         )
         .expect("write second request");
         stream.flush().expect("flush concurrent requests");

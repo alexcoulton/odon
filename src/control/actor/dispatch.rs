@@ -190,6 +190,55 @@ pub(super) fn dispatch_request(
     }
     if matches!(
         request.command.method(),
+        "project.objects.preload.get" | "project.objects.preload.list_sources"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_project_object_source_scan(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "project.objects.preload.start" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_project_object_preload(model, request, load_job_tx, diagnostics);
+        publish_projection(
+            model,
+            render_document.clone(),
+            presentation_tx,
+            presentation_coalesce_rx,
+            wake_ui,
+            diagnostics,
+        );
+        return;
+    }
+    if request.command.method() == "project.objects.preload.clear" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        let (removed, cancelled) = model.clear_project_object_preload();
+        publish_projection(
+            model,
+            render_document.clone(),
+            presentation_tx,
+            presentation_coalesce_rx,
+            wake_ui,
+            diagnostics,
+        );
+        finish_request(
+            request,
+            json!({
+                "cleared": true,
+                "removed": removed,
+                "cancelled": cancelled,
+                "preload": model.project_object_preload_snapshot(),
+            }),
+            diagnostics,
+        );
+        return;
+    }
+    if request.command.method() == "project.rois.open" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_project_roi_open(model, remote_session, request, load_job_tx, diagnostics);
+        return;
+    }
+    if matches!(
+        request.command.method(),
         "viewer.objects.source.load" | "viewer.objects.source.reload"
     ) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);

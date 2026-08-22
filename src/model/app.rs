@@ -9,7 +9,7 @@ use crate::control::{ControlError, ControlErrorKind};
 use crate::data::document::DocumentDescriptor;
 use crate::data::ome::{ChannelInfo, DatasetRenderKind, OmeZarrDataset};
 use crate::data::project_config::{
-    ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups,
+    ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups, ProjectRoi,
 };
 use crate::deep_link::{
     DeepLinkChannelColor, DeepLinkChannelContrast, DeepLinkChannelOrder,
@@ -22,8 +22,10 @@ use super::layers::NativeLayersModel;
 use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
     ControlLabelResource, ControlObjectFilterResult, ControlObjectResource, LabelZarrDataset,
-    MaskModel, ObjectSelectionModel, OperationKind, ReadinessModel, parse_world_points,
-    parse_world_rect,
+    MaskModel, ObjectSelectionModel, OperationKind, ProjectObjectPreloadCatalog,
+    ProjectObjectPreloadProjection, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
+    ProjectObjectPreloadSource, ReadinessModel, parse_world_points, parse_world_rect,
+    project_object_preload_candidates,
 };
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
@@ -201,6 +203,9 @@ pub struct AppModel {
     deep_link_resolve_operation_generation: u64,
     project_operation_generation: u64,
     project_operation_pending: bool,
+    project_object_preload: ProjectObjectPreloadCatalog,
+    project_roi_open_generation: u64,
+    project_roi_open_pending: bool,
     object_resource_generation: u64,
     installed_object_resource_generation: u64,
     object_resource_pending: bool,
@@ -266,6 +271,9 @@ impl AppModel {
             deep_link_resolve_operation_generation: 0,
             project_operation_generation: 0,
             project_operation_pending: false,
+            project_object_preload: ProjectObjectPreloadCatalog::default(),
+            project_roi_open_generation: 0,
+            project_roi_open_pending: false,
             object_resource_generation: 0,
             installed_object_resource_generation: 0,
             object_resource_pending: false,
@@ -291,6 +299,317 @@ impl AppModel {
 
     pub fn project_snapshot(&self) -> ProjectModelSnapshot {
         self.project.snapshot()
+    }
+
+    pub(crate) fn project_object_preload_scan(
+        &mut self,
+    ) -> (ProjectObjectPreloadScope, Vec<PathBuf>) {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        (
+            self.project_object_preload.scope(),
+            project_object_preload_candidates(&project),
+        )
+    }
+
+    pub(crate) fn install_project_object_preload_sources(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        sources: Vec<ProjectObjectPreloadSource>,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload.install_sources(scope, sources)
+    }
+
+    pub(crate) fn begin_project_object_preload(
+        &mut self,
+        settings: ProjectObjectPreloadSettings,
+    ) -> Result<(u64, ProjectObjectPreloadScope, Vec<PathBuf>), ControlError> {
+        let project = self.project_snapshot();
+        if project.saved_path.is_none() {
+            return Err(ControlError::new(
+                ControlErrorKind::NotReady,
+                "save the project before preloading object segmentations",
+            ));
+        }
+        self.project_object_preload.sync_scope(&project);
+        if self.project_object_preload.is_loading() {
+            return Err(ControlError::new(
+                ControlErrorKind::Conflict,
+                "project object preload is already running",
+            ));
+        }
+        let candidates = project_object_preload_candidates(&project);
+        if candidates.is_empty() {
+            return Err(ControlError::new(
+                ControlErrorKind::NotReady,
+                "project has no preload-eligible Parquet or GeoParquet segmentation paths",
+            ));
+        }
+        let generation = self
+            .project_object_preload
+            .begin(settings, candidates.len());
+        self.readiness.begin(
+            OperationKind::ProjectObjectPreload,
+            generation,
+            format!("Preloading {} project object source(s)", candidates.len()),
+        );
+        Ok((generation, self.project_object_preload.scope(), candidates))
+    }
+
+    pub(crate) fn finish_project_object_preload(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        sources: Vec<ProjectObjectPreloadSource>,
+        resources: Vec<(PathBuf, ControlObjectResource)>,
+        failed: usize,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        if !self
+            .project_object_preload
+            .finish(scope, generation, sources, resources, failed)
+        {
+            return false;
+        }
+        self.readiness.finish(
+            OperationKind::ProjectObjectPreload,
+            generation,
+            "Project object preload ready",
+        );
+        true
+    }
+
+    pub(crate) fn fail_project_object_preload(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        if !self.project_object_preload.fail(scope, generation) {
+            return false;
+        }
+        self.readiness
+            .fail(OperationKind::ProjectObjectPreload, generation, message);
+        true
+    }
+
+    pub(crate) fn cancel_project_object_preload(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        if !self.project_object_preload.fail(scope, generation) {
+            return false;
+        }
+        self.readiness
+            .cancel(OperationKind::ProjectObjectPreload, generation, message);
+        true
+    }
+
+    pub(crate) fn clear_project_object_preload(&mut self) -> (usize, bool) {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        let (removed, cancelled, generation) = self.project_object_preload.clear();
+        if cancelled {
+            self.readiness.cancel(
+                OperationKind::ProjectObjectPreload,
+                generation,
+                "Project object preload cleared",
+            );
+        }
+        (removed, cancelled)
+    }
+
+    pub(crate) fn project_object_preload_snapshot(&mut self) -> Value {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload.snapshot()
+    }
+
+    pub(crate) fn project_object_preload_sources_snapshot(
+        &mut self,
+        offset: usize,
+        limit: usize,
+    ) -> Value {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload.list_sources(offset, limit)
+    }
+
+    pub(crate) fn project_object_preload_projection(&mut self) -> ProjectObjectPreloadProjection {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload.projection()
+    }
+
+    pub(crate) fn cached_project_object_resource(
+        &mut self,
+        path: &PathBuf,
+    ) -> Option<Arc<ControlObjectResource>> {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload.cached_resource(path)
+    }
+
+    pub(crate) fn begin_project_roi_open(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        description: impl Into<String>,
+    ) -> u64 {
+        self.project_roi_open_generation = self.project_roi_open_generation.wrapping_add(1).max(1);
+        self.project_roi_open_pending = true;
+        self.readiness.begin(
+            OperationKind::ProjectRoiOpen,
+            self.project_roi_open_generation,
+            description,
+        );
+        // Keep the scope synchronized before the worker starts. A later structural project change
+        // changes this identity and makes the completion stale without disturbing the current
+        // usable document.
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        debug_assert_eq!(&self.project_object_preload.scope(), scope);
+        self.project_roi_open_generation
+    }
+
+    pub(crate) fn project_roi_open_is_current(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_roi_open_pending
+            && self.project_roi_open_generation == generation
+            && self.project_object_preload.scope() == *scope
+            && self
+                .readiness
+                .is_pending(OperationKind::ProjectRoiOpen, generation)
+    }
+
+    pub(crate) fn fail_project_roi_open(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.project_roi_open_is_current(scope, generation) {
+            return false;
+        }
+        self.project_roi_open_pending = false;
+        self.readiness
+            .fail(OperationKind::ProjectRoiOpen, generation, message);
+        true
+    }
+
+    pub(crate) fn cancel_project_roi_open(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.project_roi_open_is_current(scope, generation) {
+            return false;
+        }
+        self.project_roi_open_pending = false;
+        self.readiness
+            .cancel(OperationKind::ProjectRoiOpen, generation, message);
+        true
+    }
+
+    pub(crate) fn supersede_project_roi_open(&mut self, generation: u64, message: &str) {
+        if self.project_roi_open_pending && self.project_roi_open_generation == generation {
+            self.project_roi_open_pending = false;
+            self.readiness
+                .cancel(OperationKind::ProjectRoiOpen, generation, message);
+        }
+    }
+
+    pub(crate) fn install_project_roi_for_generation(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        operation_generation: u64,
+        roi: &ProjectRoi,
+        descriptor: DocumentDescriptor,
+        label_available: Vec<String>,
+        label_resource: Option<Arc<ControlLabelResource>>,
+        object_resource: Option<Arc<ControlObjectResource>>,
+        saved_view: Option<&Value>,
+    ) -> Result<Option<u64>, ControlError> {
+        if !self.project_roi_open_is_current(scope, operation_generation) {
+            return Ok(None);
+        }
+
+        // This method is called on a candidate clone. Every fallible resource/view installation
+        // completes before the caller swaps the candidate into the actor, so the previous usable
+        // document remains authoritative if any step fails.
+        self.project_roi_open_pending = false;
+        let document_generation = self.begin_dataset_open(roi.source_display());
+        if !self.install_document_for_generation(
+            document_generation,
+            descriptor,
+            label_available,
+            label_resource,
+        ) {
+            return Err(ControlError::new(
+                ControlErrorKind::Conflict,
+                "project ROI document generation changed during installation",
+            ));
+        }
+        {
+            let dataset = self.dataset_mut()?;
+            dataset.masks.replace(roi.mask_layers.clone(), None);
+            Self::sync_mask_native_layers(dataset);
+        }
+        if let Some(resource) = object_resource {
+            if let Some(path) = super::project_roi_segmentation_path(&self.project_snapshot(), roi)
+            {
+                self.project_object_preload
+                    .remember_resource(scope, path, Arc::clone(&resource));
+            }
+            self.install_object_resource_immediate(resource)?;
+        }
+        if let Some(view) = saved_view {
+            self.restore_project_roi_view(view)?;
+        }
+        self.project.activate_roi(roi)?;
+        self.project_initialized = true;
+        self.readiness.finish(
+            OperationKind::ProjectRoiOpen,
+            operation_generation,
+            "Project ROI ready",
+        );
+        Ok(Some(document_generation))
+    }
+
+    fn install_object_resource_immediate(
+        &mut self,
+        resource: Arc<ControlObjectResource>,
+    ) -> Result<(), ControlError> {
+        self.object_resource_generation = self.object_resource_generation.wrapping_add(1).max(1);
+        self.installed_object_resource_generation = self.object_resource_generation;
+        self.object_resource_pending = false;
+        let dataset = self.dataset_mut()?;
+        dataset.object_resource = Some(resource);
+        dataset.object_selection.reset();
+        for viewport in dataset.workspace.viewports_mut() {
+            viewport.state.native_layers.set_primary_objects(true);
+            viewport.state.objects["visible"] = Value::Bool(true);
+        }
+        self.readiness.mark_ready(
+            OperationKind::Objects,
+            self.object_resource_generation,
+            "Ready",
+        );
+        Ok(())
     }
 
     pub fn bootstrap_settings(
@@ -722,6 +1041,15 @@ impl AppModel {
     }
 
     pub fn begin_project_operation(&mut self, description: impl Into<String>) -> u64 {
+        if self.project_roi_open_pending {
+            let generation = self.project_roi_open_generation;
+            self.project_roi_open_pending = false;
+            self.readiness.cancel(
+                OperationKind::ProjectRoiOpen,
+                generation,
+                "Superseded by project transaction",
+            );
+        }
         self.project_operation_generation =
             self.project_operation_generation.wrapping_add(1).max(1);
         self.project_operation_pending = true;
@@ -2977,6 +3305,7 @@ impl AppModel {
     }
 
     pub fn set_mode(&mut self, mode: ModelMode) {
+        self.project_roi_open_pending = false;
         self.mode = mode;
         if mode != ModelMode::Single {
             self.dataset = None;
@@ -3024,6 +3353,15 @@ impl AppModel {
     }
 
     pub fn begin_dataset_open(&mut self, source: impl Into<String>) -> u64 {
+        if self.project_roi_open_pending {
+            let generation = self.project_roi_open_generation;
+            self.project_roi_open_pending = false;
+            self.readiness.cancel(
+                OperationKind::ProjectRoiOpen,
+                generation,
+                "Superseded by newer document request",
+            );
+        }
         for kind in [
             OperationKind::Document,
             OperationKind::Labels,
@@ -3644,6 +3982,28 @@ impl AppModel {
             update_logical_geometry(dataset);
         }
         self.measured_viewports = measured;
+        Ok(())
+    }
+
+    fn restore_project_roi_view(&mut self, view: &Value) -> Result<(), ControlError> {
+        let channel_count = self.dataset()?.workspace.active().state.channels.len();
+        let base = self.workspace_snapshot()?;
+        let snapshot = project_roi_view_workspace_snapshot(view, channel_count, &base)?;
+        self.restore_renderer_workspace(&snapshot)?;
+        let dataset = self.dataset_mut()?;
+        let has_objects = dataset.object_resource.is_some();
+        let has_labels = dataset.label_resource.is_some();
+        for viewport in dataset.workspace.viewports_mut() {
+            viewport
+                .state
+                .native_layers
+                .set_primary_objects(has_objects);
+            viewport
+                .state
+                .native_layers
+                .set_segmentation_labels(has_labels, has_labels);
+        }
+        Self::sync_mask_native_layers(dataset);
         Ok(())
     }
 
@@ -6236,6 +6596,202 @@ fn renderer_viewport_size(value: &Value) -> Option<[f32; 2]> {
         .then_some([width, height])
 }
 
+fn project_roi_view_workspace_snapshot(
+    view: &Value,
+    channel_count: usize,
+    base: &Value,
+) -> Result<Value, ControlError> {
+    let mut snapshot = base.clone();
+    if let Some(workspace) = view.get("workspace").filter(|value| value.is_object()) {
+        let saved_viewports = workspace
+            .get("viewports")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("saved project workspace has no viewport array"))?;
+        let base_viewport = base
+            .get("viewports")
+            .and_then(Value::as_array)
+            .and_then(|viewports| viewports.first())
+            .ok_or_else(|| invalid("installed document has no base viewport"))?;
+        let projected = saved_viewports
+            .iter()
+            .map(|saved| overlay_project_viewport(base_viewport, saved, channel_count))
+            .collect::<Result<Vec<_>, _>>()?;
+        snapshot["viewports"] = Value::Array(projected);
+        for (saved_name, projected_name) in [
+            ("layout", "layout"),
+            ("split_ratio", "ratio"),
+            ("active_viewport_id", "active_viewport_id"),
+        ] {
+            if let Some(value) = workspace.get(saved_name) {
+                snapshot[projected_name] = value.clone();
+            }
+        }
+        snapshot["links"] = json!({
+            "camera": workspace.get("link_camera").and_then(Value::as_bool).unwrap_or(true),
+            "plane": workspace.get("link_plane").and_then(Value::as_bool).unwrap_or(true),
+            "selection": workspace.get("link_selection").and_then(Value::as_bool).unwrap_or(true),
+        });
+    } else {
+        let base_viewport = base
+            .get("viewports")
+            .and_then(Value::as_array)
+            .and_then(|viewports| viewports.first())
+            .ok_or_else(|| invalid("installed document has no base viewport"))?;
+        snapshot["viewports"] = Value::Array(vec![overlay_project_viewport(
+            base_viewport,
+            view,
+            channel_count,
+        )?]);
+        snapshot["layout"] = Value::String("single".to_string());
+        snapshot["active_viewport_id"] = Value::String("viewport-1".to_string());
+    }
+
+    if let Some(ui) = view.get("ui") {
+        if let Some(left) = ui.get("show_left_panel") {
+            snapshot["panels"]["left"] = left.clone();
+        }
+        if let Some(right) = ui.get("show_right_panel") {
+            snapshot["panels"]["right"] = right.clone();
+        }
+        if let Some(right_tab) = ui.get("right_tab") {
+            snapshot["ui"]["right_tab"] = right_tab.clone();
+        }
+        if let Some(active) = snapshot
+            .get_mut("viewports")
+            .and_then(Value::as_array_mut)
+            .and_then(|viewports| viewports.first_mut())
+        {
+            for (saved_name, projected_name) in [
+                ("smooth_pixels", "smooth_pixels"),
+                ("show_scale_bar", "show_scale_bar"),
+                ("show_hud", "show_hud"),
+                ("show_tile_debug", "show_tile_debug"),
+            ] {
+                if let Some(value) = ui.get(saved_name) {
+                    active["rendering"][projected_name] = value.clone();
+                }
+            }
+            if let Some(sort) = ui.get("channel_sort") {
+                active["channel_sort"] = sort.clone();
+            }
+        }
+    }
+    Ok(snapshot)
+}
+
+fn overlay_project_viewport(
+    base: &Value,
+    saved: &Value,
+    channel_count: usize,
+) -> Result<Value, ControlError> {
+    let mut projected = base.clone();
+    for (saved_name, projected_name) in [
+        ("id", "viewport_id"),
+        ("title", "title"),
+        ("navigation_revision", "navigation_revision"),
+        ("presentation_revision", "presentation_revision"),
+    ] {
+        if let Some(value) = saved.get(saved_name) {
+            projected[projected_name] = value.clone();
+        }
+    }
+    if let Some(camera) = saved.get("camera") {
+        projected["camera"] = camera.clone();
+    }
+    if let Some(mode) = saved.get("plane_mode").and_then(Value::as_str) {
+        let slice_name = match mode.to_ascii_lowercase().as_str() {
+            "yz" => "x_level0",
+            "xz" => "y_level0",
+            _ => "z_level0",
+        };
+        projected["plane"] = json!({
+            "mode": mode,
+            "slice": saved.get(slice_name).and_then(Value::as_u64).unwrap_or(0),
+        });
+    }
+    if let Some(order) = saved.get("channel_order").and_then(Value::as_array) {
+        let indices = order.iter().filter_map(Value::as_u64).collect::<Vec<_>>();
+        let unique = indices.iter().copied().collect::<HashSet<_>>();
+        if indices.len() == channel_count && unique.len() == channel_count {
+            projected["channel_order"] = Value::Array(order.clone());
+        }
+    }
+    if let Some(channels) = saved.get("channels").and_then(Value::as_array)
+        && let Some(projected_channels) =
+            projected.get_mut("channels").and_then(Value::as_array_mut)
+    {
+        for (index, channel) in channels.iter().take(channel_count).enumerate() {
+            let Some(target) = projected_channels.get_mut(index) else {
+                continue;
+            };
+            for name in [
+                "visible",
+                "color_rgb",
+                "window",
+                "offset_world",
+                "scale",
+                "rotation_rad",
+                "note",
+            ] {
+                if let Some(value) = channel.get(name) {
+                    target[name] = value.clone();
+                }
+            }
+        }
+    }
+    if let Some(active) = saved.get("active_channel").and_then(Value::as_u64)
+        && let Some(projected_channels) =
+            projected.get_mut("channels").and_then(Value::as_array_mut)
+    {
+        for (index, channel) in projected_channels.iter_mut().enumerate() {
+            channel["selected"] = Value::Bool(index as u64 == active);
+        }
+    }
+
+    let mut objects = projected
+        .get("objects")
+        .cloned()
+        .unwrap_or_else(default_object_snapshot);
+    if let Some(display) = saved
+        .get("segmentation")
+        .and_then(|segmentation| segmentation.get("object_display"))
+    {
+        for (saved_name, projected_name) in [
+            ("color_property_key", "color_property"),
+            ("color_level_overrides", "color_level_overrides"),
+            ("fill_cells", "fill_cells"),
+            ("fill_opacity", "fill_opacity"),
+            ("selected_fill_opacity", "selected_fill_opacity"),
+            ("fast_rendering", "fast_rendering"),
+        ] {
+            if let Some(value) = display.get(saved_name) {
+                objects[projected_name] = value.clone();
+            }
+        }
+    }
+    if let Some(analysis) = saved.get("analysis")
+        && let Some(value) = analysis.get("show_selection_overlay")
+    {
+        objects["show_selection_overlay"] = value.clone();
+    }
+    for (saved_name, projected_name) in [
+        ("object_visible", "visible"),
+        ("object_opacity", "opacity"),
+        ("object_width_screen_px", "width_screen_px"),
+        ("object_color_rgb", "color_rgb"),
+        ("object_show_selection_overlay", "show_selection_overlay"),
+    ] {
+        if let Some(value) = saved.get(saved_name) {
+            objects[projected_name] = value.clone();
+        }
+    }
+    if let Some(filter) = saved.get("object_filter") {
+        objects["filter"] = filter.clone();
+    }
+    projected["objects"] = objects;
+    Ok(projected)
+}
+
 fn apply_renderer_viewport(state: &mut ViewportModel, value: &Value) -> Result<(), ControlError> {
     if let Some(camera) = value.get("camera") {
         if let Some(center) = camera
@@ -6319,6 +6875,44 @@ fn apply_renderer_viewport(state: &mut ViewportModel, value: &Value) -> Result<(
                     window.get("max")?.as_f64()? as f32,
                 ))
             });
+            if let Some(offset) = projected
+                .get("offset_world")
+                .and_then(Value::as_array)
+                .filter(|values| values.len() == 2)
+            {
+                channel.offset_world = [
+                    offset[0]
+                        .as_f64()
+                        .ok_or_else(|| invalid("renderer channel offset x is invalid"))?
+                        as f32,
+                    offset[1]
+                        .as_f64()
+                        .ok_or_else(|| invalid("renderer channel offset y is invalid"))?
+                        as f32,
+                ];
+            }
+            if let Some(scale) = projected
+                .get("scale")
+                .and_then(Value::as_array)
+                .filter(|values| values.len() == 2)
+            {
+                channel.scale = [
+                    scale[0]
+                        .as_f64()
+                        .ok_or_else(|| invalid("renderer channel scale x is invalid"))?
+                        as f32,
+                    scale[1]
+                        .as_f64()
+                        .ok_or_else(|| invalid("renderer channel scale y is invalid"))?
+                        as f32,
+                ];
+            }
+            if let Some(rotation) = projected.get("rotation_rad").and_then(Value::as_f64) {
+                channel.rotation_rad = rotation as f32;
+            }
+            if let Some(note) = projected.get("note").and_then(Value::as_str) {
+                channel.note = note.to_string();
+            }
             if projected
                 .get("selected")
                 .and_then(Value::as_bool)

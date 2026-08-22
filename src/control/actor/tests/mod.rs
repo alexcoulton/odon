@@ -155,6 +155,8 @@ mod labels;
 mod lifecycle;
 mod masks;
 mod objects;
+mod project_preload;
+mod project_roi_open;
 mod project_rois;
 mod project_roundtrip;
 mod readiness;

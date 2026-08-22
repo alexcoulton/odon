@@ -260,6 +260,160 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::ProjectRoiOpen {
+            operation_generation,
+            scope,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_project_roi_open(
+                    &scope,
+                    operation_generation,
+                    "Project ROI open cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "project ROI open");
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    if result
+                        .s3_session_generation
+                        .is_some_and(|generation| !remote_session.is_current(generation))
+                    {
+                        model.supersede_project_roi_open(
+                            operation_generation,
+                            "S3 session changed during project ROI open",
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "S3 session changed during project ROI open",
+                            ),
+                        );
+                        return;
+                    }
+                    let descriptor = result.opened.descriptor.clone();
+                    let kind = match descriptor.kind {
+                        crate::data::document::DocumentKind::OmeZarr => "ome_zarr",
+                        crate::data::document::DocumentKind::Tiff => "tiff",
+                        crate::data::document::DocumentKind::SpatialData => "spatialdata",
+                        crate::data::document::DocumentKind::Xenium => "xenium",
+                    };
+                    let mut candidate = model.clone();
+                    let installed = candidate.install_project_roi_for_generation(
+                        &scope,
+                        operation_generation,
+                        &result.roi,
+                        descriptor,
+                        result.label_available,
+                        result.label_resource.map(Arc::new),
+                        result.object_resource,
+                        result.saved_view.as_ref(),
+                    );
+                    match installed {
+                        Ok(Some(document_generation)) => {
+                            let roi_id = result.roi.id.clone();
+                            let source = result.roi.source_display();
+                            *model = candidate;
+                            *render_document = Some(Arc::new(RenderDocument {
+                                generation: document_generation,
+                                opened: result.opened,
+                            }));
+                            publish_projection(
+                                model,
+                                render_document.clone(),
+                                presentation_tx,
+                                presentation_coalesce_rx,
+                                wake_ui,
+                                diagnostics,
+                            );
+                            finish_request(
+                                request,
+                                json!({
+                                    "opened": true,
+                                    "mode": "single",
+                                    "kind": kind,
+                                    "roi": roi_id,
+                                    "source": source,
+                                    "model_ready": true,
+                                    "resources_ready": true,
+                                    "presentation_ready": false,
+                                }),
+                                diagnostics,
+                            );
+                        }
+                        Ok(None) => {
+                            model.supersede_project_roi_open(
+                                operation_generation,
+                                "Project ROI open was superseded",
+                            );
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "project ROI open was superseded by a newer transaction",
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            if model.fail_project_roi_open(
+                                &scope,
+                                operation_generation,
+                                error.message.clone(),
+                            ) {
+                                reject_actor_request(request, diagnostics, error);
+                            } else {
+                                reject_actor_request(
+                                    request,
+                                    diagnostics,
+                                    ControlError::new(
+                                        ControlErrorKind::Conflict,
+                                        "project ROI open was superseded by a newer transaction",
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("failed to open project ROI: {error}");
+                    if model.fail_project_roi_open(&scope, operation_generation, message.clone()) {
+                        // Publish only readiness/project state. The prior render document and
+                        // semantic dataset remain intact because the transaction never committed.
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        model.supersede_project_roi_open(
+                            operation_generation,
+                            "Project ROI open was superseded",
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed project ROI open was superseded by a newer transaction",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         LoadCompletion::SpatialData {
             generation,
             request,

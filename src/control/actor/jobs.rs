@@ -5,6 +5,31 @@ pub(super) struct DeepLinkResolveWorkerResult {
     pub(super) resolution: Result<DeepLinkResolution, String>,
 }
 
+pub(super) struct ProjectObjectPreloadWorkerResult {
+    pub(super) sources: Vec<ProjectObjectPreloadSource>,
+    pub(super) resources: Vec<(PathBuf, ControlObjectResource)>,
+    pub(super) failures: Vec<(PathBuf, String)>,
+}
+
+pub(super) struct ProjectRoiOpenSpec {
+    pub(super) roi: ProjectRoi,
+    pub(super) source: DatasetSource,
+    pub(super) saved_view: Option<Value>,
+    pub(super) object_path: Option<PathBuf>,
+    pub(super) cached_object: Option<Arc<ControlObjectResource>>,
+    pub(super) s3_session: Option<(u64, crate::data::remote_store::S3SessionCredentials)>,
+}
+
+pub(super) struct ProjectRoiOpenWorkerResult {
+    pub(super) opened: ControlOpenedDocument,
+    pub(super) roi: ProjectRoi,
+    pub(super) saved_view: Option<Value>,
+    pub(super) label_available: Vec<String>,
+    pub(super) label_resource: Option<ControlLabelResource>,
+    pub(super) object_resource: Option<Arc<ControlObjectResource>>,
+    pub(super) s3_session_generation: Option<u64>,
+}
+
 pub(super) enum LoadCompletion {
     DatasetInspect {
         operation_generation: u64,
@@ -51,6 +76,12 @@ pub(super) enum LoadCompletion {
             OpenedDocument<AlternateDocumentResource>,
             crate::data::document::XeniumOpenIdentity,
         )>,
+    },
+    ProjectRoiOpen {
+        operation_generation: u64,
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        result: anyhow::Result<ProjectRoiOpenWorkerResult>,
     },
     RemoteList {
         session_generation: u64,
@@ -123,6 +154,17 @@ pub(super) enum LoadCompletion {
         request: OdonControlRequest,
         root: PathBuf,
         result: anyhow::Result<Vec<PathBuf>>,
+    },
+    ProjectObjectSourceScan {
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        result: anyhow::Result<Vec<ProjectObjectPreloadSource>>,
+    },
+    ProjectObjectPreload {
+        generation: u64,
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        result: anyhow::Result<ProjectObjectPreloadWorkerResult>,
     },
     ObjectResource {
         document_generation: u64,
@@ -199,6 +241,7 @@ impl LoadCompletion {
             | Self::Tiff { .. }
             | Self::SpatialData { .. }
             | Self::Xenium { .. }
+            | Self::ProjectRoiOpen { .. }
             | Self::RemoteList { .. }
             | Self::RemoteOpen { .. }
             | Self::ChannelIntensity { .. } => CompletionDomain::Opening,
@@ -209,7 +252,9 @@ impl LoadCompletion {
             | Self::SamplesheetInspect { .. }
             | Self::SamplesheetImport { .. }
             | Self::SamplesheetExport { .. }
-            | Self::ProjectDiscovery { .. } => CompletionDomain::Project,
+            | Self::ProjectDiscovery { .. }
+            | Self::ProjectObjectSourceScan { .. }
+            | Self::ProjectObjectPreload { .. } => CompletionDomain::Project,
             Self::ObjectResource { .. } | Self::Labels { .. } => CompletionDomain::Resources,
             Self::ObjectFilter { .. } | Self::ObjectSelectionFilter { .. } => {
                 CompletionDomain::Objects
@@ -256,6 +301,12 @@ pub(super) enum LoadJob {
         request: OdonControlRequest,
         path: PathBuf,
         options: crate::data::document::XeniumOpenOptions,
+    },
+    ProjectRoiOpen {
+        operation_generation: u64,
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        spec: ProjectRoiOpenSpec,
     },
     RemoteList {
         session_generation: u64,
@@ -326,6 +377,18 @@ pub(super) enum LoadJob {
         generation: u64,
         request: OdonControlRequest,
         root: PathBuf,
+    },
+    ProjectObjectSourceScan {
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        candidates: Vec<PathBuf>,
+    },
+    ProjectObjectPreload {
+        generation: u64,
+        scope: ProjectObjectPreloadScope,
+        request: OdonControlRequest,
+        settings: ProjectObjectPreloadSettings,
+        candidates: Vec<PathBuf>,
     },
     ObjectResource {
         document_generation: u64,

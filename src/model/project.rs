@@ -63,6 +63,15 @@ pub(crate) struct ProjectModel {
 }
 
 impl ProjectModel {
+    pub(crate) fn activate_roi(&mut self, roi: &ProjectRoi) -> Result<(), ControlError> {
+        let index = self.roi_index_by_id(&roi.id)?;
+        let key = required_source_key(&self.snapshot.rois[index])?;
+        self.snapshot.focused_source_key = Some(key.clone());
+        self.snapshot.selected_source_keys = vec![key];
+        self.mark_navigation_change();
+        Ok(())
+    }
+
     pub(crate) fn replace(&mut self, mut snapshot: ProjectModelSnapshot) {
         normalize_snapshot_shape(&mut snapshot);
         self.snapshot = snapshot;

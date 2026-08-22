@@ -199,6 +199,81 @@ fn remote_sessions_listing_and_opens_complete_without_a_ui_frame() {
     assert_eq!(channels.legacy_rx.len(), 0);
 }
 
+#[test]
+fn project_roi_open_supports_http_and_s3_sources_without_a_ui_frame() {
+    let channels = spawn_test_actor_with_remote(fixture_backend());
+    let mut http_roi = ProjectRoi {
+        id: "http-roi".to_string(),
+        ..ProjectRoi::default()
+    };
+    http_roi.set_dataset_source(DatasetSource::Http {
+        base_url: "https://images.example.test/http-roi.ome.zarr".to_string(),
+    });
+    let mut s3_roi = ProjectRoi {
+        id: "s3-roi".to_string(),
+        ..ProjectRoi::default()
+    };
+    s3_roi.set_dataset_source(DatasetSource::S3 {
+        endpoint: "https://objects.example.test".to_string(),
+        region: "auto".to_string(),
+        bucket: "images".to_string(),
+        prefix: "study/s3-roi.ome.zarr".to_string(),
+    });
+    let rois = vec![http_roi, s3_roi];
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapProject(ProjectModelSnapshot {
+            config: ProjectConfig {
+                rois: rois.clone(),
+                ..ProjectConfig::default()
+            },
+            rois,
+            load_generation: 1,
+            config_generation: 1,
+            ..ProjectModelSnapshot::default()
+        }))
+        .unwrap();
+    let (sync, sync_rx) = request("app.get_state", json!({}));
+    channels.request_tx.send(sync).unwrap();
+    sync_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    let (http, http_rx) = request("project.rois.open", json!({"roi":"http-roi"}));
+    channels.request_tx.send(http).unwrap();
+    let opened_http = http_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened_http["kind"], "ome_zarr");
+    assert_eq!(opened_http["roi"], "http-roi");
+
+    let (configure, configure_rx) = request(
+        "datasets.s3.configure_session",
+        json!({
+            "endpoint":"objects.example.test",
+            "region":"auto",
+            "bucket":"images",
+            "access_key":"session-access",
+            "secret_key":"session-secret",
+        }),
+    );
+    channels.request_tx.send(configure).unwrap();
+    configure_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let (s3, s3_rx) = request("project.rois.open", json!({"roi":"s3-roi"}));
+    channels.request_tx.send(s3).unwrap();
+    let opened_s3 = s3_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(opened_s3["kind"], "ome_zarr");
+    assert_eq!(opened_s3["roi"], "s3-roi");
+    assert!(!opened_s3.to_string().contains("session-access"));
+    assert!(!opened_s3.to_string().contains("session-secret"));
+    assert_eq!(channels.legacy_rx.len(), 0);
+}
+
 struct BlockingRemoteBackend {
     fixture: PathBuf,
     started: Sender<()>,
