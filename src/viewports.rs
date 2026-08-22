@@ -176,8 +176,26 @@ impl<T> ViewportWorkspace<T> {
         })
     }
 
+    pub fn restore_projection(
+        viewports: Vec<ViewportSlot<T>>,
+        active: ViewportId,
+        layout: ViewportLayout,
+        links: ViewportLinks,
+        split_ratio: f32,
+        revision: u64,
+    ) -> Result<Self, ViewportError> {
+        let mut workspace = Self::restore(viewports, active, layout, links)?;
+        workspace.set_split_ratio(split_ratio)?;
+        workspace.revision = revision.max(1);
+        Ok(workspace)
+    }
+
     pub fn viewports(&self) -> &[ViewportSlot<T>] {
         &self.viewports
+    }
+
+    pub fn viewports_mut(&mut self) -> &mut [ViewportSlot<T>] {
+        &mut self.viewports
     }
 
     pub fn len(&self) -> usize {

@@ -1,25 +1,50 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 use super::ControlError;
 use super::registry::{self, MethodDescriptor, RequestShape};
+use crate::data::project_config::ProjectRoi;
 
 #[derive(Debug, Clone)]
 pub struct ControlCommand {
-    descriptor: &'static MethodDescriptor,
+    descriptor: Option<&'static MethodDescriptor>,
+    service_method: Option<ServiceMethod>,
     params: Value,
     if_revision: Option<u64>,
+    decoded_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ServiceMethod {
+    name: &'static str,
+    mutates: bool,
+    starts_task: bool,
 }
 
 impl ControlCommand {
     pub fn decode(method: &str, params: Value) -> Result<Self, ControlError> {
-        let descriptor = registry::method(method).ok_or_else(|| {
-            ControlError::new(
+        let descriptor = registry::method(method);
+        let service_method = descriptor
+            .is_none()
+            .then(|| {
+                registry::PROTOCOL_METHODS
+                    .iter()
+                    .find(|entry| entry.0 == method && is_actor_service_method(method))
+                    .map(|entry| ServiceMethod {
+                        name: entry.0,
+                        mutates: entry.3,
+                        starts_task: entry.4,
+                    })
+            })
+            .flatten();
+        if descriptor.is_none() && service_method.is_none() {
+            return Err(ControlError::new(
                 super::ControlErrorKind::MethodNotFound,
                 format!("unknown Odon control method '{method}'"),
             )
-            .with_data(json!({"method": method}))
-        })?;
+            .with_data(json!({"method": method})));
+        }
         let mut params = if params.is_null() { json!({}) } else { params };
         if !params.is_object() {
             return Err(ControlError::invalid_params(
@@ -36,22 +61,35 @@ impl ControlCommand {
                 })
             })
             .transpose()?;
-        if if_revision.is_some() && !descriptor.mutates {
+        let mutates = descriptor
+            .map(|descriptor| descriptor.mutates)
+            .or_else(|| service_method.map(|descriptor| descriptor.mutates))
+            .expect("a command descriptor was resolved");
+        if if_revision.is_some() && !mutates {
             return Err(ControlError::invalid_params(
                 method,
                 "if_revision is only valid for mutating methods",
             ));
         }
-        validate_params(method, descriptor.request_shape, &params)?;
+        validate_params(
+            method,
+            descriptor.map_or(RequestShape::Object, |descriptor| descriptor.request_shape),
+            &params,
+        )?;
         Ok(Self {
             descriptor,
+            service_method,
             params,
             if_revision,
+            decoded_at: Instant::now(),
         })
     }
 
     pub fn method(&self) -> &'static str {
-        self.descriptor.name
+        self.descriptor
+            .map(|descriptor| descriptor.name)
+            .or_else(|| self.service_method.map(|descriptor| descriptor.name))
+            .expect("control command retains its descriptor")
     }
 
     pub fn params(&self) -> &Value {
@@ -59,24 +97,53 @@ impl ControlCommand {
     }
 
     pub fn mutates(&self) -> bool {
-        self.descriptor.mutates
+        self.descriptor
+            .map(|descriptor| descriptor.mutates)
+            .or_else(|| self.service_method.map(|descriptor| descriptor.mutates))
+            .expect("control command retains its descriptor")
     }
 
     pub fn starts_task(&self) -> bool {
-        self.descriptor.starts_task
+        self.descriptor
+            .map(|descriptor| descriptor.starts_task)
+            .or_else(|| self.service_method.map(|descriptor| descriptor.starts_task))
+            .expect("control command retains its descriptor")
     }
 
     pub fn event_name(&self) -> Option<&'static str> {
-        self.descriptor.event
+        self.descriptor.and_then(|descriptor| descriptor.event)
     }
 
     pub fn available_in(&self) -> &'static [&'static str] {
-        self.descriptor.available_in
+        self.descriptor.map_or(
+            &["project", "single", "mosaic", "transition"],
+            |descriptor| descriptor.available_in,
+        )
     }
 
     pub fn if_revision(&self) -> Option<u64> {
         self.if_revision
     }
+
+    pub fn queue_age(&self) -> Duration {
+        self.decoded_at.elapsed()
+    }
+}
+
+fn is_actor_service_method(method: &str) -> bool {
+    matches!(
+        method,
+        "data.resources.register"
+            | "data.resources.list"
+            | "data.resources.get"
+            | "data.resources.remove"
+            | "viewer.layers.add"
+            | "viewer.layers.list"
+            | "viewer.layers.get"
+            | "viewer.layers.update"
+            | "viewer.layers.remove"
+            | "viewer.layers.reorder"
+    )
 }
 
 #[derive(Deserialize)]
@@ -321,6 +388,7 @@ struct ProjectViewCreateRequest {
 #[serde(deny_unknown_fields)]
 struct ProjectViewCaptureRequest {
     name: String,
+    viewport_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -456,12 +524,13 @@ struct ProjectRoiIdRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRoiAddRequest {
-    id: String,
-    path: String,
+    id: Option<String>,
+    path: Option<String>,
     display_name: Option<String>,
     dataset: Option<String>,
     segmentation_path: Option<String>,
     metadata: Option<std::collections::BTreeMap<String, String>>,
+    replacement: Option<ProjectRoi>,
 }
 
 #[derive(Deserialize)]
@@ -479,7 +548,8 @@ struct ProjectRoiChanges {
 #[serde(deny_unknown_fields)]
 struct ProjectRoiUpdateRequest {
     target_id: String,
-    changes: ProjectRoiChanges,
+    changes: Option<ProjectRoiChanges>,
+    replacement: Option<ProjectRoi>,
 }
 
 #[derive(Deserialize)]
@@ -1235,6 +1305,16 @@ fn validate_params(method: &str, shape: RequestShape, params: &Value) -> Result<
                     "name must not be empty",
                 ));
             }
+            if request
+                .viewport_id
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty() || value.len() > 128)
+            {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "viewport_id must contain 1 to 128 characters",
+                ));
+            }
         }
         RequestShape::ProjectViewRename => {
             let request: ProjectViewRenameRequest =
@@ -1421,18 +1501,38 @@ fn validate_params(method: &str, shape: RequestShape, params: &Value) -> Result<
         RequestShape::ProjectRoiAdd => {
             let request: ProjectRoiAddRequest =
                 serde_json::from_value(params.clone()).map_err(invalid)?;
-            if request.id.trim().is_empty() || request.path.trim().is_empty() {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "id and path must not be empty",
-                ));
+            let has_ordinary_fields = request.id.is_some()
+                || request.path.is_some()
+                || request.display_name.is_some()
+                || request.dataset.is_some()
+                || request.segmentation_path.is_some()
+                || request.metadata.is_some();
+            match (&request.replacement, has_ordinary_fields) {
+                (Some(replacement), false)
+                    if !replacement.id.trim().is_empty()
+                        && replacement.dataset_source().is_some() => {}
+                (None, true)
+                    if request
+                        .id
+                        .as_deref()
+                        .is_some_and(|id| !id.trim().is_empty())
+                        && request
+                            .path
+                            .as_deref()
+                            .is_some_and(|path| !path.trim().is_empty()) => {}
+                (Some(_), _) => {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        "replacement cannot be combined with ordinary ROI fields and must contain an ID and source",
+                    ));
+                }
+                _ => {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        "provide either replacement or non-empty id and path",
+                    ));
+                }
             }
-            let _ = (
-                request.display_name,
-                request.dataset,
-                request.segmentation_path,
-                request.metadata,
-            );
         }
         RequestShape::ProjectRoiUpdate => {
             let request: ProjectRoiUpdateRequest =
@@ -1443,29 +1543,47 @@ fn validate_params(method: &str, shape: RequestShape, params: &Value) -> Result<
                     "target_id must not be empty",
                 ));
             }
-            let changes = request.changes;
-            let changes_object = params
-                .get("changes")
-                .and_then(Value::as_object)
-                .expect("deserialized project ROI changes must be an object");
-            if changes_object.is_empty() {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "changes must not be empty",
-                ));
+            match (request.changes, request.replacement) {
+                (Some(changes), None) => {
+                    let changes_object = params
+                        .get("changes")
+                        .and_then(Value::as_object)
+                        .expect("deserialized project ROI changes must be an object");
+                    if changes_object.is_empty() {
+                        return Err(ControlError::invalid_params(
+                            method,
+                            "changes must not be empty",
+                        ));
+                    }
+                    for name in ["display_name", "dataset", "segmentation_path"] {
+                        let value = changes_object.get(name);
+                        validate_optional_nullable_string(method, name, value)?;
+                    }
+                    let _ = (
+                        changes.id,
+                        changes.path,
+                        changes.display_name,
+                        changes.dataset,
+                        changes.segmentation_path,
+                        changes.metadata,
+                    );
+                }
+                (None, Some(replacement))
+                    if !replacement.id.trim().is_empty()
+                        && replacement.dataset_source().is_some() => {}
+                (None, Some(_)) => {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        "replacement must contain a non-empty ID and source",
+                    ));
+                }
+                _ => {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        "provide exactly one of changes or replacement",
+                    ));
+                }
             }
-            for name in ["display_name", "dataset", "segmentation_path"] {
-                let value = changes_object.get(name);
-                validate_optional_nullable_string(method, name, value)?;
-            }
-            let _ = (
-                changes.id,
-                changes.path,
-                changes.display_name,
-                changes.dataset,
-                changes.segmentation_path,
-                changes.metadata,
-            );
         }
         RequestShape::ProjectRoiOrder => {
             let request: ProjectRoiOrderRequest =
@@ -1711,6 +1829,36 @@ mod tests {
     }
 
     #[test]
+    fn actor_service_commands_share_the_typed_command_envelope() {
+        let resource = ControlCommand::decode(
+            "data.resources.register",
+            json!({
+                "resource_id": "resource:test",
+                "uri": "file:///tmp/test.zarr",
+                "format": "ome-zarr",
+                "coordinate_space": {"axes": ["y", "x"]},
+            }),
+        )
+        .expect("resource commands are accepted by the actor mailbox");
+        assert_eq!(resource.method(), "data.resources.register");
+        assert!(resource.mutates());
+        assert!(resource.available_in().contains(&"project"));
+
+        let layer = ControlCommand::decode(
+            "viewer.layers.update",
+            json!({"layer_id":"layer:test","visible":false,"if_revision":12}),
+        )
+        .expect("layer-local revision is retained by the typed envelope");
+        assert_eq!(layer.if_revision(), Some(12));
+        assert_eq!(
+            layer.params(),
+            &json!({"layer_id":"layer:test","visible":false})
+        );
+        assert!(ControlCommand::decode("data.resources.list", json!({"if_revision": 1})).is_err());
+        assert!(ControlCommand::decode("system.hello", json!({})).is_err());
+    }
+
+    #[test]
     fn phase_g_commands_have_typed_validation() {
         assert!(ControlCommand::decode("app.settings.set", json!({
             "auto_contrast": {"method": "p1_to_p99", "lower_percentile": 1, "upper_percentile": 99},
@@ -1864,6 +2012,13 @@ mod tests {
     fn project_view_commands_have_typed_validation() {
         assert!(ControlCommand::decode("project.views.get", json!({"name": "Review"})).is_ok());
         assert!(
+            ControlCommand::decode(
+                "project.views.capture",
+                json!({"name": "Review", "viewport_id": "viewport-2"})
+            )
+            .is_ok()
+        );
+        assert!(
             ControlCommand::decode("project.views.get", json!({"index": 0, "name": "Review"}))
                 .is_err()
         );
@@ -1897,10 +2052,49 @@ mod tests {
             .is_ok()
         );
         assert!(ControlCommand::decode("project.rois.add", json!({"id": "ROI-1"})).is_err());
+        let replacement = json!({
+            "id": "ROI-native",
+            "source": {"Http": {"base_url": "https://example.test/roi.zarr"}},
+            "display_name": "Native ROI",
+            "mask_layers": [],
+            "meta": {"cohort": "A"}
+        });
+        assert!(
+            ControlCommand::decode(
+                "project.rois.add",
+                json!({"replacement": replacement.clone()})
+            )
+            .is_ok()
+        );
+        assert!(
+            ControlCommand::decode(
+                "project.rois.add",
+                json!({"replacement": replacement.clone(), "id": "also-an-id"})
+            )
+            .is_err()
+        );
         assert!(
             ControlCommand::decode(
                 "project.rois.update",
                 json!({"target_id": "ROI-1", "changes": {}})
+            )
+            .is_err()
+        );
+        assert!(
+            ControlCommand::decode(
+                "project.rois.update",
+                json!({"target_id": "ROI-1", "replacement": replacement.clone()})
+            )
+            .is_ok()
+        );
+        assert!(
+            ControlCommand::decode(
+                "project.rois.update",
+                json!({
+                    "target_id": "ROI-1",
+                    "changes": {"display_name": "patch"},
+                    "replacement": replacement
+                })
             )
             .is_err()
         );

@@ -4,11 +4,57 @@ use std::sync::LazyLock;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+mod actor_methods;
+
+pub use actor_methods::ACTOR_CAPABLE_METHODS;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stability {
     Experimental,
     Provisional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionClass {
+    Model,
+    Geometry,
+    Resource,
+    Presentation,
+    ExternalCompute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionOwner {
+    Actor,
+    LegacyUi,
+    ControlService,
+    Unavailable,
+}
+
+impl ExecutionOwner {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Actor => "actor",
+            Self::LegacyUi => "legacy_ui",
+            Self::ControlService => "control_service",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl ExecutionClass {
+    pub fn readiness_requirements(self) -> &'static [&'static str] {
+        match self {
+            Self::Model => &["model"],
+            Self::Geometry => &["model", "geometry"],
+            Self::Resource => &["model", "resources"],
+            Self::Presentation => &["model", "presentation", "output"],
+            Self::ExternalCompute => &["model", "resources"],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +129,134 @@ pub struct MethodDescriptor {
     pub event: Option<&'static str>,
     pub available_in: &'static [&'static str],
     pub since: &'static str,
+    pub execution_class: ExecutionClass,
+}
+
+pub fn execution_owner(
+    descriptor: &MethodDescriptor,
+    mode: &str,
+    params: &Value,
+    project_view_requires_resource_load: bool,
+) -> ExecutionOwner {
+    if !descriptor.available_in.contains(&mode) {
+        return ExecutionOwner::Unavailable;
+    }
+    if !ACTOR_CAPABLE_METHODS.contains(&descriptor.name) {
+        return ExecutionOwner::LegacyUi;
+    }
+    if mode == "mosaic" && descriptor.name.starts_with("viewer.") {
+        return ExecutionOwner::LegacyUi;
+    }
+    if mode == "mosaic" && descriptor.name == "app.get_state" {
+        return ExecutionOwner::LegacyUi;
+    }
+    if is_parameter_routed_primary_object_method(descriptor.name)
+        && (matches!(
+            params.get("target").and_then(Value::as_str),
+            Some("active" | "spatial_shape")
+        ) || params.get("screen_rect").is_some())
+    {
+        return ExecutionOwner::LegacyUi;
+    }
+    if descriptor.name == "project.views.apply" && project_view_requires_resource_load {
+        return ExecutionOwner::LegacyUi;
+    }
+    ExecutionOwner::Actor
+}
+
+pub fn execution_route_summary(descriptor: &MethodDescriptor) -> &'static str {
+    let actor_capable = ACTOR_CAPABLE_METHODS.contains(&descriptor.name);
+    if !actor_capable {
+        return "legacy_ui";
+    }
+    if is_parameter_routed_primary_object_method(descriptor.name)
+        || descriptor.name == "project.views.apply"
+    {
+        "hybrid"
+    } else {
+        "actor"
+    }
+}
+
+pub fn execution_route_json(descriptor: &MethodDescriptor) -> Value {
+    let actor_capable = ACTOR_CAPABLE_METHODS.contains(&descriptor.name);
+    let variants = if is_parameter_routed_primary_object_method(descriptor.name) {
+        json!([
+            {
+                "when":{"target":["active","spatial_shape"]},
+                "owner":"legacy_ui",
+                "reason":"renderer-owned object target"
+            },
+            {
+                "when":{"screen_rect":"present"},
+                "owner":"legacy_ui",
+                "reason":"screen-space query requires renderer state"
+            }
+        ])
+    } else if descriptor.name == "project.views.apply" {
+        json!([{
+            "when":{"required_project_resources":"not_loaded"},
+            "owner":"legacy_ui",
+            "reason":"saved-view resource loading has not yet migrated"
+        }])
+    } else {
+        json!([])
+    };
+    let by_mode = ["project", "single", "mosaic", "transition"]
+        .into_iter()
+        .map(|mode| {
+            let owner = if !descriptor.available_in.contains(&mode) {
+                ExecutionOwner::Unavailable
+            } else if !actor_capable
+                || (mode == "mosaic"
+                    && (descriptor.name.starts_with("viewer.")
+                        || descriptor.name == "app.get_state"))
+            {
+                ExecutionOwner::LegacyUi
+            } else {
+                ExecutionOwner::Actor
+            };
+            (
+                mode.to_string(),
+                json!({
+                    "default_owner":owner,
+                    "conditional": owner == ExecutionOwner::Actor && variants.as_array().is_some_and(|items| !items.is_empty()),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    json!({
+        "summary":execution_route_summary(descriptor),
+        "by_mode":by_mode,
+        "variants":variants,
+    })
+}
+
+pub fn is_parameter_routed_primary_object_method(method: &str) -> bool {
+    matches!(
+        method,
+        "viewer.objects.get_selection"
+            | "viewer.objects.query_rect"
+            | "viewer.objects.query_view"
+            | "viewer.objects.query_lasso"
+            | "viewer.objects.select_rect"
+            | "viewer.objects.select_lasso"
+            | "viewer.objects.clear_selection"
+            | "viewer.objects.selection.select_ids"
+            | "viewer.objects.selection.select_filtered"
+            | "viewer.objects.focus.set"
+            | "viewer.objects.focus.clear"
+            | "viewer.objects.style.get"
+            | "viewer.objects.style.set"
+            | "viewer.objects.legend.set"
+            | "viewer.objects.rendering.get_fast"
+            | "viewer.objects.rendering.set_fast"
+            | "viewer.objects.get_filter"
+            | "viewer.objects.set_filter"
+            | "viewer.objects.clear_filter"
+            | "viewer.objects.filters.set_model"
+            | "viewer.objects.filters.get_revision"
+    )
 }
 
 fn mcp_exposed(name: &str) -> bool {
@@ -137,6 +311,38 @@ fn mcp_exposed(name: &str) -> bool {
     )
 }
 
+fn execution_class(name: &str, starts_task: bool) -> ExecutionClass {
+    if name.contains("screenshot") || name == "exports.canvas.capture" {
+        return ExecutionClass::Presentation;
+    }
+    if matches!(
+        name,
+        "viewer.camera.fit"
+            | "viewer.viewports.camera.fit"
+            | "viewer.objects.query_view"
+            | "viewer.objects.query_region"
+    ) {
+        return ExecutionClass::Geometry;
+    }
+    if name.starts_with("data.resources.") || name.starts_with("viewer.layers.") {
+        return ExecutionClass::ExternalCompute;
+    }
+    if starts_task
+        || name.starts_with("datasets.open_")
+        || matches!(name, "project.open" | "project.save" | "project.save_as")
+        || name.ends_with(".load")
+        || name.ends_with(".reload")
+        || name.contains("preload")
+        || name.starts_with("exports.")
+        || name.starts_with("viewer.measurements.")
+        || name.starts_with("viewer.analysis.warmup.")
+        || name.starts_with("memory.pin")
+    {
+        return ExecutionClass::Resource;
+    }
+    ExecutionClass::Model
+}
+
 macro_rules! method {
     (
         $name:literal, $summary:literal, $capability:literal,
@@ -154,6 +360,7 @@ macro_rules! method {
             event: $event,
             available_in: $available_in,
             since: "0.2.0",
+            execution_class: execution_class($name, $starts_task),
         }
     };
 }
@@ -268,6 +475,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             event: None,
             available_in: ALL_MODES,
             since: "0.2.0",
+            execution_class: execution_class("app.get_method_availability", false),
         },
         method!(
             "project.rois.list",
@@ -1350,6 +1558,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "viewer.objects.selection.state.replace",
+            "Atomically replace committed primary object selection with generation checking.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.selection.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
             "viewer.objects.get_filter",
             "Get object filter state.",
             "viewer.objects.read",
@@ -1528,6 +1746,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Some("viewer.masks.changed"),
             SINGLE_MODE,
             Empty
+        ),
+        method!(
+            "viewer.masks.state.replace",
+            "Atomically replace committed mask state with optional generation conflict checking.",
+            "viewer.masks.write",
+            true,
+            false,
+            Some("viewer.masks.changed"),
+            SINGLE_MODE,
+            Object
         ),
         method!(
             "viewer.masks.import_geojson",
@@ -2530,6 +2758,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "viewer.viewports.layers.state.replace",
+            "Atomically replace actor-owned native-layer presentation for one viewport.",
+            "viewer.layers.write",
+            true,
+            false,
+            Some("viewer.viewports.presentation.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
             "viewer.ui.set_right_tab",
             "Set the single-view right tab.",
             "viewer.write",
@@ -3109,6 +3347,9 @@ pub fn catalog_json() -> Value {
                     "since": descriptor.since,
                     "event": descriptor.event,
                     "available_in": descriptor.available_in,
+                    "execution_class": descriptor.execution_class,
+                    "readiness_requirements": descriptor.execution_class.readiness_requirements(),
+                    "execution_route": execution_route_json(descriptor),
                     "aliases": aliases_for(descriptor.name),
                     "request_schema": request_schema_for(descriptor),
                     "result_schema": {"type": "object"},
@@ -3116,6 +3357,7 @@ pub fn catalog_json() -> Value {
             })
             .chain(PROTOCOL_METHODS.iter().map(
                 |(name, summary, capability, mutates, starts_task)| {
+                    let execution_class = execution_class(name, *starts_task);
                     json!({
                         "name": name,
                         "summary": summary,
@@ -3124,6 +3366,18 @@ pub fn catalog_json() -> Value {
                         "starts_task": starts_task,
                         "mcp_exposed": false,
                         "stability": Stability::Experimental,
+                        "execution_class": execution_class,
+                        "readiness_requirements": execution_class.readiness_requirements(),
+                        "execution_route": {
+                            "summary":ExecutionOwner::ControlService,
+                            "by_mode":{
+                                "project":{"default_owner":ExecutionOwner::ControlService,"conditional":false},
+                                "single":{"default_owner":ExecutionOwner::ControlService,"conditional":false},
+                                "mosaic":{"default_owner":ExecutionOwner::ControlService,"conditional":false},
+                                "transition":{"default_owner":ExecutionOwner::ControlService,"conditional":false},
+                            },
+                            "variants":[],
+                        },
                         "request_schema": {"type": "object"},
                     })
                 },
@@ -3143,6 +3397,9 @@ pub fn catalog_json() -> Value {
                         "since": descriptor.since,
                         "event": descriptor.event,
                         "available_in": descriptor.available_in,
+                        "execution_class": descriptor.execution_class,
+                        "readiness_requirements": descriptor.execution_class.readiness_requirements(),
+                        "execution_route": execution_route_json(descriptor),
                         "request_schema": request_schema_for(descriptor),
                         "result_schema": {"type": "object"},
                     })
@@ -3463,7 +3720,10 @@ fn request_schema(shape: RequestShape) -> Value {
         }),
         RequestShape::ProjectViewCapture => json!({
             "type": "object",
-            "properties": {"name": {"type": "string", "minLength": 1}},
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "viewport_id": {"type": "string", "minLength": 1, "maxLength": 128}
+            },
             "required": ["name"],
             "additionalProperties": false,
         }),
@@ -3590,9 +3850,23 @@ fn request_schema(shape: RequestShape) -> Value {
                 "display_name": {"type": "string"},
                 "dataset": {"type": "string"},
                 "segmentation_path": {"type": "string"},
-                "metadata": {"type": "object", "additionalProperties": {"type": "string"}}
+                "metadata": {"type": "object", "additionalProperties": {"type": "string"}},
+                "replacement": {"type": "object", "description": "Complete project ROI used by the native command adapter"}
             },
-            "required": ["id", "path"],
+            "oneOf": [
+                {"required": ["id", "path"], "not": {"required": ["replacement"]}},
+                {
+                    "required": ["replacement"],
+                    "not": {"anyOf": [
+                        {"required": ["id"]},
+                        {"required": ["path"]},
+                        {"required": ["display_name"]},
+                        {"required": ["dataset"]},
+                        {"required": ["segmentation_path"]},
+                        {"required": ["metadata"]}
+                    ]}
+                }
+            ],
             "additionalProperties": false,
         }),
         RequestShape::ProjectRoiUpdate => json!({
@@ -3611,9 +3885,14 @@ fn request_schema(shape: RequestShape) -> Value {
                     },
                     "minProperties": 1,
                     "additionalProperties": false
-                }
+                },
+                "replacement": {"type": "object", "description": "Complete project ROI used by the native command adapter"}
             },
-            "required": ["target_id", "changes"],
+            "required": ["target_id"],
+            "oneOf": [
+                {"required": ["changes"], "not": {"required": ["replacement"]}},
+                {"required": ["replacement"], "not": {"required": ["changes"]}}
+            ],
             "additionalProperties": false,
         }),
         RequestShape::ProjectRoiOrder => json!({
@@ -3852,6 +4131,7 @@ fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
             | "viewer.viewports.layers.set"
             | "viewer.viewports.layers.set_order"
             | "viewer.viewports.layers.set_active"
+            | "viewer.viewports.layers.state.replace"
     ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
     {
         properties.insert(
@@ -3896,8 +4176,71 @@ mod tests {
             assert!(!descriptor.summary.is_empty(), "{}", descriptor.name);
             assert!(!descriptor.capability.is_empty(), "{}", descriptor.name);
             assert!(!descriptor.available_in.is_empty(), "{}", descriptor.name);
+            assert!(
+                !descriptor
+                    .execution_class
+                    .readiness_requirements()
+                    .is_empty(),
+                "{}",
+                descriptor.name
+            );
             assert!(request_schema(descriptor.request_shape).is_object());
         }
+        assert_eq!(
+            method("viewer.viewports.camera.fit")
+                .unwrap()
+                .execution_class,
+            ExecutionClass::Geometry
+        );
+        assert_eq!(
+            method("datasets.open_ome_zarr").unwrap().execution_class,
+            ExecutionClass::Resource
+        );
+        assert_eq!(
+            method("viewer.screenshot.capture").unwrap().execution_class,
+            ExecutionClass::Presentation
+        );
+        let catalog = catalog_json();
+        assert!(catalog.as_array().unwrap().iter().all(|entry| {
+            entry.get("execution_route").is_some()
+                && entry["execution_route"]["by_mode"].is_object()
+        }));
+    }
+
+    #[test]
+    fn execution_routes_are_mode_and_parameter_aware() {
+        let camera = method("viewer.camera.set").unwrap();
+        assert_eq!(
+            execution_owner(camera, "single", &json!({}), false),
+            ExecutionOwner::Actor
+        );
+        assert_eq!(
+            execution_owner(camera, "mosaic", &json!({}), false),
+            ExecutionOwner::LegacyUi
+        );
+        let selection = method("viewer.objects.get_selection").unwrap();
+        assert_eq!(
+            execution_owner(
+                selection,
+                "single",
+                &json!({"target":"segmentation_objects"}),
+                false,
+            ),
+            ExecutionOwner::Actor
+        );
+        assert_eq!(
+            execution_owner(
+                selection,
+                "single",
+                &json!({"target":"spatial_shape"}),
+                false,
+            ),
+            ExecutionOwner::LegacyUi
+        );
+        let route = execution_route_json(camera);
+        assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
+        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
+        assert_eq!(execution_route_summary(camera), "actor");
     }
 
     #[test]
@@ -4010,6 +4353,30 @@ mod tests {
             "viewer.workspace.screenshot.capture",
         ] {
             assert!(method(name).is_some(), "missing registry method {name}");
+        }
+    }
+
+    #[test]
+    fn actor_capability_registry_has_unique_known_methods() {
+        let application_methods = METHODS
+            .iter()
+            .map(|descriptor| descriptor.name)
+            .collect::<BTreeSet<_>>();
+        let protocol_methods = PROTOCOL_METHODS
+            .iter()
+            .map(|descriptor| descriptor.0)
+            .collect::<BTreeSet<_>>();
+        let actor_only_methods = BTreeSet::from(["app.get_method_availability"]);
+        let mut seen = BTreeSet::new();
+
+        for name in ACTOR_CAPABLE_METHODS {
+            assert!(seen.insert(*name), "duplicate actor-capable method {name}");
+            assert!(
+                application_methods.contains(name)
+                    || protocol_methods.contains(name)
+                    || actor_only_methods.contains(name),
+                "actor-capable method is absent from every registry: {name}"
+            );
         }
     }
 }

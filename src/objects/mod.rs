@@ -32,6 +32,7 @@ use crate::spatialdata::{
     load_shapes_property_values_by_row, load_shapes_xy_point_features,
     load_shapes_xy_point_objects,
 };
+use odon::model::{ControlObjectFilterResult, ControlObjectResource, ObjectResourceLoader};
 
 mod analysis;
 mod core;
@@ -40,10 +41,218 @@ mod measurements;
 mod render;
 
 use self::analysis::SimpleHistogram;
-pub use self::core::preload_objects_from_path;
+pub use self::core::{
+    load_control_object_resource, load_control_object_resource_with_options,
+    preload_objects_from_path,
+};
 use self::filter_query::ObjectFilterQueryExpr;
 pub(crate) use self::geojson::GeoJsonSegmentationLayer;
 use self::render::property_scalar_value;
+
+/// Native implementation of the actor's Send-only object boundary. Parsing and filtering happen
+/// on bounded resource workers; renderer caches remain owned by `ObjectsLayer` on the UI thread.
+pub struct NativeObjectControlService;
+
+#[derive(Debug, Clone)]
+pub enum ObjectSourceUiAction {
+    Load {
+        path: PathBuf,
+        options: Option<serde_json::Value>,
+    },
+    Reload,
+    Clear,
+}
+
+impl ObjectResourceLoader for NativeObjectControlService {
+    fn load(&self, path: PathBuf, downsample_factor: f32) -> anyhow::Result<ControlObjectResource> {
+        load_control_object_resource(path, downsample_factor)
+    }
+
+    fn evaluate_filter(
+        &self,
+        resource: Arc<ControlObjectResource>,
+        model: serde_json::Value,
+    ) -> anyhow::Result<ControlObjectFilterResult> {
+        evaluate_control_object_filter(&resource, &model)
+    }
+
+    fn load_with_options(
+        &self,
+        path: PathBuf,
+        downsample_factor: f32,
+        options: Option<serde_json::Value>,
+    ) -> anyhow::Result<ControlObjectResource> {
+        load_control_object_resource_with_options(path, downsample_factor, options.as_ref())
+    }
+}
+
+fn evaluate_control_object_filter(
+    resource: &ControlObjectResource,
+    requested: &serde_json::Value,
+) -> anyhow::Result<ControlObjectFilterResult> {
+    let requested = requested.get("model").unwrap_or(requested);
+    let mode = requested
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| {
+            if requested.get("query").is_some() || requested.get("expression").is_some() {
+                "query"
+            } else {
+                "simple"
+            }
+        });
+    match mode {
+        "query" => {
+            let query = requested
+                .get("query")
+                .or_else(|| requested.get("expression"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow!("query mode requires query"))?
+                .trim()
+                .to_string();
+            let expression = if query.is_empty() {
+                None
+            } else {
+                let expression = ObjectFilterQueryExpr::parse(&query)
+                    .map_err(|error| anyhow!(error.to_string()))?;
+                let missing = expression
+                    .referenced_properties()
+                    .into_iter()
+                    .filter(|property| !control_object_property_available(resource, property))
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    anyhow::bail!(
+                        "Unknown object propert{}: {}",
+                        if missing.len() == 1 { "y" } else { "ies" },
+                        missing.join(", ")
+                    );
+                }
+                Some(expression)
+            };
+            let matching_indices = resource
+                .features
+                .iter()
+                .enumerate()
+                .filter_map(|(index, feature)| {
+                    expression
+                        .as_ref()
+                        .is_none_or(|expression| expression.matches_control_feature(feature))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            Ok(ControlObjectFilterResult {
+                model: serde_json::json!({"mode": "query", "query": query}),
+                matching_indices: Arc::new(matching_indices),
+                active: expression.is_some(),
+            })
+        }
+        "simple" => {
+            let logic = requested
+                .get("logic")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("all");
+            if !matches!(logic, "all" | "any") {
+                anyhow::bail!("logic must be 'all' or 'any'");
+            }
+            let clauses = requested
+                .get("clauses")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| anyhow!("simple mode requires clauses"))?;
+            let mut canonical = Vec::with_capacity(clauses.len().max(1));
+            for clause in clauses {
+                let property = clause
+                    .get("property")
+                    .or_else(|| clause.get("property_key"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|property| !property.is_empty())
+                    .ok_or_else(|| anyhow!("each filter clause requires property"))?;
+                if !control_object_property_available(resource, property) {
+                    anyhow::bail!("unknown object property '{property}'");
+                }
+                let query = clause
+                    .get("query")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| anyhow!("each filter clause requires query"))?
+                    .trim();
+                canonical.push(serde_json::json!({
+                    "enabled": clause
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true),
+                    "property": property,
+                    "query": query,
+                }));
+            }
+            if canonical.is_empty() {
+                canonical.push(serde_json::json!({
+                    "enabled": true,
+                    "property": "id",
+                    "query": "",
+                }));
+            }
+            let active_clauses = canonical
+                .iter()
+                .filter(|clause| {
+                    clause["enabled"].as_bool() == Some(true)
+                        && clause["query"]
+                            .as_str()
+                            .is_some_and(|query| !query.trim().is_empty())
+                })
+                .collect::<Vec<_>>();
+            let matching_indices = resource
+                .features
+                .iter()
+                .enumerate()
+                .filter_map(|(index, feature)| {
+                    let matches = |clause: &&serde_json::Value| {
+                        let property = clause["property"].as_str().unwrap_or("id");
+                        let needle = clause["query"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase();
+                        let value = if property == "id" {
+                            feature.id.clone()
+                        } else {
+                            feature
+                                .properties
+                                .get(property)
+                                .map(column_value_to_display_text)
+                                .unwrap_or_default()
+                        };
+                        value.to_ascii_lowercase().contains(&needle)
+                    };
+                    let visible = if active_clauses.is_empty() {
+                        true
+                    } else if logic == "all" {
+                        active_clauses.iter().all(matches)
+                    } else {
+                        active_clauses.iter().any(matches)
+                    };
+                    visible.then_some(index)
+                })
+                .collect::<Vec<_>>();
+            Ok(ControlObjectFilterResult {
+                model: serde_json::json!({
+                    "mode": "simple",
+                    "logic": logic,
+                    "clauses": canonical,
+                }),
+                matching_indices: Arc::new(matching_indices),
+                active: !active_clauses.is_empty(),
+            })
+        }
+        _ => anyhow::bail!("mode must be 'simple' or 'query'"),
+    }
+}
+
+fn control_object_property_available(resource: &ControlObjectResource, property: &str) -> bool {
+    property == "id"
+        || resource
+            .property_names
+            .iter()
+            .any(|candidate| candidate == property)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectPreloadMode {
@@ -1680,6 +1889,119 @@ impl Default for ObjectsLayer {
 #[cfg(test)]
 mod property_column_tests {
     use super::*;
+
+    fn control_filter_fixture() -> ControlObjectResource {
+        ControlObjectResource {
+            source: PathBuf::from("objects.geojson"),
+            downsample_factor: 1.0,
+            features: Arc::new(vec![
+                odon::model::ControlObjectFeature {
+                    id: "cell-a".to_string(),
+                    bbox_world: [0.0, 0.0, 1.0, 1.0],
+                    centroid_world: [0.5, 0.5],
+                    polygons_world: Arc::new(Vec::new()),
+                    point_position_world: Some([0.5, 0.5]),
+                    area_px: 0.0,
+                    perimeter_px: 0.0,
+                    properties: serde_json::json!({"kind":"tumour","score":0.9})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+                odon::model::ControlObjectFeature {
+                    id: "cell-b".to_string(),
+                    bbox_world: [1.0, 1.0, 2.0, 2.0],
+                    centroid_world: [1.5, 1.5],
+                    polygons_world: Arc::new(Vec::new()),
+                    point_position_world: Some([1.5, 1.5]),
+                    area_px: 0.0,
+                    perimeter_px: 0.0,
+                    properties: serde_json::json!({"kind":"immune","score":0.2})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+            ]),
+            property_names: Arc::new(vec![
+                "id".to_string(),
+                "kind".to_string(),
+                "score".to_string(),
+            ]),
+            renderer_payload: None,
+        }
+    }
+
+    #[test]
+    fn actor_query_filter_uses_the_native_typed_expression_engine() {
+        let result = evaluate_control_object_filter(
+            &control_filter_fixture(),
+            &serde_json::json!({
+                "mode":"query",
+                "query":"kind == 'tumour' and score >= 0.5",
+            }),
+        )
+        .unwrap();
+
+        assert!(result.active);
+        assert_eq!(result.matching_indices.as_ref(), &[0]);
+        assert_eq!(result.model["mode"], "query");
+    }
+
+    #[test]
+    fn actor_simple_filter_matches_renderer_contains_semantics() {
+        let result = evaluate_control_object_filter(
+            &control_filter_fixture(),
+            &serde_json::json!({
+                "mode":"simple",
+                "logic":"any",
+                "clauses":[
+                    {"property":"kind","query":"IMM"},
+                    {"property":"id","query":"missing"},
+                ],
+            }),
+        )
+        .unwrap();
+
+        assert!(result.active);
+        assert_eq!(result.matching_indices.as_ref(), &[1]);
+        assert_eq!(result.model["logic"], "any");
+    }
+
+    #[test]
+    fn actor_configured_csv_load_preserves_native_column_choices() {
+        let path = std::env::temp_dir().join(format!(
+            "odon-control-configured-{}-{}.csv",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(
+            &path,
+            "cx,cy,kind,ignored\n1,2,tumour,nope\n3,4,immune,nope\n",
+        )
+        .unwrap();
+        let resource = load_control_object_resource_with_options(
+            path.clone(),
+            1.0,
+            Some(&serde_json::json!({
+                "format":"csv",
+                "x_column":"cx",
+                "y_column":"cy",
+                "property_columns":["kind"],
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(resource.features.len(), 2);
+        assert!((resource.features[0].centroid_world[0] - 1.0).abs() < 1e-5);
+        assert!((resource.features[0].centroid_world[1] - 2.0).abs() < 1e-5);
+        assert_eq!(
+            resource.property_value(1, "kind"),
+            Some(serde_json::json!("immune"))
+        );
+        assert!(!resource.property_names.iter().any(|name| name == "ignored"));
+        assert!(resource.renderer_payload.is_some());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn dictionary_contains_filter_matches_codes_without_decoding_rows() {

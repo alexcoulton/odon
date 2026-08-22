@@ -71,7 +71,8 @@
         "viewer.viewports.layers.set",
         "viewer.viewports.layers.set_visibility",
         "viewer.viewports.layers.set_order",
-        "viewer.viewports.layers.set_active"
+        "viewer.viewports.layers.set_active",
+        "viewer.viewports.layers.state.replace"
       ],
       "events": ["viewer.workspace.layout.changed", "viewer.viewports.created", "viewer.viewports.presentation.changed", "viewer.viewports.removed", "viewer.viewports.active_changed", "viewer.viewport_links.changed", "viewer.viewports.navigation.changed", "viewer.screenshot.completed"],
       "permissions": ["viewer.read", "viewer.write", "viewer.channels.read", "viewer.channels.write", "viewer.objects.read", "viewer.objects.write", "viewer.layers.read", "viewer.layers.write", "viewer.screenshot"],
@@ -869,7 +870,7 @@
       "phase": "D",
       "status": "covered",
       "native_entry_points": ["object table selection", "analysis focus"],
-      "methods": ["viewer.objects.selection.select_ids", "viewer.objects.selection.select_filtered", "viewer.objects.focus.set", "viewer.objects.focus.clear"],
+      "methods": ["viewer.objects.selection.select_ids", "viewer.objects.selection.select_filtered", "viewer.objects.focus.set", "viewer.objects.focus.clear", "viewer.objects.selection.state.replace"],
       "events": ["viewer.selection.changed", "viewer.objects.focus.changed"],
       "permissions": ["viewer.objects.write"],
       "python_sync": ["odon.resources:Objects.select_ids", "odon.resources:Objects.select_filtered", "odon.resources:Objects.focus", "odon.resources:Objects.clear_focus"],
@@ -1000,13 +1001,13 @@
       "phase": "E",
       "status": "covered",
       "native_entry_points": ["Masks layer editor", "Draw mask polygon", "Undo"],
-      "methods": ["viewer.masks.layers.list", "viewer.masks.layers.get", "viewer.masks.layers.create", "viewer.masks.layers.update", "viewer.masks.layers.delete", "viewer.masks.polygons.list", "viewer.masks.polygons.add", "viewer.masks.polygons.update", "viewer.masks.polygons.remove", "viewer.masks.selection.get", "viewer.masks.selection.set", "viewer.masks.selection.clear", "viewer.masks.undo"],
+      "methods": ["viewer.masks.layers.list", "viewer.masks.layers.get", "viewer.masks.layers.create", "viewer.masks.layers.update", "viewer.masks.layers.delete", "viewer.masks.polygons.list", "viewer.masks.polygons.add", "viewer.masks.polygons.update", "viewer.masks.polygons.remove", "viewer.masks.selection.get", "viewer.masks.selection.set", "viewer.masks.selection.clear", "viewer.masks.undo", "viewer.masks.state.replace"],
       "events": ["viewer.masks.changed", "viewer.masks.selection.changed"],
       "permissions": ["viewer.masks.read", "viewer.masks.write"],
       "python_sync": ["odon.resources:Masks.list_layers", "odon.resources:Masks.get_layer", "odon.resources:Masks.create_layer", "odon.resources:Masks.update_layer", "odon.resources:Masks.delete_layer", "odon.resources:Masks.list_polygons", "odon.resources:Masks.add_polygon", "odon.resources:Masks.update_polygon", "odon.resources:Masks.remove_polygon", "odon.resources:Masks.get_selection", "odon.resources:Masks.select", "odon.resources:Masks.clear_selection", "odon.resources:Masks.undo"],
       "python_async": ["odon.async_resources:AsyncMasks.list_layers", "odon.async_resources:AsyncMasks.get_layer", "odon.async_resources:AsyncMasks.create_layer", "odon.async_resources:AsyncMasks.update_layer", "odon.async_resources:AsyncMasks.delete_layer", "odon.async_resources:AsyncMasks.list_polygons", "odon.async_resources:AsyncMasks.add_polygon", "odon.async_resources:AsyncMasks.update_polygon", "odon.async_resources:AsyncMasks.remove_polygon", "odon.async_resources:AsyncMasks.get_selection", "odon.async_resources:AsyncMasks.select", "odon.async_resources:AsyncMasks.clear_selection", "odon.async_resources:AsyncMasks.undo"],
       "tests": ["python:test_mask_crud_wrappers"],
-      "notes": "Layer/polygon CRUD, explicit polygon and vertex selection, and the native undo stack are covered. Polygon indices are scoped to a layer revision and may shift after deletion."
+      "notes": "Layer/polygon CRUD, explicit polygon and vertex selection, and the actor-owned undo stack are covered. The generation-checked state replacement method is the atomic native-commit primitive; ordinary Python callers should prefer granular methods. Polygon indices are scoped to a layer revision and may shift after deletion."
     },
     {
       "id":"MASK-02.target",

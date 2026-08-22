@@ -528,6 +528,7 @@ pub enum ProjectSpaceAction {
     OpenView(ProjectRoi, ProjectViewSpec),
     OpenLocalPath(PathBuf),
     OpenProject(PathBuf),
+    SaveProject(PathBuf),
     ForgetRecentProject(PathBuf),
     ClearRecentProjects,
     CaptureCurrentView,
@@ -576,6 +577,9 @@ pub struct ProjectSpace {
     view_preset_draft: Option<ProjectViewSpec>,
     save_toast: Option<ProjectSaveToast>,
     roi_list_hover_rect: Option<egui::Rect>,
+    /// Last complete actor project replacement materialized into this renderer-side view model.
+    /// Ordinary actor projections deliberately do not replace the complete persisted state.
+    control_actor_load_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -629,6 +633,123 @@ impl ProjectSpace {
 
     pub fn config_generation(&self) -> u64 {
         self.config_generation
+    }
+
+    pub fn control_actor_project_snapshot(&self) -> odon::model::ProjectModelSnapshot {
+        let mut selected_source_keys = self.selected.iter().cloned().collect::<Vec<_>>();
+        selected_source_keys.sort();
+        let view_presets = self
+            .state
+            .view_presets
+            .iter()
+            .map(|preset| {
+                serde_json::to_value(preset).expect("project view preset is serializable")
+            })
+            .collect();
+        odon::model::ProjectModelSnapshot {
+            config: self.config.clone(),
+            state: serde_json::to_value(self.state_for_save())
+                .expect("project state is serializable"),
+            load_generation: self.control_actor_load_generation,
+            rois: self.config.rois.clone(),
+            default_dataset: self.config.default_dataset.clone(),
+            secondary_dataset: self.config.secondary_dataset.clone(),
+            default_threshold_marker: self.config.default_threshold_marker.clone(),
+            mosaic_segmentation_search_roots: self.config.mosaic_segmentation_search_roots.clone(),
+            dataset_keys: self.config.datasets.keys().cloned().collect(),
+            selected_source_keys,
+            focused_source_key: self.focused.clone(),
+            saved_path: self.project_file_path.clone(),
+            config_generation: self.config_generation,
+            view_presets,
+            view_count: self.state.view_presets.len(),
+            dirty: self.config_json_dirty,
+        }
+    }
+
+    /// Lightweight snapshot for detecting native semantic commits each frame. Complete persisted
+    /// config/state are intentionally omitted; those are copied only for actor bootstrap/load.
+    pub fn control_actor_project_delta_snapshot(&self) -> odon::model::ProjectModelSnapshot {
+        let mut selected_source_keys = self.selected.iter().cloned().collect::<Vec<_>>();
+        selected_source_keys.sort();
+        let view_presets = self
+            .state
+            .view_presets
+            .iter()
+            .map(|preset| {
+                serde_json::to_value(preset).expect("project view preset is serializable")
+            })
+            .collect();
+        odon::model::ProjectModelSnapshot {
+            rois: self.config.rois.clone(),
+            default_dataset: self.config.default_dataset.clone(),
+            secondary_dataset: self.config.secondary_dataset.clone(),
+            default_threshold_marker: self.config.default_threshold_marker.clone(),
+            mosaic_segmentation_search_roots: self.config.mosaic_segmentation_search_roots.clone(),
+            dataset_keys: self.config.datasets.keys().cloned().collect(),
+            selected_source_keys,
+            focused_source_key: self.focused.clone(),
+            saved_path: self.project_file_path.clone(),
+            config_generation: self.config_generation,
+            view_presets,
+            view_count: self.state.view_presets.len(),
+            dirty: self.config_json_dirty,
+            load_generation: self.control_actor_load_generation,
+            ..odon::model::ProjectModelSnapshot::default()
+        }
+    }
+
+    pub fn apply_control_actor_project_projection(
+        &mut self,
+        snapshot: &odon::model::ProjectModelSnapshot,
+    ) {
+        if snapshot.load_generation > self.control_actor_load_generation {
+            match serde_json::from_value::<ProjectState>(snapshot.state.clone()) {
+                Ok(state) => {
+                    self.config.clone_from(&snapshot.config);
+                    self.state = state;
+                    self.control_actor_load_generation = snapshot.load_generation;
+                }
+                Err(error) => {
+                    self.status = format!("Actor project state could not be materialized: {error}");
+                }
+            }
+        }
+        self.config.rois.clone_from(&snapshot.rois);
+        self.config
+            .default_dataset
+            .clone_from(&snapshot.default_dataset);
+        self.config
+            .secondary_dataset
+            .clone_from(&snapshot.secondary_dataset);
+        self.config
+            .default_threshold_marker
+            .clone_from(&snapshot.default_threshold_marker);
+        self.config
+            .mosaic_segmentation_search_roots
+            .clone_from(&snapshot.mosaic_segmentation_search_roots);
+        match snapshot
+            .view_presets
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<ProjectViewPreset>)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(view_presets) => self.state.view_presets = view_presets,
+            Err(error) => {
+                self.status = format!("Actor project views could not be materialized: {error}")
+            }
+        }
+        self.selected = snapshot.selected_source_keys.iter().cloned().collect();
+        self.focused.clone_from(&snapshot.focused_source_key);
+        self.project_file_path.clone_from(&snapshot.saved_path);
+        self.save_path = snapshot
+            .saved_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.config_generation = snapshot.config_generation;
+        self.config_json_dirty = snapshot.dirty;
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -1313,64 +1434,7 @@ impl ProjectSpace {
         roi_query: Option<&str>,
         sample_query: Option<&str>,
     ) -> Result<ProjectRoi, String> {
-        let Some(roi_query) = roi_query.map(str::trim).filter(|s| !s.is_empty()) else {
-            return Err("Deep link is missing a roi=... parameter.".to_string());
-        };
-
-        let roi_norm = normalize_link_match_text(roi_query);
-        let sample_norm = sample_query
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(normalize_link_match_text);
-
-        let mut matches = self
-            .config
-            .rois
-            .iter()
-            .filter(|roi| {
-                sample_norm.as_ref().is_none_or(|sample| {
-                    roi_link_match_texts(roi).iter().any(|s| s.contains(sample))
-                })
-            })
-            .filter(|roi| {
-                roi_link_match_texts(roi)
-                    .iter()
-                    .any(|candidate| candidate == &roi_norm || candidate.contains(&roi_norm))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if matches.is_empty() {
-            return Err(format!("No project ROI matches '{roi_query}'."));
-        }
-
-        let exact = matches
-            .iter()
-            .filter(|roi| {
-                roi_link_match_texts(roi)
-                    .iter()
-                    .any(|candidate| candidate == &roi_norm)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if !exact.is_empty() {
-            matches = exact;
-        }
-
-        if matches.len() == 1 {
-            return Ok(matches.remove(0));
-        }
-
-        let examples = matches
-            .iter()
-            .take(4)
-            .map(|roi| roi.source_display())
-            .collect::<Vec<_>>()
-            .join("; ");
-        Err(format!(
-            "Deep link ROI '{roi_query}' matches {} project ROIs. Add sample=... or use a more specific roi path. Examples: {examples}",
-            matches.len()
-        ))
+        crate::deep_link::resolve_roi_target(&self.config.rois, roi_query, sample_query)
     }
 
     pub fn add_roi_source(&mut self, source: DatasetSource) {
@@ -1428,15 +1492,7 @@ impl ProjectSpace {
         })
     }
 
-    pub fn save_as_project(&mut self) {
-        self.save_project_via_dialog("Save Project");
-    }
-
-    pub fn save_new_project(&mut self) {
-        self.save_project_via_dialog("Save New Project");
-    }
-
-    fn save_project_via_dialog(&mut self, title: &str) {
+    fn choose_project_save_path(&self, title: &str) -> Option<PathBuf> {
         let default_name = self
             .current_project_path()
             .as_ref()
@@ -1455,10 +1511,7 @@ impl ProjectSpace {
         {
             dialog = dialog.set_directory(parent);
         }
-        if let Some(path) = dialog.save_file() {
-            self.save_path = path.to_string_lossy().to_string();
-            self.save_to_path();
-        }
+        dialog.save_file()
     }
 
     fn exportable_local_roi_count(&self) -> usize {
@@ -2372,17 +2425,17 @@ impl ProjectSpace {
                         self.status = "New project.".to_string();
                     }
                     if ui.button("Save").clicked() {
-                        if self.saved_project_path().is_some() {
-                            if let Some(path) = self.saved_project_path() {
-                                self.save_path = path.to_string_lossy().to_string();
-                            }
-                            self.save_to_path();
-                        } else {
-                            self.save_as_project();
+                        let path = self
+                            .saved_project_path()
+                            .or_else(|| self.choose_project_save_path("Save Project"));
+                        if let Some(path) = path {
+                            action = Some(ProjectSpaceAction::SaveProject(path));
                         }
                     }
                     if ui.button("Save As...").clicked() {
-                        self.save_as_project();
+                        if let Some(path) = self.choose_project_save_path("Save Project As") {
+                            action = Some(ProjectSpaceAction::SaveProject(path));
+                        }
                     }
                     if ui.button("Load Project...").clicked() {
                         if let Some(path) = FileDialog::new()
@@ -2974,31 +3027,6 @@ impl ProjectSpace {
         Ok(())
     }
 
-    fn save_to_path(&mut self) {
-        let path = PathBuf::from(self.save_path.trim());
-        if path.as_os_str().is_empty() {
-            self.status = "Save path is empty.".to_string();
-            return;
-        }
-        self.state = self.state_for_save();
-        let file = ProjectFileV6 {
-            version: 6,
-            config: self.config.clone(),
-            state: self.state.clone(),
-        };
-        match serde_json::to_string_pretty(&file) {
-            Ok(text) => match fs::write(&path, text) {
-                Ok(_) => {
-                    self.project_file_path = Some(path.clone());
-                    self.status = format!("Saved: {}", path.to_string_lossy());
-                    self.show_save_toast(&path);
-                }
-                Err(e) => self.status = format!("Save failed: {e}"),
-            },
-            Err(e) => self.status = format!("Save failed: {e}"),
-        }
-    }
-
     fn load_from_path(&mut self) {
         let path = PathBuf::from(self.load_path.trim());
         if path.as_os_str().is_empty() {
@@ -3479,58 +3507,6 @@ fn roi_match_tokens(roi: &ProjectRoi) -> HashSet<String> {
         insert_match_tokens(&mut tokens, value);
     }
     tokens
-}
-
-fn roi_link_match_texts(roi: &ProjectRoi) -> Vec<String> {
-    let mut texts = Vec::new();
-    let mut push = |value: String| {
-        let normalized = normalize_link_match_text(&value);
-        if !normalized.is_empty() && !texts.iter().any(|existing| existing == &normalized) {
-            texts.push(normalized);
-        }
-    };
-
-    push(roi.id.clone());
-    if let Some(display_name) = roi.display_name.as_ref() {
-        push(display_name.clone());
-    }
-    if let Some(dataset) = roi.dataset.as_ref() {
-        push(dataset.clone());
-    }
-    if let Some(source_key) = roi.source_key() {
-        push(source_key);
-    }
-    push(roi.source_display());
-    if let Some(path) = roi.local_path() {
-        push(path.to_string_lossy().to_string());
-        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-            push(file_name.to_string());
-        }
-        let components = path
-            .components()
-            .filter_map(|component| component.as_os_str().to_str())
-            .collect::<Vec<_>>();
-        for pair in components.windows(2) {
-            push(pair.join("/"));
-        }
-        for triple in components.windows(3) {
-            push(triple.join("/"));
-        }
-    }
-    for (key, value) in &roi.meta {
-        push(key.clone());
-        push(value.clone());
-        push(format!("{key}:{value}"));
-    }
-    texts
-}
-
-fn normalize_link_match_text(value: &str) -> String {
-    value
-        .trim()
-        .trim_matches('"')
-        .replace('\\', "/")
-        .to_ascii_lowercase()
 }
 
 fn resolve_project_relative_path(project_dir: Option<&Path>, path: PathBuf) -> PathBuf {
@@ -4033,6 +4009,74 @@ mod tests {
             canonical_objects_a.to_string_lossy()
         );
         assert_eq!(exported.rows[1].meta["cohort"], "control");
+    }
+
+    #[test]
+    fn actor_project_projection_updates_semantics_without_replacing_ui_state() {
+        let mut project = ProjectSpace::default();
+        project.view_preset_name_input = "draft remains local".to_string();
+        let mut roi = ProjectRoi {
+            id: "actor-roi".to_string(),
+            display_name: Some("Actor ROI".to_string()),
+            ..ProjectRoi::default()
+        };
+        roi.set_dataset_source(DatasetSource::Local(PathBuf::from("/tmp/actor.zarr")));
+        let source_key = roi.source_key().unwrap();
+        let snapshot = odon::model::ProjectModelSnapshot {
+            rois: vec![roi],
+            default_dataset: Some("actor-dataset".to_string()),
+            selected_source_keys: vec![source_key.clone()],
+            focused_source_key: Some(source_key),
+            config_generation: 7,
+            dirty: true,
+            ..odon::model::ProjectModelSnapshot::default()
+        };
+
+        project.apply_control_actor_project_projection(&snapshot);
+        assert_eq!(
+            project.config.default_dataset.as_deref(),
+            Some("actor-dataset")
+        );
+        assert_eq!(
+            project.focused_roi().map(|roi| roi.id.as_str()),
+            Some("actor-roi")
+        );
+        assert_eq!(project.selected_rois().len(), 1);
+        assert_eq!(project.config_generation, 7);
+        assert!(project.config_json_dirty);
+        assert_eq!(project.view_preset_name_input, "draft remains local");
+        assert_eq!(
+            project
+                .control_actor_project_snapshot()
+                .selected_source_keys,
+            vec![snapshot.selected_source_keys[0].clone()]
+        );
+
+        let mut full_config = ProjectConfig::default();
+        full_config.default_dataset = Some("loaded-dataset".to_string());
+        full_config.control_resources = vec![serde_json::json!({"id":"resource-from-file"})];
+        let full = odon::model::ProjectModelSnapshot {
+            config: full_config,
+            state: serde_json::json!({
+                "view_presets": [{"name":"Loaded view","spec":{}}],
+                "browser": {}
+            }),
+            view_presets: vec![serde_json::json!({"name":"Loaded view","spec":{}})],
+            view_count: 1,
+            load_generation: 1,
+            default_dataset: Some("loaded-dataset".to_string()),
+            saved_path: Some(PathBuf::from("/tmp/loaded.odon.project.json")),
+            ..odon::model::ProjectModelSnapshot::default()
+        };
+        project.apply_control_actor_project_projection(&full);
+        assert_eq!(
+            project.config.default_dataset.as_deref(),
+            Some("loaded-dataset")
+        );
+        assert_eq!(project.config.control_resources.len(), 1);
+        assert_eq!(project.view_presets()[0].name, "Loaded view");
+        assert_eq!(project.view_preset_name_input, "draft remains local");
+        assert_eq!(project.control_actor_load_generation, 1);
     }
 }
 

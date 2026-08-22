@@ -1,5 +1,6 @@
 pub mod dataset_kind;
 pub mod dataset_source;
+pub mod document;
 pub mod ome;
 pub mod project_config;
 pub mod remote_store;

@@ -690,47 +690,42 @@ impl ObjectsLayer {
         self.objects.as_ref().map(|v| v.len()).unwrap_or(0)
     }
 
-    pub fn open_dialog(&mut self, default_dir: &Path) {
+    pub fn prepare_source_path(&mut self, path: PathBuf) -> Option<PathBuf> {
+        if is_parquet_objects_path(&path) {
+            self.open_geoparquet_dialog(path);
+            None
+        } else if is_csv_objects_path(&path) {
+            self.open_csv_dialog(path);
+            None
+        } else {
+            Some(path)
+        }
+    }
+
+    pub fn choose_source_dialog(&self, default_dir: &Path) -> Option<PathBuf> {
         let start_dir = self
             .loaded_geojson
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or(default_dir);
-        if let Some(path) = FileDialog::new()
+        FileDialog::new()
             .add_filter("GeoJSON", &["geojson", "json"])
             .add_filter("GeoParquet", &["parquet", "geoparquet"])
             .add_filter("CSV", &["csv"])
             .set_title("Open Segmentation Objects")
             .set_directory(start_dir)
             .pick_file()
-        {
-            if is_parquet_objects_path(&path) {
-                self.open_geoparquet_dialog(path);
-            } else if is_csv_objects_path(&path) {
-                self.open_csv_dialog(path);
-            } else {
-                self.request_load(path, self.downsample_factor, None);
-            }
-        }
     }
 
-    pub fn handle_dropped_path(&mut self, path: PathBuf) -> bool {
-        if is_parquet_objects_path(&path) {
-            self.open_geoparquet_dialog(path);
-            return true;
-        }
-        if is_csv_objects_path(&path) {
-            self.open_csv_dialog(path);
-            return true;
-        }
-        let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-            return false;
-        };
-        if matches!(ext.to_ascii_lowercase().as_str(), "geojson" | "json") {
-            self.request_load(path, self.downsample_factor, None);
-            return true;
-        }
-        false
+    pub fn supports_source_path(path: &Path) -> bool {
+        is_parquet_objects_path(path)
+            || is_csv_objects_path(path)
+            || path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    matches!(extension.to_ascii_lowercase().as_str(), "geojson" | "json")
+                })
     }
 
     fn open_geoparquet_dialog(&mut self, path: PathBuf) {
@@ -847,10 +842,11 @@ impl ObjectsLayer {
         }
     }
 
-    pub fn ui_load_dialog(&mut self, ctx: &egui::Context) {
+    pub fn ui_load_dialog(&mut self, ctx: &egui::Context) -> Option<ObjectSourceUiAction> {
         let Some(mut dialog) = self.object_load_dialog.clone() else {
-            return;
+            return None;
         };
+        let mut source_action = None;
         let mut keep_open = true;
         let mut close_requested = false;
         let mut do_load = false;
@@ -1038,24 +1034,24 @@ impl ObjectsLayer {
         }
 
         if do_load {
-            let property_columns = Some(
-                dialog
-                    .selected_property_columns
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            );
-            let load_options = match dialog.source_kind {
+            let property_columns = dialog
+                .selected_property_columns
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            let loader_options = match dialog.source_kind {
                 ObjectTableSourceKind::GeoParquet => {
                     match (dialog.display_mode, dialog.point_source) {
                         (ObjectDisplayMode::Polygons, _) | (_, GeoParquetPointSource::Geometry) => {
-                            Some(ObjectLoadOptions::Parquet(ObjectParquetLoadOptions {
-                                display_mode: dialog.display_mode,
-                                source: ObjectParquetSource::Geometry(ShapesLoadOptions {
-                                    transform: SpatialDataTransform2::default(),
-                                    geometry_column: dialog.geometry_column.clone(),
-                                    property_columns,
-                                }),
+                            Some(serde_json::json!({
+                                "format":"geoparquet",
+                                "display_mode": match dialog.display_mode {
+                                    ObjectDisplayMode::Polygons => "polygons",
+                                    ObjectDisplayMode::Points => "points",
+                                },
+                                "source":"geometry",
+                                "geometry_column":dialog.geometry_column,
+                                "property_columns":property_columns,
                             }))
                         }
                         (ObjectDisplayMode::Points, GeoParquetPointSource::XYColumns) => {
@@ -1065,13 +1061,13 @@ impl ObjectsLayer {
                                         .to_string();
                                 None
                             } else {
-                                Some(ObjectLoadOptions::Parquet(ObjectParquetLoadOptions {
-                                    display_mode: ObjectDisplayMode::Points,
-                                    source: ObjectParquetSource::XYColumns {
-                                        x_column: dialog.x_column.clone(),
-                                        y_column: dialog.y_column.clone(),
-                                        property_columns,
-                                    },
+                                Some(serde_json::json!({
+                                    "format":"geoparquet",
+                                    "display_mode":"points",
+                                    "source":"xy_columns",
+                                    "x_column":dialog.x_column,
+                                    "y_column":dialog.y_column,
+                                    "property_columns":property_columns,
                                 }))
                             }
                         }
@@ -1083,20 +1079,20 @@ impl ObjectsLayer {
                             "Choose both X and Y columns before loading point objects.".to_string();
                         None
                     } else {
-                        Some(ObjectLoadOptions::Csv(ObjectCsvLoadOptions {
-                            x_column: dialog.x_column.clone(),
-                            y_column: dialog.y_column.clone(),
-                            property_columns,
+                        Some(serde_json::json!({
+                            "format":"csv",
+                            "x_column":dialog.x_column,
+                            "y_column":dialog.y_column,
+                            "property_columns":property_columns,
                         }))
                     }
                 }
             };
-            if let Some(load_options) = load_options {
-                self.request_load(
-                    dialog.path.clone(),
-                    self.downsample_factor,
-                    Some(load_options),
-                );
+            if let Some(options) = loader_options {
+                source_action = Some(ObjectSourceUiAction::Load {
+                    path: dialog.path.clone(),
+                    options: Some(options),
+                });
             }
         }
 
@@ -1105,12 +1101,14 @@ impl ObjectsLayer {
         } else {
             self.object_load_dialog = None;
         }
+        source_action
     }
 
-    pub fn ui_topbar(&mut self, ui: &mut egui::Ui, default_dir: &Path) {
+    pub fn ui_topbar(&mut self, ui: &mut egui::Ui, default_dir: &Path) -> Option<PathBuf> {
         if ui.button("Load Seg Objects...").clicked() {
-            self.open_dialog(default_dir);
+            return self.choose_source_dialog(default_dir);
         }
+        None
     }
 
     pub fn load_path(&mut self, path: PathBuf, downsample_factor: f32) {
@@ -1131,6 +1129,17 @@ impl ObjectsLayer {
         self.load_rx = None;
         self.object_load_cancel = None;
         self.install_load_result(preloaded.result.clone());
+    }
+
+    pub fn install_control_resource(
+        &mut self,
+        resource: &odon::model::ControlObjectResource,
+    ) -> bool {
+        let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
+            return false;
+        };
+        self.install_preloaded(preloaded);
+        true
     }
 
     pub fn load_objects_with_transform(
@@ -1205,13 +1214,23 @@ impl ObjectsLayer {
             .ok();
     }
 
-    pub fn ui_properties(&mut self, ui: &mut egui::Ui, default_dir: &Path) {
+    pub fn ui_properties(
+        &mut self,
+        ui: &mut egui::Ui,
+        default_dir: &Path,
+    ) -> Option<ObjectSourceUiAction> {
         self.ensure_filter_cache();
         self.ensure_color_groups();
 
+        let mut source_action = None;
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.visible, "Visible");
-            self.ui_topbar(ui, default_dir);
+            source_action =
+                self.ui_topbar(ui, default_dir)
+                    .map(|path| ObjectSourceUiAction::Load {
+                        path,
+                        options: None,
+                    });
         });
         ui.add(
             egui::Slider::new(&mut self.opacity, 0.0..=1.0)
@@ -1306,15 +1325,13 @@ impl ObjectsLayer {
                 .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Reload"))
                 .clicked()
             {
-                if let Some(path) = self.loaded_geojson.clone() {
-                    self.request_load(path, self.downsample_factor, None);
-                }
+                source_action = Some(ObjectSourceUiAction::Reload);
             }
             if ui
                 .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Clear"))
                 .clicked()
             {
-                self.clear();
+                source_action = Some(ObjectSourceUiAction::Clear);
             }
         });
         ui.label(format!("Objects: {}", self.object_count()));
@@ -1679,6 +1696,7 @@ impl ObjectsLayer {
                     }
                 });
         }
+        source_action
     }
 
     pub fn has_data(&self) -> bool {
@@ -2613,6 +2631,17 @@ impl ObjectsLayer {
 
     pub(crate) fn apply_project_display_state(&mut self, state: &ObjectProjectDisplayState) {
         self.set_color_by_property(state.color_property_key.clone());
+        // Project and control-actor presentation is declarative. Preserve a requested property
+        // even when its object column has not materialized yet; the resource loader can satisfy
+        // it later without losing the canonical presentation while the renderer is catching up.
+        if let Some(property_key) = state
+            .color_property_key
+            .as_deref()
+            .filter(|property_key| !property_key.is_empty())
+        {
+            self.color_mode = ObjectColorMode::ByProperty;
+            self.color_property_key = property_key.to_string();
+        }
         self.color_level_overrides_property_key =
             state.color_property_key.clone().unwrap_or_default();
         self.color_level_overrides = state.color_level_overrides.clone();
@@ -3213,6 +3242,40 @@ impl ObjectsLayer {
         let changed = self.selected_object_index.take().is_some();
         self.rebuild_selection_render_lods();
         serde_json::json!({"changed": changed, "focused": null})
+    }
+
+    pub fn install_control_selection(
+        &mut self,
+        selected_indices: &[usize],
+        primary_index: Option<usize>,
+    ) -> Result<(), String> {
+        let object_count = self.objects.as_ref().map_or(0, |objects| objects.len());
+        if selected_indices.iter().any(|index| *index >= object_count) {
+            return Err("actor object selection contains an out-of-range index".to_string());
+        }
+        let selected = selected_indices.iter().copied().collect::<HashSet<_>>();
+        if primary_index.is_some_and(|index| !selected.contains(&index)) {
+            return Err("actor object selection primary is not selected".to_string());
+        }
+        self.selected_object_indices = selected;
+        self.selected_object_index = primary_index;
+        self.rebuild_selection_render_lods();
+        self.clear_measurements();
+        self.invalidate_table_cache();
+        Ok(())
+    }
+
+    pub fn control_selection_projection_json(&self) -> serde_json::Value {
+        let mut selected_indices = self
+            .selected_object_indices
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        selected_indices.sort_unstable();
+        serde_json::json!({
+            "selected_indices":selected_indices,
+            "primary_index":self.selected_object_index,
+        })
     }
 
     fn current_selection_object_ids(&self) -> Vec<String> {
@@ -4907,6 +4970,172 @@ pub fn preload_objects_from_path(
         ),
     }?;
     Ok(PreloadedObjectLayer { result })
+}
+
+pub fn load_control_object_resource(
+    path: PathBuf,
+    downsample_factor: f32,
+) -> anyhow::Result<odon::model::ControlObjectResource> {
+    let preloaded = preload_objects_from_path(
+        path.clone(),
+        downsample_factor,
+        ObjectPreloadSettings {
+            mode: ObjectPreloadMode::FullGeometry,
+            lazy_properties: false,
+        },
+    )?;
+    control_resource_from_preloaded(path, downsample_factor, preloaded)
+}
+
+pub fn load_control_object_resource_with_options(
+    path: PathBuf,
+    downsample_factor: f32,
+    options: Option<&serde_json::Value>,
+) -> anyhow::Result<odon::model::ControlObjectResource> {
+    let Some(options) = options else {
+        return load_control_object_resource(path, downsample_factor);
+    };
+    let property_columns = options
+        .get("property_columns")
+        .and_then(serde_json::Value::as_array)
+        .map(|columns| {
+            columns
+                .iter()
+                .map(|column| {
+                    column
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| anyhow!("property_columns must contain strings"))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })
+        .transpose()?;
+    let format = options
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("object loader options require format"))?;
+    let load_options = match format {
+        "geoparquet" => {
+            let display_mode = match options
+                .get("display_mode")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("polygons")
+            {
+                "polygons" => ObjectDisplayMode::Polygons,
+                "points" => ObjectDisplayMode::Points,
+                other => anyhow::bail!("unknown GeoParquet display_mode '{other}'"),
+            };
+            let source = match options
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("geometry")
+            {
+                "geometry" => ObjectParquetSource::Geometry(ShapesLoadOptions {
+                    transform: SpatialDataTransform2::default(),
+                    geometry_column: required_loader_option(options, "geometry_column")?,
+                    property_columns,
+                }),
+                "xy_columns" => ObjectParquetSource::XYColumns {
+                    x_column: required_loader_option(options, "x_column")?,
+                    y_column: required_loader_option(options, "y_column")?,
+                    property_columns,
+                },
+                other => anyhow::bail!("unknown GeoParquet source '{other}'"),
+            };
+            ObjectLoadOptions::Parquet(ObjectParquetLoadOptions {
+                display_mode,
+                source,
+            })
+        }
+        "csv" => ObjectLoadOptions::Csv(ObjectCsvLoadOptions {
+            x_column: required_loader_option(options, "x_column")?,
+            y_column: required_loader_option(options, "y_column")?,
+            property_columns,
+        }),
+        other => anyhow::bail!("unknown object loader format '{other}'"),
+    };
+    let cancel = AtomicBool::new(false);
+    let result = load_in_thread(
+        path.clone(),
+        downsample_factor,
+        Some(load_options),
+        0,
+        &cancel,
+    )?;
+    control_resource_from_preloaded(path, downsample_factor, PreloadedObjectLayer { result })
+}
+
+fn required_loader_option(options: &serde_json::Value, name: &str) -> anyhow::Result<String> {
+    options
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("object loader option '{name}' is required"))
+}
+
+fn control_resource_from_preloaded(
+    path: PathBuf,
+    downsample_factor: f32,
+    preloaded: PreloadedObjectLayer,
+) -> anyhow::Result<odon::model::ControlObjectResource> {
+    let result = preloaded.result.clone();
+    let loaded_properties = result.property_store.loaded_keys();
+    let mut property_names = result
+        .object_property_keys
+        .iter()
+        .chain(loaded_properties.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    property_names.insert("id".to_string());
+    let features = result
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(index, object)| {
+            let mut properties = object.inline_properties.clone();
+            for property in &loaded_properties {
+                let value = result
+                    .property_store
+                    .loaded_columns
+                    .get(property)
+                    .map(|column| column.value_json_at(index))
+                    .unwrap_or(serde_json::Value::Null);
+                if !value.is_null() {
+                    properties.insert(property.clone(), value);
+                }
+            }
+            odon::model::ControlObjectFeature {
+                id: object.id.clone(),
+                bbox_world: [
+                    object.bbox_world.min.x,
+                    object.bbox_world.min.y,
+                    object.bbox_world.max.x,
+                    object.bbox_world.max.y,
+                ],
+                centroid_world: [object.centroid_world.x, object.centroid_world.y],
+                polygons_world: Arc::new(
+                    object
+                        .polygons_world
+                        .iter()
+                        .map(|polygon| polygon.iter().map(|point| [point.x, point.y]).collect())
+                        .collect(),
+                ),
+                point_position_world: object.point_position_world.map(|point| [point.x, point.y]),
+                area_px: object.area_px,
+                perimeter_px: object.perimeter_px,
+                properties,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(odon::model::ControlObjectResource {
+        source: path,
+        downsample_factor,
+        features: Arc::new(features),
+        property_names: Arc::new(property_names.into_iter().collect()),
+        renderer_payload: Some(Arc::new(preloaded)),
+    })
 }
 
 fn load_centroid_points_in_thread(

@@ -468,10 +468,12 @@ impl ChannelListHost for MosaicViewerApp {
 
 #[derive(Debug, Clone)]
 pub enum MosaicRequest {
+    CloseWindow,
     BackToSingle,
     OpenProjectRoi(ProjectRoi),
     OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
     OpenProject(PathBuf),
+    SaveProject(PathBuf),
     OpenLocalPath(PathBuf),
     ForgetRecentProject(PathBuf),
     ClearRecentProjects,
@@ -4072,7 +4074,7 @@ impl eframe::App for MosaicViewerApp {
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close
         if top_bar::handle_cmd_w_close(ctx, &mut self.close_dialog_open) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.pending_request = Some(MosaicRequest::CloseWindow);
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
@@ -4201,7 +4203,7 @@ impl eframe::App for MosaicViewerApp {
         self.ui_screenshot_settings_dialog(ctx);
 
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.pending_request = Some(MosaicRequest::CloseWindow);
         }
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
 
@@ -5452,6 +5454,9 @@ impl MosaicViewerApp {
             }
             crate::project::ProjectSpaceAction::OpenProject(path) => {
                 self.pending_request = Some(MosaicRequest::OpenProject(path));
+            }
+            crate::project::ProjectSpaceAction::SaveProject(path) => {
+                self.pending_request = Some(MosaicRequest::SaveProject(path));
             }
             crate::project::ProjectSpaceAction::OpenLocalPath(path) => {
                 self.pending_request = Some(MosaicRequest::OpenLocalPath(path));

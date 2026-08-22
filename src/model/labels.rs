@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
 use zarrs::array::Array;
@@ -18,10 +19,7 @@ pub fn discover_label_names_local(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for entry in rd.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if !looks_like_zarr_group_dir(&path) {
+        if !path.is_dir() || !looks_like_zarr_group_dir(&path) {
             continue;
         }
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -35,8 +33,6 @@ pub fn discover_label_names_local(root: &Path) -> Vec<String> {
 }
 
 fn looks_like_zarr_group_dir(dir: &Path) -> bool {
-    // Zarr v2 groups commonly have `.zgroup` and/or `.zattrs`.
-    // Zarr v3 groups use a `zarr.json`.
     dir.join(".zgroup").is_file()
         || dir.join(".zattrs").is_file()
         || dir.join("zarr.json").is_file()
@@ -50,11 +46,8 @@ pub struct LabelZarrDataset {
 }
 
 impl LabelZarrDataset {
-    /// Tries to open an OME-NGFF label multiscale at `labels/<label_name>`.
-    ///
-    /// Returns `Ok(None)` if the expected metadata file is not present.
     pub fn try_open(
-        store: std::sync::Arc<dyn ReadableStorageTraits>,
+        store: Arc<dyn ReadableStorageTraits>,
         label_name: &str,
     ) -> anyhow::Result<Option<Self>> {
         let labels_prefix = format!("labels/{label_name}");
@@ -72,7 +65,6 @@ impl LabelZarrDataset {
 
         let dims = dims_from_axes(&multiscale.axes)?;
         let levels = load_levels(store, label_name, &multiscale, &dims)?;
-
         Ok(Some(Self {
             label_name: label_name.to_string(),
             levels,
@@ -93,8 +85,22 @@ impl LabelZarrDataset {
             .multiscale
             .name
             .clone()
-            .or_else(|| dataset.channels.first().map(|c| c.name.clone()))
+            .or_else(|| dataset.channels.first().map(|channel| channel.name.clone()))
             .unwrap_or_else(|| "labels".to_string())
+    }
+}
+
+#[derive(Clone)]
+pub struct ControlLabelResource {
+    pub dataset: LabelZarrDataset,
+    pub store: Arc<dyn ReadableStorageTraits>,
+}
+
+impl std::fmt::Debug for ControlLabelResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlLabelResource")
+            .field("dataset", &self.dataset)
+            .finish_non_exhaustive()
     }
 }
 
@@ -103,7 +109,6 @@ fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
     let mut z = None;
     let mut y = None;
     let mut x = None;
-
     for (i, axis) in axes.iter().enumerate() {
         match axis.name.as_str() {
             "c" => c = Some(i),
@@ -113,10 +118,8 @@ fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
             _ => {}
         }
     }
-
     let y = y.ok_or_else(|| anyhow!("axes missing required 'y' dimension"))?;
     let x = x.ok_or_else(|| anyhow!("axes missing required 'x' dimension"))?;
-
     Ok(Dims {
         c,
         z,
@@ -127,13 +130,12 @@ fn dims_from_axes(axes: &[Axis]) -> anyhow::Result<Dims> {
 }
 
 fn load_levels(
-    store: std::sync::Arc<dyn ReadableStorageTraits>,
+    store: Arc<dyn ReadableStorageTraits>,
     label_name: &str,
     multiscale: &Multiscale,
     dims: &Dims,
 ) -> anyhow::Result<Vec<LevelInfo>> {
     let mut levels = Vec::with_capacity(multiscale.datasets.len());
-
     let base_scale = dataset_scale(multiscale, 0, dims)?;
     let base_y = base_scale[dims.y];
     let base_x = base_scale[dims.x];
@@ -143,13 +145,11 @@ fn load_levels(
         let zarr_path = format!("/{}", full_path.to_string_lossy().trim_start_matches('/'));
         let array: Array<dyn ReadableStorageTraits> = Array::open(store.clone(), &zarr_path)
             .with_context(|| format!("failed to open label array metadata at {zarr_path}"))?;
-
         let shape = array.shape().to_vec();
         let chunk_shape = array
             .chunk_shape(&vec![0u64; shape.len()])
-            .map(|v| v.into_iter().map(|n| n.get()).collect::<Vec<u64>>())
+            .map(|values| values.into_iter().map(|value| value.get()).collect())
             .unwrap_or_else(|_| vec![1u64; shape.len()]);
-
         if shape.len() != dims.ndim || chunk_shape.len() != dims.ndim {
             return Err(anyhow!(
                 "label level {} has unexpected dimensionality: shape {:?}, chunks {:?}, expected ndim {}",
@@ -159,13 +159,9 @@ fn load_levels(
                 dims.ndim
             ));
         }
-
         let scale = dataset_scale(multiscale, index, dims)?;
         let translation = dataset_translation(multiscale, index, dims)?;
-        let downsample_y = scale[dims.y] / base_y;
-        let downsample_x = scale[dims.x] / base_x;
-        let downsample = downsample_y.max(downsample_x);
-
+        let downsample = (scale[dims.y] / base_y).max(scale[dims.x] / base_x);
         levels.push(LevelInfo {
             index,
             path: full_path.to_string_lossy().to_string(),
@@ -177,7 +173,6 @@ fn load_levels(
             translation,
         });
     }
-
     Ok(levels)
 }
 
@@ -186,9 +181,8 @@ fn dataset_scale(multiscale: &Multiscale, level: usize, dims: &Dims) -> anyhow::
         .datasets
         .get(level)
         .ok_or_else(|| anyhow!("missing dataset entry for level {level}"))?;
-
-    for ct in &ds.coordinate_transformations {
-        if let CoordTransform::Scale { scale } = ct {
+    for transform in &ds.coordinate_transformations {
+        if let CoordTransform::Scale { scale } = transform {
             if scale.len() != dims.ndim {
                 return Err(anyhow!(
                     "label level {level} scale has wrong length: got {}, expected {}",
@@ -199,7 +193,6 @@ fn dataset_scale(multiscale: &Multiscale, level: usize, dims: &Dims) -> anyhow::
             return Ok(scale.clone());
         }
     }
-
     Err(anyhow!(
         "label level {level} missing coordinateTransformations scale"
     ))
@@ -214,9 +207,8 @@ fn dataset_translation(
         .datasets
         .get(level)
         .ok_or_else(|| anyhow!("missing dataset entry for level {level}"))?;
-
-    for ct in &ds.coordinate_transformations {
-        if let CoordTransform::Translation { translation } = ct {
+    for transform in &ds.coordinate_transformations {
+        if let CoordTransform::Translation { translation } = transform {
             if translation.len() != dims.ndim {
                 return Err(anyhow!(
                     "label level {level} translation has wrong length: got {}, expected {}",
@@ -227,6 +219,5 @@ fn dataset_translation(
             return Ok(translation.clone());
         }
     }
-
     Ok(vec![0.0; dims.ndim])
 }

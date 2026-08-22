@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::app::{
-    LabelPromptSessionPreference, OmeZarrViewerApp, S3DatasetSelection, ViewerRequest,
+    LabelPromptSessionPreference, NativeControlIntent, OmeZarrViewerApp, S3DatasetSelection,
+    ViewerRequest,
 };
 use crate::app_support::menu::{NativeMenu, NativeMenuAction};
 use crate::app_support::settings::{AppSettings, AutoContrastMethod, settings_file_path};
@@ -32,8 +33,10 @@ use crate::spatialdata::{SpatialDataDiscovery, SpatialDataElement, discover_spat
 use crate::ui::top_bar;
 use crate::xenium::{TiffPlaneSelection, TiffPyramid, discover_xenium_explorer};
 use crate::{log_debug, log_info, log_warn};
+use odon::control::actor::RenderProjection;
 use odon::control::{ControlError, ControlErrorKind, TaskState};
 use odon::mcp::{OdonControlBridge, OdonControlRequest};
+use odon::model::{ModelMode, ProjectModelSnapshot};
 use rfd::FileDialog;
 
 fn control_event_name(method: &str) -> &'static str {
@@ -79,6 +82,242 @@ fn control_event_name(method: &str) -> &'static str {
     }
 }
 
+fn project_native_control_intents(
+    before: &ProjectModelSnapshot,
+    after: &ProjectModelSnapshot,
+) -> Vec<NativeControlIntent> {
+    let mut intents = Vec::new();
+    if before.default_dataset != after.default_dataset
+        || before.secondary_dataset != after.secondary_dataset
+        || before.default_threshold_marker != after.default_threshold_marker
+        || before.mosaic_segmentation_search_roots != after.mosaic_segmentation_search_roots
+    {
+        intents.push(NativeControlIntent {
+            method: "project.update_metadata",
+            params: serde_json::json!({
+                "default_dataset": after.default_dataset,
+                "secondary_dataset": after.secondary_dataset,
+                "default_threshold_marker": after.default_threshold_marker,
+                "mosaic_segmentation_search_roots": after.mosaic_segmentation_search_roots,
+            }),
+        });
+    }
+
+    let view_name = |preset: &serde_json::Value| {
+        preset
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let before_view_names = before
+        .view_presets
+        .iter()
+        .filter_map(&view_name)
+        .collect::<Vec<_>>();
+    let after_view_names = after
+        .view_presets
+        .iter()
+        .filter_map(&view_name)
+        .collect::<Vec<_>>();
+    let before_view_set = before_view_names.iter().cloned().collect::<HashSet<_>>();
+    let after_view_set = after_view_names.iter().cloned().collect::<HashSet<_>>();
+    if before_view_set.len() == before.view_presets.len()
+        && after_view_set.len() == after.view_presets.len()
+    {
+        let mut renamed_before = HashSet::new();
+        let mut renamed_after = HashSet::new();
+        for previous in &before.view_presets {
+            let previous_name = view_name(previous).expect("validated view name");
+            if after_view_set.contains(&previous_name) {
+                continue;
+            }
+            let candidates = after
+                .view_presets
+                .iter()
+                .filter(|candidate| {
+                    let Some(candidate_name) = view_name(candidate) else {
+                        return false;
+                    };
+                    !before_view_set.contains(&candidate_name)
+                        && candidate.get("description") == previous.get("description")
+                        && candidate.get("spec") == previous.get("spec")
+                })
+                .collect::<Vec<_>>();
+            if let [replacement] = candidates.as_slice() {
+                let replacement_name = view_name(replacement).expect("validated view name");
+                renamed_before.insert(previous_name.clone());
+                renamed_after.insert(replacement_name.clone());
+                intents.push(NativeControlIntent {
+                    method: "project.views.rename",
+                    params: serde_json::json!({
+                        "name": previous_name,
+                        "new_name": replacement_name,
+                    }),
+                });
+            }
+        }
+        for previous in &before.view_presets {
+            let name = view_name(previous).expect("validated view name");
+            if !after_view_set.contains(&name) && !renamed_before.contains(&name) {
+                intents.push(NativeControlIntent {
+                    method: "project.views.delete",
+                    params: serde_json::json!({"name":name}),
+                });
+            }
+        }
+        for preset in &after.view_presets {
+            let name = view_name(preset).expect("validated view name");
+            if renamed_after.contains(&name) {
+                continue;
+            }
+            let previous = before.view_presets.iter().find(|candidate| {
+                candidate.get("name").and_then(serde_json::Value::as_str) == Some(name.as_str())
+            });
+            if previous != Some(preset) {
+                intents.push(NativeControlIntent {
+                    method: "project.views.create",
+                    params: serde_json::json!({
+                        "name": name,
+                        "spec": preset.get("spec").cloned().unwrap_or_else(|| serde_json::json!({})),
+                    }),
+                });
+            }
+        }
+    }
+
+    let before_ids = before
+        .rois
+        .iter()
+        .map(|roi| roi.id.as_str())
+        .collect::<Vec<_>>();
+    let after_ids = after
+        .rois
+        .iter()
+        .map(|roi| roi.id.as_str())
+        .collect::<Vec<_>>();
+    let before_unique = before_ids.iter().copied().collect::<HashSet<_>>();
+    let after_unique = after_ids.iter().copied().collect::<HashSet<_>>();
+    if before_unique.len() == before_ids.len() && after_unique.len() == after_ids.len() {
+        // An ROI ID rename is one semantic update, not a remove followed by an add. Pair renamed
+        // entries by their stable dataset source so actor revisions, selection, and focus match a
+        // native ProjectSpace rename.
+        let mut renamed_before = HashSet::new();
+        let mut renamed_after = HashSet::new();
+        for previous in &before.rois {
+            if after_unique.contains(previous.id.as_str()) {
+                continue;
+            }
+            let Some(source_key) = previous.source_key() else {
+                continue;
+            };
+            let candidates = after
+                .rois
+                .iter()
+                .filter(|candidate| {
+                    !before_unique.contains(candidate.id.as_str())
+                        && candidate.source_key().as_deref() == Some(source_key.as_str())
+                })
+                .collect::<Vec<_>>();
+            if let [replacement] = candidates.as_slice() {
+                renamed_before.insert(previous.id.clone());
+                renamed_after.insert(replacement.id.clone());
+            }
+        }
+        for roi in &before.rois {
+            if !after_unique.contains(roi.id.as_str()) && !renamed_before.contains(&roi.id) {
+                intents.push(NativeControlIntent {
+                    method: "project.rois.remove",
+                    params: serde_json::json!({"id":roi.id}),
+                });
+            }
+        }
+        for previous in &before.rois {
+            if !renamed_before.contains(&previous.id) {
+                continue;
+            }
+            let source_key = previous
+                .source_key()
+                .expect("renamed ROI pairing requires a source key");
+            let replacement = after
+                .rois
+                .iter()
+                .find(|candidate| {
+                    renamed_after.contains(&candidate.id)
+                        && candidate.source_key().as_deref() == Some(source_key.as_str())
+                })
+                .expect("paired renamed ROI remains present");
+            intents.push(NativeControlIntent {
+                method: "project.rois.update",
+                params: serde_json::json!({"target_id":previous.id,"replacement":replacement}),
+            });
+        }
+        for roi in &after.rois {
+            match before.rois.iter().find(|candidate| candidate.id == roi.id) {
+                None if !renamed_after.contains(&roi.id) => intents.push(NativeControlIntent {
+                    method: "project.rois.add",
+                    params: serde_json::json!({"replacement":roi}),
+                }),
+                Some(previous)
+                    if serde_json::to_value(previous).ok() != serde_json::to_value(roi).ok() =>
+                {
+                    intents.push(NativeControlIntent {
+                        method: "project.rois.update",
+                        params: serde_json::json!({"target_id":previous.id,"replacement":roi}),
+                    });
+                }
+                Some(_) | None => {}
+            }
+        }
+        let retained_before = before_ids
+            .iter()
+            .filter(|id| after_unique.contains(**id))
+            .copied()
+            .collect::<Vec<_>>();
+        let retained_after = after_ids
+            .iter()
+            .filter(|id| before_unique.contains(**id))
+            .copied()
+            .collect::<Vec<_>>();
+        if retained_before != retained_after || before_ids.len() != after_ids.len() {
+            intents.push(NativeControlIntent {
+                method: "project.rois.reorder",
+                params: serde_json::json!({"ids":after_ids}),
+            });
+        }
+    }
+
+    if before.selected_source_keys != after.selected_source_keys {
+        let selected_ids = after
+            .rois
+            .iter()
+            .filter(|roi| {
+                roi.source_key()
+                    .is_some_and(|key| after.selected_source_keys.iter().any(|item| item == &key))
+            })
+            .map(|roi| roi.id.clone())
+            .collect::<Vec<_>>();
+        intents.push(NativeControlIntent {
+            method: "project.rois.select",
+            params: serde_json::json!({"ids":selected_ids,"mode":"replace"}),
+        });
+    }
+    if before.focused_source_key != after.focused_source_key
+        && let Some(id) = after.focused_source_key.as_deref().and_then(|key| {
+            after
+                .rois
+                .iter()
+                .find(|roi| roi.source_key().as_deref() == Some(key))
+                .map(|roi| roi.id.clone())
+        })
+    {
+        intents.push(NativeControlIntent {
+            method: "project.rois.focus",
+            params: serde_json::json!({"id":id}),
+        });
+    }
+    intents
+}
+
 fn control_event_source(method: &str) -> &'static str {
     if method.starts_with("project.") {
         "project:active"
@@ -110,7 +349,8 @@ fn active_viewport_compatibility_event(method: &str) -> Option<&'static str> {
         | "viewer.viewports.layers.set"
         | "viewer.viewports.layers.set_visibility"
         | "viewer.viewports.layers.set_order"
-        | "viewer.viewports.layers.set_active" => Some("viewer.layers.changed"),
+        | "viewer.viewports.layers.set_active"
+        | "viewer.viewports.layers.state.replace" => Some("viewer.layers.changed"),
         _ => None,
     }
 }
@@ -189,10 +429,6 @@ fn control_canvas_target(method: &str, params: &serde_json::Value) -> Option<Con
     };
     match method {
         "viewer.camera.fit" => Some(ControlCanvasTarget::ActiveViewer),
-        "viewer.viewports.camera.fit" => params
-            .get("viewport_id")
-            .and_then(serde_json::Value::as_str)
-            .map(|viewport_id| ControlCanvasTarget::SingleViewport(viewport_id.to_string())),
         "viewer.objects.query_view" | "viewer.screenshot.capture" => Some(viewport_target()),
         "viewer.workspace.screenshot.capture" => Some(ControlCanvasTarget::SingleWorkspace),
         "mosaic.focus.fit" | "mosaic.fit_all" => Some(ControlCanvasTarget::MosaicViewer),
@@ -318,62 +554,11 @@ fn project_roi_segmentation_path(
 }
 
 fn resolve_example_project_path(example: &str) -> Option<PathBuf> {
-    let normalized = normalize_example_name(example);
-    let project_name = match normalized.as_str() {
-        "synthetic5ch" | "synthetic" | "demo" => "synthetic_5ch.project.json",
-        _ => return None,
-    };
-
-    example_dirs()
-        .into_iter()
-        .map(|dir| dir.join(project_name))
-        .find(|path| path.is_file())
+    crate::deep_link::resolve_example_project_path(example)
 }
 
 fn apply_example_defaults(req: &mut DeepLinkRequest, example: &str) {
-    let normalized = normalize_example_name(example);
-    if !matches!(normalized.as_str(), "synthetic5ch" | "synthetic" | "demo") {
-        return;
-    }
-    if req.roi.is_none() {
-        req.roi = Some("synthetic_5ch.ome.zarr".to_string());
-    }
-    if req.channel.is_none() {
-        req.channel = Some("DAPI".to_string());
-    }
-    if req.visible_channels.is_empty() {
-        req.visible_channels = vec!["DAPI".to_string(), "CD3".to_string(), "PanCK".to_string()];
-    }
-    if req.visible_channel_group.is_none() {
-        req.visible_channel_group = Some("Synthetic example".to_string());
-    }
-    if req.channel_order.is_none() {
-        req.channel_order = Some(crate::deep_link::DeepLinkChannelOrder::Listed);
-    }
-}
-
-fn normalize_example_name(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect()
-}
-
-fn example_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(bin_dir) = exe.parent()
-    {
-        dirs.push(bin_dir.join("examples"));
-        dirs.push(bin_dir.join("../Resources/examples"));
-        dirs.push(bin_dir.join("../../Resources/examples"));
-    }
-    dirs.push(PathBuf::from("/usr/share/odon/examples"));
-    if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd.join("fixtures"));
-    }
-    dirs
+    crate::deep_link::apply_example_defaults(req, example);
 }
 
 fn project_object_segmentation_paths(project_space: &ProjectSpace) -> Vec<PathBuf> {
@@ -469,17 +654,109 @@ pub struct RootApp {
     control_observed_state: Option<serde_json::Value>,
     control_mutated_this_frame: bool,
     control_last_observed_at: Instant,
+    control_projection_applied_this_frame: Option<u64>,
+    control_projection_revision_applied: u64,
+    control_document_generation_applied: u64,
+    control_actor_mode_signature: Option<String>,
+    control_projection_gap: bool,
+    pending_native_control_intents: VecDeque<NativeControlIntent>,
     deferred_control_requests: VecDeque<DeferredControlRequest>,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
 
 impl RootApp {
+    fn control_actor_mode_signature(&self) -> String {
+        match &self.mode {
+            Mode::Single(app) => format!("single:{}", app.control_actor_source_key()),
+            Mode::Project { .. } => "project".to_string(),
+            Mode::Mosaic { .. } => "mosaic".to_string(),
+            Mode::Transition => "transition".to_string(),
+        }
+    }
+
+    fn bootstrap_control_actor(&mut self) {
+        let signature = self.control_actor_mode_signature();
+        let project_snapshot = self
+            .current_project_space()
+            .map(ProjectSpace::control_actor_project_snapshot);
+        let Some(bridge) = self.control_bridge.as_ref() else {
+            return;
+        };
+        bridge.bootstrap_settings(self.app_settings.clone(), settings_file_path().ok());
+        bridge.report_renderer_capabilities(self.gpu_available);
+        match &mut self.mode {
+            Mode::Single(app) => bridge.bootstrap_dataset_model(
+                app.control_actor_dataset(),
+                app.control_viewport_workspace_snapshot(),
+                app.control_actor_store(),
+                app.control_actor_dataset()
+                    .source
+                    .local_path()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(app.control_actor_source_key())),
+            ),
+            Mode::Project { .. } => bridge.bootstrap_model_mode(ModelMode::Project),
+            Mode::Mosaic { .. } => bridge.bootstrap_model_mode(ModelMode::Mosaic),
+            Mode::Transition => bridge.bootstrap_model_mode(ModelMode::Transition),
+        }
+        if let Some(snapshot) = project_snapshot {
+            bridge.bootstrap_project_model(snapshot);
+        }
+        self.control_actor_mode_signature = Some(signature);
+    }
+
+    fn sync_control_actor_mode_from_native(&mut self) {
+        let signature = self.control_actor_mode_signature();
+        if self.control_actor_mode_signature.as_deref() != Some(signature.as_str()) {
+            self.bootstrap_control_actor();
+        }
+    }
+
+    fn report_control_viewport_geometry(&self) {
+        let (Some(bridge), Mode::Single(app)) = (self.control_bridge.as_ref(), &self.mode) else {
+            return;
+        };
+        for (viewport_id, width, height) in app.control_actor_viewport_geometry() {
+            let _ = bridge.report_viewport_geometry(viewport_id, width, height);
+        }
+    }
+
+    fn report_actor_renderer_workspace(&mut self) {
+        let workspace = match &mut self.mode {
+            Mode::Single(app) => app.control_viewport_workspace_snapshot(),
+            _ => return,
+        };
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            let _ = bridge
+                .observe_renderer_workspace(workspace, self.control_projection_revision_applied);
+        }
+    }
+
+    fn report_control_presentation(&mut self) {
+        let Some(revision) = self.control_projection_applied_this_frame.take() else {
+            return;
+        };
+        if let Some(bridge) = self.control_bridge.as_ref()
+            && !bridge.report_presentation_applied(revision)
+        {
+            self.control_projection_applied_this_frame = Some(revision);
+        }
+    }
+
     fn spawn_control_bridge(
         ctx: &egui::Context,
         settings_status: &mut String,
     ) -> Option<OdonControlBridge> {
-        match OdonControlBridge::spawn_default(ctx.clone()) {
+        let object_loader: Arc<dyn odon::model::ObjectResourceLoader> =
+            Arc::new(crate::objects::NativeObjectControlService);
+        let dataset_inspector: Arc<dyn odon::data::document::DatasetInspector> =
+            Arc::new(crate::app_support::datasets::NativeDatasetInspector);
+        match OdonControlBridge::spawn_default_with_services(
+            ctx.clone(),
+            object_loader,
+            dataset_inspector,
+        ) {
             Ok(bridge) => Some(bridge),
             Err(err) => {
                 let msg = format!("Odon control server unavailable: {err}");
@@ -560,13 +837,27 @@ impl RootApp {
         }
     }
 
-    fn forget_recent_project(&mut self, path: &Path) {
+    fn forget_recent_project(&mut self, ctx: &egui::Context, path: &Path) {
+        if self.control_bridge.as_ref().is_some_and(|bridge| {
+            bridge.submit_native_command(
+                ctx,
+                "app.recent_projects.forget",
+                serde_json::json!({"path":path}),
+            )
+        }) {
+            return;
+        }
         if self.app_settings.forget_recent_project(path) {
             self.persist_app_settings();
         }
     }
 
-    fn clear_recent_projects(&mut self) {
+    fn clear_recent_projects(&mut self, ctx: &egui::Context) {
+        if self.control_bridge.as_ref().is_some_and(|bridge| {
+            bridge.submit_native_command(ctx, "app.recent_projects.clear", serde_json::json!({}))
+        }) {
+            return;
+        }
         if self.app_settings.clear_recent_projects() {
             self.persist_app_settings();
         }
@@ -598,6 +889,209 @@ impl RootApp {
                 ctx.request_repaint();
             }
         }
+    }
+
+    fn process_control_presentations(&mut self, ctx: &egui::Context) {
+        let mut updates = Vec::new();
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            // The actor channel is latest-value and capacity one. Keep the drain loop so a
+            // concurrently published replacement can be consumed in the same frame.
+            for _ in 0..2 {
+                match bridge.try_recv_presentation() {
+                    Ok(update) => updates.push(update),
+                    Err(_) => break,
+                }
+            }
+            if bridge.pending_presentation_len() > 0 {
+                ctx.request_repaint();
+            }
+        }
+        for update in updates {
+            let revision = update.revision;
+            if self.apply_control_presentation(ctx, update) {
+                self.control_projection_gap = false;
+                self.control_mutated_this_frame = true;
+                self.control_projection_revision_applied =
+                    self.control_projection_revision_applied.max(revision);
+                self.control_projection_applied_this_frame = Some(
+                    self.control_projection_applied_this_frame
+                        .map_or(revision, |current| current.max(revision)),
+                );
+            } else {
+                self.control_projection_gap = true;
+            }
+        }
+    }
+
+    fn process_control_platform_effects(&self, ctx: &egui::Context) {
+        let Some(bridge) = self.control_bridge.as_ref() else {
+            return;
+        };
+        while let Ok(effect) = bridge.try_recv_platform_effect() {
+            match effect {
+                odon::control::actor::PlatformEffect::CloseWindow { .. } => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+    }
+
+    fn apply_control_presentation(
+        &mut self,
+        ctx: &egui::Context,
+        projection: RenderProjection,
+    ) -> bool {
+        if self.app_settings != projection.settings {
+            self.app_settings = projection.settings.clone();
+            self.apply_app_settings_to_mode();
+        }
+        if projection.mode == ModelMode::Project {
+            let mut project_space = match &mut self.mode {
+                Mode::Project { project_space } => std::mem::take(project_space),
+                Mode::Single(app) => app.take_project_space(),
+                Mode::Mosaic { mosaic, .. } => mosaic.take_project_space(),
+                Mode::Transition => ProjectSpace::default(),
+            };
+            project_space.apply_control_actor_project_projection(&projection.project);
+            self.mode = Mode::Project { project_space };
+            self.control_document_generation_applied = projection.document_generation;
+            self.control_actor_mode_signature = Some("project".to_string());
+            return true;
+        }
+        if projection.mode == ModelMode::Mosaic {
+            let Mode::Mosaic { mosaic, .. } = &mut self.mode else {
+                log_warn!("actor project projection expected an active mosaic renderer");
+                return false;
+            };
+            mosaic
+                .project_space_mut()
+                .apply_control_actor_project_projection(&projection.project);
+            self.control_document_generation_applied = projection.document_generation;
+            self.control_actor_mode_signature = Some("mosaic".to_string());
+            return true;
+        }
+        if projection.mode != ModelMode::Single {
+            log_warn!("unsupported transition actor render projection");
+            return false;
+        }
+        if projection.document_generation != self.control_document_generation_applied {
+            let Some(document) = projection.document.as_ref() else {
+                let actor_source = projection
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.get("shared_resources"))
+                    .and_then(|resources| resources.get("dataset_source"))
+                    .and_then(serde_json::Value::as_str);
+                let renderer_source = match &self.mode {
+                    Mode::Single(app) => Some(app.control_actor_source_key()),
+                    _ => None,
+                };
+                if renderer_source.as_deref() == actor_source {
+                    self.control_document_generation_applied = projection.document_generation;
+                    self.control_actor_mode_signature =
+                        actor_source.map(|source| format!("single:{source}"));
+                    if let Mode::Single(app) = &mut self.mode {
+                        app.project_space_mut()
+                            .apply_control_actor_project_projection(&projection.project);
+                    }
+                    return self.apply_control_projection_workspace(
+                        projection.workspace.as_ref(),
+                        projection.object_resource.as_ref(),
+                        projection.label_resource.as_ref(),
+                    );
+                }
+                log_warn!(
+                    "actor projection generation {} has no matching render document",
+                    projection.document_generation
+                );
+                return false;
+            };
+            if document.generation != projection.document_generation {
+                log_warn!("actor projection and render document generations disagree");
+                return false;
+            }
+            let mut project_space = match &mut self.mode {
+                Mode::Project { project_space } => std::mem::take(project_space),
+                Mode::Single(app) => app.take_project_space(),
+                Mode::Mosaic { mosaic, .. } => mosaic.take_project_space(),
+                Mode::Transition => ProjectSpace::default(),
+            };
+            if let Some(path) = document.path() {
+                project_space.handle_dropped_paths([path.to_path_buf()]);
+            }
+            let mut app = OmeZarrViewerApp::new_runtime(
+                ctx,
+                self.gpu_available,
+                document.dataset().clone(),
+                Arc::clone(document.store()),
+                self.app_settings.auto_contrast,
+            );
+            self.configure_single_app(&mut app);
+            app.set_project_space(project_space);
+            self.mode = Mode::Single(app);
+            self.control_document_generation_applied = projection.document_generation;
+            self.control_actor_mode_signature = Some(format!(
+                "single:{}",
+                document.opened.descriptor.source.source_key()
+            ));
+        }
+        if let Mode::Single(app) = &mut self.mode {
+            app.project_space_mut()
+                .apply_control_actor_project_projection(&projection.project);
+        }
+        self.apply_control_projection_workspace(
+            projection.workspace.as_ref(),
+            projection.object_resource.as_ref(),
+            projection.label_resource.as_ref(),
+        )
+    }
+
+    fn apply_control_projection_workspace(
+        &mut self,
+        workspace: Option<&serde_json::Value>,
+        object_resource: Option<&Arc<odon::model::ControlObjectResource>>,
+        label_resource: Option<&Arc<odon::model::ControlLabelResource>>,
+    ) -> bool {
+        let Some(workspace) = workspace else {
+            log_warn!("single-viewer actor projection has no workspace");
+            return false;
+        };
+        let Mode::Single(app) = &mut self.mode else {
+            log_warn!("actor projection could not establish a single-image viewer");
+            return false;
+        };
+        if let Some(resource) = object_resource {
+            let generation = workspace
+                .get("object_resource")
+                .and_then(|descriptor| descriptor.get("generation"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            app.install_control_actor_object_resource(generation, resource);
+        }
+        if workspace
+            .get("labels")
+            .and_then(|labels| labels.get("actor_owned"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            let generation = workspace["labels"]["generation"].as_u64().unwrap_or(0);
+            let result = if let Some(resource) = label_resource {
+                app.install_control_actor_label_resource(generation, resource)
+                    .map(|_| ())
+            } else {
+                app.unload_control_actor_label_resource(generation);
+                Ok(())
+            };
+            if let Err(error) = result {
+                log_warn!("actor label resource could not be installed: {error}");
+                return false;
+            }
+        }
+        if let Err(error) = app.apply_control_actor_workspace_projection(workspace) {
+            log_warn!("actor render projection could not be applied: {error}");
+            return false;
+        }
+        true
     }
 
     fn control_request_canvas_ready(&self, request: &OdonControlRequest) -> bool {
@@ -691,6 +1185,14 @@ impl RootApp {
         }
         self.control_last_observed_at = Instant::now();
         let snapshot = self.control_observed_snapshot();
+        if let Some(workspace) = snapshot.get("workspace").filter(|value| !value.is_null())
+            && let Some(bridge) = self.control_bridge.as_ref()
+        {
+            let _ = bridge.observe_renderer_workspace(
+                workspace.clone(),
+                self.control_projection_revision_applied,
+            );
+        }
         let Some(previous) = self.control_observed_state.replace(snapshot.clone()) else {
             return;
         };
@@ -723,25 +1225,6 @@ impl RootApp {
     }
 
     fn reply_to_control_request(&mut self, ctx: &egui::Context, request: OdonControlRequest) {
-        if let Some(task_id) = request.task_id.as_deref() {
-            match request.task_registry.get(task_id) {
-                Ok(task) if task.state == TaskState::Cancelled => {
-                    let _ = request.reply.send(Err(ControlError::new(
-                        ControlErrorKind::Cancelled,
-                        "task was cancelled",
-                    )
-                    .with_data(serde_json::json!({"task_id": task_id}))));
-                    return;
-                }
-                Ok(_) => {
-                    let _ = request.task_registry.mark_running(task_id);
-                }
-                Err(error) => {
-                    let _ = request.reply.send(Err(error));
-                    return;
-                }
-            }
-        }
         let method = request.command.method();
         let mutates = request.command.mutates();
         let current_revision = request.event_hub.revision();
@@ -1134,9 +1617,9 @@ impl RootApp {
                 serde_json::json!({"revision": revision}),
             );
         }
-        let event_data = response.clone();
-        let _ = request.reply.send(Ok(response));
         if mutates {
+            self.report_actor_renderer_workspace();
+            let event_data = response.clone();
             let event_source = params
                 .get("viewport_id")
                 .and_then(serde_json::Value::as_str)
@@ -1172,7 +1655,7 @@ impl RootApp {
                     revision,
                     serde_json::json!({
                         "method": method,
-                        "result": event_data,
+                        "result": event_data.clone(),
                         "caused_by_event": primary_event,
                     }),
                     Some(request.session_id),
@@ -1180,6 +1663,7 @@ impl RootApp {
                 );
             }
         }
+        let _ = request.reply.send(Ok(response));
     }
 
     fn current_project_space(&self) -> Option<&ProjectSpace> {
@@ -5985,6 +6469,31 @@ impl RootApp {
         }
     }
 
+    fn save_project_direct(&mut self, path: &Path) {
+        match &mut self.mode {
+            Mode::Project { project_space } => {
+                if let Err(error) = project_space.save_to_file(path) {
+                    project_space.set_status(format!("Save project failed: {error}"));
+                }
+            }
+            Mode::Single(app) => {
+                let mut project_space = app.take_project_space();
+                if let Err(error) = project_space.save_to_file(path) {
+                    project_space.set_status(format!("Save project failed: {error}"));
+                }
+                app.set_project_space(project_space);
+            }
+            Mode::Mosaic { mosaic, .. } => {
+                let mut project_space = mosaic.take_project_space();
+                if let Err(error) = project_space.save_to_file(path) {
+                    project_space.set_status(format!("Save project failed: {error}"));
+                }
+                mosaic.set_project_space(project_space);
+            }
+            Mode::Transition => {}
+        }
+    }
+
     fn ui_settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
@@ -6131,7 +6640,19 @@ impl RootApp {
 
         if self.app_settings != before {
             self.apply_app_settings_to_mode();
-            self.persist_app_settings();
+            let submitted = self.control_bridge.as_ref().is_some_and(|bridge| {
+                bridge.submit_native_command(
+                    ctx,
+                    "app.settings.set",
+                    serde_json::json!({
+                        "auto_contrast":self.app_settings.auto_contrast,
+                        "fast_object_rendering":self.app_settings.fast_object_rendering,
+                    }),
+                )
+            });
+            if !submitted {
+                self.persist_app_settings();
+            }
         }
     }
 
@@ -6746,10 +7267,17 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            control_projection_applied_this_frame: None,
+            control_projection_revision_applied: 0,
+            control_document_generation_applied: 0,
+            control_actor_mode_signature: None,
+            control_projection_gap: false,
+            pending_native_control_intents: VecDeque::new(),
             deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
+        root.bootstrap_control_actor();
         root.load_control_manifest_from_project();
         Ok(root)
     }
@@ -6811,10 +7339,17 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            control_projection_applied_this_frame: None,
+            control_projection_revision_applied: 0,
+            control_document_generation_applied: 0,
+            control_actor_mode_signature: None,
+            control_projection_gap: false,
+            pending_native_control_intents: VecDeque::new(),
             deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
+        root.bootstrap_control_actor();
         root.load_control_manifest_from_project();
         Ok(root)
     }
@@ -6876,10 +7411,17 @@ impl RootApp {
             control_observed_state: None,
             control_mutated_this_frame: false,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            control_projection_applied_this_frame: None,
+            control_projection_revision_applied: 0,
+            control_document_generation_applied: 0,
+            control_actor_mode_signature: None,
+            control_projection_gap: false,
+            pending_native_control_intents: VecDeque::new(),
             deferred_control_requests: VecDeque::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
+        root.bootstrap_control_actor();
         root.load_control_manifest_from_project();
         Ok(root)
     }
@@ -7696,6 +8238,8 @@ impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.handle_viewport_screenshot_events(ctx);
         self.control_mutated_this_frame = false;
+        self.process_control_presentations(ctx);
+        self.process_control_platform_effects(ctx);
         self.process_control_requests(ctx);
         if let Some(rx) = self.deep_link_rx.as_ref() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -7741,6 +8285,7 @@ impl eframe::App for RootApp {
         let mut forget_recent_project_path: Option<PathBuf> = None;
         let mut clear_recent_projects = false;
         let mut open_mosaic_from_project: Option<(Vec<ProjectRoi>, ProjectSpace)> = None;
+        let mut native_menu_control_intents = Vec::new();
 
         if let Some(req) = self.pending_deep_link.take() {
             let mut req = req;
@@ -7926,7 +8471,14 @@ impl eframe::App for RootApp {
                                 .set_title("Load Project")
                                 .pick_file()
                             {
-                                self.load_project_into_current_mode(&path);
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.open",
+                                        params: serde_json::json!({"path": path}),
+                                    });
+                                } else {
+                                    self.load_project_into_current_mode(&path);
+                                }
                             }
                         }
                         NativeMenuAction::SaveProject => {
@@ -7940,63 +8492,41 @@ impl eframe::App for RootApp {
                                 }
                                 Mode::Transition => None,
                             };
+                            let save_target = save_target.or_else(|| {
+                                FileDialog::new()
+                                    .add_filter("Project JSON", &["json"])
+                                    .set_file_name("odon.project.json")
+                                    .set_title("Save Project")
+                                    .save_file()
+                            });
                             if let Some(path) = save_target {
-                                match &mut self.mode {
-                                    Mode::Project { project_space } => {
-                                        if let Err(err) = project_space.save_to_file(&path) {
-                                            project_space
-                                                .set_status(format!("Save project failed: {err}"));
-                                        }
-                                    }
-                                    Mode::Single(app) => {
-                                        let mut ps = app.take_project_space();
-                                        if let Err(err) = ps.save_to_file(&path) {
-                                            ps.set_status(format!("Save project failed: {err}"));
-                                        }
-                                        app.set_project_space(ps);
-                                    }
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        let mut ps = mosaic.take_project_space();
-                                        if let Err(err) = ps.save_to_file(&path) {
-                                            ps.set_status(format!("Save project failed: {err}"));
-                                        }
-                                        mosaic.set_project_space(ps);
-                                    }
-                                    Mode::Transition => {}
-                                }
-                            } else {
-                                match &mut self.mode {
-                                    Mode::Project { project_space } => {
-                                        project_space.save_as_project()
-                                    }
-                                    Mode::Single(app) => {
-                                        let mut ps = app.take_project_space();
-                                        ps.save_as_project();
-                                        app.set_project_space(ps);
-                                    }
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        let mut ps = mosaic.take_project_space();
-                                        ps.save_as_project();
-                                        mosaic.set_project_space(ps);
-                                    }
-                                    Mode::Transition => {}
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.save_as",
+                                        params: serde_json::json!({"path": path}),
+                                    });
+                                } else {
+                                    self.save_project_direct(&path);
                                 }
                             }
                         }
-                        NativeMenuAction::SaveNewProject => match &mut self.mode {
-                            Mode::Project { project_space } => project_space.save_new_project(),
-                            Mode::Single(app) => {
-                                let mut ps = app.take_project_space();
-                                ps.save_new_project();
-                                app.set_project_space(ps);
+                        NativeMenuAction::SaveNewProject => {
+                            if let Some(path) = FileDialog::new()
+                                .add_filter("Project JSON", &["json"])
+                                .set_file_name("odon.project.json")
+                                .set_title("Save Project As")
+                                .save_file()
+                            {
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.save_as",
+                                        params: serde_json::json!({"path": path}),
+                                    });
+                                } else {
+                                    self.save_project_direct(&path);
+                                }
                             }
-                            Mode::Mosaic { mosaic, .. } => {
-                                let mut ps = mosaic.take_project_space();
-                                ps.save_new_project();
-                                mosaic.set_project_space(ps);
-                            }
-                            Mode::Transition => {}
-                        },
+                        }
                         NativeMenuAction::SaveScreenshot => {
                             self.save_screenshot_via_dialog();
                         }
@@ -8083,7 +8613,8 @@ impl eframe::App for RootApp {
                                 app.set_show_scale_bar(visible);
                             }
                         }
-                        NativeMenuAction::CloseWindow | NativeMenuAction::Quit => {
+                        action @ (NativeMenuAction::CloseWindow | NativeMenuAction::Quit) => {
+                            let quit = matches!(action, NativeMenuAction::Quit);
                             let should_close = match &mut self.mode {
                                 Mode::Project { .. } => {
                                     if self.close_dialog_open {
@@ -8101,7 +8632,14 @@ impl eframe::App for RootApp {
                                 Mode::Transition => false,
                             };
                             if should_close {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: if quit {
+                                        "app.lifecycle.request_quit"
+                                    } else {
+                                        "app.lifecycle.request_close"
+                                    },
+                                    params: serde_json::json!({"save":"discard"}),
+                                });
                             }
                         }
                     }
@@ -8136,6 +8674,28 @@ impl eframe::App for RootApp {
         }
         self.sync_control_manifest_to_project();
 
+        let native_project_before = self
+            .control_bridge
+            .as_ref()
+            .and_then(|_| self.current_project_space())
+            .map(ProjectSpace::control_actor_project_delta_snapshot);
+        let native_masks_before = self.control_bridge.as_ref().and_then(|_| match &self.mode {
+            Mode::Single(app) => Some(app.control_mask_projection_snapshot()),
+            _ => None,
+        });
+        let native_object_selection_before =
+            self.control_bridge.as_ref().and_then(|_| match &self.mode {
+                Mode::Single(app) => Some(app.control_object_selection_projection_snapshot()),
+                _ => None,
+            });
+        let native_layers_before =
+            self.control_bridge
+                .as_ref()
+                .and_then(|_| match &mut self.mode {
+                    Mode::Single(app) => Some(app.control_native_layers_projection_snapshot()),
+                    _ => None,
+                });
+        let mut native_control_intents = Vec::new();
         match &mut self.mode {
             Mode::Project { project_space } => {
                 project_space.set_recent_projects(&self.app_settings.recent_projects);
@@ -8155,7 +8715,10 @@ impl eframe::App for RootApp {
                 if top_bar::handle_cmd_w_close(ctx, &mut self.close_dialog_open)
                     || top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open)
                 {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    native_control_intents.push(NativeControlIntent {
+                        method: "app.lifecycle.request_close",
+                        params: serde_json::json!({"save":"discard"}),
+                    });
                 }
 
                 // Minimal "landing" UI: show the project workspace and let users open datasets.
@@ -8189,7 +8752,27 @@ impl eframe::App for RootApp {
                                 open_project_roi = Some((roi, ps, Some(req)));
                             }
                             ProjectSpaceAction::OpenProject(path) => {
-                                open_project_path = Some(path);
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.open",
+                                        params: serde_json::json!({"path": path}),
+                                    });
+                                } else {
+                                    open_project_path = Some(path);
+                                }
+                            }
+                            ProjectSpaceAction::SaveProject(path) => {
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "project.save_as",
+                                        params: serde_json::json!({"path": path}),
+                                    });
+                                } else {
+                                    if let Err(error) = project_space.save_to_file(&path) {
+                                        project_space
+                                            .set_status(format!("Save project failed: {error}"));
+                                    }
+                                }
                             }
                             ProjectSpaceAction::OpenLocalPath(path) => {
                                 let mut ps = std::mem::take(project_space);
@@ -8235,7 +8818,27 @@ impl eframe::App for RootApp {
                             open_project_roi = Some((roi, ps, Some(req)));
                         }
                         ProjectSpaceAction::OpenProject(path) => {
-                            open_project_path = Some(path);
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.open",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else {
+                                open_project_path = Some(path);
+                            }
+                        }
+                        ProjectSpaceAction::SaveProject(path) => {
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.save_as",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else {
+                                if let Err(error) = project_space.save_to_file(&path) {
+                                    project_space
+                                        .set_status(format!("Save project failed: {error}"));
+                                }
+                            }
                         }
                         ProjectSpaceAction::OpenLocalPath(path) => {
                             let mut ps = std::mem::take(project_space);
@@ -8294,6 +8897,16 @@ impl eframe::App for RootApp {
                     object_preload_settings,
                 ));
                 app.update(ctx, frame);
+                if let Some(before) = native_object_selection_before.as_ref() {
+                    app.record_native_object_selection_intent(before);
+                }
+                if let Some(before) = native_masks_before.as_ref() {
+                    app.record_native_mask_intent(before);
+                }
+                if let Some(before) = native_layers_before.as_ref() {
+                    app.record_native_layers_intent(before);
+                }
+                native_control_intents.extend(app.take_native_control_intents());
                 self.label_prompt_preference = app.label_prompt_preference();
                 if let Some(req) = app.take_request() {
                     match req {
@@ -8311,7 +8924,25 @@ impl eframe::App for RootApp {
                             }
                         }
                         ViewerRequest::OpenProject(path) => {
-                            open_project_path = Some(path);
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.open",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else {
+                                open_project_path = Some(path);
+                            }
+                        }
+                        ViewerRequest::SaveProject(path) => {
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.save_as",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else if let Err(error) = app.project_space_mut().save_to_file(&path) {
+                                app.project_space_mut()
+                                    .set_status(format!("Save project failed: {error}"));
+                            }
                         }
                         ViewerRequest::OpenLocalPath(path) => {
                             let mut ps = app.take_project_space();
@@ -8366,6 +8997,12 @@ impl eframe::App for RootApp {
                 mosaic.update(ctx, frame);
                 if let Some(req) = mosaic.take_request() {
                     match req {
+                        MosaicRequest::CloseWindow => {
+                            native_control_intents.push(NativeControlIntent {
+                                method: "app.lifecycle.request_close",
+                                params: serde_json::json!({"save":"discard"}),
+                            });
+                        }
                         MosaicRequest::BackToSingle => {
                             back_to_single = true;
                         }
@@ -8379,7 +9016,28 @@ impl eframe::App for RootApp {
                             open_project_roi = Some((roi, ps, Some(req)));
                         }
                         MosaicRequest::OpenProject(path) => {
-                            open_project_path = Some(path);
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.open",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else {
+                                open_project_path = Some(path);
+                            }
+                        }
+                        MosaicRequest::SaveProject(path) => {
+                            if self.control_bridge.is_some() {
+                                native_menu_control_intents.push(NativeControlIntent {
+                                    method: "project.save_as",
+                                    params: serde_json::json!({"path": path}),
+                                });
+                            } else if let Err(error) =
+                                mosaic.project_space_mut().save_to_file(&path)
+                            {
+                                mosaic
+                                    .project_space_mut()
+                                    .set_status(format!("Save project failed: {error}"));
+                            }
                         }
                         MosaicRequest::OpenLocalPath(path) => {
                             let mut ps = mosaic.take_project_space();
@@ -8410,6 +9068,66 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Transition => {}
+        }
+
+        if let (Some(before), Some(after)) = (
+            native_project_before.as_ref(),
+            self.current_project_space()
+                .map(ProjectSpace::control_actor_project_delta_snapshot),
+        ) {
+            native_control_intents.extend(project_native_control_intents(before, &after));
+        }
+
+        if self.control_bridge.is_some()
+            && (!native_control_intents.is_empty() || !native_menu_control_intents.is_empty())
+        {
+            let mut lifecycle_intents = Vec::new();
+            native_control_intents.retain(|intent| {
+                if intent.method.starts_with("app.lifecycle.request_") {
+                    lifecycle_intents.push(intent.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            native_menu_control_intents.retain(|intent| {
+                if intent.method.starts_with("app.lifecycle.request_") {
+                    lifecycle_intents.push(intent.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            // The actor publishes the canonical revisions/events for these optimistic native
+            // commits. Suppress the legacy snapshot-diff publisher for this frame.
+            self.control_mutated_this_frame = true;
+            self.pending_native_control_intents
+                .extend(native_control_intents);
+            // Persistence commands must follow any semantic edits collected in this frame so the
+            // actor's single mailbox snapshots the updated project.
+            self.pending_native_control_intents
+                .extend(native_menu_control_intents);
+            // Close/quit validation observes every semantic mutation and persistence command
+            // collected earlier in this frame.
+            self.pending_native_control_intents
+                .extend(lifecycle_intents);
+        } else if self.control_bridge.is_none()
+            && native_control_intents
+                .iter()
+                .chain(native_menu_control_intents.iter())
+                .any(|intent| intent.method.starts_with("app.lifecycle.request_"))
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            while let Some(intent) = self.pending_native_control_intents.front() {
+                if bridge.submit_native_command(ctx, intent.method, intent.params.clone()) {
+                    self.pending_native_control_intents.pop_front();
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(5));
+                    break;
+                }
+            }
         }
 
         if matches!(self.mode, Mode::Project { .. }) {
@@ -8468,10 +9186,10 @@ impl eframe::App for RootApp {
         }
 
         if let Some(path) = forget_recent_project_path {
-            self.forget_recent_project(&path);
+            self.forget_recent_project(ctx, &path);
         }
         if clear_recent_projects {
-            self.clear_recent_projects();
+            self.clear_recent_projects(ctx);
         }
         if let Some(root) = self.pending_control_open_root.take() {
             let project_space = match &mut self.mode {
@@ -8564,6 +9282,9 @@ impl eframe::App for RootApp {
         // This makes a successful reply mean the requested geometry operation was actually
         // applied, even when the request arrived before the first viewer frame.
         self.process_deferred_control_requests(ctx);
+        self.sync_control_actor_mode_from_native();
+        self.report_control_viewport_geometry();
+        self.report_control_presentation();
         self.publish_observed_control_changes();
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
     }
@@ -8572,6 +9293,7 @@ impl eframe::App for RootApp {
 #[cfg(test)]
 mod control_boundary_tests {
     use super::*;
+    use odon::control::ControlCommand;
 
     #[test]
     fn application_errors_become_structured_control_errors() {
@@ -8632,9 +9354,8 @@ mod control_boundary_tests {
                 "viewer.viewports.camera.fit",
                 &serde_json::json!({"viewport_id": "viewport-2"}),
             ),
-            Some(ControlCanvasTarget::SingleViewport(
-                "viewport-2".to_string()
-            ))
+            None,
+            "actor-owned logical camera fitting must never enter the UI deferral queue"
         );
         assert_eq!(
             control_canvas_target(
@@ -8710,5 +9431,172 @@ mod control_boundary_tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn native_project_changes_are_translated_to_actor_commands() {
+        let mut a = ProjectRoi {
+            id: "a".to_string(),
+            display_name: Some("A".to_string()),
+            ..ProjectRoi::default()
+        };
+        a.set_dataset_source(DatasetSource::Local(PathBuf::from("/tmp/a.zarr")));
+        let mut before = ProjectModelSnapshot {
+            rois: vec![a.clone()],
+            selected_source_keys: vec![a.source_key().unwrap()],
+            focused_source_key: a.source_key(),
+            ..ProjectModelSnapshot::default()
+        };
+        let mut b = ProjectRoi {
+            id: "b".to_string(),
+            display_name: Some("B".to_string()),
+            ..ProjectRoi::default()
+        };
+        b.set_dataset_source(DatasetSource::Local(PathBuf::from("/tmp/b.zarr")));
+        a.display_name = Some("A updated".to_string());
+        let mut after = before.clone();
+        after.default_dataset = Some("cohort".to_string());
+        after.rois = vec![b.clone(), a];
+        after.selected_source_keys = vec![b.source_key().unwrap()];
+        after.focused_source_key = b.source_key();
+
+        let intents = project_native_control_intents(&before, &after);
+        let methods = intents
+            .iter()
+            .map(|intent| intent.method)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            vec![
+                "project.update_metadata",
+                "project.rois.add",
+                "project.rois.update",
+                "project.rois.reorder",
+                "project.rois.select",
+                "project.rois.focus",
+            ]
+        );
+        assert_eq!(intents[1].params["replacement"]["id"], "b");
+        assert_eq!(
+            intents[2].params["replacement"]["display_name"],
+            "A updated"
+        );
+        assert_eq!(intents[4].params["ids"], serde_json::json!(["b"]));
+        for intent in &intents {
+            ControlCommand::decode(intent.method, intent.params.clone()).unwrap_or_else(|error| {
+                panic!(
+                    "native intent {} did not pass typed decoding: {error}",
+                    intent.method
+                )
+            });
+        }
+
+        before = after;
+        assert!(project_native_control_intents(&before, &before).is_empty());
+    }
+
+    #[test]
+    fn native_roi_rename_replays_as_one_actor_transaction() {
+        let mut roi = ProjectRoi {
+            id: "before".to_string(),
+            display_name: Some("Before".to_string()),
+            ..ProjectRoi::default()
+        };
+        roi.set_dataset_source(DatasetSource::Local(PathBuf::from("/tmp/rename.zarr")));
+        let source_key = roi.source_key().unwrap();
+        let before = ProjectModelSnapshot {
+            rois: vec![roi.clone()],
+            selected_source_keys: vec![source_key.clone()],
+            focused_source_key: Some(source_key.clone()),
+            config_generation: 10,
+            ..ProjectModelSnapshot::default()
+        };
+        roi.id = "after".to_string();
+        roi.display_name = Some("After".to_string());
+        let after = ProjectModelSnapshot {
+            rois: vec![roi.clone()],
+            selected_source_keys: vec![source_key.clone()],
+            focused_source_key: Some(source_key),
+            config_generation: 11,
+            dirty: true,
+            ..ProjectModelSnapshot::default()
+        };
+
+        let intents = project_native_control_intents(&before, &after);
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].method, "project.rois.update");
+        assert_eq!(intents[0].params["target_id"], "before");
+
+        let mut model = odon::model::AppModel::project();
+        model.bootstrap_project_from_renderer(before);
+        for intent in intents {
+            ControlCommand::decode(intent.method, intent.params.clone()).unwrap();
+            model
+                .dispatch(intent.method, &intent.params)
+                .expect("project method is actor-owned")
+                .expect("native transaction succeeds");
+        }
+        let actual = model.project_snapshot();
+        assert_eq!(
+            serde_json::to_value(&actual.rois).unwrap(),
+            serde_json::to_value(&after.rois).unwrap()
+        );
+        assert_eq!(actual.selected_source_keys, after.selected_source_keys);
+        assert_eq!(actual.focused_source_key, after.focused_source_key);
+        assert_eq!(actual.config_generation, after.config_generation);
+    }
+
+    #[test]
+    fn native_saved_view_changes_replay_through_actor_commands() {
+        let original = serde_json::json!({
+            "name":"Before",
+            "description":"",
+            "spec":{"visible_channels":["DAPI"]}
+        });
+        let renamed = serde_json::json!({
+            "name":"After",
+            "description":"",
+            "spec":{"visible_channels":["DAPI"]}
+        });
+        let added = serde_json::json!({
+            "name":"Cells",
+            "description":"",
+            "spec":{"visible_channels":["CD3"]}
+        });
+        let before = ProjectModelSnapshot {
+            view_presets: vec![original],
+            view_count: 1,
+            config_generation: 4,
+            ..ProjectModelSnapshot::default()
+        };
+        let after = ProjectModelSnapshot {
+            view_presets: vec![renamed.clone(), added.clone()],
+            view_count: 2,
+            config_generation: 6,
+            dirty: true,
+            ..ProjectModelSnapshot::default()
+        };
+        let intents = project_native_control_intents(&before, &after);
+        assert_eq!(
+            intents
+                .iter()
+                .map(|intent| intent.method)
+                .collect::<Vec<_>>(),
+            vec!["project.views.rename", "project.views.create"]
+        );
+
+        let mut model = odon::model::AppModel::project();
+        model.bootstrap_project_from_renderer(before);
+        for intent in intents {
+            ControlCommand::decode(intent.method, intent.params.clone()).unwrap();
+            model
+                .dispatch(intent.method, &intent.params)
+                .expect("saved views are actor-owned")
+                .expect("native saved-view transaction succeeds");
+        }
+        let actual = model.project_snapshot();
+        assert_eq!(actual.view_presets, vec![renamed, added]);
+        assert_eq!(actual.view_count, 2);
+        assert_eq!(actual.config_generation, 6);
     }
 }

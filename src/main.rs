@@ -5,7 +5,6 @@ mod app;
 mod app_support;
 mod camera;
 mod custom;
-mod data;
 mod debug_log;
 mod deep_link;
 mod deep_link_ipc;
@@ -20,8 +19,9 @@ mod render;
 mod root_app;
 mod spatialdata;
 mod ui;
-mod viewports;
 mod xenium;
+
+use odon::{data, viewports};
 
 use std::path::PathBuf;
 

@@ -108,6 +108,66 @@ expires, `RequestTimeoutError` means that Python stopped waiting; it does not
 prove that Odon stopped the operation. Operations designed to run for a long
 time return tasks instead.
 
+## Background execution and readiness
+
+Odon separates semantic work from native presentation. For actor-owned
+single-image operations, local OME-Zarr opening, viewport workspace changes,
+camera fitting, plane changes, complete channel presentation (including notes,
+transforms, order, groups, and search), channel intensity reads, side-panel
+visibility, explicit per-viewport object appearance/property/legend presentation, viewport
+rendering preferences, local NGFF label discovery/loading/visibility, project create/open/save and
+metadata/ROI/saved-view CRUD, and referenced-resource/external-layer commands
+continue while the native window is covered or occluded. Project file and
+dataset metadata I/O, samplesheet operations, and recursive project discovery
+run on bounded workers; resource/layer mutations and
+project persistence retain actor mailbox ordering. The actor retains one
+immutable latest-value projection and the renderer consumes
+that final state when frames resume. Intermediate visual states are coalesced;
+semantic command results, revisions, and events are not.
+
+Mask layer/polygon CRUD, selection, undo, GeoJSON import/export, and project synchronization use
+the same no-frame path. Import/export filesystem work runs on bounded workers. Successful edits
+mean the canonical mask generation has committed; successful export additionally reports
+`output_ready`. Native mask commits carry an expected generation and are rejected on conflict
+rather than overwriting a newer Python transaction.
+
+Primary-object query, selection, and focus commands also complete against actor state without a
+render frame. Standalone `filter_query` selection is evaluated on a bounded worker, and committed
+native primary-object selection uses generation checking. Explicit active/spatial-shape targets
+and screen-coordinate rectangle requests remain compatibility-routed during the spatial-layer
+migration.
+
+The active-view compatibility methods for camera, plane navigation, channel
+presentation, panels, and smooth-pixel sampling are routed to the
+same actor-owned viewport. `system.list_methods` reports each method's
+`execution_class` and `readiness_requirements`. `system.get_diagnostics`
+reports the current `actor`/`hybrid`/`legacy_ui`/`control_service` route per method plus
+separate queue, model, reply, worker, projection, and presentation-wait
+measurements.
+
+`application.get_loading_state()` can report these readiness fields:
+
+| Field | Meaning |
+| --- | --- |
+| `model_ready` | The canonical semantic state has accepted the operation. |
+| `resources_ready` | Required metadata and storage resources are usable. |
+| `geometry_ready` | Logical viewport geometry exists for geometry commands. |
+| `geometry` | Geometry source (`bootstrap`, `derived`, or `observed`), confidence, and retained workspace size. |
+| `presentation_ready` | A rendered frame has consumed the latest projection revision. |
+| `projection_revision` | Latest renderer projection produced by the actor. |
+| `presented_projection_revision` | Latest projection acknowledged after a UI frame. |
+
+Dataset-open tasks complete at model/resource/geometry readiness. They do not
+wait for a covered macOS window to paint. Pixel-dependent work such as window
+or canvas screenshots can still require presentation readiness. Legacy fields,
+including `canvas_ready`, remain in diagnostic snapshots for compatibility but
+are not the completion condition for actor-owned dataset opening.
+
+An actor-owned command submitted while an asynchronous open is still in its
+transition phase fails immediately with `NOT_READY` and declared readiness
+requirements. It is not sent to the legacy GUI dispatcher. Await the open task
+and retry; unrelated actor queries and cancellation remain responsive.
+
 ## Modes and availability
 
 Odon has four reported modes:
@@ -325,8 +385,10 @@ replaces project ROI definitions only after validation. Export never overwrites
 unless requested.
 
 Saved views contain reproducible viewer presentation state. `capture()` reads
-the active viewer, while `create()` accepts an explicit spec. Applying a saved
-view mutates the current viewer and is mode/data dependent.
+the active viewer or an explicitly selected viewport, while `create()` accepts an explicit spec.
+Capture is background-safe. Applying a saved view is background-safe when its referenced object
+or label resources are already ready; an apply that must load a missing resource uses the
+documented hybrid compatibility route.
 
 ### Viewer, camera, planes, and channels
 
@@ -347,11 +409,19 @@ Native-layer IDs describe Odon-owned render layers. External-layer IDs describe
 resources registered through `app.layers`; these namespaces and lifecycle
 rules are distinct.
 
+In single-image mode, native-layer inventory, active identity, visibility, stack order,
+presentation, and world translation are canonical actor state. The global
+`viewer.native_layers.*` family addresses the active viewport (translations remain shared by the
+document); `viewer.viewports.layers.*` addresses an explicit viewport. These calls complete
+without a rendered frame. Native UI changes use an internal atomic viewport-state transaction
+with an optimistic presentation revision, so a stale frame cannot overwrite newer Python state.
+
 ### Labels and external layers
 
 NGFF labels are discovered from the active dataset and loaded by name. The
-current native labels renderer draws outlines rather than arbitrary per-label
-property fills.
+metadata resource is opened and committed by the background actor; creating the native tile
+loader and drawing it remain asynchronous renderer work. The current native labels renderer draws
+outlines rather than arbitrary per-label property fills.
 
 External data is moved by reference. Supported descriptor formats include
 OME-Zarr/Zarr, Arrow IPC, Parquet, GeoParquet, and GeoJSON, but descriptor
@@ -368,10 +438,15 @@ The main object source supports Parquet/GeoParquet and related object data
 accepted by the native loader. Loading and property materialization can be
 long-running tasks. Property listing and value retrieval are paginated;
 extensions must not assume every property or value is returned in one call.
+Source parsing, property indexing, and per-viewport filter evaluation are background-safe actor
+operations. Their successful synchronous reply means the semantic resource/filter has committed;
+`presentation_ready` may remain false until a renderer frame consumes the latest projection.
 
 Rectangles and lasso vertices are world-coordinate values. Query methods do
 not change selection. Selection methods accept replace/add/remove/toggle modes,
-and selection is distinct from focus. Focusing can optionally fit the camera.
+and selection is distinct from focus. Focusing can optionally fit the camera using retained
+logical viewport geometry. Primary-object selection identity is actor-owned and document-shared;
+the renderer projection carries only indices and a generation, not object geometry.
 
 Simple filter models contain typed clauses joined with `all` or `any`; advanced
 filters carry a query string. Object style, legend, analysis, measurement, and
@@ -383,7 +458,10 @@ build.
 
 Mask layers have integer IDs and contain indexed polygons. Polygon vertices
 must contain coordinate pairs. Layer/polygon edits participate in the native
-undo history. GeoJSON export requires explicit overwrite permission.
+actor-owned undo history. GeoJSON export requires explicit overwrite permission. CRUD, selection,
+undo, import/export, and project synchronization are background-safe; renderer presentation is
+asynchronous. `viewer.masks.state.replace` is the atomic state-transfer primitive used for native
+commits and accepts `expected_generation` for optimistic concurrency.
 
 Threshold preview is a bounded, single-view workflow: choose scope, pyramid
 level, channel, threshold, and minimum component size; start or refresh the

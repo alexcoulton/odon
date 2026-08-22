@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crossbeam_channel::{Receiver, Sender};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -42,6 +43,176 @@ pub struct TaskSnapshot {
 pub struct TaskRegistry {
     tasks: Mutex<HashMap<String, TaskSnapshot>>,
     event_hub: Arc<EventHub>,
+}
+
+pub(crate) enum TaskServiceRequest {
+    Create {
+        label: String,
+        owner_session_id: String,
+        cancellation_supported: bool,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Get {
+        task_id: String,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    List {
+        include_finished: bool,
+        reply: Sender<Result<Vec<TaskSnapshot>, ControlError>>,
+    },
+    MarkRunning {
+        task_id: String,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Complete {
+        task_id: String,
+        result: Value,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Fail {
+        task_id: String,
+        error: ControlError,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Cancel {
+        task_id: String,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Progress {
+        task_id: String,
+        progress: Option<f64>,
+        phase: String,
+        reply: Sender<Result<TaskSnapshot, ControlError>>,
+    },
+    Forget {
+        task_id: String,
+        reply: Sender<Result<(), ControlError>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskServiceHandle {
+    tx: Sender<TaskServiceRequest>,
+    registry: Arc<TaskRegistry>,
+}
+
+impl TaskServiceHandle {
+    pub(crate) fn channel(
+        capacity: usize,
+        registry: Arc<TaskRegistry>,
+    ) -> (Self, Receiver<TaskServiceRequest>) {
+        let (tx, rx) = crossbeam_channel::bounded(capacity);
+        (Self { tx, registry }, rx)
+    }
+
+    pub(crate) fn spawn_standalone(registry: Arc<TaskRegistry>) -> Self {
+        let (handle, rx) = Self::channel(64, Arc::clone(&registry));
+        std::thread::Builder::new()
+            .name("odon-test-task-service".to_string())
+            .spawn(move || {
+                while let Ok(request) = rx.recv() {
+                    registry.handle_service_request(request);
+                }
+            })
+            .expect("spawn test task service");
+        handle
+    }
+
+    pub(crate) fn registry(&self) -> Arc<TaskRegistry> {
+        Arc::clone(&self.registry)
+    }
+
+    pub fn create(
+        &self,
+        label: impl Into<String>,
+        owner_session_id: impl Into<String>,
+        cancellation_supported: bool,
+    ) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Create {
+            label: label.into(),
+            owner_session_id: owner_session_id.into(),
+            cancellation_supported,
+            reply,
+        })
+    }
+
+    pub fn get(&self, task_id: &str) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Get {
+            task_id: task_id.to_string(),
+            reply,
+        })
+    }
+
+    pub fn list(&self, include_finished: bool) -> Result<Vec<TaskSnapshot>, ControlError> {
+        self.call(|reply| TaskServiceRequest::List {
+            include_finished,
+            reply,
+        })
+    }
+
+    pub fn mark_running(&self, task_id: &str) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::MarkRunning {
+            task_id: task_id.to_string(),
+            reply,
+        })
+    }
+
+    pub fn complete(&self, task_id: &str, result: Value) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Complete {
+            task_id: task_id.to_string(),
+            result,
+            reply,
+        })
+    }
+
+    pub fn fail(&self, task_id: &str, error: &ControlError) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Fail {
+            task_id: task_id.to_string(),
+            error: error.clone(),
+            reply,
+        })
+    }
+
+    pub fn cancel(&self, task_id: &str) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Cancel {
+            task_id: task_id.to_string(),
+            reply,
+        })
+    }
+
+    pub fn progress(
+        &self,
+        task_id: &str,
+        progress: Option<f64>,
+        phase: impl Into<String>,
+    ) -> Result<TaskSnapshot, ControlError> {
+        self.call(|reply| TaskServiceRequest::Progress {
+            task_id: task_id.to_string(),
+            progress,
+            phase: phase.into(),
+            reply,
+        })
+    }
+
+    pub fn forget(&self, task_id: &str) -> Result<(), ControlError> {
+        self.call(|reply| TaskServiceRequest::Forget {
+            task_id: task_id.to_string(),
+            reply,
+        })
+    }
+
+    fn call<T>(
+        &self,
+        request: impl FnOnce(Sender<Result<T, ControlError>>) -> TaskServiceRequest,
+    ) -> Result<T, ControlError> {
+        let (reply, response) = crossbeam_channel::bounded(1);
+        self.tx
+            .send_timeout(request(reply), std::time::Duration::from_secs(5))
+            .map_err(|_| task_service_unavailable())?;
+        response
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| task_service_unavailable())?
+    }
 }
 
 impl TaskRegistry {
@@ -243,6 +414,66 @@ impl TaskRegistry {
             None,
         );
     }
+
+    pub(crate) fn handle_service_request(&self, request: TaskServiceRequest) {
+        match request {
+            TaskServiceRequest::Create {
+                label,
+                owner_session_id,
+                cancellation_supported,
+                reply,
+            } => {
+                let _ = reply.send(self.create(label, owner_session_id, cancellation_supported));
+            }
+            TaskServiceRequest::Get { task_id, reply } => {
+                let _ = reply.send(self.get(&task_id));
+            }
+            TaskServiceRequest::List {
+                include_finished,
+                reply,
+            } => {
+                let _ = reply.send(Ok(self.list(include_finished)));
+            }
+            TaskServiceRequest::MarkRunning { task_id, reply } => {
+                let _ = reply.send(self.mark_running(&task_id));
+            }
+            TaskServiceRequest::Complete {
+                task_id,
+                result,
+                reply,
+            } => {
+                let _ = reply.send(self.complete(&task_id, result));
+            }
+            TaskServiceRequest::Fail {
+                task_id,
+                error,
+                reply,
+            } => {
+                let _ = reply.send(self.fail(&task_id, &error));
+            }
+            TaskServiceRequest::Cancel { task_id, reply } => {
+                let _ = reply.send(self.cancel(&task_id));
+            }
+            TaskServiceRequest::Progress {
+                task_id,
+                progress,
+                phase,
+                reply,
+            } => {
+                let _ = reply.send(self.progress(&task_id, progress, phase));
+            }
+            TaskServiceRequest::Forget { task_id, reply } => {
+                let _ = reply.send(self.forget(&task_id));
+            }
+        }
+    }
+}
+
+fn task_service_unavailable() -> ControlError {
+    ControlError::new(
+        ControlErrorKind::NotReady,
+        "Odon's actor-owned task service is unavailable",
+    )
 }
 
 fn task_not_found(task_id: &str) -> ControlError {

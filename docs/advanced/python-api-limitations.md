@@ -4,6 +4,74 @@ The Python SDK exposes Odon's current semantic application surface, but that
 does not mean every visual or computational detail is replaceable from Python.
 This page is the explicit boundary for the current implementation.
 
+## Background-control migration
+
+The actor-owned local OME-Zarr and multi-viewport comparison slice progresses
+without GUI frames: open tasks, viewport creation/layout/rename/linking,
+logical camera fit, plane state, channel visibility/color/contrast, and
+channel notes/transforms/order/groups/search, side-panel visibility, channel
+intensity statistics, per-viewport object appearance/property/legend presentation, and
+per-viewport rendering preferences are
+background-safe. Project creation/open/save, metadata and ROI editing/navigation,
+saved-view CRUD/capture, referenced-resource registration, and
+external-layer installation/style/visibility/order/removal now use the same
+no-frame actor path. Resource/layer mutations and project saves share one
+serialized mailbox, so a save issued immediately after a layer call includes
+that layer. Samplesheet inspection/validation/import/export and recursive
+OME-Zarr project discovery likewise execute in bounded background workers and
+commit through the actor. Their renderer
+changes coalesce into one latest-value projection and are displayed when Odon
+next receives a frame, rather than replaying every intermediate visual state.
+Renderer observations carry the last applied projection revision and cannot
+overwrite newer actor-owned values when an old frame resumes after occlusion.
+The equivalent active-view camera, plane, channel, panel, and smooth-pixel
+methods also use this path. Dataset metadata opening and channel-statistics I/O
+are admitted through a bounded worker pool, so repeated requests cannot create
+unbounded worker threads. If an actor-owned command arrives before an
+asynchronous open reaches model/resource readiness, it returns explicit
+`NOT_READY`; it is never rerouted to the GUI queue.
+
+Single-image native layer inventory, active layer, visibility, independent viewport
+presentation/order, and world offsets are actor-owned as well. Native layer changes made in the
+Rust UI commit back as one viewport presentation transaction with a revision guard. The actor
+accepts newly discovered compatibility-layer descriptors without allowing a delayed renderer
+frame to replace presentation already committed through Python.
+
+Local NGFF label discovery, load, visibility, and unload are background-safe as well. Label
+metadata is opened by the bounded worker pool and committed independently of GPU presentation;
+when frames resume, the renderer creates its label tile loader from that shared resource.
+
+Mask layer and polygon CRUD, mask selection/undo, GeoJSON import/export, and
+in-memory project synchronization are also actor-owned. GeoJSON filesystem work
+runs on the bounded worker pool. A native committed mask edit is replayed as one
+generation-checked actor transaction, so it cannot silently overwrite a newer
+Python edit; the versioned mask projection is rendered when frames resume.
+
+Other application domains still use the compatibility UI dispatcher while the
+central-model migration continues. In particular, resource-loading saved-view apply,
+project ROI opening, mosaics, other native image resource loading, spatial-shape object selection,
+annotations, threshold-mask computation, measurements, object exports, screenshots, remote stores, TIFF,
+SpatialData, and Xenium have not all been moved to the actor yet. A method in
+one of those domains may still require Odon's native event loop to advance.
+Use `system.get_diagnostics` to inspect every method's current `actor`, `hybrid`,
+`legacy_ui`, or independent `control_service` route and the actor's
+queue/model/reply/presentation timing.
+
+Applying a saved view is actor-owned when its referenced object/label resources are already
+available. A preset that itself requests a missing object or label resource remains an explicit
+hybrid route until saved-view application is connected to the actor resource workers; diagnostics report
+`project.views.apply` accordingly. Capturing channel, camera, and object presentation from any
+existing viewport is fully background-safe.
+
+Primary object source loading, reload/clear, paginated property access, per-viewport appearance,
+legends, and filters now use the background actor. The source worker produces both the canonical
+property/spatial index and a shared renderer preload; returning to Odon therefore installs the
+already parsed geometry rather than starting the import again. Primary-object queries, selection,
+focus, and native selection commits also use the actor, including worker-evaluated standalone
+filter selection. Explicit `target="active"`, `target="spatial_shape"`, and screen-coordinate
+rectangle requests retain the compatibility path until spatial layers and exact canvas origins
+move into the canonical model. Analysis and export remain on the compatibility path at this stage.
+
 ## Two-viewport milestone limit
 
 Single-image mode supports one or two native Rust viewports, arranged

@@ -1,5 +1,6 @@
 //! Transport-independent control contracts for Odon automation clients.
 
+pub mod actor;
 mod command;
 pub mod discovery;
 mod error;
@@ -25,5 +26,5 @@ pub use surface::{
     ApplicationSurfaceEntry, ApplicationSurfaceManifest, SurfaceStatus, application_surface,
     application_surface_json,
 };
-pub use tasks::{TaskRegistry, TaskSnapshot, TaskState};
+pub use tasks::{TaskRegistry, TaskServiceHandle, TaskSnapshot, TaskState};
 pub use ui::{Component, ContributionSnapshot, ExtensionSnapshot, UiAction, UiRegistry};

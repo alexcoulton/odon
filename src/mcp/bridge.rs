@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -22,6 +23,9 @@ const MAX_INLINE_PAYLOAD_BYTES: u64 = 1_048_576;
 pub struct OdonControlBridge {
     rx: Receiver<OdonControlRequest>,
     tx: Sender<OdonControlRequest>,
+    presentation_rx: Receiver<crate::control::actor::RenderProjection>,
+    platform_effect_rx: Receiver<crate::control::actor::PlatformEffect>,
+    actor_model_tx: Sender<crate::control::actor::ActorModelUpdate>,
     local_addr: SocketAddr,
     manifest: Option<crate::control::discovery::InstanceManifestGuard>,
     event_hub: Arc<EventHub>,
@@ -37,8 +41,10 @@ struct ControlServerIdentity {
     allow_legacy: bool,
     event_hub: Arc<EventHub>,
     task_registry: Arc<TaskRegistry>,
+    task_service: crate::control::TaskServiceHandle,
     resource_registry: Arc<ResourceRegistry>,
     ui_registry: Arc<UiRegistry>,
+    actor_diagnostics: Arc<crate::control::actor::ActorDiagnostics>,
 }
 
 #[derive(Debug)]
@@ -54,14 +60,41 @@ pub struct OdonControlRequest {
 
 impl OdonControlBridge {
     pub fn spawn_default(ctx: egui::Context) -> anyhow::Result<Self> {
-        Self::spawn_inner(DEFAULT_ADDR, ctx, true)
+        Self::spawn_inner(DEFAULT_ADDR, ctx, true, None, None)
+    }
+
+    pub fn spawn_default_with_object_loader(
+        ctx: egui::Context,
+        object_loader: Arc<dyn crate::model::ObjectResourceLoader>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_inner(DEFAULT_ADDR, ctx, true, Some(object_loader), None)
+    }
+
+    pub fn spawn_default_with_services(
+        ctx: egui::Context,
+        object_loader: Arc<dyn crate::model::ObjectResourceLoader>,
+        dataset_inspector: Arc<dyn crate::data::document::DatasetInspector>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_inner(
+            DEFAULT_ADDR,
+            ctx,
+            true,
+            Some(object_loader),
+            Some(dataset_inspector),
+        )
     }
 
     pub fn spawn(addr: &str, ctx: egui::Context) -> anyhow::Result<Self> {
-        Self::spawn_inner(addr, ctx, false)
+        Self::spawn_inner(addr, ctx, false, None, None)
     }
 
-    fn spawn_inner(addr: &str, ctx: egui::Context, publish: bool) -> anyhow::Result<Self> {
+    fn spawn_inner(
+        addr: &str,
+        ctx: egui::Context,
+        publish: bool,
+        object_loader: Option<Arc<dyn crate::model::ObjectResourceLoader>>,
+        dataset_inspector: Option<Arc<dyn crate::data::document::DatasetInspector>>,
+    ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         let local_addr = listener.local_addr()?;
         listener.set_nonblocking(false)?;
@@ -76,6 +109,16 @@ impl OdonControlBridge {
         let task_registry = TaskRegistry::shared(Arc::clone(&event_hub));
         let resource_registry = ResourceRegistry::shared(Arc::clone(&event_hub));
         let ui_registry = UiRegistry::shared(Arc::clone(&event_hub));
+        let actor = crate::control::actor::spawn_control_actor_with_services(
+            Arc::new({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            }),
+            Arc::clone(&resource_registry),
+            object_loader,
+            dataset_inspector,
+            Some(Arc::clone(&task_registry)),
+        )?;
         let identity = Arc::new(ControlServerIdentity {
             instance_id: manifest
                 .as_ref()
@@ -87,10 +130,16 @@ impl OdonControlBridge {
             allow_legacy: !publish,
             event_hub: Arc::clone(&event_hub),
             task_registry: Arc::clone(&task_registry),
+            task_service: actor.task_service.clone(),
             resource_registry: Arc::clone(&resource_registry),
             ui_registry: Arc::clone(&ui_registry),
+            actor_diagnostics: Arc::clone(&actor.diagnostics),
         });
-        let (tx, rx) = crossbeam_channel::bounded::<OdonControlRequest>(256);
+        let tx = actor.request_tx;
+        let rx = actor.legacy_rx;
+        let presentation_rx = actor.presentation_rx;
+        let platform_effect_rx = actor.platform_effect_rx;
+        let actor_model_tx = actor.model_tx;
         thread::Builder::new()
             .name("odon-control-bridge".to_string())
             .spawn({
@@ -101,6 +150,9 @@ impl OdonControlBridge {
         Ok(Self {
             rx,
             tx,
+            presentation_rx,
+            platform_effect_rx,
+            actor_model_tx,
             local_addr,
             manifest,
             event_hub,
@@ -112,6 +164,109 @@ impl OdonControlBridge {
 
     pub fn try_recv(&self) -> Result<OdonControlRequest, crossbeam_channel::TryRecvError> {
         self.rx.try_recv()
+    }
+
+    pub fn try_recv_presentation(
+        &self,
+    ) -> Result<crate::control::actor::RenderProjection, crossbeam_channel::TryRecvError> {
+        self.presentation_rx.try_recv()
+    }
+
+    pub fn pending_presentation_len(&self) -> usize {
+        self.presentation_rx.len()
+    }
+
+    pub fn try_recv_platform_effect(
+        &self,
+    ) -> Result<crate::control::actor::PlatformEffect, crossbeam_channel::TryRecvError> {
+        self.platform_effect_rx.try_recv()
+    }
+
+    pub fn bootstrap_dataset_model(
+        &self,
+        dataset: crate::data::ome::OmeZarrDataset,
+        workspace: Value,
+        store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+        path: PathBuf,
+    ) {
+        let _ =
+            self.actor_model_tx
+                .send(crate::control::actor::ActorModelUpdate::BootstrapDataset {
+                    dataset,
+                    workspace,
+                    store,
+                    path,
+                });
+    }
+
+    pub fn report_renderer_capabilities(&self, gpu_available: bool) {
+        let _ = self
+            .actor_model_tx
+            .send(crate::control::actor::ActorModelUpdate::RendererCapabilities { gpu_available });
+    }
+
+    pub fn bootstrap_model_mode(&self, mode: crate::model::ModelMode) {
+        let _ = self
+            .actor_model_tx
+            .send(crate::control::actor::ActorModelUpdate::BootstrapMode(mode));
+    }
+
+    pub fn bootstrap_project_model(&self, snapshot: crate::model::ProjectModelSnapshot) {
+        let _ =
+            self.actor_model_tx
+                .send(crate::control::actor::ActorModelUpdate::BootstrapProject(
+                    snapshot,
+                ));
+    }
+
+    pub fn bootstrap_settings(
+        &self,
+        settings: crate::settings::AppSettings,
+        path: Option<PathBuf>,
+    ) {
+        let recent_project_exists = settings
+            .recent_projects
+            .iter()
+            .map(|project| (project.path.clone(), project.path.exists()))
+            .collect();
+        let _ =
+            self.actor_model_tx
+                .send(crate::control::actor::ActorModelUpdate::BootstrapSettings {
+                    settings,
+                    path,
+                    recent_project_exists,
+                });
+    }
+
+    pub fn report_presentation_applied(&self, revision: u64) -> bool {
+        self.actor_model_tx
+            .try_send(crate::control::actor::ActorModelUpdate::PresentationApplied(revision))
+            .is_ok()
+    }
+
+    pub fn report_viewport_geometry(&self, viewport_id: String, width: f32, height: f32) -> bool {
+        self.actor_model_tx
+            .try_send(crate::control::actor::ActorModelUpdate::ViewportGeometry {
+                viewport_id,
+                width,
+                height,
+            })
+            .is_ok()
+    }
+
+    pub fn observe_renderer_workspace(
+        &self,
+        workspace: Value,
+        based_on_projection_revision: u64,
+    ) -> bool {
+        self.actor_model_tx
+            .try_send(
+                crate::control::actor::ActorModelUpdate::RendererWorkspaceObserved {
+                    workspace,
+                    based_on_projection_revision,
+                },
+            )
+            .is_ok()
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -167,11 +322,13 @@ impl OdonControlBridge {
                     };
                     if matches!(property, "opacity" | "visible") {
                         let mut patch = serde_json::Map::new();
+                        patch.insert("layer_id".to_string(), Value::String(layer_id.to_string()));
                         patch.insert(property.to_string(), action.value);
-                        let _ = self.resource_registry.update_layer(
-                            layer_id,
-                            &Value::Object(patch),
-                            &action.owner_session_id,
+                        self.queue_native_command(
+                            ctx,
+                            action.owner_session_id,
+                            "viewer.layers.update",
+                            Value::Object(patch),
                         );
                     }
                 }
@@ -214,21 +371,31 @@ impl OdonControlBridge {
         session_id: String,
         method: &str,
         params: Value,
-    ) {
+    ) -> bool {
         let Ok(command) = ControlCommand::decode(method, params) else {
-            return;
+            return false;
         };
         let (reply, _result) = crossbeam_channel::bounded(1);
-        let _ = self.tx.try_send(OdonControlRequest {
-            command,
-            reply,
-            session_id,
-            request_id: None,
-            event_hub: Arc::clone(&self.event_hub),
-            task_registry: Arc::clone(&self.task_registry),
-            task_id: None,
-        });
-        ctx.request_repaint();
+        let sent = self
+            .tx
+            .try_send(OdonControlRequest {
+                command,
+                reply,
+                session_id,
+                request_id: None,
+                event_hub: Arc::clone(&self.event_hub),
+                task_registry: Arc::clone(&self.task_registry),
+                task_id: None,
+            })
+            .is_ok();
+        if sent {
+            ctx.request_repaint();
+        }
+        sent
+    }
+
+    pub fn submit_native_command(&self, ctx: &egui::Context, method: &str, params: Value) -> bool {
+        self.queue_native_command(ctx, "native-ui".to_string(), method, params)
     }
 
     pub fn external_layers(
@@ -424,8 +591,10 @@ struct ConnectionState {
     hello_server: HelloServerInfo,
     event_hub: Arc<EventHub>,
     task_registry: Arc<TaskRegistry>,
+    task_service: crate::control::TaskServiceHandle,
     resource_registry: Arc<ResourceRegistry>,
     ui_registry: Arc<UiRegistry>,
+    actor_diagnostics: Arc<crate::control::actor::ActorDiagnostics>,
 }
 
 impl ConnectionState {
@@ -442,22 +611,29 @@ impl ConnectionState {
             },
             event_hub: Arc::clone(&identity.event_hub),
             task_registry: Arc::clone(&identity.task_registry),
+            task_service: identity.task_service.clone(),
             resource_registry: Arc::clone(&identity.resource_registry),
             ui_registry: Arc::clone(&identity.ui_registry),
+            actor_diagnostics: Arc::clone(&identity.actor_diagnostics),
         })
     }
 
     fn unauthenticated_test() -> Self {
         let (outbound, _rx) = crossbeam_channel::bounded(8);
         let event_hub = EventHub::shared();
+        let task_registry = TaskRegistry::shared(Arc::clone(&event_hub));
         let identity = ControlServerIdentity {
             instance_id: "test-instance".to_string(),
             expected_token: None,
             allow_legacy: true,
             event_hub: Arc::clone(&event_hub),
-            task_registry: TaskRegistry::shared(Arc::clone(&event_hub)),
+            task_service: crate::control::TaskServiceHandle::spawn_standalone(Arc::clone(
+                &task_registry,
+            )),
+            task_registry,
             resource_registry: ResourceRegistry::shared(Arc::clone(&event_hub)),
             ui_registry: UiRegistry::shared(Arc::clone(&event_hub)),
+            actor_diagnostics: crate::control::actor::ActorDiagnostics::shared(),
         };
         let state = Self::new(&identity, outbound.clone()).expect("create test connection state");
         identity
@@ -582,15 +758,18 @@ fn handle_json_rpc_request(
             "event_policies": ["commit", "immediate", "throttle", "debounce"]
         })),
         "system.batch" => run_batch(&request.params, tx, ctx, state),
-        "system.get_diagnostics" => Ok(json!({
-            "control_queue_depth": tx.len(),
-            "events": state.event_hub.diagnostics(),
-            "tasks": state.task_registry.list(true),
-            "data_resource_count": state.resource_registry.list_resources().len(),
-            "external_layer_count": state.resource_registry.list_layers().len(),
-            "extensions": state.ui_registry.list_extensions(),
-            "contribution_count": state.ui_registry.list_contributions().len(),
-        })),
+        "system.get_diagnostics" => state.task_service.list(true).map(|tasks| {
+            json!({
+                "control_queue_depth": tx.len(),
+                "dispatch": crate::control::actor::execution_diagnostics(&state.actor_diagnostics),
+                "events": state.event_hub.diagnostics(),
+                "tasks": tasks,
+                "data_resource_count": state.resource_registry.list_resources().len(),
+                "external_layer_count": state.resource_registry.list_layers().len(),
+                "extensions": state.ui_registry.list_extensions(),
+                "contribution_count": state.ui_registry.list_contributions().len(),
+            })
+        }),
         "events.subscribe" => subscribe_events(&request.params, state),
         "events.unsubscribe" => unsubscribe_events(&request.params, state),
         "events.get_status" => Ok(state.event_hub.status(&state.hello_server.session_id)),
@@ -599,22 +778,6 @@ fn handle_json_rpc_request(
         "tasks.list" => list_tasks(&request.params, state),
         "tasks.cancel" => cancel_task(&request.params, state),
         "tasks.forget" => forget_task(&request.params, state),
-        "data.resources.register" => register_resource(request.params, state),
-        "data.resources.list" => Ok(json!({
-            "resources": state.resource_registry.list_resources(),
-            "revision": state.event_hub.revision(),
-        })),
-        "data.resources.get" => get_resource(&request.params, state),
-        "data.resources.remove" => remove_resource(&request.params, state),
-        "viewer.layers.add" => add_layer(request.params, state),
-        "viewer.layers.list" => Ok(json!({
-            "layers": state.resource_registry.list_layers(),
-            "revision": state.event_hub.revision(),
-        })),
-        "viewer.layers.get" => get_layer(&request.params, state),
-        "viewer.layers.update" => update_layer(&request.params, state),
-        "viewer.layers.remove" => remove_layer(&request.params, state),
-        "viewer.layers.reorder" => reorder_layers(&request.params, state),
         "ui.extensions.register" => register_extension(request.params, state),
         "ui.extensions.list" => Ok(json!({
             "extensions": state.ui_registry.list_extensions(),
@@ -823,7 +986,7 @@ fn start_task(
     }
     let operation_method = command.method().to_string();
     let operation_params = command.params().clone();
-    let snapshot = state.task_registry.create(
+    let snapshot = state.task_service.create(
         params
             .get("label")
             .and_then(Value::as_str)
@@ -853,7 +1016,7 @@ fn start_task(
         ),
     })?;
     ctx.request_repaint();
-    let tasks = Arc::clone(&state.task_registry);
+    let tasks = state.task_service.clone();
     let app_tx = tx.clone();
     let app_ctx = ctx.clone();
     let session_id = state.hello_server.session_id.clone();
@@ -1046,7 +1209,7 @@ fn wait_for_project_object_preload(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     thread::sleep(Duration::from_millis(50));
@@ -1062,7 +1225,7 @@ fn wait_for_project_object_preload(
                         session_id: session_id.to_string(),
                         request_id: None,
                         event_hub: Arc::clone(event_hub),
-                        task_registry: Arc::clone(tasks),
+                        task_registry: tasks.registry(),
                         task_id: None,
                     },
                     Duration::from_secs(1),
@@ -1080,7 +1243,7 @@ fn wait_for_project_object_preload(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1129,7 +1292,7 @@ fn wait_for_mosaic_object_load(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     thread::sleep(Duration::from_millis(50));
@@ -1144,7 +1307,7 @@ fn wait_for_mosaic_object_load(
                         session_id: session_id.to_string(),
                         request_id: None,
                         event_hub: Arc::clone(event_hub),
-                        task_registry: Arc::clone(tasks),
+                        task_registry: tasks.registry(),
                         task_id: None,
                     },
                     Duration::from_secs(1),
@@ -1162,7 +1325,7 @@ fn wait_for_mosaic_object_load(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1206,7 +1369,7 @@ fn wait_for_deep_link_application(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     thread::sleep(Duration::from_millis(50));
@@ -1221,7 +1384,7 @@ fn wait_for_deep_link_application(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1271,7 +1434,7 @@ fn wait_for_object_property_load(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     let property = find_string_field(initial, "property")
@@ -1301,7 +1464,7 @@ fn wait_for_object_property_load(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1349,7 +1512,7 @@ fn wait_for_object_source_load(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     thread::sleep(Duration::from_millis(50));
@@ -1366,7 +1529,7 @@ fn wait_for_object_source_load(
                         session_id: session_id.to_string(),
                         request_id: None,
                         event_hub: Arc::clone(event_hub),
-                        task_registry: Arc::clone(tasks),
+                        task_registry: tasks.registry(),
                         task_id: None,
                     },
                     Duration::from_secs(1),
@@ -1385,7 +1548,7 @@ fn wait_for_object_source_load(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1425,7 +1588,7 @@ fn wait_for_control_operation(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     thread::sleep(Duration::from_millis(50));
@@ -1442,7 +1605,7 @@ fn wait_for_control_operation(
                         session_id: session_id.to_string(),
                         request_id: None,
                         event_hub: Arc::clone(event_hub),
-                        task_registry: Arc::clone(tasks),
+                        task_registry: tasks.registry(),
                         task_id: None,
                     },
                     Duration::from_secs(1),
@@ -1460,7 +1623,7 @@ fn wait_for_control_operation(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1502,7 +1665,7 @@ fn wait_for_application_ready(
     ctx: &egui::Context,
     session_id: &str,
     event_hub: &Arc<EventHub>,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     let expected_mode = match operation {
@@ -1522,7 +1685,7 @@ fn wait_for_application_ready(
                 session_id: session_id.to_string(),
                 request_id: None,
                 event_hub: Arc::clone(event_hub),
-                task_registry: Arc::clone(tasks),
+                task_registry: tasks.registry(),
                 task_id: None,
             },
             Duration::from_secs(5),
@@ -1555,19 +1718,38 @@ fn application_state_is_ready(state: &Value, expected_mode: &str) -> bool {
         .and_then(Value::as_bool)
         .or_else(|| state.get("busy").and_then(Value::as_bool))
         .unwrap_or(true);
-    let canvas_ready = expected_mode == "project"
-        || state
-            .get("loading")
-            .and_then(|loading| loading.get("canvas_ready"))
+    let loading = state.get("loading").unwrap_or(state);
+    let actor_readiness = loading.get("model_ready").is_some()
+        || loading.get("resources_ready").is_some()
+        || loading.get("geometry_ready").is_some();
+    let work_ready = if actor_readiness {
+        loading
+            .get("model_ready")
             .and_then(Value::as_bool)
-            .or_else(|| state.get("canvas_ready").and_then(Value::as_bool))
-            .unwrap_or(false);
-    mode_matches && !busy && canvas_ready
+            .unwrap_or(false)
+            && loading
+                .get("resources_ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && loading
+                .get("geometry_ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    } else {
+        expected_mode == "project"
+            || state
+                .get("loading")
+                .and_then(|loading| loading.get("canvas_ready"))
+                .and_then(Value::as_bool)
+                .or_else(|| state.get("canvas_ready").and_then(Value::as_bool))
+                .unwrap_or(false)
+    };
+    mode_matches && !busy && work_ready
 }
 
 fn wait_for_output_path(
     value: &Value,
-    tasks: &Arc<TaskRegistry>,
+    tasks: &crate::control::TaskServiceHandle,
     task_id: &str,
 ) -> Result<(), ControlError> {
     let Some(path) = find_string_field(value, "path") else {
@@ -1583,7 +1765,10 @@ fn wait_for_output_path(
     }
 }
 
-fn ensure_task_not_cancelled(tasks: &TaskRegistry, task_id: &str) -> Result<(), ControlError> {
+fn ensure_task_not_cancelled(
+    tasks: &crate::control::TaskServiceHandle,
+    task_id: &str,
+) -> Result<(), ControlError> {
     if tasks.get(task_id)?.state == TaskState::Cancelled {
         Err(
             ControlError::new(ControlErrorKind::Cancelled, "task was cancelled")
@@ -1642,7 +1827,7 @@ fn task_id<'a>(method: &str, params: &'a Value) -> Result<&'a str, ControlError>
 }
 
 fn get_task(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    serde_json::to_value(state.task_registry.get(task_id("tasks.get", params)?)?).map_err(|error| {
+    serde_json::to_value(state.task_service.get(task_id("tasks.get", params)?)?).map_err(|error| {
         ControlError::new(
             ControlErrorKind::Internal,
             format!("failed to serialize task: {error}"),
@@ -1655,13 +1840,13 @@ fn list_tasks(params: &Value, state: &ConnectionState) -> Result<Value, ControlE
         .get("include_finished")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    Ok(json!({"tasks": state.task_registry.list(include_finished)}))
+    Ok(json!({"tasks": state.task_service.list(include_finished)?}))
 }
 
 fn cancel_task(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
     serde_json::to_value(
         state
-            .task_registry
+            .task_service
             .cancel(task_id("tasks.cancel", params)?)?,
     )
     .map_err(|error| {
@@ -1674,7 +1859,7 @@ fn cancel_task(params: &Value, state: &ConnectionState) -> Result<Value, Control
 
 fn forget_task(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
     let id = task_id("tasks.forget", params)?;
-    state.task_registry.forget(id)?;
+    state.task_service.forget(id)?;
     Ok(json!({"task_id": id, "forgotten": true}))
 }
 
@@ -1692,88 +1877,6 @@ fn required_id<'a>(method: &str, field: &str, params: &'a Value) -> Result<&'a s
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| ControlError::invalid_params(method, format!("{field} is required")))
-}
-
-fn register_resource(params: Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    serialize_control(
-        state
-            .resource_registry
-            .register_resource(params, &state.hello_server.session_id)?,
-    )
-}
-
-fn get_resource(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    serialize_control(state.resource_registry.get_resource(required_id(
-        "data.resources.get",
-        "resource_id",
-        params,
-    )?)?)
-}
-
-fn remove_resource(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    let id = required_id("data.resources.remove", "resource_id", params)?;
-    state
-        .resource_registry
-        .remove_resource(id, &state.hello_server.session_id)?;
-    Ok(json!({"resource_id": id, "removed": true}))
-}
-
-fn add_layer(params: Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    serialize_control(
-        state
-            .resource_registry
-            .add_layer(params, &state.hello_server.session_id)?,
-    )
-}
-
-fn get_layer(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    serialize_control(state.resource_registry.get_layer(required_id(
-        "viewer.layers.get",
-        "layer_id",
-        params,
-    )?)?)
-}
-
-fn update_layer(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    let id = required_id("viewer.layers.update", "layer_id", params)?;
-    let mut patch = params.clone();
-    patch
-        .as_object_mut()
-        .map(|object| object.remove("layer_id"));
-    serialize_control(state.resource_registry.update_layer(
-        id,
-        &patch,
-        &state.hello_server.session_id,
-    )?)
-}
-
-fn remove_layer(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    let id = required_id("viewer.layers.remove", "layer_id", params)?;
-    state
-        .resource_registry
-        .remove_layer(id, &state.hello_server.session_id)?;
-    Ok(json!({"layer_id": id, "removed": true}))
-}
-
-fn reorder_layers(params: &Value, state: &ConnectionState) -> Result<Value, ControlError> {
-    let order = params
-        .get("order")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ControlError::invalid_params("viewer.layers.reorder", "order is required"))?
-        .iter()
-        .map(|id| {
-            id.as_str().map(str::to_string).ok_or_else(|| {
-                ControlError::invalid_params("viewer.layers.reorder", "layer IDs must be strings")
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({
-        "layers": state.resource_registry.reorder_layers(
-            &order,
-            &state.hello_server.session_id,
-        )?,
-        "revision": state.event_hub.revision(),
-    }))
 }
 
 fn register_extension(params: Value, state: &ConnectionState) -> Result<Value, ControlError> {
@@ -1888,6 +1991,7 @@ fn unsubscribe_events(params: &Value, state: &ConnectionState) -> Result<Value, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::Instant;
 
     fn read_json(reader: &mut BufReader<TcpStream>) -> Value {
@@ -1924,7 +2028,7 @@ mod tests {
         writeln!(
             stream,
             "{}",
-            json!({"method": "set_camera", "params": {"center_x": 12.5}})
+            json!({"method": "project.objects.preload.get", "params": {}})
         )
         .expect("write valid request");
         stream.flush().expect("flush valid request");
@@ -1938,15 +2042,15 @@ mod tests {
                 Err(error) => panic!("bridge request not delivered: {error}"),
             }
         };
-        assert_eq!(request.command.method(), "viewer.camera.set");
-        assert_eq!(request.command.params()["center_x"], 12.5);
+        assert_eq!(request.command.method(), "project.objects.preload.get");
+        assert_eq!(request.command.params(), &json!({}));
         request
             .reply
-            .send(Ok(json!({"center_world_lvl0": [12.5, 0.0]})))
+            .send(Ok(json!({"view": "project"})))
             .expect("reply from app");
         let response = read_json(&mut reader);
         assert_eq!(response["ok"], true);
-        assert_eq!(response["result"]["center_world_lvl0"], json!([12.5, 0.0]));
+        assert_eq!(response["result"]["view"], "project");
     }
 
     #[test]
@@ -2039,13 +2143,13 @@ mod tests {
         writeln!(
             stream,
             "{}",
-            json!({"jsonrpc": "2.0", "id": 2, "method": "get_camera", "params": {}})
+            json!({"jsonrpc": "2.0", "id": 2, "method": "project.objects.preload.get", "params": {}})
         )
         .expect("write first request");
         writeln!(
             stream,
             "{}",
-            json!({"jsonrpc": "2.0", "id": 3, "method": "list_channels", "params": {}})
+            json!({"jsonrpc": "2.0", "id": 3, "method": "project.objects.preload.list_sources", "params": {}})
         )
         .expect("write second request");
         stream.flush().expect("flush concurrent requests");
@@ -2086,10 +2190,249 @@ mod tests {
     }
 
     #[test]
+    fn comparison_workflow_completes_over_tcp_without_a_ui_frame() {
+        let bridge = OdonControlBridge::spawn("127.0.0.1:0", egui::Context::default())
+            .expect("spawn bridge on ephemeral port");
+        let mut stream = TcpStream::connect(bridge.local_addr()).expect("connect bridge client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set read timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone bridge socket"));
+        let mut next_id = 1_u64;
+        let mut rpc = |method: &str, params: Value| {
+            let id = next_id;
+            next_id += 1;
+            writeln!(
+                stream,
+                "{}",
+                json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params})
+            )
+            .expect("write request");
+            stream.flush().expect("flush request");
+            let response = read_json(&mut reader);
+            assert_eq!(response["id"], id);
+            assert!(response.get("error").is_none(), "RPC error: {response}");
+            response["result"].clone()
+        };
+
+        rpc(
+            "system.hello",
+            json!({"client":{"name":"paused-render-test","version":"1"}, "protocol_versions":[1]}),
+        );
+        rpc(
+            "project.create",
+            json!({"default_dataset":"paused-frame-project"}),
+        );
+        for (id, path) in [("roi-a", "/tmp/a.zarr"), ("roi-b", "/tmp/b.zarr")] {
+            rpc(
+                "project.rois.add",
+                json!({"id":id,"path":path,"metadata":{"condition":"paused"}}),
+            );
+        }
+        rpc(
+            "project.rois.select",
+            json!({"ids":["roi-b"],"mode":"replace"}),
+        );
+        rpc(
+            "data.resources.register",
+            json!({
+                "resource_id":"resource:paused-project",
+                "uri":"file:///tmp/paused-project.geojson",
+                "format":"geojson",
+                "ownership":"project",
+                "coordinate_space":{"axes":["y","x"]}
+            }),
+        );
+        rpc(
+            "viewer.layers.add",
+            json!({
+                "layer_id":"layer:paused-project",
+                "name":"Paused project layer",
+                "kind":"shapes",
+                "data_resource_id":"resource:paused-project",
+                "ownership":"project"
+            }),
+        );
+        let saved_project = std::env::temp_dir().join(format!(
+            "odon-paused-frame-project-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        rpc("project.save_as", json!({"path":saved_project}));
+        let saved_value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&saved_project).unwrap()).unwrap();
+        assert_eq!(
+            saved_value["config"]["control_resources"][0]["resource_id"],
+            "resource:paused-project"
+        );
+        assert_eq!(
+            saved_value["config"]["control_layers"][0]["layer_id"],
+            "layer:paused-project"
+        );
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+        let task = rpc(
+            "tasks.start",
+            json!({"method":"datasets.open_ome_zarr", "params":{"path":fixture}}),
+        );
+        let task_id = task["task_id"].as_str().expect("task id").to_string();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let task = rpc("tasks.get", json!({"task_id":task_id}));
+            match task["state"].as_str() {
+                Some("completed") => break,
+                Some("failed" | "cancelled") => panic!("open task did not complete: {task}"),
+                _ if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                _ => panic!("open task timed out without a UI frame: {task}"),
+            }
+        }
+
+        let channels = rpc("viewer.channels.list", json!({}));
+        assert!(
+            channels["channels"]
+                .as_array()
+                .is_some_and(|items| items.len() >= 2)
+        );
+        let intensity = rpc(
+            "viewer.channels.intensity_stats",
+            json!({"channel":0,"level":0}),
+        );
+        assert!(intensity["n"].as_u64().is_some_and(|count| count > 0));
+        let workspace = rpc("viewer.workspace.get", json!({}));
+        let left = workspace["active_viewport_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        rpc(
+            "viewer.viewports.rename",
+            json!({"viewport_id":left, "title":"Channel A"}),
+        );
+        let cloned = rpc(
+            "viewer.viewports.clone",
+            json!({"viewport_id":left, "title":"Channel B", "layout":"horizontal", "ratio":0.5}),
+        );
+        let right = cloned["viewport_id"].as_str().unwrap().to_string();
+        rpc(
+            "viewer.viewport_links.create",
+            json!({"viewports":[left,right], "fields":["camera","plane","selection"]}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_visible",
+            json!({"viewport_id":left,"channels":[0],"mode":"only"}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_visible",
+            json!({"viewport_id":right,"channels":[1],"mode":"only"}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_color",
+            json!({"viewport_id":left,"channel":0,"color_rgb":[80,140,255]}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_color",
+            json!({"viewport_id":right,"channel":1,"color_rgb":[255,90,120]}),
+        );
+        rpc(
+            "viewer.channels.set_note",
+            json!({"channel":1,"note":"right comparison marker"}),
+        );
+        rpc(
+            "viewer.channels.set_transform",
+            json!({"channel":1,"offset_world":[2.0,-1.0],"scale":[1.1,0.9],"rotation_rad":0.1}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_order",
+            json!({"viewport_id":left,"channels":[4,3,2,1,0],"mode":"exact"}),
+        );
+        rpc(
+            "viewer.viewports.channels.set_group",
+            json!({"viewport_id":right,"channels":[0,1],"name":"Comparison"}),
+        );
+        rpc(
+            "viewer.channels.presentation.set",
+            json!({"search":"CD","sort":"visible_first"}),
+        );
+        rpc("viewer.panels.set", json!({"left":false,"right":false}));
+        rpc(
+            "viewer.viewports.rendering.set",
+            json!({"viewport_id":left,"smooth_pixels":false,"show_hud":true}),
+        );
+        rpc(
+            "viewer.viewports.rendering.set",
+            json!({"viewport_id":right,"smooth_pixels":true,"show_hud":true}),
+        );
+        let fitted = rpc("viewer.viewports.camera.fit", json!({"viewport_id":left}));
+        assert!(
+            fitted["result"]["zoom_screen_per_lvl0_px"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        let mut final_workspace = rpc("viewer.workspace.get", json!({}));
+        let final_project = rpc("project.get", json!({}));
+        let final_rois = rpc("project.rois.list", json!({}));
+        assert_eq!(final_workspace["layout"], "horizontal");
+        assert_eq!(final_workspace["viewports"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            final_project["metadata"]["default_dataset"],
+            "paused-frame-project"
+        );
+        assert_eq!(final_rois["roi_count"], 2);
+        assert_eq!(final_rois["rois"][1]["selected"], true);
+
+        assert_eq!(
+            bridge.pending_len(),
+            0,
+            "no command should require RootApp::update"
+        );
+        assert_eq!(
+            bridge.pending_presentation_len(),
+            1,
+            "covered-window updates should coalesce to one latest render projection"
+        );
+        let projection = bridge
+            .try_recv_presentation()
+            .expect("latest render projection remains available");
+        assert!(projection.document.is_some());
+        assert_eq!(projection.project.rois.len(), 2);
+        assert_eq!(projection.project.selected_source_keys.len(), 1);
+        final_workspace.as_object_mut().unwrap().remove("_control");
+        assert_eq!(projection.workspace.unwrap(), final_workspace);
+        let diagnostics = rpc("system.get_diagnostics", json!({}));
+        for method in [
+            "viewer.channels.set_note",
+            "viewer.channels.intensity_stats",
+            "viewer.channels.set_transform",
+            "viewer.viewports.channels.set_order",
+            "viewer.viewports.channels.set_group",
+            "viewer.channels.presentation.set",
+            "viewer.panels.set",
+            "project.create",
+            "project.rois.add",
+            "project.rois.select",
+            "project.save_as",
+        ] {
+            assert_eq!(
+                diagnostics["dispatch"]["method_routes"][method], "actor",
+                "{method} must not depend on RootApp::update"
+            );
+        }
+        let _ = std::fs::remove_file(saved_project);
+    }
+
+    #[test]
     fn protocol_registries_roundtrip_data_layers_and_declarative_ui() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
         let ctx = egui::Context::default();
         let mut state = ConnectionState::unauthenticated_test();
+        let actor = crate::control::actor::spawn_control_actor(
+            Arc::new(|| {}),
+            Arc::clone(&state.resource_registry),
+        )
+        .unwrap();
+        let tx = actor.request_tx;
 
         let call = |state: &mut ConnectionState, id: u64, method: &str, params: Value| {
             handle_control_line(
@@ -2170,7 +2513,7 @@ mod tests {
     }
 
     #[test]
-    fn application_readiness_requires_a_laid_out_viewer_canvas() {
+    fn application_readiness_uses_actor_work_readiness_with_legacy_canvas_fallback() {
         let loading_without_canvas = json!({
             "mode": "single",
             "loading": {"busy": false, "canvas_ready": false},
@@ -2185,6 +2528,19 @@ mod tests {
             "loading": {"busy": false, "canvas_ready": true},
         });
         assert!(application_state_is_ready(&ready, "single"));
+
+        let background_ready = json!({
+            "mode": "single",
+            "loading": {
+                "busy": false,
+                "model_ready": true,
+                "resources_ready": true,
+                "geometry_ready": true,
+                "presentation_ready": false,
+                "canvas_ready": false,
+            },
+        });
+        assert!(application_state_is_ready(&background_ready, "single"));
 
         let still_loading = json!({
             "mode": "single",

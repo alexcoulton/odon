@@ -1,6 +1,7 @@
 use super::{
     GeoJsonObjectFeature, ObjectPropertyColumn, ObjectPropertyStore, column_value_to_display_text,
 };
+use odon::model::ControlObjectFeature;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +107,19 @@ impl ObjectFilterQueryExpr {
             Self::Predicate(predicate) => predicate.matches(object_index, obj, properties),
         }
     }
+
+    pub(super) fn matches_control_feature(&self, feature: &ControlObjectFeature) -> bool {
+        match self {
+            Self::And(left, right) => {
+                left.matches_control_feature(feature) && right.matches_control_feature(feature)
+            }
+            Self::Or(left, right) => {
+                left.matches_control_feature(feature) || right.matches_control_feature(feature)
+            }
+            Self::Not(inner) => !inner.matches_control_feature(feature),
+            Self::Predicate(predicate) => predicate.matches_control_feature(feature),
+        }
+    }
 }
 
 impl ObjectFilterPredicate {
@@ -116,6 +130,23 @@ impl ObjectFilterPredicate {
         properties: &ObjectPropertyStore,
     ) -> bool {
         let actual = object_query_value(object_index, obj, properties, &self.property_key);
+        self.matches_actual(actual)
+    }
+
+    fn matches_control_feature(&self, feature: &ControlObjectFeature) -> bool {
+        let actual = if self.property_key == "id" {
+            ObjectFilterActualValue::String(feature.id.clone())
+        } else {
+            feature
+                .properties
+                .get(&self.property_key)
+                .map(json_query_value)
+                .unwrap_or(ObjectFilterActualValue::Missing)
+        };
+        self.matches_actual(actual)
+    }
+
+    fn matches_actual(&self, actual: ObjectFilterActualValue) -> bool {
         match &self.op {
             ObjectFilterQueryOp::Truthy => actual.is_truthy(),
             ObjectFilterQueryOp::Eq(expected) => actual.equals_query_value(expected),
