@@ -1,22 +1,37 @@
 //! Canonical, renderer-independent application state.
 
+mod analysis;
 mod app;
 mod labels;
 mod layers;
 mod masks;
+mod measurement;
+mod memory;
 mod objects;
 mod project;
 mod project_preload;
 mod readiness;
+mod screenshot;
 mod selection;
+mod threshold;
 
+pub(crate) use analysis::AnalysisModel;
+pub(crate) use app::{
+    AnalysisResourceSpec, DeepLinkApplyGuard, DeepLinkCurrentResources, MeasurementSpec,
+    MemoryPinSpec, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
+    ThresholdPreviewRecomputeSpec,
+};
 pub use app::{
     AppModel, ChannelIntensitySpec, ModelDispatch, ModelMode, SettingsMutationOutcome,
     SettingsSaveOperation,
 };
-pub(crate) use app::{DeepLinkApplyGuard, DeepLinkCurrentResources};
 pub use labels::{ControlLabelResource, LabelZarrDataset, discover_label_names_local};
 pub(crate) use masks::{MaskModel, load_geojson_mask_polylines};
+pub(crate) use measurement::{MeasurementMetric, MeasurementModel};
+pub use memory::{
+    ControlPinnedLevelResource, TileLoadingPolicy, TilePrefetchAggressiveness, TilePrefetchMode,
+};
+pub(crate) use memory::{PinnedMemoryModel, SystemMemorySnapshot, TileLoadingModel};
 pub use objects::{
     ControlObjectFeature, ControlObjectFilterResult, ControlObjectResource, ObjectResourceLoader,
 };
@@ -30,4 +45,9 @@ pub use project_preload::{
     ProjectObjectPreloadMode, ProjectObjectPreloadProjection, ProjectObjectPreloadSettings,
 };
 pub(crate) use readiness::{OperationKind, ReadinessModel};
+pub use screenshot::ScreenshotPreferences;
+pub(crate) use screenshot::default_screenshot_filename;
 pub(crate) use selection::{ObjectSelectionModel, parse_world_points, parse_world_rect};
+pub(crate) use threshold::ThresholdPreviewModel;
+pub use threshold::{ControlThresholdPreviewResource, ThresholdScope};
+pub(crate) use threshold::{ThresholdMask, extract_threshold_mask, threshold_mask_polygons};

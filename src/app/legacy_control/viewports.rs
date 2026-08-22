@@ -75,6 +75,12 @@ impl OmeZarrViewerApp {
                 "frame_plan_ema_ms": self.viewport_frame_plan_ema_ms,
                 "frame_plan_samples": self.viewport_frame_plan_samples,
             },
+            "tile_loading_observation": {
+                "cache": {"loaded": self.cache.len(), "capacity": self.cache.capacity(), "in_flight": self.cache.in_flight_len()},
+                "target_level": self.last_target_level,
+                "realized_generation": self.control_actor_tile_policy_generation,
+                "status": self.tile_loading_status,
+            },
             "links": {
                 "camera": links.camera,
                 "plane": links.plane,

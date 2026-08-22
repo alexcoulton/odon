@@ -44,14 +44,20 @@ use crate::deep_link::{
 };
 use crate::mcp::OdonControlRequest;
 use crate::model::{
-    AppModel, ChannelIntensitySpec, ControlLabelResource, ControlObjectFilterResult,
-    ControlObjectResource, DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset,
-    ModelMode, ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, SettingsMutationOutcome,
-    discover_label_names_local, project_roi_segmentation_path,
+    AnalysisResourceSpec, AppModel, ChannelIntensitySpec, ControlLabelResource,
+    ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
+    ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
+    LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
+    ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ScreenshotPreferences,
+    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
+    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
+    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
+    threshold_mask_polygons,
 };
 use crate::settings::AppSettings;
 
+mod analysis;
 mod application;
 mod channel_io;
 mod channels;
@@ -68,6 +74,8 @@ mod dispatch;
 mod jobs;
 mod mask_io;
 mod masks;
+mod measurements;
+mod memory;
 mod objects;
 mod project_io;
 mod project_preload;
@@ -79,9 +87,14 @@ mod request;
 mod resources;
 mod routing;
 mod runtime;
+mod screenshots;
+mod thresholds;
 mod worker;
 
 pub use crate::control::registry::ACTOR_CAPABLE_METHODS as MIGRATED_METHODS;
+use analysis::{
+    begin_analysis_compute, begin_analysis_preset_export, begin_analysis_preset_import,
+};
 use application::{
     begin_lifecycle_request, begin_settings_mutation, enqueue_recent_project_persistence,
 };
@@ -99,12 +112,15 @@ use deep_links::{
 pub use diagnostics::ActorDiagnostics;
 use dispatch::dispatch_request;
 use jobs::{
-    CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult, DeepLinkResolveWorkerResult,
-    LoadCompletion, LoadJob, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
+    AnalysisComputeKind, CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult,
+    DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MemoryPinWorkerOutcome,
+    MemoryPinWorkerResult, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
     ProjectRoiOpenWorkerResult,
 };
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
+use measurements::begin_measurement;
+use memory::begin_memory_pin;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
 use project_io::{
     discover_omezarr_roots_under, export_samplesheet_rois, import_samplesheet_rois,
@@ -129,6 +145,8 @@ pub use runtime::{
     ActorModelUpdate, ControlActorChannels, spawn_control_actor,
     spawn_control_actor_with_object_loader, spawn_control_actor_with_services,
 };
+use screenshots::begin_screenshot_settings_update;
+use thresholds::{begin_threshold_apply, begin_threshold_configure, begin_threshold_load};
 use worker::{open_project_roi_on_worker, spawn_resource_workers};
 
 const ACTOR_QUEUE_CAPACITY: usize = 256;

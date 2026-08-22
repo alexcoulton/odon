@@ -146,6 +146,7 @@ fn spawn_test_actor_with_alternate(
 }
 
 mod alternate_datasets;
+mod analysis;
 mod backpressure;
 mod dataset_inspection;
 mod deep_link_apply;
@@ -155,6 +156,7 @@ mod events;
 mod labels;
 mod lifecycle;
 mod masks;
+mod memory;
 mod objects;
 mod project_preload;
 mod project_roi_open;
@@ -165,6 +167,8 @@ mod remote;
 mod routing;
 mod samplesheets;
 mod saved_views;
+mod screenshots;
 mod settings;
 mod task_cancellation;
+mod thresholds;
 mod workspace;

@@ -1,6 +1,19 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn apply_control_actor_screenshot_preferences(
+        &mut self,
+        preferences: &odon::model::ScreenshotPreferences,
+    ) {
+        self.screenshot_output_dir = preferences.output_dir().map(Path::to_path_buf);
+        self.screenshot_settings = ScreenshotSettings {
+            include_scale_bar: preferences.include_scale_bar(),
+            include_legend: preferences.include_legend(),
+            scale_bar_scale: preferences.scale_bar_scale(),
+            legend_scale: preferences.legend_scale(),
+        };
+    }
+
     pub fn open_screenshot_settings(&mut self) {
         self.screenshot_settings_open = true;
     }

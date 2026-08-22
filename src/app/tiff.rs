@@ -147,6 +147,8 @@ impl OmeZarrViewerApp {
         if !self.screenshot_settings_open {
             return;
         }
+        let before_output_dir = self.screenshot_output_dir.clone();
+        let before_settings = self.screenshot_settings;
         let mut open = self.screenshot_settings_open;
         egui::Window::new("Screenshot Settings")
             .collapsible(false)
@@ -211,6 +213,20 @@ impl OmeZarrViewerApp {
                 });
             });
         self.screenshot_settings_open = open;
+        if self.screenshot_output_dir != before_output_dir
+            || self.screenshot_settings != before_settings
+        {
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.screenshot.settings.set",
+                params: serde_json::json!({
+                    "output_dir":self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                    "include_scale_bar":self.screenshot_settings.include_scale_bar,
+                    "include_legend":self.screenshot_settings.include_legend,
+                    "scale_bar_scale":self.screenshot_settings.scale_bar_scale,
+                    "legend_scale":self.screenshot_settings.legend_scale,
+                }),
+            });
+        }
     }
 
     pub(super) fn ui_roi_info_window(&mut self, ctx: &egui::Context) {

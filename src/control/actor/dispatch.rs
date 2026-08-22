@@ -167,6 +167,128 @@ pub(super) fn dispatch_request(
         begin_channel_intensity(model, request, load_job_tx, render_document, diagnostics);
         return;
     }
+    if request.command.method() == "viewer.screenshot.settings.set" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_screenshot_settings_update(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "memory.pin" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_memory_pin(model, request, load_job_tx, render_document, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if request.command.method() == "viewer.thresholds.preview.configure" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_threshold_configure(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if matches!(
+        request.command.method(),
+        "viewer.thresholds.preview.start" | "viewer.thresholds.preview.refresh"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        let refresh = request.command.method() == "viewer.thresholds.preview.refresh";
+        if begin_threshold_load(
+            model,
+            request,
+            load_job_tx,
+            render_document,
+            refresh,
+            diagnostics,
+        ) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if request.command.method() == "viewer.thresholds.preview.apply" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_threshold_apply(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if matches!(
+        request.command.method(),
+        "viewer.analysis.histogram"
+            | "viewer.analysis.suggest_thresholds"
+            | "viewer.analysis.warmup.start"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        let method = request.command.method();
+        let kind = match method {
+            "viewer.analysis.histogram" => AnalysisComputeKind::Histogram,
+            "viewer.analysis.suggest_thresholds" => AnalysisComputeKind::ThresholdSuggestions,
+            _ => AnalysisComputeKind::Warmup,
+        };
+        let present = matches!(kind, AnalysisComputeKind::Warmup);
+        if begin_analysis_compute(model, request, load_job_tx, kind, diagnostics) && present {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if request.command.method() == "viewer.analysis.presets.import" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_analysis_preset_import(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "viewer.analysis.presets.export" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_analysis_preset_export(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "viewer.measurements.start" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_measurement(model, request, load_job_tx, render_document, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
     if request.command.method() == "project.open" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_project_open(model, request, load_job_tx, diagnostics);

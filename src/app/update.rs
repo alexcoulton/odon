@@ -292,6 +292,8 @@ impl eframe::App for OmeZarrViewerApp {
                         let suspend_live_selection_sync =
                             matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect);
                         if self.seg_objects.object_count() > 0 {
+                            let analysis_before = (self.control_actor_analysis_generation > 0)
+                                .then(|| self.seg_objects.project_analysis_state());
                             self.seg_objects.ui_analysis(
                                 ui,
                                 &self.dataset,
@@ -303,6 +305,15 @@ impl eframe::App for OmeZarrViewerApp {
                                 self.spatial_root.as_deref(),
                                 self.spatial_layers.table_elements(),
                             );
+                            if let Some(before) = analysis_before {
+                                let after = self.seg_objects.project_analysis_state();
+                                if before != after {
+                                    self.native_control_intents.push(NativeControlIntent {
+                                        method: "viewer.analysis.set",
+                                        params: serde_json::json!({"state":after}),
+                                    });
+                                }
+                            }
                             if let Some(idx) = self.seg_objects.take_pending_zoom_object_index() {
                                 self.fit_to_seg_object_index(idx);
                             }

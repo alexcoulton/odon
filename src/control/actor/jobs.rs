@@ -22,6 +22,27 @@ pub(super) struct DeepLinkApplyWorkerResult {
     pub(super) object_filter: Option<ControlObjectFilterResult>,
 }
 
+pub(super) enum MemoryPinWorkerOutcome {
+    Confirmation {
+        risk: &'static str,
+        projected_bytes: u64,
+        available_bytes: u64,
+    },
+    Loaded(ControlPinnedLevelResource),
+}
+
+pub(super) struct MemoryPinWorkerResult {
+    pub(super) system: Option<SystemMemorySnapshot>,
+    pub(super) outcome: MemoryPinWorkerOutcome,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AnalysisComputeKind {
+    Histogram,
+    ThresholdSuggestions,
+    Warmup,
+}
+
 pub(super) struct ProjectObjectPreloadWorkerResult {
     pub(super) sources: Vec<ProjectObjectPreloadSource>,
     pub(super) resources: Vec<(PathBuf, ControlObjectResource)>,
@@ -158,6 +179,55 @@ pub(super) enum LoadCompletion {
         response: Value,
         result: anyhow::Result<PathBuf>,
     },
+    ScreenshotSettingsValidate {
+        generation: u64,
+        request: OdonControlRequest,
+        preferences: ScreenshotPreferences,
+        result: anyhow::Result<()>,
+    },
+    MemoryPin {
+        request: OdonControlRequest,
+        spec: MemoryPinSpec,
+        result: anyhow::Result<MemoryPinWorkerResult>,
+    },
+    ThresholdLoad {
+        request: OdonControlRequest,
+        spec: ThresholdPreviewLoadSpec,
+        result: anyhow::Result<ControlThresholdPreviewResource>,
+    },
+    ThresholdRecompute {
+        request: OdonControlRequest,
+        spec: ThresholdPreviewRecomputeSpec,
+        result: anyhow::Result<ControlThresholdPreviewResource>,
+    },
+    ThresholdApply {
+        request: OdonControlRequest,
+        spec: ThresholdPreviewApplySpec,
+        result: anyhow::Result<Vec<Vec<[f32; 2]>>>,
+    },
+    AnalysisCompute {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        kind: AnalysisComputeKind,
+        result: anyhow::Result<Value>,
+    },
+    AnalysisPresetImport {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        path: PathBuf,
+        result: anyhow::Result<Value>,
+    },
+    AnalysisPresetExport {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        path: PathBuf,
+        result: anyhow::Result<usize>,
+    },
+    Measurement {
+        request: OdonControlRequest,
+        spec: MeasurementSpec,
+        result: anyhow::Result<(ControlObjectResource, usize)>,
+    },
     SamplesheetInspect {
         request: OdonControlRequest,
         result: Value,
@@ -275,13 +345,23 @@ impl LoadCompletion {
             | Self::ProjectSave { .. }
             | Self::SettingsSave { .. }
             | Self::SettingsPersist { .. }
+            | Self::ScreenshotSettingsValidate { .. }
             | Self::SamplesheetInspect { .. }
             | Self::SamplesheetImport { .. }
             | Self::SamplesheetExport { .. }
             | Self::ProjectDiscovery { .. }
             | Self::ProjectObjectSourceScan { .. }
             | Self::ProjectObjectPreload { .. } => CompletionDomain::Project,
-            Self::ObjectResource { .. } | Self::Labels { .. } => CompletionDomain::Resources,
+            Self::ObjectResource { .. }
+            | Self::Labels { .. }
+            | Self::MemoryPin { .. }
+            | Self::ThresholdLoad { .. }
+            | Self::ThresholdRecompute { .. }
+            | Self::ThresholdApply { .. } => CompletionDomain::Resources,
+            Self::AnalysisCompute { .. }
+            | Self::AnalysisPresetImport { .. }
+            | Self::AnalysisPresetExport { .. }
+            | Self::Measurement { .. } => CompletionDomain::Objects,
             Self::ObjectFilter { .. } | Self::ObjectSelectionFilter { .. } => {
                 CompletionDomain::Objects
             }
@@ -385,6 +465,52 @@ pub(super) enum LoadJob {
         path: PathBuf,
         settings: AppSettings,
         response: Value,
+    },
+    ScreenshotSettingsValidate {
+        generation: u64,
+        request: OdonControlRequest,
+        preferences: ScreenshotPreferences,
+    },
+    MemoryPin {
+        request: OdonControlRequest,
+        document: Arc<RenderDocument>,
+        spec: MemoryPinSpec,
+    },
+    ThresholdLoad {
+        request: OdonControlRequest,
+        document: Arc<RenderDocument>,
+        spec: ThresholdPreviewLoadSpec,
+    },
+    ThresholdRecompute {
+        request: OdonControlRequest,
+        spec: ThresholdPreviewRecomputeSpec,
+    },
+    ThresholdApply {
+        request: OdonControlRequest,
+        spec: ThresholdPreviewApplySpec,
+    },
+    AnalysisCompute {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        kind: AnalysisComputeKind,
+        params: Value,
+    },
+    AnalysisPresetImport {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        path: PathBuf,
+    },
+    AnalysisPresetExport {
+        request: OdonControlRequest,
+        spec: AnalysisResourceSpec,
+        path: PathBuf,
+        overwrite: bool,
+        state: Value,
+    },
+    Measurement {
+        request: OdonControlRequest,
+        document: Arc<RenderDocument>,
+        spec: MeasurementSpec,
     },
     SamplesheetInspect {
         request: OdonControlRequest,

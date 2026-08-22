@@ -22,11 +22,14 @@ use crate::viewports::{ViewportId, ViewportLayout, ViewportLinks, ViewportWorksp
 use super::layers::NativeLayersModel;
 use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
-    ControlLabelResource, ControlObjectFilterResult, ControlObjectResource, LabelZarrDataset,
-    MaskModel, ObjectSelectionModel, OperationKind, ProjectObjectPreloadCatalog,
-    ProjectObjectPreloadProjection, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
-    ProjectObjectPreloadSource, ReadinessModel, parse_world_points, parse_world_rect,
-    project_object_preload_candidates,
+    AnalysisModel, ControlLabelResource, ControlObjectFilterResult, ControlObjectResource,
+    ControlPinnedLevelResource, ControlThresholdPreviewResource, LabelZarrDataset, MaskModel,
+    MeasurementMetric, MeasurementModel, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
+    ProjectObjectPreloadCatalog, ProjectObjectPreloadProjection, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ReadinessModel,
+    ScreenshotPreferences, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
+    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, parse_world_points,
+    parse_world_rect, project_object_preload_candidates,
 };
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
@@ -223,6 +226,14 @@ pub struct AppModel {
     settings_status: String,
     settings_operation_generation: u64,
     settings_operation_pending: bool,
+    screenshot_preferences: ScreenshotPreferences,
+    screenshot_settings_generation: u64,
+    screenshot_settings_pending: bool,
+    tile_loading: TileLoadingModel,
+    pinned_memory: PinnedMemoryModel,
+    threshold_preview: ThresholdPreviewModel,
+    analysis: AnalysisModel,
+    measurement: MeasurementModel,
     measured_viewports: HashSet<ViewportId>,
     renderer_gpu_available: bool,
 }
@@ -256,6 +267,78 @@ pub struct ChannelIntensitySpec {
     pub zarr_path: String,
     pub dtype: String,
     pub ranges: Vec<Range<u64>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MemoryPinSpec {
+    pub document_generation: u64,
+    pub operation_generation: u64,
+    pub level: usize,
+    pub channel_ids: Vec<u64>,
+    pub estimated_bytes: u64,
+    pub pinned_bytes: u64,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ThresholdPreviewLoadSpec {
+    pub(crate) document_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) channel_index: usize,
+    pub(crate) channel_name: String,
+    pub(crate) scope: ThresholdScope,
+    pub(crate) level: usize,
+    pub(crate) downsample: f32,
+    pub(crate) x0: u64,
+    pub(crate) y0: u64,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) zarr_path: String,
+    pub(crate) dtype: String,
+    pub(crate) ranges: Vec<Range<u64>>,
+    pub(crate) threshold: u16,
+    pub(crate) min_component_pixels: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ThresholdPreviewRecomputeSpec {
+    pub(crate) document_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) preview: Arc<ControlThresholdPreviewResource>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ThresholdPreviewApplySpec {
+    pub(crate) document_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) preview: Arc<ControlThresholdPreviewResource>,
+    pub(crate) pivot: [f32; 2],
+    pub(crate) offset: [f32; 2],
+    pub(crate) scale: [f32; 2],
+    pub(crate) rotation_rad: f32,
+}
+
+#[derive(Clone)]
+pub(crate) struct AnalysisResourceSpec {
+    pub(crate) document_generation: u64,
+    pub(crate) resource_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) operation_scope: String,
+    pub(crate) resource: Arc<ControlObjectResource>,
+    pub(crate) indices: Option<Arc<Vec<usize>>>,
+    pub(crate) filtered: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct MeasurementSpec {
+    pub(crate) document_generation: u64,
+    pub(crate) resource_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) level: usize,
+    pub(crate) metric: MeasurementMetric,
+    pub(crate) prefix: String,
+    pub(crate) resource: Arc<ControlObjectResource>,
+    pub(crate) target_indices: Arc<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +392,14 @@ impl AppModel {
             settings_status: String::new(),
             settings_operation_generation: 0,
             settings_operation_pending: false,
+            screenshot_preferences: ScreenshotPreferences::default(),
+            screenshot_settings_generation: 0,
+            screenshot_settings_pending: false,
+            tile_loading: TileLoadingModel::default(),
+            pinned_memory: PinnedMemoryModel::default(),
+            threshold_preview: ThresholdPreviewModel::default(),
+            analysis: AnalysisModel::default(),
+            measurement: MeasurementModel::default(),
             measured_viewports: HashSet::new(),
             renderer_gpu_available: false,
         }
@@ -794,6 +885,1121 @@ impl AppModel {
 
     pub fn settings(&self) -> &AppSettings {
         &self.settings
+    }
+
+    pub fn screenshot_preferences(&self) -> &ScreenshotPreferences {
+        &self.screenshot_preferences
+    }
+
+    pub fn tile_loading_policy(&self) -> &TileLoadingPolicy {
+        self.tile_loading.policy()
+    }
+
+    pub fn tile_loading_snapshot(&self) -> Result<Value, ControlError> {
+        let supported =
+            self.dataset()?.descriptor.kind != crate::data::document::DocumentKind::Tiff;
+        Ok(self.tile_loading.snapshot(supported))
+    }
+
+    fn set_tile_loading_policy(&mut self, params: &Value) -> Result<Value, ControlError> {
+        let supported =
+            self.dataset()?.descriptor.kind != crate::data::document::DocumentKind::Tiff;
+        self.tile_loading.set(params, supported)
+    }
+
+    pub(crate) fn prepare_memory_pin(
+        &mut self,
+        params: &Value,
+    ) -> Result<MemoryPinSpec, ControlError> {
+        let dataset = self.dataset()?;
+        if dataset.plane_extents[0] > 1 {
+            return Err(invalid(
+                "RAM pinning is currently unavailable for OME-Zarr z-stacks",
+            ));
+        }
+        let level = params
+            .get("level")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|level| *level < dataset.descriptor.levels.len())
+            .ok_or_else(|| invalid("memory level is required and must be in range"))?;
+        let selected_channel_indices = match params.get("channels") {
+            Some(value) => {
+                let values = value
+                    .as_array()
+                    .ok_or_else(|| invalid("channels must be an array"))?;
+                resolve_channel_list_ordered(&dataset.workspace.active().state.channels, values)?
+            }
+            None => {
+                let selected = self.pinned_memory.selected_channels().to_vec();
+                if selected.is_empty() {
+                    (0..dataset.workspace.active().state.channels.len()).collect()
+                } else {
+                    selected
+                }
+            }
+        };
+        if selected_channel_indices.is_empty() {
+            return Err(invalid("select at least one channel to pin"));
+        }
+        let channel_ids = selected_channel_indices
+            .iter()
+            .map(|index| dataset.workspace.active().state.channels[*index].index as u64)
+            .collect::<Vec<_>>();
+        let estimated_bytes =
+            estimate_pinned_level_bytes(&dataset.descriptor, level, selected_channel_indices.len());
+        let status = format!(
+            "Loading {} channel(s) from level {level} into RAM",
+            channel_ids.len()
+        );
+        let operation_generation =
+            self.pinned_memory
+                .begin(level, selected_channel_indices.clone(), status.clone());
+        self.readiness.begin_scoped(
+            OperationKind::MemoryPin,
+            level.to_string(),
+            operation_generation,
+            status,
+        );
+        Ok(MemoryPinSpec {
+            document_generation: self.document_generation,
+            operation_generation,
+            level,
+            channel_ids,
+            estimated_bytes,
+            pinned_bytes: self.pinned_memory.total_loaded_bytes(),
+            force: params
+                .get("force")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+
+    pub(crate) fn memory_pin_is_current(&self, spec: &MemoryPinSpec) -> bool {
+        self.mode == ModelMode::Single
+            && spec.document_generation == self.document_generation
+            && self
+                .pinned_memory
+                .is_current(spec.level, spec.operation_generation)
+    }
+
+    pub(crate) fn install_memory_pin(
+        &mut self,
+        spec: &MemoryPinSpec,
+        resource: Arc<ControlPinnedLevelResource>,
+        system: Option<SystemMemorySnapshot>,
+    ) -> Option<Value> {
+        if !self.memory_pin_is_current(spec)
+            || !self
+                .pinned_memory
+                .install(spec.level, spec.operation_generation, resource, system)
+        {
+            return None;
+        }
+        self.readiness.finish_scoped(
+            OperationKind::MemoryPin,
+            &spec.level.to_string(),
+            spec.operation_generation,
+            "Pinned level ready",
+        );
+        Some(json!({
+            "started":true,
+            "completed":true,
+            "level":spec.level,
+            "estimated_bytes":spec.estimated_bytes,
+            "memory":self.memory_snapshot().ok()?,
+        }))
+    }
+
+    pub(crate) fn finish_memory_pin_confirmation(
+        &mut self,
+        spec: &MemoryPinSpec,
+        system: Option<SystemMemorySnapshot>,
+        risk: &str,
+        projected_bytes: u64,
+        available_bytes: u64,
+    ) -> Option<Value> {
+        if !self.memory_pin_is_current(spec)
+            || !self
+                .pinned_memory
+                .confirmation(spec.level, spec.operation_generation, system)
+        {
+            return None;
+        }
+        self.readiness.finish_scoped(
+            OperationKind::MemoryPin,
+            &spec.level.to_string(),
+            spec.operation_generation,
+            "RAM pinning requires confirmation",
+        );
+        Some(json!({
+            "confirmation_required":true,
+            "level":spec.level,
+            "requested_bytes":spec.estimated_bytes,
+            "projected_bytes":projected_bytes,
+            "available_bytes":available_bytes,
+            "risk":risk,
+        }))
+    }
+
+    pub(crate) fn fail_memory_pin(
+        &mut self,
+        spec: &MemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.memory_pin_is_current(spec) {
+            return false;
+        }
+        let message = message.into();
+        self.pinned_memory
+            .fail(spec.level, spec.operation_generation, message.clone());
+        self.readiness.fail_scoped(
+            OperationKind::MemoryPin,
+            &spec.level.to_string(),
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn cancel_memory_pin(
+        &mut self,
+        spec: &MemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.memory_pin_is_current(spec) {
+            return false;
+        }
+        let message = message.into();
+        self.pinned_memory
+            .cancel(spec.level, spec.operation_generation, message.clone());
+        self.readiness.cancel_scoped(
+            OperationKind::MemoryPin,
+            &spec.level.to_string(),
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn pinned_level_resources(&self) -> Vec<Arc<ControlPinnedLevelResource>> {
+        self.pinned_memory.resources()
+    }
+
+    fn memory_snapshot(&self) -> Result<Value, ControlError> {
+        let dataset = self.dataset()?;
+        let selected = if self.pinned_memory.selected_channels().is_empty() {
+            (0..dataset.workspace.active().state.channels.len()).collect::<Vec<_>>()
+        } else {
+            self.pinned_memory.selected_channels().to_vec()
+        };
+        let levels = dataset
+            .descriptor
+            .levels
+            .iter()
+            .enumerate()
+            .map(|(level_index, level)| {
+                let (status, bytes, channels_loaded, error) =
+                    self.pinned_memory.status(level_index);
+                json!({
+                    "level":level_index,
+                    "downsample":level.downsample,
+                    "shape_y":level.shape.get(dataset.descriptor.dims.y),
+                    "shape_x":level.shape.get(dataset.descriptor.dims.x),
+                    "selected_channel_estimate_bytes":estimate_pinned_level_bytes(&dataset.descriptor, level_index, selected.len()),
+                    "status":status,
+                    "loaded_bytes":bytes,
+                    "channels_loaded":channels_loaded,
+                    "error":error,
+                })
+            })
+            .collect::<Vec<_>>();
+        let system = self.pinned_memory.system();
+        Ok(json!({
+            "running":self.pinned_memory.running(),
+            "status":self.pinned_memory.status_message(),
+            "pinned_bytes":self.pinned_memory.total_loaded_bytes(),
+            "system":system.map(|memory| json!({"total_bytes":memory.total_bytes,"available_bytes":memory.available_bytes})),
+            "selected_channels":selected,
+            "z_stack_supported":dataset.plane_extents[0] <= 1,
+            "levels":levels,
+        }))
+    }
+
+    fn unpin_memory(&mut self, params: &Value) -> Result<Value, ControlError> {
+        let level_count = self.dataset()?.descriptor.levels.len();
+        let level = params
+            .get("level")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|level| *level < level_count)
+            .ok_or_else(|| invalid("memory level is required and must be in range"))?;
+        let pending_generation = self.pinned_memory.pending_generation(level);
+        let unloaded = self.pinned_memory.unpin(level);
+        if let Some(generation) = pending_generation {
+            self.readiness.cancel_scoped(
+                OperationKind::MemoryPin,
+                &level.to_string(),
+                generation,
+                "Pinned level was unloaded",
+            );
+        }
+        Ok(json!({"unloaded":unloaded,"level":level}))
+    }
+
+    fn unpin_all_memory(&mut self) -> Result<Value, ControlError> {
+        self.dataset()?;
+        let count = self.pinned_memory.unpin_all();
+        self.readiness
+            .cancel_kind_pending(OperationKind::MemoryPin, "All pinned levels were unloaded");
+        Ok(json!({"unloaded_levels":count}))
+    }
+
+    pub fn threshold_preview_resource(&self) -> Option<Arc<ControlThresholdPreviewResource>> {
+        self.threshold_preview.preview.clone()
+    }
+
+    pub fn threshold_preview_generation(&self) -> u64 {
+        self.threshold_preview.operation_generation
+    }
+
+    pub fn threshold_preview_pending(&self) -> bool {
+        self.readiness.is_pending(
+            OperationKind::ThresholdPreview,
+            self.threshold_preview.operation_generation,
+        )
+    }
+
+    pub(crate) fn threshold_preview_snapshot(&self) -> Result<Value, ControlError> {
+        self.dataset()?;
+        Ok(self.threshold_preview.snapshot())
+    }
+
+    pub(crate) fn configure_threshold_preview(
+        &mut self,
+        params: &Value,
+    ) -> Result<Option<ThresholdPreviewRecomputeSpec>, ControlError> {
+        let dataset = self.dataset()?;
+        let scope = optional_threshold_scope(params)?;
+        let level = optional_threshold_level(params, dataset.descriptor.levels.len())?;
+        let min_component_pixels = optional_threshold_min_pixels(params)?;
+        let threshold = optional_threshold_value(params)?;
+        let has_channel = has_channel_selector(params);
+        let channel = has_channel
+            .then(|| {
+                resolve_channel(
+                    &dataset.workspace.active().state.channels,
+                    channel_selector_from_params(params)?,
+                )
+            })
+            .transpose()?;
+        let active = self.threshold_preview.preview.clone();
+        if threshold.is_some() && active.is_none() {
+            return Err(invalid(
+                "threshold can only be set after a preview has started",
+            ));
+        }
+        if let Some(preview) = active.as_ref()
+            && (scope.is_some_and(|scope| scope != preview.scope)
+                || level.is_some_and(|level| level != preview.level)
+                || channel.is_some_and(|channel| channel != preview.channel_index))
+        {
+            return Err(invalid(
+                "cancel the active threshold preview before changing its scope, level, or channel",
+            ));
+        }
+        if let Some(scope) = scope {
+            self.threshold_preview.scope = scope;
+        }
+        if let Some(level) = level {
+            self.threshold_preview.full_level = level;
+        }
+        if let Some(channel) = channel {
+            self.dataset_mut()?
+                .workspace
+                .active_mut()
+                .state
+                .active_channel = channel;
+        }
+        if let Some(value) = min_component_pixels {
+            self.threshold_preview.min_component_pixels = value;
+        }
+        let Some(active) = active else {
+            return Ok(None);
+        };
+        let next_threshold = threshold.unwrap_or(active.threshold);
+        let next_min_pixels = min_component_pixels.unwrap_or(active.min_component_pixels);
+        if next_threshold == active.threshold && next_min_pixels == active.min_component_pixels {
+            return Ok(None);
+        }
+        let generation = self.threshold_preview.next_generation();
+        let mut candidate = (*active).clone();
+        candidate.generation = generation;
+        candidate.threshold = next_threshold;
+        candidate.min_component_pixels = next_min_pixels;
+        self.threshold_preview.status = "Recomputing threshold preview".to_string();
+        self.readiness.begin(
+            OperationKind::ThresholdPreview,
+            generation,
+            "Recomputing threshold preview",
+        );
+        Ok(Some(ThresholdPreviewRecomputeSpec {
+            document_generation: self.document_generation,
+            operation_generation: generation,
+            preview: Arc::new(candidate),
+        }))
+    }
+
+    pub(crate) fn prepare_threshold_preview_load(
+        &mut self,
+        params: &Value,
+        refresh: bool,
+    ) -> Result<ThresholdPreviewLoadSpec, ControlError> {
+        let existing = self.threshold_preview.preview.clone();
+        if refresh && existing.is_none() {
+            return Err(invalid("no threshold preview is active"));
+        }
+        if !refresh && existing.is_some() {
+            return Err(invalid(
+                "a threshold preview is already active; refresh or cancel it first",
+            ));
+        }
+        let dataset = self.dataset()?;
+        let viewport = &dataset.workspace.active().state;
+        if viewport.plane_mode != "xy" {
+            return Err(invalid("threshold preview is only available in XY view"));
+        }
+        let requested_scope = optional_threshold_scope(params)?;
+        let requested_level = optional_threshold_level(params, dataset.descriptor.levels.len())?;
+        let requested_min = optional_threshold_min_pixels(params)?;
+        let requested_threshold = optional_threshold_value(params)?;
+        let requested_channel = if has_channel_selector(params) {
+            Some(resolve_channel(
+                &viewport.channels,
+                channel_selector_from_params(params)?,
+            )?)
+        } else {
+            None
+        };
+        let scope = existing
+            .as_ref()
+            .map(|preview| preview.scope)
+            .or(requested_scope)
+            .unwrap_or(self.threshold_preview.scope);
+        let channel_index = existing
+            .as_ref()
+            .map(|preview| preview.channel_index)
+            .or(requested_channel)
+            .unwrap_or(viewport.active_channel)
+            .min(viewport.channels.len().saturating_sub(1));
+        let min_component_pixels = existing
+            .as_ref()
+            .map(|preview| preview.min_component_pixels)
+            .or(requested_min)
+            .unwrap_or(self.threshold_preview.min_component_pixels)
+            .max(1);
+        let threshold = existing
+            .as_ref()
+            .map(|preview| preview.threshold)
+            .or(requested_threshold)
+            .unwrap_or_else(|| {
+                viewport
+                    .channels
+                    .get(channel_index)
+                    .and_then(|channel| channel.window)
+                    .map(|(minimum, _)| minimum.round().clamp(0.0, u16::MAX as f32) as u16)
+                    .unwrap_or(0)
+            });
+        let level_position = if scope == ThresholdScope::EntireImage {
+            existing
+                .as_ref()
+                .map(|preview| preview.level)
+                .or(requested_level)
+                .unwrap_or(self.threshold_preview.full_level)
+        } else {
+            dataset
+                .descriptor
+                .levels
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| {
+                    let left_error = (viewport.zoom * left.downsample.max(1e-6)).ln().abs();
+                    let right_error = (viewport.zoom * right.downsample.max(1e-6)).ln().abs();
+                    left_error.total_cmp(&right_error)
+                })
+                .map(|(position, _)| position)
+                .unwrap_or(0)
+        };
+        let level = dataset
+            .descriptor
+            .levels
+            .get(level_position)
+            .ok_or_else(|| invalid(format!("threshold level {level_position} is out of range")))?;
+        let (x0, y0, x1, y1) = threshold_extent(dataset, viewport, channel_index, scope, level)?;
+        let width = usize::try_from(x1.saturating_sub(x0))
+            .map_err(|_| invalid("threshold width is too large"))?;
+        let height = usize::try_from(y1.saturating_sub(y0))
+            .map_err(|_| invalid("threshold height is too large"))?;
+        let pixels = (width as u64)
+            .checked_mul(height as u64)
+            .ok_or_else(|| invalid("threshold region is too large"))?;
+        if pixels == 0 {
+            return Err(invalid("threshold region is empty"));
+        }
+        if pixels > THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS {
+            return Err(invalid(format!(
+                "thresholding at this level would read {pixels} pixels; choose a coarser level"
+            )));
+        }
+        let level0 = dataset
+            .descriptor
+            .levels
+            .first()
+            .ok_or_else(|| invalid("dataset has no image levels"))?;
+        let channel = viewport
+            .channels
+            .get(channel_index)
+            .ok_or_else(|| invalid("threshold channel is out of range"))?;
+        let z_index = dataset.descriptor.dims.z.and_then(|dimension| {
+            map_level0_axis_index(level0, level, dimension, viewport.plane_slices[0])
+        });
+        let ranges = (0..level.shape.len())
+            .map(|dimension| {
+                let length = level.shape[dimension];
+                if Some(dimension) == dataset.descriptor.dims.c {
+                    let selected = (channel.index as u64).min(length.saturating_sub(1));
+                    selected..selected.saturating_add(1)
+                } else if Some(dimension) == dataset.descriptor.dims.z {
+                    let selected = z_index.unwrap_or(0).min(length.saturating_sub(1));
+                    selected..selected.saturating_add(1)
+                } else if dimension == dataset.descriptor.dims.y {
+                    y0.min(length)..y1.min(length)
+                } else if dimension == dataset.descriptor.dims.x {
+                    x0.min(length)..x1.min(length)
+                } else {
+                    0..length.min(1)
+                }
+            })
+            .collect::<Vec<_>>();
+        let channel_name = channel.name.clone();
+        let document_generation = self.document_generation;
+        let zarr_path = format!("/{}", level.path.trim_start_matches('/'));
+        let dtype = level.dtype.clone();
+        let downsample = level.downsample.max(1e-6);
+        if !refresh {
+            self.threshold_preview.scope = scope;
+            self.threshold_preview.full_level = level_position;
+            self.threshold_preview.min_component_pixels = min_component_pixels;
+            self.dataset_mut()?
+                .workspace
+                .active_mut()
+                .state
+                .active_channel = channel_index;
+        }
+        let operation_generation = self.threshold_preview.next_generation();
+        self.threshold_preview.status = if refresh {
+            "Refreshing threshold preview".to_string()
+        } else {
+            "Loading threshold preview".to_string()
+        };
+        self.readiness.begin(
+            OperationKind::ThresholdPreview,
+            operation_generation,
+            self.threshold_preview.status.clone(),
+        );
+        Ok(ThresholdPreviewLoadSpec {
+            document_generation,
+            operation_generation,
+            channel_index,
+            channel_name,
+            scope,
+            level: level_position,
+            downsample,
+            x0,
+            y0,
+            width,
+            height,
+            zarr_path,
+            dtype,
+            ranges,
+            threshold,
+            min_component_pixels,
+        })
+    }
+
+    pub(crate) fn threshold_operation_is_current(
+        &self,
+        document_generation: u64,
+        operation_generation: u64,
+    ) -> bool {
+        self.mode == ModelMode::Single
+            && document_generation == self.document_generation
+            && operation_generation == self.threshold_preview.operation_generation
+    }
+
+    pub(crate) fn install_threshold_preview(
+        &mut self,
+        document_generation: u64,
+        operation_generation: u64,
+        preview: Arc<ControlThresholdPreviewResource>,
+    ) -> Option<Value> {
+        if !self.threshold_operation_is_current(document_generation, operation_generation) {
+            return None;
+        }
+        self.threshold_preview.status = format!(
+            "Preview: {} pixels selected in {} {} at level {}.",
+            preview
+                .included
+                .iter()
+                .filter(|included| **included)
+                .count(),
+            preview.channel_name,
+            preview.scope.as_str(),
+            preview.level,
+        );
+        self.threshold_preview.preview = Some(preview);
+        self.readiness.finish(
+            OperationKind::ThresholdPreview,
+            operation_generation,
+            "Threshold preview ready",
+        );
+        self.threshold_preview_snapshot().ok()
+    }
+
+    pub(crate) fn prepare_threshold_preview_apply(
+        &mut self,
+    ) -> Result<ThresholdPreviewApplySpec, ControlError> {
+        let preview = self
+            .threshold_preview
+            .preview
+            .clone()
+            .ok_or_else(|| invalid("no threshold preview is active"))?;
+        let dataset = self.dataset()?;
+        let viewport = &dataset.workspace.active().state;
+        let channel = viewport
+            .channels
+            .get(preview.channel_index)
+            .ok_or_else(|| invalid("threshold channel is no longer available"))?;
+        let spec = ThresholdPreviewApplySpec {
+            document_generation: self.document_generation,
+            operation_generation: self
+                .threshold_preview
+                .operation_generation
+                .wrapping_add(1)
+                .max(1),
+            preview,
+            pivot: [dataset.world_size[0] * 0.5, dataset.world_size[1] * 0.5],
+            offset: channel.offset_world,
+            scale: channel.scale,
+            rotation_rad: channel.rotation_rad,
+        };
+        self.threshold_preview.operation_generation = spec.operation_generation;
+        self.threshold_preview.status = "Creating threshold mask".to_string();
+        self.readiness.begin(
+            OperationKind::ThresholdPreview,
+            spec.operation_generation,
+            "Creating threshold mask",
+        );
+        Ok(spec)
+    }
+
+    pub(crate) fn install_threshold_mask(
+        &mut self,
+        spec: &ThresholdPreviewApplySpec,
+        polygons_world: Vec<Vec<[f32; 2]>>,
+    ) -> Option<Value> {
+        if !self.threshold_operation_is_current(spec.document_generation, spec.operation_generation)
+        {
+            return None;
+        }
+        let dataset = self.dataset.as_mut()?;
+        let response = dataset.masks.install_generated_threshold_layer(
+            format!(
+                "Threshold {} {} level {}",
+                spec.preview.channel_name,
+                spec.preview.scope.layer_label(),
+                spec.preview.level,
+            ),
+            polygons_world,
+        );
+        Self::sync_mask_native_layers(dataset);
+        self.threshold_preview.preview = None;
+        self.threshold_preview.status = format!(
+            "Created {} threshold region(s) from {}.",
+            response["polygon_count"].as_u64().unwrap_or(0),
+            spec.preview.channel_name,
+        );
+        self.readiness.finish(
+            OperationKind::ThresholdPreview,
+            spec.operation_generation,
+            "Threshold mask ready",
+        );
+        Some(json!({
+            "applied":true,
+            "layer_id":response["id"],
+            "polygon_count":response["polygon_count"],
+            "mask_layer":response,
+        }))
+    }
+
+    pub(crate) fn fail_threshold_operation(
+        &mut self,
+        document_generation: u64,
+        operation_generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.threshold_operation_is_current(document_generation, operation_generation) {
+            return false;
+        }
+        let message = message.into();
+        self.threshold_preview.status = message.clone();
+        self.readiness.fail(
+            OperationKind::ThresholdPreview,
+            operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn cancel_threshold_preview(&mut self) -> Result<Value, ControlError> {
+        self.dataset()?;
+        let cancelled = self.threshold_preview.preview.take().is_some()
+            || self.readiness.is_pending(
+                OperationKind::ThresholdPreview,
+                self.threshold_preview.operation_generation,
+            );
+        self.threshold_preview.next_generation();
+        self.threshold_preview.status.clear();
+        self.readiness.cancel_kind_pending(
+            OperationKind::ThresholdPreview,
+            "Threshold preview was cancelled",
+        );
+        Ok(json!({"cancelled":cancelled,"active":false}))
+    }
+
+    pub fn analysis_state(&self) -> &Value {
+        self.analysis.state()
+    }
+
+    pub fn analysis_generation(&self) -> u64 {
+        self.analysis.generation()
+    }
+
+    pub(crate) fn analysis_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "analysis")?;
+        let dataset = self.dataset()?;
+        let resource = dataset.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "analysis requires object data to be loaded",
+            )
+        })?;
+        let viewport = &dataset.workspace.active().state;
+        Ok(json!({
+            "state":self.analysis.state(),
+            "generation":self.analysis.generation(),
+            "numeric_properties":numeric_object_properties(resource),
+            "warmup":self.analysis.warmup_snapshot(),
+            "active_channel":viewport.channels.get(viewport.active_channel).map(|channel| channel.name.as_str()),
+            "filtered":viewport.object_filter_active,
+            "filtered_count":if viewport.object_filter_active { viewport.object_filter_indices.len() } else { resource.features.len() },
+            "object_count":resource.features.len(),
+        }))
+    }
+
+    pub(crate) fn set_analysis_state(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "analysis")?;
+        self.dataset()?.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "analysis requires object data to be loaded",
+            )
+        })?;
+        self.analysis.replace(params)?;
+        self.analysis_snapshot(&json!({}))
+    }
+
+    pub(crate) fn prepare_analysis_resource_operation(
+        &mut self,
+        params: &Value,
+        scope: &str,
+    ) -> Result<AnalysisResourceSpec, ControlError> {
+        self.require_primary_analysis_target(params, "analysis")?;
+        let dataset = self.dataset()?;
+        let resource = dataset.object_resource.clone().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "analysis requires object data to be loaded",
+            )
+        })?;
+        let viewport = &dataset.workspace.active().state;
+        let filtered = viewport.object_filter_active;
+        let indices = filtered.then(|| Arc::clone(&viewport.object_filter_indices));
+        let document_generation = self.document_generation;
+        let resource_generation = self.installed_object_resource_generation;
+        let operation_generation = self.analysis.begin(scope);
+        self.readiness.begin_scoped(
+            OperationKind::Analysis,
+            scope,
+            operation_generation,
+            format!("Running {scope}"),
+        );
+        Ok(AnalysisResourceSpec {
+            document_generation,
+            resource_generation,
+            operation_generation,
+            operation_scope: scope.to_string(),
+            resource,
+            indices,
+            filtered,
+        })
+    }
+
+    pub(crate) fn analysis_operation_is_current(&self, spec: &AnalysisResourceSpec) -> bool {
+        self.mode == ModelMode::Single
+            && spec.document_generation == self.document_generation
+            && spec.resource_generation == self.installed_object_resource_generation
+            && self
+                .analysis
+                .is_current(&spec.operation_scope, spec.operation_generation)
+    }
+
+    pub(crate) fn finish_analysis_operation(&mut self, spec: &AnalysisResourceSpec) -> bool {
+        if !self.analysis_operation_is_current(spec) {
+            return false;
+        }
+        self.readiness.finish_scoped(
+            OperationKind::Analysis,
+            &spec.operation_scope,
+            spec.operation_generation,
+            "Analysis ready",
+        );
+        true
+    }
+
+    pub(crate) fn fail_analysis_operation(
+        &mut self,
+        spec: &AnalysisResourceSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.analysis_operation_is_current(spec) {
+            return false;
+        }
+        self.analysis.fail_warmup();
+        self.readiness.fail_scoped(
+            OperationKind::Analysis,
+            &spec.operation_scope,
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn begin_analysis_warmup(
+        &mut self,
+        params: &Value,
+    ) -> Result<AnalysisResourceSpec, ControlError> {
+        let spec = self.prepare_analysis_resource_operation(params, "analysis_warmup")?;
+        let total = numeric_object_properties(&spec.resource).len();
+        self.analysis.begin_warmup(total);
+        Ok(spec)
+    }
+
+    pub(crate) fn finish_analysis_warmup(
+        &mut self,
+        spec: &AnalysisResourceSpec,
+        completed: usize,
+    ) -> Option<Value> {
+        if !self.finish_analysis_operation(spec) {
+            return None;
+        }
+        self.analysis.finish_warmup(completed);
+        Some(self.analysis.warmup_snapshot())
+    }
+
+    pub(crate) fn analysis_warmup_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "analysis")?;
+        self.dataset()?.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "analysis requires object data to be loaded",
+            )
+        })?;
+        Ok(self.analysis.warmup_snapshot())
+    }
+
+    pub(crate) fn install_analysis_preset(
+        &mut self,
+        spec: &AnalysisResourceSpec,
+        state: Value,
+        path: &Path,
+    ) -> Option<Result<Value, ControlError>> {
+        if !self.finish_analysis_operation(spec) {
+            return None;
+        }
+        if let Err(error) = self.analysis.install_imported_state(state) {
+            return Some(Err(error));
+        }
+        Some(Ok(json!({
+            "imported":true,
+            "path":path.to_string_lossy(),
+            "call_count":self.analysis.state()["threshold_elements"].as_array().map_or(0, Vec::len),
+        })))
+    }
+
+    fn require_primary_analysis_target(
+        &self,
+        params: &Value,
+        operation: &str,
+    ) -> Result<(), ControlError> {
+        match params.get("target").and_then(Value::as_str) {
+            None | Some("segmentation_objects" | "objects" | "primary") => Ok(()),
+            Some(target) => Err(invalid(format!(
+                "{operation} target '{target}' is renderer-owned and must use its legacy route"
+            ))),
+        }
+    }
+
+    pub(crate) fn measurement_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "measurements")?;
+        let dataset = self.dataset()?;
+        let resource = dataset.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "measurements require object data",
+            )
+        })?;
+        let viewport = &dataset.workspace.active().state;
+        let target_count = if self.measurement.filtered_only && viewport.object_filter_active {
+            viewport.object_filter_indices.len()
+        } else {
+            resource.features.len()
+        };
+        let properties = resource
+            .property_names
+            .iter()
+            .filter(|property| property.starts_with(&self.measurement.prefix))
+            .cloned()
+            .collect();
+        Ok(self
+            .measurement
+            .snapshot(&dataset.descriptor, target_count, properties))
+    }
+
+    pub(crate) fn configure_measurement(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "measurements")?;
+        let levels = self.dataset()?.descriptor.levels.len();
+        self.measurement.configure(params, levels)?;
+        self.measurement_snapshot(&json!({}))
+    }
+
+    pub(crate) fn prepare_measurement(
+        &mut self,
+        params: &Value,
+    ) -> Result<MeasurementSpec, ControlError> {
+        self.configure_measurement(params)?;
+        let dataset = self.dataset()?;
+        if dataset.descriptor.render_kind == DatasetRenderKind::LabelMask {
+            return Err(invalid(
+                "image measurements are unavailable for label-mask root datasets",
+            ));
+        }
+        if dataset.plane_extents[0] > 1 {
+            return Err(invalid(
+                "image measurements are currently unavailable for OME-Zarr z-stacks",
+            ));
+        }
+        let resource = dataset.object_resource.clone().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "measurements require object data",
+            )
+        })?;
+        if resource
+            .features
+            .iter()
+            .all(|feature| feature.polygons_world.is_empty())
+        {
+            return Err(invalid(
+                "bulk polygon measurements are unavailable for point-only object layers",
+            ));
+        }
+        let viewport = &dataset.workspace.active().state;
+        let target_indices = if self.measurement.filtered_only && viewport.object_filter_active {
+            viewport.object_filter_indices.as_ref().clone()
+        } else {
+            (0..resource.features.len()).collect()
+        };
+        if target_indices.is_empty() {
+            return Err(invalid("no target cells available for measurement"));
+        }
+        let document_generation = self.document_generation;
+        let resource_generation = self.installed_object_resource_generation;
+        let operation_generation = self.measurement.begin(target_indices.len());
+        self.readiness.begin(
+            OperationKind::Measurement,
+            operation_generation,
+            "Measuring object intensities",
+        );
+        Ok(MeasurementSpec {
+            document_generation,
+            resource_generation,
+            operation_generation,
+            level: self.measurement.level,
+            metric: self.measurement.metric,
+            prefix: self.measurement.prefix.clone(),
+            resource,
+            target_indices: Arc::new(target_indices),
+        })
+    }
+
+    pub(crate) fn install_measurement(
+        &mut self,
+        spec: &MeasurementSpec,
+        resource: ControlObjectResource,
+        measured: usize,
+    ) -> Option<Value> {
+        if spec.document_generation != self.document_generation
+            || spec.resource_generation != self.installed_object_resource_generation
+            || !self.measurement.finish(spec.operation_generation, measured)
+        {
+            return None;
+        }
+        self.installed_object_resource_generation = self
+            .installed_object_resource_generation
+            .wrapping_add(1)
+            .max(1);
+        self.object_resource_generation = self.installed_object_resource_generation;
+        self.dataset.as_mut()?.object_resource = Some(Arc::new(resource));
+        self.readiness.finish(
+            OperationKind::Measurement,
+            spec.operation_generation,
+            "Measurements ready",
+        );
+        Some(
+            json!({"started":true,"completed":true,"measurement":self.measurement_snapshot(&json!({})).ok()?}),
+        )
+    }
+
+    pub(crate) fn fail_measurement(
+        &mut self,
+        spec: &MeasurementSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if spec.document_generation != self.document_generation
+            || spec.resource_generation != self.installed_object_resource_generation
+        {
+            return false;
+        }
+        let message = message.into();
+        if !self
+            .measurement
+            .fail(spec.operation_generation, message.clone())
+        {
+            return false;
+        }
+        self.readiness.fail(
+            OperationKind::Measurement,
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn cancel_measurement(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "measurements")?;
+        self.dataset()?;
+        let generation = self.measurement.generation;
+        let cancelled = self.measurement.cancel();
+        if cancelled {
+            self.readiness.cancel(
+                OperationKind::Measurement,
+                generation,
+                "Measurement cancelled",
+            );
+        }
+        Ok(json!({"cancelled":cancelled,"status":self.measurement.status}))
+    }
+
+    pub fn screenshot_settings_snapshot(&self) -> Result<Value, ControlError> {
+        let dataset = self.dataset()?;
+        Ok(self.screenshot_preferences.snapshot(
+            &default_screenshot_filename(&dataset.descriptor.source.display_name()),
+            self.screenshot_settings_generation,
+            self.screenshot_settings_pending,
+        ))
+    }
+
+    pub fn begin_screenshot_settings_update(
+        &mut self,
+        params: &Value,
+        normalized_output_dir: Option<Option<PathBuf>>,
+    ) -> Result<(u64, ScreenshotPreferences), ControlError> {
+        self.dataset()?;
+        let candidate = self
+            .screenshot_preferences
+            .updated(params, normalized_output_dir)?;
+        self.screenshot_settings_generation =
+            self.screenshot_settings_generation.wrapping_add(1).max(1);
+        self.screenshot_settings_pending = true;
+        self.readiness.begin(
+            OperationKind::ScreenshotSettings,
+            self.screenshot_settings_generation,
+            "Validating screenshot settings",
+        );
+        Ok((self.screenshot_settings_generation, candidate))
+    }
+
+    pub fn install_screenshot_settings_for_generation(
+        &mut self,
+        generation: u64,
+        preferences: ScreenshotPreferences,
+    ) -> Option<Value> {
+        if generation != self.screenshot_settings_generation || !self.screenshot_settings_pending {
+            return None;
+        }
+        self.screenshot_preferences = preferences;
+        self.screenshot_settings_pending = false;
+        self.readiness.finish(
+            OperationKind::ScreenshotSettings,
+            generation,
+            "Screenshot settings ready",
+        );
+        self.screenshot_settings_snapshot().ok()
+    }
+
+    pub fn fail_screenshot_settings_for_generation(
+        &mut self,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if generation != self.screenshot_settings_generation || !self.screenshot_settings_pending {
+            return false;
+        }
+        self.screenshot_settings_pending = false;
+        self.readiness.fail(
+            OperationKind::ScreenshotSettings,
+            generation,
+            message.into(),
+        );
+        true
+    }
+
+    pub fn cancel_screenshot_settings_for_generation(
+        &mut self,
+        generation: u64,
+        message: impl Into<String>,
+    ) -> bool {
+        if generation != self.screenshot_settings_generation || !self.screenshot_settings_pending {
+            return false;
+        }
+        self.screenshot_settings_pending = false;
+        self.readiness.cancel(
+            OperationKind::ScreenshotSettings,
+            generation,
+            message.into(),
+        );
+        true
     }
 
     pub fn settings_snapshot(&self) -> Value {
@@ -1557,6 +2763,7 @@ impl AppModel {
         }
         self.pending_object_filters.clear();
         self.pending_object_selection_filter = None;
+        self.tile_loading.reset_observation();
         self.readiness.cancel_kind_pending(
             OperationKind::ObjectFilter,
             "Object filters superseded by object resource replacement",
@@ -3636,6 +4843,9 @@ impl AppModel {
             OperationKind::Objects,
             OperationKind::ObjectFilter,
             OperationKind::MaskIo,
+            OperationKind::MemoryPin,
+            OperationKind::ThresholdPreview,
+            OperationKind::Analysis,
         ] {
             self.readiness
                 .cancel_kind_pending(kind, "Superseded by newer document request");
@@ -3923,6 +5133,7 @@ impl AppModel {
         mut label_available: Vec<String>,
         root_label_resource: Option<Arc<ControlLabelResource>>,
     ) {
+        let channel_count = descriptor.channels.len();
         self.object_resource_generation = self.object_resource_generation.wrapping_add(1).max(1);
         self.installed_object_resource_generation = self.object_resource_generation;
         self.object_resource_pending = false;
@@ -4005,6 +5216,30 @@ impl AppModel {
             masks: MaskModel::default(),
             workspace: ViewportWorkspace::new(viewport),
         });
+        self.pinned_memory.clear_for_document(channel_count);
+        let default_threshold_level = self
+            .dataset
+            .as_ref()
+            .and_then(|dataset| {
+                dataset.descriptor.levels.iter().find_map(|level| {
+                    level
+                        .shape
+                        .get(dataset.descriptor.dims.x)
+                        .copied()
+                        .zip(level.shape.get(dataset.descriptor.dims.y).copied())
+                        .and_then(|(width, height)| width.checked_mul(height))
+                        .filter(|pixels| *pixels <= THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS)
+                        .map(|_| level.index)
+                })
+            })
+            .unwrap_or_else(|| {
+                self.dataset.as_ref().map_or(0, |dataset| {
+                    dataset.descriptor.levels.len().saturating_sub(1)
+                })
+            });
+        self.threshold_preview.reset(default_threshold_level);
+        self.analysis.reset();
+        self.measurement.reset();
         self.measured_viewports
             .retain(|id| id.as_str() == "viewport-1");
         self.mode = ModelMode::Single;
@@ -4107,6 +5342,9 @@ impl AppModel {
         }
         if let Some(performance) = snapshot.get("performance") {
             dataset.performance = performance.clone();
+        }
+        if let Some(observation) = snapshot.get("tile_loading_observation") {
+            self.tile_loading.observe(observation);
         }
         if let Some(projected) = snapshot.get("viewports").and_then(Value::as_array) {
             for value in projected {
@@ -4574,6 +5812,14 @@ impl AppModel {
                 | "viewer.rendering.get_state"
                 | "viewer.scale_bar.get"
                 | "viewer.scale_bar.set"
+                | "viewer.screenshot.settings.get"
+                | "viewer.screenshot.settings.set"
+                | "memory.tiles.get"
+                | "memory.tiles.set"
+                | "memory.get"
+                | "memory.pin"
+                | "memory.unpin"
+                | "memory.unpin_all"
                 | "viewer.panels.get"
                 | "viewer.panels.set"
                 | "viewer.ui.set_right_tab"
@@ -4657,6 +5903,25 @@ impl AppModel {
                 | "viewer.labels.unload"
                 | "viewer.labels.set_visibility"
                 | "viewer.thresholds.levels.list"
+                | "viewer.thresholds.preview.get"
+                | "viewer.thresholds.preview.configure"
+                | "viewer.thresholds.preview.start"
+                | "viewer.thresholds.preview.refresh"
+                | "viewer.thresholds.preview.apply"
+                | "viewer.thresholds.preview.cancel"
+                | "viewer.analysis.get"
+                | "viewer.analysis.set"
+                | "viewer.analysis.histogram"
+                | "viewer.analysis.suggest_thresholds"
+                | "viewer.analysis.warmup.get"
+                | "viewer.analysis.warmup.start"
+                | "viewer.analysis.presets.import"
+                | "viewer.analysis.presets.export"
+                | "viewer.measurements.get"
+                | "viewer.measurements.configure"
+                | "viewer.measurements.start"
+                | "viewer.measurements.cancel"
+                | "viewer.measurements.properties.list"
                 | "viewer.native_layers.list"
                 | "viewer.native_layers.get"
                 | "viewer.native_layers.set_active"
@@ -4886,6 +6151,18 @@ impl AppModel {
                 "viewer.rendering.get_state" => self.rendering_state()?,
                 "viewer.scale_bar.get" => self.get_scale_bar_global()?,
                 "viewer.scale_bar.set" => self.set_scale_bar_global(params)?,
+                "viewer.screenshot.settings.get" => self.screenshot_settings_snapshot()?,
+                "viewer.screenshot.settings.set" => {
+                    unreachable!("screenshot settings updates use the bounded worker dispatcher")
+                }
+                "memory.tiles.get" => self.tile_loading_snapshot()?,
+                "memory.tiles.set" => self.set_tile_loading_policy(params)?,
+                "memory.get" => self.memory_snapshot()?,
+                "memory.pin" => {
+                    unreachable!("memory pinning uses the bounded worker dispatcher")
+                }
+                "memory.unpin" => self.unpin_memory(params)?,
+                "memory.unpin_all" => self.unpin_all_memory()?,
                 "viewer.panels.get" => self.get_panels()?,
                 "viewer.panels.set" => self.set_panels(params)?,
                 "viewer.ui.set_right_tab" => self.set_right_tab(params)?,
@@ -5013,6 +6290,32 @@ impl AppModel {
                 "viewer.labels.unload" => self.unload_labels()?,
                 "viewer.labels.set_visibility" => self.set_labels_visibility(params)?,
                 "viewer.thresholds.levels.list" => self.threshold_levels()?,
+                "viewer.thresholds.preview.get" => self.threshold_preview_snapshot()?,
+                "viewer.thresholds.preview.configure"
+                | "viewer.thresholds.preview.start"
+                | "viewer.thresholds.preview.refresh"
+                | "viewer.thresholds.preview.apply" => {
+                    unreachable!("threshold work uses the bounded worker dispatcher")
+                }
+                "viewer.thresholds.preview.cancel" => self.cancel_threshold_preview()?,
+                "viewer.analysis.get" => self.analysis_snapshot(params)?,
+                "viewer.analysis.set" => self.set_analysis_state(params)?,
+                "viewer.analysis.warmup.get" => self.analysis_warmup_snapshot(params)?,
+                "viewer.analysis.histogram"
+                | "viewer.analysis.suggest_thresholds"
+                | "viewer.analysis.warmup.start"
+                | "viewer.analysis.presets.import"
+                | "viewer.analysis.presets.export" => {
+                    unreachable!("analysis work uses the bounded worker dispatcher")
+                }
+                "viewer.measurements.get" | "viewer.measurements.properties.list" => {
+                    self.measurement_snapshot(params)?
+                }
+                "viewer.measurements.configure" => self.configure_measurement(params)?,
+                "viewer.measurements.start" => {
+                    unreachable!("measurement work uses the bounded worker dispatcher")
+                }
+                "viewer.measurements.cancel" => self.cancel_measurement(params)?,
                 "viewer.native_layers.list" => self.native_layers_global()?,
                 "viewer.native_layers.get" => self.native_layer_global(params)?,
                 "viewer.native_layers.set_active"
@@ -5077,6 +6380,9 @@ impl AppModel {
                 | "viewer.rendering.get_smooth_pixels"
                 | "viewer.rendering.get_state"
                 | "viewer.scale_bar.get"
+                | "viewer.screenshot.settings.get"
+                | "memory.tiles.get"
+                | "memory.get"
                 | "viewer.panels.get"
                 | "viewer.workspace.get"
                 | "viewer.viewports.list"
@@ -5108,6 +6414,11 @@ impl AppModel {
                 | "viewer.labels.list"
                 | "viewer.labels.get"
                 | "viewer.thresholds.levels.list"
+                | "viewer.thresholds.preview.get"
+                | "viewer.analysis.get"
+                | "viewer.analysis.warmup.get"
+                | "viewer.measurements.get"
+                | "viewer.measurements.properties.list"
                 | "viewer.native_layers.list"
                 | "viewer.native_layers.get"
                 | "viewer.masks.layers.list"
@@ -7614,6 +8925,208 @@ fn plane_mode_index(mode: &str) -> usize {
         "yz" => 2,
         _ => 0,
     }
+}
+
+fn has_channel_selector(params: &Value) -> bool {
+    ["index", "channel_index", "name", "channel", "marker"]
+        .iter()
+        .any(|key| params.get(key).is_some())
+}
+
+fn optional_threshold_scope(params: &Value) -> Result<Option<ThresholdScope>, ControlError> {
+    params
+        .get("scope")
+        .map(|value| match value.as_str() {
+            Some("visible" | "visible_region") => Ok(ThresholdScope::Visible),
+            Some("entire_image" | "full" | "full_image") => Ok(ThresholdScope::EntireImage),
+            _ => Err(invalid("scope must be 'visible' or 'entire_image'")),
+        })
+        .transpose()
+}
+
+fn optional_threshold_level(
+    params: &Value,
+    level_count: usize,
+) -> Result<Option<usize>, ControlError> {
+    params
+        .get("level")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|level| *level < level_count)
+                .ok_or_else(|| invalid("level must be a valid non-negative pyramid index"))
+        })
+        .transpose()
+}
+
+fn optional_threshold_min_pixels(params: &Value) -> Result<Option<usize>, ControlError> {
+    params
+        .get("min_component_pixels")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| (1..=1_000_000).contains(value))
+                .ok_or_else(|| invalid("min_component_pixels must be an integer from 1 to 1000000"))
+        })
+        .transpose()
+}
+
+fn optional_threshold_value(params: &Value) -> Result<Option<u16>, ControlError> {
+    params
+        .get("threshold")
+        .map(|value| {
+            value
+                .as_u64()
+                .filter(|value| *value <= u16::MAX as u64)
+                .map(|value| value as u16)
+                .ok_or_else(|| invalid("threshold must be an integer from 0 to 65535"))
+        })
+        .transpose()
+}
+
+fn threshold_extent(
+    dataset: &DatasetModel,
+    viewport: &ViewportModel,
+    channel_index: usize,
+    scope: ThresholdScope,
+    level: &crate::data::ome::LevelInfo,
+) -> Result<(u64, u64, u64, u64), ControlError> {
+    let width = level
+        .shape
+        .get(dataset.descriptor.dims.x)
+        .copied()
+        .ok_or_else(|| invalid("threshold level has no x dimension"))?;
+    let height = level
+        .shape
+        .get(dataset.descriptor.dims.y)
+        .copied()
+        .ok_or_else(|| invalid("threshold level has no y dimension"))?;
+    if scope == ThresholdScope::EntireImage {
+        return Ok((0, 0, width, height));
+    }
+    let channel = viewport
+        .channels
+        .get(channel_index)
+        .ok_or_else(|| invalid("threshold channel is out of range"))?;
+    let zoom = viewport.zoom.max(1e-6);
+    let half_width = viewport.logical_size[0].max(1.0) * 0.5 / zoom;
+    let half_height = viewport.logical_size[1].max(1.0) * 0.5 / zoom;
+    let corners = [
+        [
+            viewport.center[0] - half_width,
+            viewport.center[1] - half_height,
+        ],
+        [
+            viewport.center[0] + half_width,
+            viewport.center[1] - half_height,
+        ],
+        [
+            viewport.center[0] + half_width,
+            viewport.center[1] + half_height,
+        ],
+        [
+            viewport.center[0] - half_width,
+            viewport.center[1] + half_height,
+        ],
+    ];
+    let pivot = [dataset.world_size[0] * 0.5, dataset.world_size[1] * 0.5];
+    let mut minimum = [f32::INFINITY; 2];
+    let mut maximum = [f32::NEG_INFINITY; 2];
+    for point in corners {
+        let local = inverse_channel_point(
+            point,
+            pivot,
+            channel.offset_world,
+            channel.scale,
+            channel.rotation_rad,
+        );
+        minimum[0] = minimum[0].min(local[0]);
+        minimum[1] = minimum[1].min(local[1]);
+        maximum[0] = maximum[0].max(local[0]);
+        maximum[1] = maximum[1].max(local[1]);
+    }
+    let downsample = level.downsample.max(1e-6);
+    let x0 = (minimum[0].max(0.0) / downsample).floor() as u64;
+    let y0 = (minimum[1].max(0.0) / downsample).floor() as u64;
+    let x1 = (maximum[0].min(dataset.world_size[0]).max(0.0) / downsample).ceil() as u64;
+    let y1 = (maximum[1].min(dataset.world_size[1]).max(0.0) / downsample).ceil() as u64;
+    Ok((x0.min(width), y0.min(height), x1.min(width), y1.min(height)))
+}
+
+fn inverse_channel_point(
+    point: [f32; 2],
+    pivot: [f32; 2],
+    offset: [f32; 2],
+    scale: [f32; 2],
+    rotation_rad: f32,
+) -> [f32; 2] {
+    let x = point[0] - pivot[0] - offset[0];
+    let y = point[1] - pivot[1] - offset[1];
+    let (sin, cos) = (-rotation_rad).sin_cos();
+    let rotated_x = x * cos - y * sin;
+    let rotated_y = x * sin + y * cos;
+    [
+        pivot[0] + rotated_x / scale[0].abs().max(1e-6),
+        pivot[1] + rotated_y / scale[1].abs().max(1e-6),
+    ]
+}
+
+fn estimate_pinned_level_bytes(
+    descriptor: &DocumentDescriptor,
+    level_index: usize,
+    selected_channel_count: usize,
+) -> u64 {
+    let Some(level) = descriptor.levels.get(level_index) else {
+        return 0;
+    };
+    if selected_channel_count == 0 {
+        return 0;
+    }
+    let Some(&height) = level.shape.get(descriptor.dims.y) else {
+        return 0;
+    };
+    let Some(&width) = level.shape.get(descriptor.dims.x) else {
+        return 0;
+    };
+    let channel_count = if descriptor.dims.c.is_some() {
+        selected_channel_count as u64
+    } else {
+        1
+    };
+    let bytes_per_sample = match level.dtype.as_str() {
+        "|u1" | "|i1" => 1,
+        "<u2" | ">u2" | "<i2" | ">i2" => 2,
+        "<f4" | ">f4" | "<u4" | ">u4" | "<i4" | ">i4" => 4,
+        _ => 2,
+    };
+    channel_count
+        .checked_mul(height)
+        .and_then(|value| value.checked_mul(width))
+        .and_then(|value| value.checked_mul(bytes_per_sample))
+        .unwrap_or(0)
+}
+
+fn numeric_object_properties(resource: &ControlObjectResource) -> Vec<String> {
+    let mut properties = resource
+        .property_names
+        .iter()
+        .filter(|property| {
+            property.as_str() != "id"
+                && resource.features.iter().any(|feature| {
+                    feature
+                        .properties
+                        .get(property.as_str())
+                        .and_then(Value::as_f64)
+                        .is_some_and(f64::is_finite)
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    properties.sort();
+    properties.dedup();
+    properties
 }
 
 fn map_level0_axis_index(

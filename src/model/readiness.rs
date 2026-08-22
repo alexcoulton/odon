@@ -17,6 +17,11 @@ pub(crate) enum OperationKind {
     ObjectFilter,
     MaskIo,
     SettingsIo,
+    ScreenshotSettings,
+    MemoryPin,
+    ThresholdPreview,
+    Analysis,
+    Measurement,
 }
 
 impl OperationKind {
@@ -35,6 +40,11 @@ impl OperationKind {
             Self::ObjectFilter => "object_filter",
             Self::MaskIo => "mask_io",
             Self::SettingsIo => "settings_io",
+            Self::ScreenshotSettings => "screenshot_settings",
+            Self::MemoryPin => "memory_pin",
+            Self::ThresholdPreview => "threshold_preview",
+            Self::Analysis => "analysis",
+            Self::Measurement => "measurement",
         }
     }
 }

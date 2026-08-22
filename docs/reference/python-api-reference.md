@@ -64,9 +64,9 @@ Access: `app.application`. Application state, settings, navigation, lifecycle, a
 | `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. |
 | `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; event: application.close.requested) |
 | `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; event: application.quit.requested) |
-| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
-| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
-| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
+| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
+| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
+| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
 | `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; event: application.mode.changed) |
 
 ### Datasets
@@ -79,9 +79,9 @@ Access: `app.datasets`. Dataset inspection and opening.
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
-| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
-| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
-| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
+| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
+| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
+| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
 
 ### S3 datasets
 
@@ -93,7 +93,7 @@ Access: `app.datasets.s3`. Authenticated S3 session, listing, and opening.
 | `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; event: datasets.credentials.changed) |
 | `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; event: datasets.credentials.changed) |
 | `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task) |
-| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
+| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
 
 ### Deep links
 
@@ -105,7 +105,7 @@ Access: `app.deep_links`. Parse, generate, resolve, and apply Odon deep links.
 | `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. |
 | `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. |
 | `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. |
-| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic | Queue a validated deep link for application by Odon's UI update cycle. (mutates; task; event: application.state.changed) |
+| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; event: application.state.changed) |
 
 ### Viewer
 
@@ -284,11 +284,11 @@ Access: `app.projects`. Project creation, persistence, metadata, and ROI opening
 | `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
 | `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. |
 | `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; event: application.mode.changed) |
-| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic | Open a project. (mutates; task; event: application.mode.changed) |
+| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; event: application.mode.changed) |
 | `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; event: project.saved) |
 | `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; event: project.saved) |
 | `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; event: project.changed) |
-| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
 
 ### Project samplesheets
 
@@ -337,7 +337,7 @@ Access: `app.projects.rois`. ROI CRUD, ordering, selection, focus, and opening.
 | `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; event: project.rois.selection_changed) |
 | `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; event: project.rois.selection_changed) |
 | `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; event: project.rois.selection_changed) |
-| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
 | `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; event: application.mode.changed) |
 
 ### Project views
@@ -813,9 +813,9 @@ Access: `app.application`. Async application resource.
 | `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. |
 | `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; event: application.close.requested) |
 | `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; event: application.quit.requested) |
-| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
-| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
-| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
+| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
+| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
+| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
 | `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; event: application.mode.changed) |
 
 ### Async datasets
@@ -828,9 +828,9 @@ Access: `app.datasets`. Async dataset resource.
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
-| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
-| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
-| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
+| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
+| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
+| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
 
 ### Async S3 datasets
 
@@ -842,7 +842,7 @@ Access: `app.datasets.s3`. Async S3 dataset resource.
 | `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; event: datasets.credentials.changed) |
 | `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; event: datasets.credentials.changed) |
 | `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task) |
-| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
+| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
 
 ### Async deep links
 
@@ -854,7 +854,7 @@ Access: `app.deep_links`. Async deep-link resource.
 | `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. |
 | `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. |
 | `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. |
-| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic | Queue a validated deep link for application by Odon's UI update cycle. (mutates; task; event: application.state.changed) |
+| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; event: application.state.changed) |
 
 ### Async viewer
 
@@ -1033,11 +1033,11 @@ Access: `app.projects`. Async project resource.
 | `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
 | `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. |
 | `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; event: application.mode.changed) |
-| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic | Open a project. (mutates; task; event: application.mode.changed) |
+| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; event: application.mode.changed) |
 | `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; event: project.saved) |
 | `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; event: project.saved) |
 | `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; event: project.changed) |
-| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
 
 ### Async project samplesheets
 
@@ -1086,7 +1086,7 @@ Access: `app.projects.rois`. Async ROI resource.
 | `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; event: project.rois.selection_changed) |
 | `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; event: project.rois.selection_changed) |
 | `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; event: project.rois.selection_changed) |
-| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
 | `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; event: application.mode.changed) |
 
 ### Async project views

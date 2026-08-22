@@ -144,7 +144,9 @@ pub fn execution_owner(
     if !ACTOR_CAPABLE_METHODS.contains(&descriptor.name) {
         return ExecutionOwner::LegacyUi;
     }
-    if mode == "mosaic" && descriptor.name.starts_with("viewer.") {
+    if mode == "mosaic"
+        && (descriptor.name.starts_with("viewer.") || descriptor.name.starts_with("memory."))
+    {
         return ExecutionOwner::LegacyUi;
     }
     if mode == "mosaic" && descriptor.name == "app.get_state" {
@@ -210,6 +212,7 @@ pub fn execution_route_json(descriptor: &MethodDescriptor) -> Value {
             } else if !actor_capable
                 || (mode == "mosaic"
                     && (descriptor.name.starts_with("viewer.")
+                        || descriptor.name.starts_with("memory.")
                         || descriptor.name == "app.get_state"))
             {
                 ExecutionOwner::LegacyUi
@@ -256,6 +259,19 @@ pub fn is_parameter_routed_primary_object_method(method: &str) -> bool {
             | "viewer.objects.clear_filter"
             | "viewer.objects.filters.set_model"
             | "viewer.objects.filters.get_revision"
+            | "viewer.analysis.get"
+            | "viewer.analysis.set"
+            | "viewer.analysis.histogram"
+            | "viewer.analysis.suggest_thresholds"
+            | "viewer.analysis.warmup.get"
+            | "viewer.analysis.warmup.start"
+            | "viewer.analysis.presets.import"
+            | "viewer.analysis.presets.export"
+            | "viewer.measurements.get"
+            | "viewer.measurements.configure"
+            | "viewer.measurements.start"
+            | "viewer.measurements.cancel"
+            | "viewer.measurements.properties.list"
     )
 }
 
@@ -1089,7 +1105,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
         ),
         method!(
             "deep_links.apply",
-            "Queue a validated deep link for application by Odon's UI update cycle.",
+            "Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready.",
             "application.write",
             true,
             true,
@@ -4241,6 +4257,19 @@ mod tests {
         assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
         assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
         assert_eq!(execution_route_summary(camera), "actor");
+
+        let memory = method("memory.pin").unwrap();
+        assert_eq!(
+            execution_owner(memory, "single", &json!({}), false),
+            ExecutionOwner::Actor
+        );
+        assert_eq!(
+            execution_owner(memory, "mosaic", &json!({}), false),
+            ExecutionOwner::LegacyUi
+        );
+        let route = execution_route_json(memory);
+        assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
+        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
     }
 
     #[test]

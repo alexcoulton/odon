@@ -1,6 +1,127 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn apply_control_actor_analysis_state(
+        &mut self,
+        generation: u64,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        if generation <= self.control_actor_analysis_generation {
+            return Ok(());
+        }
+        let state =
+            serde_json::from_value::<crate::objects::ObjectProjectAnalysisState>(state.clone())
+                .map_err(|error| format!("actor analysis state is invalid: {error}"))?;
+        let active_channel = self
+            .channels
+            .get(self.selected_channel)
+            .map(|channel| channel.name.as_str());
+        self.seg_objects
+            .apply_project_analysis_state(&state, active_channel);
+        self.control_actor_analysis_generation = generation;
+        Ok(())
+    }
+
+    pub fn apply_control_actor_threshold_preview(
+        &mut self,
+        ctx: &egui::Context,
+        projection_generation: u64,
+        pending: bool,
+        resource: Option<&Arc<odon::model::ControlThresholdPreviewResource>>,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        if let Some(scope) = state
+            .get("configured_scope")
+            .and_then(serde_json::Value::as_str)
+        {
+            self.threshold_region_scope = match scope {
+                "visible" => ThresholdRegionScope::VisibleRegion,
+                "entire_image" => ThresholdRegionScope::EntireImage,
+                _ => return Err(format!("actor threshold scope '{scope}' is invalid")),
+            };
+        }
+        if let Some(level) = state
+            .get("configured_full_level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|level| usize::try_from(level).ok())
+        {
+            self.threshold_region_full_level = level;
+        }
+        if let Some(minimum) = state
+            .get("configured_min_component_pixels")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|minimum| usize::try_from(minimum).ok())
+        {
+            self.threshold_region_min_pixels = minimum.max(1);
+        }
+        if let Some(status) = state.get("status").and_then(serde_json::Value::as_str) {
+            self.threshold_region_status = status.to_string();
+        }
+        if let Some(resource) = resource {
+            if resource.generation() <= self.control_actor_threshold_generation {
+                return Ok(());
+            }
+            let [width, height] = resource.size();
+            let plane = Array2::from_shape_vec((height, width), resource.values().as_ref().clone())
+                .map_err(|error| format!("actor threshold pixels are invalid: {error}"))?;
+            if resource.included().len() != width.saturating_mul(height) {
+                return Err("actor threshold mask dimensions are invalid".to_string());
+            }
+            let [x0, y0] = resource.origin();
+            let scope = match resource.scope() {
+                odon::model::ThresholdScope::Visible => ThresholdRegionScope::VisibleRegion,
+                odon::model::ThresholdScope::EntireImage => ThresholdRegionScope::EntireImage,
+            };
+            let mut preview = ThresholdRegionPreview {
+                generation: resource.generation(),
+                channel_index: resource.channel_index(),
+                channel_name: resource.channel_name().to_string(),
+                scope,
+                level_index: resource.level(),
+                downsample: resource.downsample(),
+                x0,
+                y0,
+                raw_values: Arc::clone(resource.values()),
+                plane,
+                threshold: resource.threshold(),
+                min_component_pixels: resource.min_component_pixels(),
+                mask: ThresholdRegionMask {
+                    width,
+                    height,
+                    included: resource.included().as_ref().clone(),
+                },
+                texture: None,
+            };
+            if !self.uses_gpu_threshold_region_preview(&preview) {
+                Self::recompute_threshold_region_preview_cpu_data(ctx, &mut preview);
+            }
+            self.threshold_region_min_pixels = preview.min_component_pixels;
+            self.threshold_region_scope = preview.scope;
+            self.threshold_region_full_level = preview.level_index;
+            self.threshold_region_status = Self::threshold_region_preview_status_message(
+                &preview,
+                self.uses_gpu_threshold_region_preview(&preview),
+            );
+            self.threshold_region_preview = Some(preview);
+            self.control_actor_threshold_generation = resource.generation();
+            self.bump_render_id();
+        } else if !pending && projection_generation > self.control_actor_threshold_generation {
+            self.threshold_region_preview = None;
+            self.threshold_region_status.clear();
+            self.control_actor_threshold_generation = projection_generation;
+            self.bump_render_id();
+        }
+        Ok(())
+    }
+
+    pub fn apply_control_actor_pinned_levels(
+        &mut self,
+        resources: &[Arc<odon::model::ControlPinnedLevelResource>],
+    ) {
+        self.pinned_levels
+            .replace_control_actor_resources(resources);
+    }
+
     pub fn control_actor_dataset(&self) -> OmeZarrDataset {
         self.dataset.clone()
     }

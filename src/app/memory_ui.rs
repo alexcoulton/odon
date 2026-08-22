@@ -115,13 +115,24 @@ impl OmeZarrViewerApp {
             return;
         }
         for request in requests {
-            self.pinned_levels.request_load(
-                self.store.clone(),
-                self.dataset.dims.clone(),
-                self.dataset.levels.clone(),
-                request.level,
-                request.selected_channels,
-            );
+            if self.control_actor_tile_policy_generation > 0 {
+                self.native_control_intents.push(NativeControlIntent {
+                    method: "memory.pin",
+                    params: serde_json::json!({
+                        "level":request.level,
+                        "channels":request.selected_channels,
+                        "force":true,
+                    }),
+                });
+            } else {
+                self.pinned_levels.request_load(
+                    self.store.clone(),
+                    self.dataset.dims.clone(),
+                    self.dataset.levels.clone(),
+                    request.level,
+                    request.selected_channels,
+                );
+            }
         }
         self.memory_status = summary;
     }
@@ -144,6 +155,12 @@ impl OmeZarrViewerApp {
         );
         ui.add_space(6.0);
 
+        let before_tile_policy = (
+            self.tile_loader_threads,
+            self.tile_prefetch_mode,
+            self.tile_prefetch_aggressiveness,
+            self.prefer_pinned_finer_levels,
+        );
         ui.collapsing("Tile Loading", |ui| {
             if self.supports_runtime_tile_loader_tuning() {
                 let mut threads = self.tile_loader_threads as u32;
@@ -249,6 +266,31 @@ impl OmeZarrViewerApp {
             }
             ui.separator();
         });
+        let after_tile_policy = (
+            self.tile_loader_threads,
+            self.tile_prefetch_mode,
+            self.tile_prefetch_aggressiveness,
+            self.prefer_pinned_finer_levels,
+        );
+        if after_tile_policy != before_tile_policy {
+            self.native_control_intents.push(NativeControlIntent {
+                method: "memory.tiles.set",
+                params: serde_json::json!({
+                    "workers":self.tile_loader_threads,
+                    "prefetch_mode":match self.tile_prefetch_mode {
+                        TilePrefetchMode::Off => "off",
+                        TilePrefetchMode::TargetHalo => "target_halo",
+                        TilePrefetchMode::TargetAndFinerHalo => "target_and_finer_halo",
+                    },
+                    "prefetch_aggressiveness":match self.tile_prefetch_aggressiveness {
+                        TilePrefetchAggressiveness::Conservative => "conservative",
+                        TilePrefetchAggressiveness::Balanced => "balanced",
+                        TilePrefetchAggressiveness::Aggressive => "aggressive",
+                    },
+                    "prefer_pinned_finer_levels":self.prefer_pinned_finer_levels,
+                }),
+            });
+        }
 
         let rows = self.memory_channel_rows();
         ui_memory_channel_selector(
@@ -387,6 +429,12 @@ impl OmeZarrViewerApp {
                             .add_enabled(can_unload, egui::Button::new("Unload"))
                             .clicked()
                         {
+                            if self.control_actor_tile_policy_generation > 0 {
+                                self.native_control_intents.push(NativeControlIntent {
+                                    method: "memory.unpin",
+                                    params: serde_json::json!({"level":level_idx}),
+                                });
+                            }
                             self.pinned_levels.unload(level_idx);
                             self.memory_status =
                                 format!("Unloaded pinned level {level_idx} from RAM.");

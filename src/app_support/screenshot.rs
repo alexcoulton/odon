@@ -3,7 +3,7 @@ use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScreenshotSettings {
     pub include_scale_bar: bool,
     pub include_legend: bool,

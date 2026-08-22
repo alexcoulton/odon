@@ -916,6 +916,30 @@ impl RootApp {
             self.app_settings = projection.settings.clone();
             self.apply_app_settings_to_mode();
         }
+        if let Mode::Single(app) = &mut self.mode {
+            app.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
+            if let Err(error) =
+                app.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy)
+            {
+                log_warn!("could not realize actor tile-loading policy: {error}");
+            }
+            app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            if let Err(error) = app.apply_control_actor_threshold_preview(
+                ctx,
+                projection.threshold_preview_generation,
+                projection.threshold_preview_pending,
+                projection.threshold_preview.as_ref(),
+                &projection.threshold_preview_state,
+            ) {
+                log_warn!("could not realize actor threshold preview: {error}");
+            }
+            if let Err(error) = app.apply_control_actor_analysis_state(
+                projection.analysis_generation,
+                &projection.analysis_state,
+            ) {
+                log_warn!("could not realize actor analysis state: {error}");
+            }
+        }
         self.apply_project_object_preload_projection(&projection.project_object_preload);
         if projection.mode == ModelMode::Project {
             let mut project_space = match &mut self.mode {
@@ -1105,6 +1129,28 @@ impl RootApp {
         if let Mode::Single(app) = &mut self.mode {
             app.project_space_mut()
                 .apply_control_actor_project_projection(&projection.project);
+            app.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
+            if let Err(error) =
+                app.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy)
+            {
+                log_warn!("could not realize actor tile-loading policy: {error}");
+            }
+            app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            if let Err(error) = app.apply_control_actor_threshold_preview(
+                ctx,
+                projection.threshold_preview_generation,
+                projection.threshold_preview_pending,
+                projection.threshold_preview.as_ref(),
+                &projection.threshold_preview_state,
+            ) {
+                log_warn!("could not realize actor threshold preview: {error}");
+            }
+            if let Err(error) = app.apply_control_actor_analysis_state(
+                projection.analysis_generation,
+                &projection.analysis_state,
+            ) {
+                log_warn!("could not realize actor analysis state: {error}");
+            }
         }
         self.apply_control_projection_workspace(
             projection.workspace.as_ref(),

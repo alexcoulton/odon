@@ -332,6 +332,72 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         },
+        LoadCompletion::ScreenshotSettingsValidate {
+            generation,
+            request,
+            preferences,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_screenshot_settings_for_generation(
+                    generation,
+                    "Screenshot settings update was cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "screenshot settings update");
+                return;
+            }
+            match result {
+                Ok(()) => {
+                    if let Some(response) =
+                        model.install_screenshot_settings_for_generation(generation, preferences)
+                    {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        finish_request(request, response, diagnostics);
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "screenshot settings update was superseded by a newer operation",
+                            ),
+                        );
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if model.fail_screenshot_settings_for_generation(generation, &message) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed screenshot settings update was superseded by a newer operation",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         LoadCompletion::SamplesheetInspect { request, result } => {
             if request_is_cancelled(&request) {
                 reject_cancelled_request(request, diagnostics, "samplesheet inspection");

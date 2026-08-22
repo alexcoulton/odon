@@ -1,6 +1,41 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn apply_control_actor_tile_loading_policy(
+        &mut self,
+        policy: &odon::model::TileLoadingPolicy,
+    ) -> anyhow::Result<()> {
+        if policy.generation() <= self.control_actor_tile_policy_generation {
+            return Ok(());
+        }
+        if policy.workers() != self.tile_loader_threads {
+            self.tile_loader_threads = policy.workers();
+            self.respawn_tile_loaders()?;
+        }
+        self.tile_prefetch_mode = match policy.prefetch_mode() {
+            odon::model::TilePrefetchMode::Off => TilePrefetchMode::Off,
+            odon::model::TilePrefetchMode::TargetHalo => TilePrefetchMode::TargetHalo,
+            odon::model::TilePrefetchMode::TargetAndFinerHalo => {
+                TilePrefetchMode::TargetAndFinerHalo
+            }
+        };
+        self.tile_prefetch_aggressiveness = match policy.prefetch_aggressiveness() {
+            odon::model::TilePrefetchAggressiveness::Conservative => {
+                TilePrefetchAggressiveness::Conservative
+            }
+            odon::model::TilePrefetchAggressiveness::Balanced => {
+                TilePrefetchAggressiveness::Balanced
+            }
+            odon::model::TilePrefetchAggressiveness::Aggressive => {
+                TilePrefetchAggressiveness::Aggressive
+            }
+        };
+        self.prefer_pinned_finer_levels = policy.prefer_pinned_finer_levels();
+        self.control_actor_tile_policy_generation = policy.generation();
+        self.tile_loading_status = "Tile loading policy realized by renderer.".to_string();
+        Ok(())
+    }
+
     pub(super) fn default_tile_loader_threads() -> usize {
         recommended_tile_loader_threads()
     }

@@ -89,6 +89,28 @@ impl PinnedLevels {
             .any(|state| matches!(state, PinnedLevelState::Loading { .. }))
     }
 
+    pub fn replace_control_actor_resources(
+        &self,
+        resources: &[Arc<odon::model::ControlPinnedLevelResource>],
+    ) {
+        let levels = resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.level(),
+                    PinnedLevelState::Loaded(PinnedLevelData {
+                        width: resource.width(),
+                        height: resource.height(),
+                        channel_offsets: resource.channel_offsets().as_ref().clone(),
+                        data: Arc::clone(resource.data()),
+                        bytes: resource.bytes(),
+                    }),
+                )
+            })
+            .collect();
+        self.inner.lock().levels = levels;
+    }
+
     pub fn request_load(
         &self,
         store: Arc<dyn ReadableStorageTraits>,

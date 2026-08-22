@@ -35,6 +35,7 @@ ACTOR_METHODS = (
     "datasets.s3.configure_session",
     "datasets.s3.clear_session",
     "datasets.s3.list",
+    "deep_links.apply",
     "project.objects.preload.get",
     "project.objects.preload.list_sources",
     "project.objects.preload.start",
@@ -56,6 +57,14 @@ ACTOR_METHODS = (
     "viewer.ui.set_right_tab",
     "viewer.scale_bar.get",
     "viewer.scale_bar.set",
+    "viewer.screenshot.settings.get",
+    "viewer.screenshot.settings.set",
+    "memory.tiles.get",
+    "memory.tiles.set",
+    "memory.get",
+    "memory.pin",
+    "memory.unpin",
+    "memory.unpin_all",
     "viewer.viewports.rendering.set",
     "viewer.rendering.get_state",
     "viewer.objects.source.load",
@@ -83,6 +92,12 @@ ACTOR_METHODS = (
     "viewer.labels.unload",
     "viewer.labels.set_visibility",
     "viewer.thresholds.levels.list",
+    "viewer.thresholds.preview.get",
+    "viewer.thresholds.preview.configure",
+    "viewer.thresholds.preview.start",
+    "viewer.thresholds.preview.refresh",
+    "viewer.thresholds.preview.apply",
+    "viewer.thresholds.preview.cancel",
     "viewer.masks.layers.create",
     "viewer.masks.polygons.add",
     "viewer.masks.selection.set",
@@ -185,6 +200,31 @@ def main() -> None:
     call(app, "viewer.labels.set_visibility", {"visible": False})
     shown_labels = call(app, "viewer.labels.set_visibility", {"visible": True})
     threshold_levels = call(app, "viewer.thresholds.levels.list")
+    threshold_level = threshold_levels["default_full_level"]
+    threshold_started = call(
+        app,
+        "viewer.thresholds.preview.start",
+        {
+            "scope": "entire_image",
+            "level": threshold_level,
+            "channel": 0,
+            "threshold": 0,
+        },
+    )
+    threshold_configured = call(
+        app,
+        "viewer.thresholds.preview.configure",
+        {"threshold": threshold_started["preview"]["source_max"]},
+    )
+    threshold_refreshed = call(app, "viewer.thresholds.preview.refresh")
+    threshold_applied = call(app, "viewer.thresholds.preview.apply")
+    call(
+        app,
+        "viewer.thresholds.preview.start",
+        {"scope": "entire_image", "level": threshold_level, "threshold": 0},
+    )
+    threshold_cancelled = call(app, "viewer.thresholds.preview.cancel")
+    threshold_state = call(app, "viewer.thresholds.preview.get")
     mask_id = call(
         app,
         "viewer.masks.layers.create",
@@ -324,6 +364,35 @@ def main() -> None:
     call(app, "viewer.panels.set", {"left": False, "right": False})
     right_tab = call(app, "viewer.ui.set_right_tab", {"tab": "measurements"})
     call(app, "viewer.scale_bar.set", {"visible": True})
+    screenshot_settings = call(
+        app,
+        "viewer.screenshot.settings.set",
+        {
+            "include_scale_bar": True,
+            "include_legend": False,
+            "scale_bar_scale": 1.25,
+            "legend_scale": 1.5,
+        },
+    )
+    current_screenshot_settings = call(app, "viewer.screenshot.settings.get")
+    tile_policy = call(
+        app,
+        "memory.tiles.set",
+        {
+            "prefetch_mode": "target_halo",
+            "prefetch_aggressiveness": "balanced",
+            "prefer_pinned_finer_levels": True,
+        },
+    )
+    current_tile_policy = call(app, "memory.tiles.get")
+    memory_before = call(app, "memory.get")
+    pin_level = len(memory_before["levels"]) - 1
+    pinned_memory = call(
+        app,
+        "memory.pin",
+        {"level": pin_level, "channels": [0], "force": True},
+    )
+    unpinned_memory = call(app, "memory.unpin", {"level": pin_level})
     stats = call(app, "viewer.channels.intensity_stats", {"channel": 0, "level": 0})
     fit = call(app, "viewer.viewports.camera.fit", {"viewport_id": left})
     captured_view = call(
@@ -357,6 +426,11 @@ def main() -> None:
     assert loaded_labels["loaded"] == "cells", loaded_labels
     assert shown_labels["visible"] is True, shown_labels
     assert threshold_levels["levels"][0]["width"] == 512, threshold_levels
+    assert threshold_configured["active"] is True, threshold_configured
+    assert threshold_refreshed["active"] is True, threshold_refreshed
+    assert threshold_applied["polygon_count"] > 0, threshold_applied
+    assert threshold_cancelled["cancelled"] is True, threshold_cancelled
+    assert threshold_state["active"] is False, threshold_state
     assert masks["layers"][-1]["polygon_count"] == 1, masks
     assert mask_persistence["persistence"]["dirty"] is False, mask_persistence
     assert hidden_mask["result"]["layer"]["visible"] is False, hidden_mask
@@ -382,6 +456,12 @@ def main() -> None:
     assert application_state["mode"] == "single", application_state
     assert application_state["view"]["channel_count"] == 5, application_state
     assert rendering_state["compositing"] == "additive", rendering_state
+    assert screenshot_settings["include_legend"] is False, screenshot_settings
+    assert current_screenshot_settings["legend_scale"] == 1.5, current_screenshot_settings
+    assert tile_policy["prefetch_mode"] == "target_halo", tile_policy
+    assert current_tile_policy["prefer_pinned_finer_levels"] is True, current_tile_policy
+    assert pinned_memory["completed"] is True, pinned_memory
+    assert unpinned_memory["unloaded"] is True, unpinned_memory
     assert loading["loading"]["model_ready"] is True, loading
     assert loading["loading"]["resources_ready"] is True, loading
     assert loading["loading"]["geometry_ready"] is True, loading

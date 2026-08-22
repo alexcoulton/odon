@@ -314,7 +314,21 @@ impl OmeZarrViewerApp {
                     .clicked()
                 {
                     self.threshold_region_status.clear();
-                    if let Err(err) = self.start_threshold_region_preview(ctx) {
+                    if self.control_actor_threshold_generation > 0 {
+                        let scope = match self.threshold_region_scope {
+                            ThresholdRegionScope::VisibleRegion => "visible",
+                            ThresholdRegionScope::EntireImage => "entire_image",
+                        };
+                        self.native_control_intents.push(NativeControlIntent {
+                            method: "viewer.thresholds.preview.start",
+                            params: serde_json::json!({
+                                "scope":scope,
+                                "level":self.threshold_region_full_level,
+                                "min_component_pixels":self.threshold_region_min_pixels,
+                                "channel":self.selected_channel,
+                            }),
+                        });
+                    } else if let Err(err) = self.start_threshold_region_preview(ctx) {
                         self.threshold_region_status = format!("Threshold regions failed: {err}");
                     }
                 }
@@ -381,25 +395,51 @@ impl OmeZarrViewerApp {
                     preview_changed = true;
                 }
                 if preview_changed {
-                    self.recompute_threshold_region_preview(ctx);
+                    if self.control_actor_threshold_generation > 0 {
+                        self.native_control_intents.push(NativeControlIntent {
+                            method: "viewer.thresholds.preview.configure",
+                            params: serde_json::json!({
+                                "threshold":threshold,
+                                "min_component_pixels":min_pixels,
+                            }),
+                        });
+                    } else {
+                        self.recompute_threshold_region_preview(ctx);
+                    }
                 }
 
                 ui.horizontal(|ui| {
                     if ui.button("Refresh preview").clicked() {
                         self.threshold_region_status.clear();
-                        if let Err(err) = self.start_threshold_region_preview(ctx) {
+                        if self.control_actor_threshold_generation > 0 {
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "viewer.thresholds.preview.refresh",
+                                params: serde_json::json!({}),
+                            });
+                        } else if let Err(err) = self.start_threshold_region_preview(ctx) {
                             self.threshold_region_status =
                                 format!("Threshold regions failed: {err}");
                         }
                     }
                     if ui.button("Apply mask from preview").clicked() {
                         self.threshold_region_status.clear();
-                        if let Err(err) = self.create_threshold_mask_from_preview() {
+                        if self.control_actor_threshold_generation > 0 {
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "viewer.thresholds.preview.apply",
+                                params: serde_json::json!({}),
+                            });
+                        } else if let Err(err) = self.create_threshold_mask_from_preview() {
                             self.threshold_region_status =
                                 format!("Threshold regions failed: {err}");
                         }
                     }
                     if ui.button("Cancel preview").clicked() {
+                        if self.control_actor_threshold_generation > 0 {
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "viewer.thresholds.preview.cancel",
+                                params: serde_json::json!({}),
+                            });
+                        }
                         self.threshold_region_preview = None;
                         self.threshold_region_status.clear();
                     }

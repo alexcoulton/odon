@@ -12,7 +12,7 @@ fn saturated_legacy_queue_returns_backpressure_without_stalling_the_actor() {
 
     let mut replies = Vec::new();
     for _ in 0..=ACTOR_QUEUE_CAPACITY {
-        let (legacy, reply) = request("viewer.analysis.get", json!({}));
+        let (legacy, reply) = request("viewer.screenshot.capture", json!({}));
         channels.request_tx.send(legacy).unwrap();
         replies.push(reply);
     }

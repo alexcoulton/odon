@@ -159,6 +159,35 @@ impl MaskModel {
         })
     }
 
+    pub(crate) fn install_generated_threshold_layer(
+        &mut self,
+        name: String,
+        polygons_world: Vec<Vec<[f32; 2]>>,
+    ) -> Value {
+        self.push_undo();
+        let id = self.next_id.max(1);
+        self.next_id = id.saturating_add(1).max(1);
+        let polygon_count = polygons_world.len();
+        self.layers.push(ProjectMaskLayer {
+            id,
+            name,
+            visible: true,
+            opacity: 0.85,
+            width_screen_px: 1.5,
+            display_mode: Some("filled_preview".to_string()),
+            color_rgb: [255, 210, 80],
+            offset_world: [0.0, 0.0],
+            editable: true,
+            polygons_world,
+            source_geojson: None,
+        });
+        self.active_layer_id = Some(id);
+        self.commit();
+        let mut response = self.layer_json(self.layers.last().expect("threshold mask exists"));
+        response["polygon_count"] = json!(polygon_count);
+        response
+    }
+
     pub(crate) fn dispatch(&mut self, method: &str, params: &Value) -> Result<Value, ControlError> {
         match method {
             "viewer.masks.layers.list" => Ok(self.list_layers()),

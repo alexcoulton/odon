@@ -454,7 +454,8 @@
       "permissions": ["viewer.screenshot", "application.screenshot"],
       "python_sync": ["odon.resources:Screenshots.capture", "odon.resources:Screenshots.capture_window", "odon.resources:Screenshots.capture_project", "odon.resources:Screenshots.get_settings", "odon.resources:Screenshots.set_settings"],
       "python_async": ["odon.async_resources:AsyncScreenshots.capture", "odon.async_resources:AsyncScreenshots.capture_window", "odon.async_resources:AsyncScreenshots.capture_project", "odon.async_resources:AsyncScreenshots.get_settings", "odon.async_resources:AsyncScreenshots.set_settings"],
-      "tests": ["rust:screenshot_task_completion", "python:test_screenshot_settings_and_overwrite"]
+      "tests": ["rust:screenshot_task_completion", "rust:screenshot_preferences_set_and_get_complete_without_a_ui_frame", "rust:invalid_screenshot_output_directory_does_not_replace_existing_preferences", "python:test_screenshot_settings_and_overwrite"],
+      "notes": "Single-view screenshot preferences are actor-owned and project to the renderer; output-folder validation runs on the bounded worker pool and commits by generation. Mosaic preferences remain on the mosaic route until Wave 4, while the four pixel-capture methods remain explicit presentation work for Wave 5."
     },
 
     {"id":"VIEW-04.target","feature_id":"VIEW-04","domain":"viewer.rendering","title":"GPU image compositing controls and deterministic output","phase":"B","status":"covered",
@@ -511,7 +512,8 @@
       "permissions": ["memory.read", "memory.write"],
       "python_sync": ["odon.resources:Memory.get_tile_loading", "odon.resources:Memory.set_tile_loading"],
       "python_async": ["odon.async_resources:AsyncMemory.get_tile_loading", "odon.async_resources:AsyncMemory.set_tile_loading"],
-      "tests": ["python:test_memory_wrappers"]
+      "tests": ["rust:tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations", "python:test_memory_wrappers"],
+      "notes": "Single-view tile policy is actor-canonical and completes without a frame. Renderer cache occupancy and realization generation flow back as observation-only state, so an old frame cannot overwrite policy. Mosaic policy remains on the mosaic route until Wave 4."
     },
     {
       "id": "PERF-02.target",
@@ -541,8 +543,8 @@
       "permissions": ["memory.read", "memory.write"],
       "python_sync": ["odon.resources:Memory.get", "odon.resources:Memory.pin", "odon.resources:Memory.unpin", "odon.resources:Memory.unpin_all"],
       "python_async": ["odon.async_resources:AsyncMemory.get", "odon.async_resources:AsyncMemory.pin", "odon.async_resources:AsyncMemory.unpin", "odon.async_resources:AsyncMemory.unpin_all"],
-      "tests": ["rust:mosaic_ram_estimate", "python:test_memory_wrappers"],
-      "notes": "The shared methods support single-image levels and focused, selected-item, or all-ROI mosaic scopes with explicit memory-risk confirmation."
+      "tests": ["rust:memory_pin_loads_shared_level_data_and_unpins_without_a_frame", "rust:unpinning_supersedes_a_late_memory_pin_install", "rust:mosaic_ram_estimate", "python:test_memory_wrappers"],
+      "notes": "Single-image pinning loads full pyramid levels on bounded actor workers into immutable shared resources, checks cancellation between channel reads, and projects buffers to the renderer without copying them into JSON. Unpin operations invalidate late completions. Memory-risk confirmation is worker-derived. Focused, selected-item, and all-ROI mosaic scopes remain on the mosaic route until Wave 4."
     },
     {
       "id": "PROJ-04.saved-views",
@@ -958,8 +960,8 @@
       "permissions":["viewer.thresholds.read", "viewer.thresholds.write"],
       "python_sync":["odon.resources:Thresholds.list_levels", "odon.resources:Thresholds.get_preview", "odon.resources:Thresholds.start_preview", "odon.resources:Thresholds.refresh_preview", "odon.resources:Thresholds.cancel_preview"],
       "python_async":["odon.async_resources:AsyncThresholds.list_levels", "odon.async_resources:AsyncThresholds.get_preview", "odon.async_resources:AsyncThresholds.start_preview", "odon.async_resources:AsyncThresholds.refresh_preview", "odon.async_resources:AsyncThresholds.cancel_preview"],
-      "tests":["python:test_threshold_preview_workflow"],
-      "notes":"Whole-image preview retains the native 10-million-pixel interactive safety limit. Start and refresh are task methods because image reads may be slow."
+      "tests":["python:test_threshold_preview_workflow", "rust:control::actor::tests::thresholds::threshold_preview_configure_refresh_apply_and_cancel_without_a_frame", "rust:control::actor::tests::thresholds::cancelling_threshold_preview_rejects_a_late_worker_install"],
+      "notes":"Actor-owned whole-image and visible-region reads retain the 10-million-pixel interactive safety limit. Start and refresh run on bounded workers, project an immutable preview resource, and reject cancelled or stale installs without a UI frame."
     },
     {
       "id":"THRESH-02.target",
@@ -974,8 +976,8 @@
       "permissions":["viewer.thresholds.write"],
       "python_sync":["odon.resources:Thresholds.configure"],
       "python_async":["odon.async_resources:AsyncThresholds.configure"],
-      "tests":["python:test_threshold_preview_workflow", "rust:geometry::threshold_regions"],
-      "notes":"Apply recomputes the CPU mask using the configured minimum component size before polygonization."
+      "tests":["python:test_threshold_preview_workflow", "rust:geometry::threshold_regions", "rust:control::actor::tests::thresholds::threshold_preview_configure_refresh_apply_and_cancel_without_a_frame"],
+      "notes":"Threshold and minimum-component changes are recomputed on a bounded worker against the actor-owned immutable source pixels."
     },
     {
       "id":"THRESH-03.target",
@@ -990,8 +992,8 @@
       "permissions":["viewer.thresholds.write"],
       "python_sync":["odon.resources:Thresholds.apply_preview"],
       "python_async":["odon.async_resources:AsyncThresholds.apply_preview"],
-      "tests":["python:test_threshold_preview_workflow"],
-      "notes":"The apply task identifies the created editable mask layer and polygon count."
+      "tests":["python:test_threshold_preview_workflow", "rust:control::actor::tests::thresholds::threshold_preview_configure_refresh_apply_and_cancel_without_a_frame"],
+      "notes":"The actor-owned apply worker polygonizes the filtered mask, then commits the editable layer through the canonical mask model and returns its layer ID and polygon count."
     },
     {
       "id": "MASK-01.target",
@@ -1127,8 +1129,8 @@
       "permissions": ["deep_links.read", "application.write"],
       "python_sync": ["odon.resources:DeepLinks.generate", "odon.resources:DeepLinks.apply"],
       "python_async": ["odon.async_resources:AsyncDeepLinks.generate", "odon.async_resources:AsyncDeepLinks.apply"],
-      "tests": ["rust:canonical_url_round_trips_public_state", "python:test_deep_link_wrappers"],
-      "notes": "Apply validates project/ROI resolution before mutation and returns a task that settles after queued application and viewer loading are idle."
+      "tests": ["rust:canonical_url_round_trips_public_state", "rust:deep_link_apply_commits_project_resources_channels_objects_and_camera_without_a_frame", "rust:failed_external_deep_link_retains_the_previous_usable_document", "rust:cancelled_deep_link_cannot_replace_the_previous_document", "rust:same_roi_deep_link_reuses_the_document_and_preserves_the_workspace", "python:test_deep_link_wrappers"],
+      "notes": "Apply is an actor-owned retained transaction. It resolves and opens the project, ROI, labels, and objects on bounded workers, then atomically commits saved-view, channel, object, filter, and camera state. The task settles only after model and resources are ready; cancellation, concurrent edits, and stale remote sessions cannot replace the current usable document."
     },
     {"id":"LINK-04.target","feature_id":"LINK-04","domain":"deep_links","title":"Installed example and test page","phase":"H","status":"presentation_only","semantic":false},
     {"id":"LINK-05.target","feature_id":"LINK-05","domain":"deep_links","title":"OS registration and existing-window IPC","phase":"G","status":"adapter_only","semantic":false},
