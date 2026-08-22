@@ -218,7 +218,12 @@ pub(super) fn dispatch_request(
     }
     if request.command.method() == "memory.pin" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
-        if begin_memory_pin(model, request, load_job_tx, render_document, diagnostics) {
+        let started = if model.mode() == ModelMode::Mosaic {
+            begin_mosaic_memory_pin(model, request, load_job_tx, diagnostics)
+        } else {
+            begin_memory_pin(model, request, load_job_tx, render_document, diagnostics)
+        };
+        if started {
             publish_projection(
                 model,
                 render_document.clone(),

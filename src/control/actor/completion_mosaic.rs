@@ -126,6 +126,70 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::MosaicMemoryPin {
+            request,
+            spec,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_mosaic_memory_pin(&spec, "Mosaic memory pinning was cancelled");
+                reject_cancelled_request(request, diagnostics, "mosaic memory pinning");
+                return;
+            }
+            match result {
+                Ok(MosaicMemoryPinWorkerResult { system, outcome }) => {
+                    let response = match outcome {
+                        MosaicMemoryPinWorkerOutcome::Confirmation {
+                            risk,
+                            projected_bytes,
+                            available_bytes,
+                        } => model.finish_mosaic_memory_confirmation(
+                            &spec,
+                            system,
+                            risk,
+                            projected_bytes,
+                            available_bytes,
+                        ),
+                        MosaicMemoryPinWorkerOutcome::Loaded(result) => {
+                            model.install_mosaic_memory_pin(&spec, result, system)
+                        }
+                    };
+                    if let Some(response) = response {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        finish_request(request, response, diagnostics);
+                    } else {
+                        reject_stale_mosaic(request, diagnostics, "mosaic memory pinning");
+                    }
+                }
+                Err(error) => {
+                    let message = format!("mosaic memory pinning failed: {error}");
+                    if model.fail_mosaic_memory_pin(&spec, &message) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        reject_stale_mosaic(request, diagnostics, "mosaic memory pinning");
+                    }
+                }
+            }
+        }
         _ => unreachable!("non-mosaic completion reached mosaic completion dispatcher"),
     }
 }

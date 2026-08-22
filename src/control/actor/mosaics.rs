@@ -162,6 +162,39 @@ pub(super) fn begin_mosaic_object_load(
     }
 }
 
+pub(super) fn begin_mosaic_memory_pin(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) -> bool {
+    if load_job_tx.is_full() {
+        reject_worker_submission(request, diagnostics);
+        return false;
+    }
+    let spec = match model.prepare_mosaic_memory_pin(request.command.params()) {
+        Ok(spec) => spec,
+        Err(error) => {
+            reject_actor_request(request, diagnostics, error);
+            return false;
+        }
+    };
+    match load_job_tx.try_send(LoadJob::MosaicMemoryPin { request, spec }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(error) => {
+            let LoadJob::MosaicMemoryPin { request, spec } = error.into_inner() else {
+                unreachable!("mosaic memory submission returns its own job")
+            };
+            model.fail_mosaic_memory_pin(&spec, "Mosaic memory worker queue is unavailable");
+            reject_worker_submission(request, diagnostics);
+            false
+        }
+    }
+}
+
 pub(super) fn open_mosaic_samplesheet_on_worker(
     generation: u64,
     path: &Path,

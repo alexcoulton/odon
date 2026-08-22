@@ -25,6 +25,7 @@ pub(crate) enum OperationKind {
     ObjectExport,
     Mosaic,
     MosaicObjects,
+    Presentation,
 }
 
 impl OperationKind {
@@ -51,6 +52,7 @@ impl OperationKind {
             Self::ObjectExport => "object_export",
             Self::Mosaic => "mosaic",
             Self::MosaicObjects => "mosaic_objects",
+            Self::Presentation => "presentation",
         }
     }
 }

@@ -35,7 +35,10 @@ pub use memory::{
 };
 pub(crate) use memory::{PinnedMemoryModel, SystemMemorySnapshot, TileLoadingModel};
 pub use mosaic::{ControlMosaicItemResource, ControlMosaicResource};
-pub(crate) use mosaic::{MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec};
+pub(crate) use mosaic::{
+    MosaicMemoryPinItemSpec, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicModel,
+    MosaicObjectLoadResult, MosaicObjectLoadSpec,
+};
 pub(crate) use object_export::{
     ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
     object_export_columns, write_object_export,

@@ -295,6 +295,15 @@ pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
             | "viewer.channels.set_color"
             | "viewer.channels.set_note"
             | "viewer.channels.set_order"
+            | "viewer.channels.presentation.get"
+            | "viewer.channels.presentation.set"
+            | "viewer.channels.list_groups"
+            | "viewer.channels.set_group"
+            | "viewer.native_layers.list"
+            | "viewer.native_layers.get"
+            | "viewer.native_layers.set_active"
+            | "viewer.native_layers.set_visibility"
+            | "viewer.native_layers.set_order"
             | "viewer.camera.get"
             | "viewer.camera.set"
             | "viewer.camera.zoom_in"
@@ -309,6 +318,12 @@ pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
             | "viewer.objects.set_visibility"
             | "viewer.objects.rendering.get_fast"
             | "viewer.objects.rendering.set_fast"
+            | "viewer.screenshot.settings.get"
+            | "viewer.screenshot.settings.set"
+            | "memory.get"
+            | "memory.pin"
+            | "memory.unpin"
+            | "memory.unpin_all"
     )
 }
 
@@ -4293,7 +4308,7 @@ mod tests {
         let route = execution_route_json(camera);
         assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
         assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "actor");
-        assert_eq!(execution_route_summary(camera), "hybrid");
+        assert_eq!(execution_route_summary(camera), "actor");
 
         let memory = method("memory.pin").unwrap();
         assert_eq!(
@@ -4302,11 +4317,11 @@ mod tests {
         );
         assert_eq!(
             execution_owner(memory, "mosaic", &json!({}), false),
-            ExecutionOwner::LegacyUi
+            ExecutionOwner::Actor
         );
         let route = execution_route_json(memory);
         assert_eq!(route["by_mode"]["single"]["default_owner"], "actor");
-        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "legacy_ui");
+        assert_eq!(route["by_mode"]["mosaic"]["default_owner"], "actor");
     }
 
     #[test]
@@ -4319,7 +4334,14 @@ mod tests {
             })
             .map(|descriptor| descriptor.name)
             .collect::<Vec<_>>();
-        println!("remaining mosaic legacy routes: {legacy:?}");
+        assert_eq!(
+            legacy,
+            vec![
+                "viewer.screenshot.capture",
+                "app.screenshot.capture",
+                "project.screenshot.capture",
+            ]
+        );
     }
 
     #[test]

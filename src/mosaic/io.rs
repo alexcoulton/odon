@@ -13,6 +13,7 @@ use zarrs::storage::ReadableStorageTraits;
 use crate::data::dataset_source::DatasetSource;
 use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
 use crate::render::array_dims::squeeze_to_2d;
+use odon::model::ControlPinnedLevelResource;
 
 #[derive(Clone)]
 pub struct MosaicSource {
@@ -142,6 +143,36 @@ impl MosaicPinnedLevels {
 
     pub fn unload(&self, dataset_id: usize, level: usize) {
         self.inner.lock().levels.remove(&(dataset_id, level));
+    }
+
+    pub fn install(&self, dataset_id: usize, resource: Arc<ControlPinnedLevelResource>) {
+        self.inner.lock().levels.insert(
+            (dataset_id, resource.level()),
+            PinnedLevelState::Loaded(PinnedLevelData {
+                width: resource.width(),
+                height: resource.height(),
+                channel_offsets: resource.channel_offsets().as_ref().clone(),
+                data: Arc::clone(resource.data()),
+                bytes: resource.bytes(),
+            }),
+        );
+    }
+
+    pub fn replace_control_resources(
+        &self,
+        resources: &[(usize, Arc<ControlPinnedLevelResource>)],
+    ) {
+        let retained = resources
+            .iter()
+            .map(|(dataset_id, resource)| (*dataset_id, resource.level()))
+            .collect::<std::collections::HashSet<_>>();
+        self.inner
+            .lock()
+            .levels
+            .retain(|key, _| retained.contains(key));
+        for (dataset_id, resource) in resources {
+            self.install(*dataset_id, Arc::clone(resource));
+        }
     }
 
     pub fn total_loaded_bytes(&self) -> u64 {

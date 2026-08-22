@@ -464,6 +464,81 @@ fn mosaic_native_control_intents(
             params: serde_json::json!({"order":after["channel_order"]}),
         });
     }
+    if before.get("channel_presentation") != after.get("channel_presentation") {
+        intents.push(NativeControlIntent {
+            method: "viewer.channels.presentation.set",
+            params: after["channel_presentation"].clone(),
+        });
+    }
+    if before.get("layer_groups") != after.get("layer_groups") {
+        intents.push(NativeControlIntent {
+            method: "viewer.channels.set_group",
+            params: serde_json::json!({"state":after["layer_groups"]}),
+        });
+    }
+    let before_layers = before["native_layers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let after_layers = after["native_layers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let active_layer = |layers: &[serde_json::Value]| {
+        layers
+            .iter()
+            .find(|layer| layer["active"].as_bool() == Some(true))
+            .and_then(|layer| layer["layer_id"].as_str())
+            .map(str::to_string)
+    };
+    if active_layer(&before_layers) != active_layer(&after_layers)
+        && let Some(layer_id) = active_layer(&after_layers)
+        && !layer_id.starts_with("channel:")
+    {
+        intents.push(NativeControlIntent {
+            method: "viewer.native_layers.set_active",
+            params: serde_json::json!({"layer_id":layer_id}),
+        });
+    }
+    for layer in &after_layers {
+        let Some(layer_id) = layer["layer_id"].as_str() else {
+            continue;
+        };
+        if layer_id.starts_with("channel:")
+            || matches!(layer_id, "segmentation_geojson" | "text_labels")
+        {
+            continue;
+        }
+        let previous = before_layers
+            .iter()
+            .find(|candidate| candidate["layer_id"].as_str() == Some(layer_id));
+        if previous.and_then(|layer| layer["visible"].as_bool()) != layer["visible"].as_bool()
+            && let Some(visible) = layer["visible"].as_bool()
+        {
+            intents.push(NativeControlIntent {
+                method: "viewer.native_layers.set_visibility",
+                params: serde_json::json!({"layer_id":layer_id,"visible":visible}),
+            });
+        }
+    }
+    for stack in ["channels", "overlays"] {
+        let ordered = |layers: &[serde_json::Value]| {
+            layers
+                .iter()
+                .filter(|layer| layer["stack"].as_str() == Some(stack))
+                .filter_map(|layer| layer["layer_id"].as_str())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let before_order = ordered(&before_layers);
+        let after_order = ordered(&after_layers);
+        if before_order != after_order && !after_order.is_empty() {
+            intents.push(NativeControlIntent {
+                method: "viewer.native_layers.set_order",
+                params: serde_json::json!({"stack":stack,"layers":after_order}),
+            });
+        }
+    }
     if before.get("objects_visible") != after.get("objects_visible") {
         intents.push(NativeControlIntent {
             method: "viewer.objects.set_visibility",
@@ -1130,6 +1205,9 @@ impl RootApp {
                 &projection.object_export_state,
             );
         }
+        if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
+            mosaic.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
+        }
         self.apply_project_object_preload_projection(&projection.project_object_preload);
         if projection.mode == ModelMode::Project {
             let mut project_space = match &mut self.mode {
@@ -1196,6 +1274,7 @@ impl RootApp {
                 if let Err(error) = mosaic.apply_control_actor_state(
                     &projection.mosaic_state,
                     &projection.mosaic_object_resources,
+                    &projection.mosaic_pinned_levels,
                 ) {
                     log_warn!("could not apply actor mosaic state: {error}");
                     self.mode = Mode::Project {
@@ -1211,6 +1290,7 @@ impl RootApp {
                 if let Err(error) = mosaic.apply_control_actor_state(
                     &projection.mosaic_state,
                     &projection.mosaic_object_resources,
+                    &projection.mosaic_pinned_levels,
                 ) {
                     log_warn!("could not apply actor mosaic state: {error}");
                     return false;
@@ -1415,6 +1495,9 @@ impl RootApp {
                 projection.object_export_generation,
                 &projection.object_export_state,
             );
+        }
+        if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
+            mosaic.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
         }
         self.apply_control_projection_workspace(
             projection.workspace.as_ref(),

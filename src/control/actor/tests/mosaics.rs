@@ -112,6 +112,81 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
     );
     call(
         &channels,
+        "viewer.channels.presentation.set",
+        json!({"search":"CD","sort":"name_asc"}),
+    );
+    let presentation = call(&channels, "viewer.channels.presentation.get", json!({}));
+    assert_eq!(presentation["presentation"]["search"], "CD");
+    assert_eq!(presentation["presentation"]["sort"], "name_asc");
+    call(
+        &channels,
+        "viewer.channels.set_group",
+        json!({"name":"Markers","channels":[0,1],"color_rgb":[9,8,7]}),
+    );
+    let groups = call(&channels, "viewer.channels.list_groups", json!({}));
+    assert_eq!(groups["groups"][0]["name"], "Markers");
+    assert_eq!(groups["groups"][0]["members"].as_array().unwrap().len(), 2);
+
+    let layers = call(&channels, "viewer.native_layers.list", json!({}));
+    assert_eq!(layers["layers"].as_array().unwrap().len(), 7);
+    assert_eq!(
+        call(
+            &channels,
+            "viewer.native_layers.get",
+            json!({"layer_id":"text_labels"})
+        )["layer"]["kind"],
+        "text_labels"
+    );
+    call(
+        &channels,
+        "viewer.native_layers.set_visibility",
+        json!({"layer_id":"text_labels","visible":false}),
+    );
+    call(
+        &channels,
+        "viewer.native_layers.set_active",
+        json!({"layer_id":"channel:1"}),
+    );
+    call(
+        &channels,
+        "viewer.native_layers.set_order",
+        json!({"stack":"overlays","layers":["text_labels","segmentation_geojson"]}),
+    );
+
+    let screenshot = call(
+        &channels,
+        "viewer.screenshot.settings.set",
+        json!({"output_dir":directory,"include_legend":false,"legend_scale":1.5}),
+    );
+    assert_eq!(screenshot["include_legend"], false);
+    assert_eq!(
+        call(&channels, "viewer.screenshot.settings.get", json!({}))["legend_scale"],
+        1.5
+    );
+
+    assert_eq!(call(&channels, "memory.get", json!({}))["mode"], "mosaic");
+    let pinned = call(
+        &channels,
+        "memory.pin",
+        json!({"level":0,"channels":[0],"scope":"focused","force":true}),
+    );
+    assert_eq!(pinned["completed"], true);
+    assert_eq!(
+        pinned["memory"]["items"][0]["levels"][0]["status"],
+        "loaded"
+    );
+    let unpinned = call(
+        &channels,
+        "memory.unpin",
+        json!({"level":0,"scope":"focused"}),
+    );
+    assert_eq!(unpinned["unloaded_items"], 1);
+    assert_eq!(
+        call(&channels, "memory.unpin_all", json!({}))["unloaded_item_levels"],
+        0
+    );
+    call(
+        &channels,
         "viewer.camera.set",
         json!({"center_world_lvl0":[12.0,34.0],"zoom":0.25}),
     );

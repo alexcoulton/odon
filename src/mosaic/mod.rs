@@ -2483,6 +2483,19 @@ impl MosaicViewerApp {
         self.screenshot_settings_open = true;
     }
 
+    pub fn apply_control_actor_screenshot_preferences(
+        &mut self,
+        preferences: &odon::model::ScreenshotPreferences,
+    ) {
+        self.screenshot_output_dir = preferences.output_dir().map(Path::to_path_buf);
+        self.screenshot_settings = ScreenshotSettings {
+            include_scale_bar: false,
+            include_legend: preferences.include_legend(),
+            scale_bar_scale: preferences.scale_bar_scale(),
+            legend_scale: preferences.legend_scale(),
+        };
+    }
+
     pub fn control_screenshot_settings_json(&self) -> serde_json::Value {
         serde_json::json!({
             "output_dir": self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
@@ -3053,6 +3066,7 @@ impl MosaicViewerApp {
         &mut self,
         state: &serde_json::Value,
         object_resources: &[(usize, Arc<odon::model::ControlObjectResource>)],
+        pinned_levels: &[(usize, Arc<odon::model::ControlPinnedLevelResource>)],
     ) -> Result<(), String> {
         let generation = state
             .get("generation")
@@ -3274,6 +3288,67 @@ impl MosaicViewerApp {
                 .filter(|index| *index < self.channels.len())
                 .collect();
         }
+        if let Some(presentation) = state.get("channel_presentation") {
+            if let Some(search) = presentation
+                .get("search")
+                .and_then(serde_json::Value::as_str)
+            {
+                self.channel_list_search = search.to_string();
+            }
+            if let Some(sort) = presentation
+                .get("sort")
+                .and_then(serde_json::Value::as_str)
+                .and_then(ChannelSortMode::from_storage_key)
+            {
+                self.channel_sort_mode = sort;
+            }
+        }
+        if let Some(groups) = state.get("layer_groups") {
+            self.layer_groups = serde_json::from_value(groups.clone())
+                .map_err(|error| format!("invalid actor mosaic channel groups: {error}"))?;
+        }
+        if let Some(layers) = state
+            .get("native_layers")
+            .and_then(serde_json::Value::as_array)
+        {
+            let channel_order = layers
+                .iter()
+                .filter(|layer| layer["stack"].as_str() == Some("channels"))
+                .filter_map(|layer| {
+                    layer["layer_id"]
+                        .as_str()?
+                        .strip_prefix("channel:")?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .collect::<Vec<_>>();
+            if channel_order.len() == self.channels.len() {
+                self.channel_layer_order = channel_order;
+            }
+            let overlay_order = layers
+                .iter()
+                .filter(|layer| layer["stack"].as_str() == Some("overlays"))
+                .filter_map(|layer| self.parse_layer_id_storage_key(layer["layer_id"].as_str()?))
+                .filter(|layer| self.layer_available(*layer))
+                .collect::<Vec<_>>();
+            if overlay_order.len() == self.overlay_layer_order.len() {
+                self.overlay_layer_order = overlay_order;
+            }
+            for layer in layers {
+                let Some(id) = layer["layer_id"]
+                    .as_str()
+                    .and_then(|id| self.parse_layer_id_storage_key(id))
+                else {
+                    continue;
+                };
+                if let Some(visible) = layer["visible"].as_bool() {
+                    self.set_layer_visible(id, visible);
+                }
+                if layer["active"].as_bool() == Some(true) && self.layer_available(id) {
+                    self.set_active_layer(id);
+                }
+            }
+        }
 
         let object_generation = state["objects"]["generation"].as_u64().unwrap_or(0);
         if object_generation > self.control_actor_object_generation {
@@ -3291,6 +3366,7 @@ impl MosaicViewerApp {
             .filter_map(|item| item["item_id"].as_u64())
             .map(|item_id| item_id as usize)
             .collect();
+        self.pinned_levels.replace_control_resources(pinned_levels);
         self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
         self.last_tile_request_signature = None;
         Ok(())
@@ -3403,6 +3479,9 @@ impl MosaicViewerApp {
                 "active":index == self.selected_channel,
             })).collect::<Vec<_>>(),
             "channel_order":self.channel_layer_order,
+            "channel_presentation":self.control_channel_presentation_json(),
+            "layer_groups":self.layer_groups,
+            "native_layers":self.control_native_layer_snapshot_list(),
         })
     }
 

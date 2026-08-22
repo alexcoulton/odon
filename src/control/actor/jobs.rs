@@ -36,6 +36,20 @@ pub(super) struct MemoryPinWorkerResult {
     pub(super) outcome: MemoryPinWorkerOutcome,
 }
 
+pub(super) enum MosaicMemoryPinWorkerOutcome {
+    Confirmation {
+        risk: &'static str,
+        projected_bytes: u64,
+        available_bytes: u64,
+    },
+    Loaded(MosaicMemoryPinResult),
+}
+
+pub(super) struct MosaicMemoryPinWorkerResult {
+    pub(super) system: Option<SystemMemorySnapshot>,
+    pub(super) outcome: MosaicMemoryPinWorkerOutcome,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AnalysisComputeKind {
     Histogram,
@@ -194,6 +208,11 @@ pub(super) enum LoadCompletion {
         request: OdonControlRequest,
         spec: MemoryPinSpec,
         result: anyhow::Result<MemoryPinWorkerResult>,
+    },
+    MosaicMemoryPin {
+        request: OdonControlRequest,
+        spec: MosaicMemoryPinSpec,
+        result: anyhow::Result<MosaicMemoryPinWorkerResult>,
     },
     ThresholdLoad {
         request: OdonControlRequest,
@@ -388,7 +407,9 @@ impl LoadCompletion {
                 CompletionDomain::Objects
             }
             Self::MaskImport { .. } | Self::MaskExport { .. } => CompletionDomain::Masks,
-            Self::MosaicOpen { .. } | Self::MosaicObjects { .. } => CompletionDomain::Mosaic,
+            Self::MosaicOpen { .. } | Self::MosaicObjects { .. } | Self::MosaicMemoryPin { .. } => {
+                CompletionDomain::Mosaic
+            }
         }
     }
 }
@@ -498,6 +519,10 @@ pub(super) enum LoadJob {
         request: OdonControlRequest,
         document: Arc<RenderDocument>,
         spec: MemoryPinSpec,
+    },
+    MosaicMemoryPin {
+        request: OdonControlRequest,
+        spec: MosaicMemoryPinSpec,
     },
     ThresholdLoad {
         request: OdonControlRequest,

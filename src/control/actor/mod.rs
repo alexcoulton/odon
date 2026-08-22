@@ -48,14 +48,14 @@ use crate::model::{
     ControlMosaicItemResource, ControlMosaicResource, ControlObjectFilterResult,
     ControlObjectResource, ControlPinnedLevelResource, ControlThresholdPreviewResource,
     DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric,
-    MeasurementSpec, MemoryPinSpec, ModelMode, MosaicObjectLoadResult, MosaicObjectLoadSpec,
-    ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader,
-    ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
-    ProjectObjectPreloadSource, ScreenshotPreferences, SettingsMutationOutcome,
-    SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
-    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
-    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
-    write_object_export,
+    MeasurementSpec, MemoryPinSpec, ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec,
+    MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult,
+    ObjectExportSpec, ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ScreenshotPreferences,
+    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
+    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
+    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
+    threshold_mask_polygons, write_object_export,
 };
 use crate::settings::AppSettings;
 
@@ -119,16 +119,18 @@ use dispatch::dispatch_request;
 use jobs::{
     AnalysisComputeKind, CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult,
     DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MemoryPinWorkerOutcome,
-    MemoryPinWorkerResult, MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult,
-    ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult,
+    MemoryPinWorkerResult, MosaicMemoryPinWorkerOutcome, MosaicMemoryPinWorkerResult,
+    MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
+    ProjectRoiOpenWorkerResult,
 };
 use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
 use measurements::begin_measurement;
 use memory::begin_memory_pin;
 use mosaics::{
-    begin_mosaic_object_load, begin_mosaic_open, load_mosaic_objects_on_worker,
-    open_mosaic_project_on_worker, open_mosaic_samplesheet_on_worker,
+    begin_mosaic_memory_pin, begin_mosaic_object_load, begin_mosaic_open,
+    load_mosaic_objects_on_worker, open_mosaic_project_on_worker,
+    open_mosaic_samplesheet_on_worker,
 };
 use object_exports::begin_object_export;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};

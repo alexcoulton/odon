@@ -10,6 +10,12 @@ use serde_json::{Value, json};
 use crate::control::{ControlError, ControlErrorKind};
 use crate::data::document::ControlOpenedDocument;
 use crate::data::ome::ChannelInfo;
+use crate::data::project_config::{
+    ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups,
+};
+
+use super::layers::NativeLayersModel;
+use super::{ControlPinnedLevelResource, SystemMemorySnapshot};
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
 const DEFAULT_GRID_PAD: f32 = 64.0;
@@ -156,6 +162,38 @@ pub(crate) struct MosaicObjectLoadResult {
     pub cancelled: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct MosaicMemoryPinItemSpec {
+    pub item_id: usize,
+    pub document: ControlOpenedDocument,
+    /// Mapping from global mosaic channel index to this document's channel index.
+    pub channel_map: Vec<Option<u64>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct MosaicMemoryPinSpec {
+    pub resource_generation: u64,
+    pub operation_generation: u64,
+    pub level: usize,
+    pub channel_ids: Vec<u64>,
+    pub items: Vec<MosaicMemoryPinItemSpec>,
+    pub estimated_bytes: u64,
+    pub pinned_bytes: u64,
+    pub force: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct MosaicMemoryPinResult {
+    pub loaded: Vec<(usize, ControlPinnedLevelResource)>,
+    pub failures: Vec<(usize, String)>,
+}
+
+#[derive(Debug, Clone)]
+enum MosaicPinnedLevelState {
+    Loaded(Arc<ControlPinnedLevelResource>),
+    Failed(String),
+}
+
 /// Canonical, renderer-independent semantic mosaic state.
 #[derive(Debug, Clone)]
 pub(crate) struct MosaicModel {
@@ -164,6 +202,10 @@ pub(crate) struct MosaicModel {
     channels: Vec<MosaicChannelModel>,
     active_channel: usize,
     channel_order: Vec<usize>,
+    channel_search: String,
+    channel_sort: String,
+    layer_groups: ProjectLayerGroups,
+    native_layers: NativeLayersModel,
     selected_ids: HashSet<usize>,
     focused_id: Option<usize>,
     right_tab: String,
@@ -194,6 +236,12 @@ pub(crate) struct MosaicModel {
     object_failures: BTreeMap<usize, String>,
     object_cancel: Option<Arc<AtomicBool>>,
     object_status: String,
+    pinned_levels: BTreeMap<(usize, usize), MosaicPinnedLevelState>,
+    memory_selected_channels: Vec<usize>,
+    memory_operation_generation: u64,
+    memory_pending: HashMap<(usize, usize), u64>,
+    memory_status: String,
+    system_memory: Option<SystemMemorySnapshot>,
 }
 
 impl Default for MosaicModel {
@@ -204,6 +252,10 @@ impl Default for MosaicModel {
             channels: Vec::new(),
             active_channel: 0,
             channel_order: Vec::new(),
+            channel_search: String::new(),
+            channel_sort: "manual".to_string(),
+            layer_groups: ProjectLayerGroups::default(),
+            native_layers: NativeLayersModel::channels(&[]),
             selected_ids: HashSet::new(),
             focused_id: None,
             right_tab: "properties".to_string(),
@@ -234,11 +286,48 @@ impl Default for MosaicModel {
             object_failures: BTreeMap::new(),
             object_cancel: None,
             object_status: String::new(),
+            pinned_levels: BTreeMap::new(),
+            memory_selected_channels: Vec::new(),
+            memory_operation_generation: 0,
+            memory_pending: HashMap::new(),
+            memory_status: String::new(),
+            system_memory: None,
         }
     }
 }
 
 impl MosaicModel {
+    pub(crate) fn require_ready(&self) -> Result<(), ControlError> {
+        self.require_resource().map(|_| ())
+    }
+
+    pub(crate) fn default_screenshot_filename(&self) -> Result<String, ControlError> {
+        self.require_resource()?;
+        let source_name = self
+            .focused_id
+            .and_then(|id| self.items.iter().find(|item| item.id == id))
+            .or_else(|| self.items.first())
+            .map(|item| item.roi_id.as_str())
+            .unwrap_or("mosaic");
+        let stem = source_name
+            .strip_suffix(".ome.zarr")
+            .or_else(|| source_name.strip_suffix(".zarr"))
+            .unwrap_or(source_name);
+        let sanitized = stem
+            .chars()
+            .map(|ch| match ch {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                _ => ch,
+            })
+            .collect::<String>();
+        let sanitized = sanitized.trim().trim_matches('.').trim_matches('_');
+        Ok(if sanitized.is_empty() {
+            "odon.mosaic.screenshot.png".to_string()
+        } else {
+            format!("{sanitized}.mosaic.screenshot.png")
+        })
+    }
+
     pub(crate) fn resource(&self) -> Option<Arc<ControlMosaicResource>> {
         self.resource.clone()
     }
@@ -321,6 +410,10 @@ impl MosaicModel {
         self.channels = channels;
         self.active_channel = 0;
         self.channel_order = (0..self.channels.len()).collect();
+        self.channel_search.clear();
+        self.channel_sort = "manual".to_string();
+        self.layer_groups = ProjectLayerGroups::default();
+        self.native_layers = initial_native_layers(&self.channels, &self.items);
         self.focused_id = focused_id;
         self.selected_ids = focused_id.into_iter().collect();
         self.right_tab = "properties".to_string();
@@ -345,6 +438,12 @@ impl MosaicModel {
         self.object_failures.clear();
         self.object_pending_ids.clear();
         self.object_status.clear();
+        self.pinned_levels.clear();
+        self.memory_selected_channels = (0..self.channels.len()).collect();
+        self.memory_operation_generation = 0;
+        self.memory_pending.clear();
+        self.memory_status.clear();
+        self.system_memory = None;
         self.apply_layout();
         self.fit_bounds(self.bounds);
     }
@@ -435,6 +534,28 @@ impl MosaicModel {
             if order.len() == self.channels.len() {
                 self.channel_order = order;
             }
+        }
+        if let Some(presentation) = state.get("channel_presentation") {
+            if let Some(search) = presentation.get("search").and_then(Value::as_str) {
+                self.channel_search = search.to_string();
+            }
+            if let Some(sort) = presentation
+                .get("sort")
+                .and_then(Value::as_str)
+                .and_then(canonical_channel_sort)
+            {
+                self.channel_sort = sort.to_string();
+            }
+        }
+        if let Some(groups) = state.get("layer_groups") {
+            self.layer_groups = serde_json::from_value(groups.clone())
+                .map_err(|error| invalid(format!("invalid mosaic channel groups: {error}")))?;
+        }
+        if let Some(layers) = state.get("native_layers") {
+            self.native_layers = NativeLayersModel::restore(layers)?;
+            self.sync_semantics_from_native_layers()?;
+        } else {
+            self.sync_native_layers_from_semantics();
         }
         Ok(())
     }
@@ -532,6 +653,9 @@ impl MosaicModel {
                 "active":channel.index == self.active_channel,
             })).collect::<Vec<_>>(),
             "channel_order":self.channel_order,
+            "channel_presentation":self.channel_presentation_snapshot(),
+            "layer_groups":self.layer_groups,
+            "native_layers":self.native_layers.snapshots(),
             "objects":self.object_state(),
         })
     }
@@ -573,12 +697,17 @@ impl MosaicModel {
                 | "viewer.channels.list_visible"
                 | "viewer.channels.get_active"
                 | "viewer.channels.get_contrast"
+                | "viewer.channels.presentation.get"
+                | "viewer.channels.list_groups"
+                | "viewer.native_layers.list"
+                | "viewer.native_layers.get"
                 | "viewer.camera.get"
                 | "viewer.panels.get"
                 | "viewer.rendering.get_smooth_pixels"
                 | "viewer.rendering.get_state"
                 | "viewer.objects.get_visibility"
                 | "viewer.objects.rendering.get_fast"
+                | "memory.get"
         );
         let result = match method {
             "viewer.channels.list" => self.channels_snapshot(),
@@ -591,6 +720,15 @@ impl MosaicModel {
             "viewer.channels.set_color" => self.set_channel_color(params),
             "viewer.channels.set_note" => self.set_channel_note(params),
             "viewer.channels.set_order" => self.set_channel_order(params),
+            "viewer.channels.presentation.get" => self.channel_presentation(),
+            "viewer.channels.presentation.set" => self.set_channel_presentation(params),
+            "viewer.channels.list_groups" => self.channel_groups(),
+            "viewer.channels.set_group" => self.set_channel_group(params),
+            "viewer.native_layers.list" => self.native_layers_snapshot(),
+            "viewer.native_layers.get" => self.native_layer_snapshot(params),
+            "viewer.native_layers.set_active" => self.set_native_layer_active(params),
+            "viewer.native_layers.set_visibility" => self.set_native_layer_visibility(params),
+            "viewer.native_layers.set_order" => self.set_native_layer_order(params),
             "viewer.camera.get" => self
                 .require_resource()
                 .map(|_| json!({"mode":"mosaic","camera":self.camera_snapshot()})),
@@ -607,9 +745,680 @@ impl MosaicModel {
             "viewer.objects.set_visibility" => self.set_object_visibility(params),
             "viewer.objects.rendering.get_fast" => self.fast_object_rendering_snapshot(),
             "viewer.objects.rendering.set_fast" => self.set_fast_object_rendering(params),
+            "memory.get" => self.memory_snapshot(),
+            "memory.unpin" => self.unpin_memory(params),
+            "memory.unpin_all" => self.unpin_all_memory(),
             _ => return None,
         };
         Some(result.map(|response| (response, !read_only)))
+    }
+
+    fn channel_presentation_snapshot(&self) -> Value {
+        json!({
+            "search":self.channel_search,
+            "sort":self.channel_sort,
+            "order":self.channel_order.iter().map(|index| json!({
+                "index":index,
+                "name":self.channels[*index].name,
+                "visible":self.channels[*index].visible,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn channel_presentation(&self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        Ok(json!({"mode":"mosaic","presentation":self.channel_presentation_snapshot()}))
+    }
+
+    fn set_channel_presentation(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        if let Some(search) = params.get("search") {
+            self.channel_search = search
+                .as_str()
+                .ok_or_else(|| invalid("search must be a string"))?
+                .to_string();
+        }
+        if let Some(sort) = params.get("sort") {
+            self.channel_sort = canonical_channel_sort(
+                sort.as_str()
+                    .ok_or_else(|| invalid("sort must be a string"))?,
+            )
+            .ok_or_else(|| invalid("unknown channel sort mode"))?
+            .to_string();
+        }
+        Ok(json!({"mode":"mosaic","presentation":self.channel_presentation_snapshot()}))
+    }
+
+    fn channel_groups_snapshot(&self) -> Value {
+        Value::Array(
+            self.layer_groups
+                .channel_groups
+                .iter()
+                .map(|group| {
+                    let members = self
+                        .channels
+                        .iter()
+                        .filter_map(|channel| {
+                            let member = self.layer_groups.channel_members.get(&channel.name)?;
+                            (member.group_id == group.id).then(|| {
+                                json!({
+                                    "index":channel.index,
+                                    "name":channel.name,
+                                    "inherit_color":member.inherit_color,
+                                })
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    json!({
+                        "id":group.id,
+                        "name":group.name,
+                        "expanded":group.expanded,
+                        "color_rgb":group.color_rgb,
+                        "members":members,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn channel_groups(&self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        Ok(json!({"mode":"mosaic","groups":self.channel_groups_snapshot()}))
+    }
+
+    fn set_channel_group(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        if let Some(state) = params.get("state") {
+            let replacement: ProjectLayerGroups = serde_json::from_value(state.clone())
+                .map_err(|error| invalid(format!("invalid channel-group state: {error}")))?;
+            let changed = self.layer_groups != replacement;
+            self.layer_groups = replacement;
+            return Ok(json!({
+                "mode":"mosaic",
+                "result":{
+                    "changed":changed,
+                    "groups":self.channel_groups_snapshot(),
+                },
+            }));
+        }
+        let selectors = params
+            .get("channels")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("set_channel_group requires channels"))?;
+        let mut indices = selectors
+            .iter()
+            .map(|selector| self.channel_index(selector))
+            .collect::<Result<Vec<_>, _>>()?;
+        indices.sort_unstable();
+        indices.dedup();
+        if indices.is_empty() {
+            return Err(invalid("no channels resolved"));
+        }
+        let requested_id = params.get("group_id").and_then(Value::as_u64);
+        let requested_name = params
+            .get("group")
+            .or_else(|| params.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let color = color_from_params(params)?;
+        let group_id =
+            ensure_channel_group(&mut self.layer_groups, requested_id, requested_name, color);
+        if params
+            .get("replace_group_members")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            self.layer_groups
+                .channel_members
+                .retain(|_, member| member.group_id != group_id);
+        }
+        let inherit_color = params
+            .get("inherit_color")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        for index in indices {
+            self.layer_groups.channel_members.insert(
+                self.channels[index].name.clone(),
+                ProjectChannelGroupMember {
+                    group_id,
+                    inherit_color,
+                },
+            );
+        }
+        Ok(json!({
+            "mode":"mosaic",
+            "result":{
+                "changed":true,
+                "group_id":group_id,
+                "groups":self.channel_groups_snapshot(),
+            },
+        }))
+    }
+
+    fn native_layers_snapshot(&self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        Ok(json!({"mode":"mosaic","layers":self.native_layers.snapshots()}))
+    }
+
+    fn native_layer_id<'a>(&self, params: &'a Value) -> Result<&'a str, ControlError> {
+        params
+            .get("layer_id")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("layer_id is required"))
+    }
+
+    fn native_layer_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let layer_id = self.native_layer_id(params)?;
+        let layer = self
+            .native_layers
+            .snapshots()
+            .into_iter()
+            .find(|layer| layer["layer_id"].as_str() == Some(layer_id))
+            .ok_or_else(|| invalid(format!("native layer '{layer_id}' is not loaded")))?;
+        Ok(json!({"mode":"mosaic","layer":layer}))
+    }
+
+    fn set_native_layer_active(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let layer_id = self.native_layer_id(params)?.to_string();
+        let changed = self.native_layers.set_active(&layer_id)?;
+        self.sync_semantics_from_native_layers()?;
+        let layer = self.native_layer_snapshot(&json!({"layer_id":layer_id}))?["layer"].clone();
+        Ok(json!({"mode":"mosaic","result":{"changed":changed,"layer":layer}}))
+    }
+
+    fn set_native_layer_visibility(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let layer_id = self.native_layer_id(params)?.to_string();
+        let visible = params
+            .get("visible")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid("visible is required"))?;
+        let changed = self.native_layers.set_visibility(&layer_id, visible)?;
+        self.sync_semantics_from_native_layers()?;
+        let layer = self.native_layer_snapshot(&json!({"layer_id":layer_id}))?["layer"].clone();
+        Ok(json!({"mode":"mosaic","result":{"changed":changed,"layer":layer}}))
+    }
+
+    fn set_native_layer_order(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let stack = params
+            .get("stack")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("stack is required"))?;
+        let layers = params
+            .get("layers")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("layers is required"))?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid("layer IDs must be strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let changed = self.native_layers.set_order(stack, &layers)?;
+        self.sync_semantics_from_native_layers()?;
+        Ok(json!({
+            "mode":"mosaic",
+            "result":{"changed":changed,"layers":self.native_layers.snapshots()},
+        }))
+    }
+
+    fn sync_semantics_from_native_layers(&mut self) -> Result<(), ControlError> {
+        let snapshots = self.native_layers.snapshots();
+        let mut channel_order = Vec::new();
+        for layer in &snapshots {
+            let Some(layer_id) = layer["layer_id"].as_str() else {
+                continue;
+            };
+            let visible = layer["visible"].as_bool().unwrap_or(false);
+            if let Some(index) = layer_id
+                .strip_prefix("channel:")
+                .and_then(|value| value.parse::<usize>().ok())
+            {
+                let channel = self
+                    .channels
+                    .get_mut(index)
+                    .ok_or_else(|| invalid(format!("native layer '{layer_id}' is not loaded")))?;
+                channel.visible = visible;
+                channel_order.push(index);
+                if layer["active"].as_bool() == Some(true) {
+                    self.active_channel = index;
+                }
+            } else if layer_id == "segmentation_geojson" {
+                self.objects_visible = visible;
+            } else if layer_id == "text_labels" {
+                self.show_text_labels = visible;
+            }
+        }
+        if channel_order.len() == self.channels.len() {
+            self.channel_order = channel_order;
+        }
+        Ok(())
+    }
+
+    fn sync_native_layers_from_semantics(&mut self) {
+        for channel in &self.channels {
+            let _ = self
+                .native_layers
+                .set_visibility(&format!("channel:{}", channel.index), channel.visible);
+        }
+        let _ = self
+            .native_layers
+            .set_visibility("segmentation_geojson", self.objects_visible);
+        let _ = self
+            .native_layers
+            .set_visibility("text_labels", self.show_text_labels);
+        let _ = self
+            .native_layers
+            .set_active(&format!("channel:{}", self.active_channel));
+        let order = self
+            .channel_order
+            .iter()
+            .map(|index| format!("channel:{index}"))
+            .collect::<Vec<_>>();
+        let _ = self.native_layers.set_order("channels", &order);
+    }
+
+    pub(crate) fn pinned_level_resources(&self) -> Vec<(usize, Arc<ControlPinnedLevelResource>)> {
+        self.pinned_levels
+            .iter()
+            .filter_map(|((item_id, _), state)| match state {
+                MosaicPinnedLevelState::Loaded(resource) => Some((*item_id, Arc::clone(resource))),
+                MosaicPinnedLevelState::Failed(_) => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn prepare_memory_pin(
+        &mut self,
+        params: &Value,
+    ) -> Result<MosaicMemoryPinSpec, ControlError> {
+        let resource = Arc::clone(self.require_resource()?);
+        let level = params
+            .get("level")
+            .and_then(Value::as_u64)
+            .and_then(|level| usize::try_from(level).ok())
+            .ok_or_else(|| invalid("memory level is required"))?;
+        let selected_channels = match params.get("channels") {
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| invalid("channels must be an array"))?
+                .iter()
+                .map(|selector| self.channel_index(selector))
+                .collect::<Result<Vec<_>, _>>()?,
+            None if self.memory_selected_channels.is_empty() => (0..self.channels.len()).collect(),
+            None => self.memory_selected_channels.clone(),
+        };
+        let mut selected_channels = selected_channels;
+        selected_channels.sort_unstable();
+        selected_channels.dedup();
+        if selected_channels.is_empty() {
+            return Err(invalid("select at least one channel to pin"));
+        }
+        let item_ids = self.memory_item_ids(params)?;
+        let mut items = Vec::new();
+        let mut estimated_bytes = 0_u64;
+        for item_id in item_ids {
+            let Some(item) = resource.items.iter().find(|item| item.id == item_id) else {
+                continue;
+            };
+            let z_extent = item
+                .document
+                .descriptor
+                .dims
+                .z
+                .and_then(|dimension| {
+                    item.document
+                        .descriptor
+                        .levels
+                        .first()
+                        .and_then(|level| level.shape.get(dimension))
+                })
+                .copied()
+                .unwrap_or(1);
+            if z_extent > 1 {
+                return Err(invalid(format!(
+                    "RAM pinning is unavailable for z-stack mosaic ROI '{}'",
+                    item.roi_id
+                )));
+            }
+            if level >= item.document.descriptor.levels.len() {
+                continue;
+            }
+            let channel_map = self
+                .channels
+                .iter()
+                .map(|global| {
+                    item.document
+                        .descriptor
+                        .channels
+                        .iter()
+                        .find(|local| local.name == global.name)
+                        .map(|local| local.index as u64)
+                })
+                .collect::<Vec<_>>();
+            let present_channels = selected_channels
+                .iter()
+                .filter(|index| channel_map.get(**index).copied().flatten().is_some())
+                .count();
+            if present_channels == 0 {
+                continue;
+            }
+            estimated_bytes = estimated_bytes.saturating_add(estimate_level_bytes(
+                &item.document,
+                level,
+                present_channels,
+            ));
+            items.push(MosaicMemoryPinItemSpec {
+                item_id,
+                document: item.document.clone(),
+                channel_map,
+            });
+        }
+        if items.is_empty() {
+            return Err(invalid(
+                "the requested level and channels are unavailable for the selected mosaic scope",
+            ));
+        }
+        self.memory_operation_generation = self.memory_operation_generation.wrapping_add(1).max(1);
+        self.memory_selected_channels = selected_channels.clone();
+        for item in &items {
+            self.memory_pending
+                .insert((item.item_id, level), self.memory_operation_generation);
+        }
+        self.memory_status = format!(
+            "Loading {} channel(s) from level {level} into RAM for {} ROI(s)",
+            selected_channels.len(),
+            items.len()
+        );
+        Ok(MosaicMemoryPinSpec {
+            resource_generation: self.resource_generation(),
+            operation_generation: self.memory_operation_generation,
+            level,
+            channel_ids: selected_channels
+                .iter()
+                .map(|index| *index as u64)
+                .collect(),
+            items,
+            estimated_bytes,
+            pinned_bytes: self.pinned_bytes(),
+            force: params
+                .get("force")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+
+    pub(crate) fn memory_pin_is_current(&self, spec: &MosaicMemoryPinSpec) -> bool {
+        self.resource_generation() == spec.resource_generation
+            && spec.items.iter().all(|item| {
+                self.memory_pending
+                    .get(&(item.item_id, spec.level))
+                    .copied()
+                    == Some(spec.operation_generation)
+            })
+    }
+
+    pub(crate) fn install_memory_pin(
+        &mut self,
+        spec: &MosaicMemoryPinSpec,
+        result: MosaicMemoryPinResult,
+        system: Option<SystemMemorySnapshot>,
+    ) -> Option<Value> {
+        if !self.memory_pin_is_current(spec) {
+            return None;
+        }
+        for item in &spec.items {
+            self.memory_pending.remove(&(item.item_id, spec.level));
+        }
+        for (item_id, resource) in result.loaded {
+            self.pinned_levels.insert(
+                (item_id, spec.level),
+                MosaicPinnedLevelState::Loaded(Arc::new(resource)),
+            );
+        }
+        for (item_id, error) in result.failures {
+            self.pinned_levels
+                .insert((item_id, spec.level), MosaicPinnedLevelState::Failed(error));
+        }
+        self.system_memory = system;
+        self.memory_status = format!("Pinned mosaic level {} into RAM", spec.level);
+        Some(json!({
+            "started":true,
+            "completed":true,
+            "level":spec.level,
+            "items":spec.items.len(),
+            "estimated_bytes":spec.estimated_bytes,
+            "memory":self.memory_snapshot().ok()?,
+        }))
+    }
+
+    pub(crate) fn finish_memory_confirmation(
+        &mut self,
+        spec: &MosaicMemoryPinSpec,
+        system: Option<SystemMemorySnapshot>,
+        risk: &str,
+        projected_bytes: u64,
+        available_bytes: u64,
+    ) -> Option<Value> {
+        if !self.memory_pin_is_current(spec) {
+            return None;
+        }
+        for item in &spec.items {
+            self.memory_pending.remove(&(item.item_id, spec.level));
+        }
+        self.system_memory = system;
+        self.memory_status = format!(
+            "RAM pinning mosaic level {} requires confirmation",
+            spec.level
+        );
+        Some(json!({
+            "confirmation_required":true,
+            "level":spec.level,
+            "items":spec.items.len(),
+            "requested_bytes":spec.estimated_bytes,
+            "projected_bytes":projected_bytes,
+            "available_bytes":available_bytes,
+            "risk":risk,
+        }))
+    }
+
+    pub(crate) fn fail_memory_pin(
+        &mut self,
+        spec: &MosaicMemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.memory_pin_is_current(spec) {
+            return false;
+        }
+        let message = message.into();
+        for item in &spec.items {
+            self.memory_pending.remove(&(item.item_id, spec.level));
+            self.pinned_levels.insert(
+                (item.item_id, spec.level),
+                MosaicPinnedLevelState::Failed(message.clone()),
+            );
+        }
+        self.memory_status = message;
+        true
+    }
+
+    pub(crate) fn cancel_memory_pin(
+        &mut self,
+        spec: &MosaicMemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if !self.memory_pin_is_current(spec) {
+            return false;
+        }
+        for item in &spec.items {
+            self.memory_pending.remove(&(item.item_id, spec.level));
+        }
+        self.memory_status = message.into();
+        true
+    }
+
+    fn memory_item_ids(&self, params: &Value) -> Result<Vec<usize>, ControlError> {
+        match params
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or("focused")
+        {
+            "all" => Ok(self.items.iter().map(|item| item.id).collect()),
+            "focused" => self
+                .focused_id
+                .map(|id| vec![id])
+                .ok_or_else(|| invalid("mosaic has no focused ROI")),
+            "item" => {
+                let selector = params
+                    .get("item")
+                    .ok_or_else(|| invalid("item is required when scope is item"))?;
+                let id = if let Some(id) = selector.as_u64() {
+                    usize::try_from(id)
+                        .ok()
+                        .filter(|id| self.items.iter().any(|item| item.id == *id))
+                } else if let Some(roi_id) = selector.as_str() {
+                    self.items
+                        .iter()
+                        .find(|item| item.roi_id == roi_id)
+                        .map(|item| item.id)
+                } else {
+                    None
+                };
+                id.map(|id| vec![id])
+                    .ok_or_else(|| invalid(format!("unknown mosaic item selector: {selector}")))
+            }
+            scope => Err(invalid(format!(
+                "unknown memory scope '{scope}'; use focused, item, or all"
+            ))),
+        }
+    }
+
+    fn memory_snapshot(&self) -> Result<Value, ControlError> {
+        let resource = self.require_resource()?;
+        let selected = if self.memory_selected_channels.is_empty() {
+            (0..self.channels.len()).collect::<Vec<_>>()
+        } else {
+            self.memory_selected_channels.clone()
+        };
+        let items = resource
+            .items
+            .iter()
+            .map(|item| {
+                let levels = item
+                    .document
+                    .descriptor
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .map(|(level, descriptor)| {
+                        let key = (item.id, level);
+                        let (status, bytes, channels_loaded, error) =
+                            if self.memory_pending.contains_key(&key) {
+                                ("loading", None, None, None)
+                            } else {
+                                match self.pinned_levels.get(&key) {
+                                    None => ("unloaded", None, None, None),
+                                    Some(MosaicPinnedLevelState::Loaded(resource)) => (
+                                        "loaded",
+                                        Some(resource.bytes()),
+                                        Some(resource.channels_loaded()),
+                                        None,
+                                    ),
+                                    Some(MosaicPinnedLevelState::Failed(error)) => {
+                                        ("failed", None, None, Some(error.as_str()))
+                                    }
+                                }
+                            };
+                        let present = selected
+                            .iter()
+                            .filter(|index| {
+                                self.channels.get(**index).is_some_and(|global| {
+                                    item.document
+                                        .descriptor
+                                        .channels
+                                        .iter()
+                                        .any(|local| local.name == global.name)
+                                })
+                            })
+                            .count();
+                        json!({
+                            "level":level,
+                            "shape":descriptor.shape,
+                            "selected_channel_estimate_bytes":estimate_level_bytes(&item.document, level, present),
+                            "status":status,
+                            "loaded_bytes":bytes,
+                            "channels_loaded":channels_loaded,
+                            "error":error,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "id":item.id,
+                    "sample_id":item.roi_id,
+                    "focused":self.focused_id == Some(item.id),
+                    "levels":levels,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "mode":"mosaic",
+            "running":!self.memory_pending.is_empty(),
+            "status":self.memory_status,
+            "pinned_bytes":self.pinned_bytes(),
+            "system":self.system_memory.map(|memory| json!({
+                "total_bytes":memory.total_bytes,
+                "available_bytes":memory.available_bytes,
+            })),
+            "selected_channels":selected,
+            "items":items,
+        }))
+    }
+
+    fn unpin_memory(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let level = params
+            .get("level")
+            .and_then(Value::as_u64)
+            .and_then(|level| usize::try_from(level).ok())
+            .ok_or_else(|| invalid("memory level is required"))?;
+        let item_ids = self.memory_item_ids(params)?;
+        self.memory_operation_generation = self.memory_operation_generation.wrapping_add(1).max(1);
+        let mut unloaded = 0;
+        for item_id in item_ids {
+            self.memory_pending.remove(&(item_id, level));
+            if self.pinned_levels.remove(&(item_id, level)).is_some() {
+                unloaded += 1;
+            }
+        }
+        self.memory_status = format!("Unloaded level {level} from {unloaded} ROI(s)");
+        Ok(json!({"unloaded_items":unloaded,"level":level}))
+    }
+
+    fn unpin_all_memory(&mut self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        self.memory_operation_generation = self.memory_operation_generation.wrapping_add(1).max(1);
+        self.memory_pending.clear();
+        let unloaded = self.pinned_levels.len();
+        self.pinned_levels.clear();
+        self.memory_status = format!("Unloaded {unloaded} pinned mosaic level(s) from RAM");
+        Ok(json!({"unloaded_item_levels":unloaded}))
+    }
+
+    fn pinned_bytes(&self) -> u64 {
+        self.pinned_levels
+            .values()
+            .filter_map(|state| match state {
+                MosaicPinnedLevelState::Loaded(resource) => Some(resource.bytes()),
+                MosaicPinnedLevelState::Failed(_) => None,
+            })
+            .sum()
     }
 
     fn channels_snapshot(&self) -> Result<Value, ControlError> {
@@ -643,6 +1452,7 @@ impl MosaicModel {
         let index = self.channel_index_from_params(params)?;
         let changed = self.active_channel != index;
         self.active_channel = index;
+        let _ = self.native_layers.set_active(&format!("channel:{index}"));
         Ok(json!({
             "mode":"mosaic",
             "result":{"changed":changed,"active_channel":self.channel_json(&self.channels[index])},
@@ -679,6 +1489,7 @@ impl MosaicModel {
         if let Some(first) = indices.iter().next() {
             self.active_channel = *first;
         }
+        self.sync_native_layers_from_semantics();
         Ok(json!({
             "mode":"mosaic",
             "result":{
@@ -781,6 +1592,8 @@ impl MosaicModel {
         }
         let changed = self.channel_order != order;
         self.channel_order = order;
+        self.channel_sort = "manual".to_string();
+        self.sync_native_layers_from_semantics();
         Ok(json!({
             "changed":changed,
             "order":self.channel_order.iter().map(|index| json!({"index":index,"name":self.channels[*index].name})).collect::<Vec<_>>(),
@@ -906,6 +1719,9 @@ impl MosaicModel {
             .ok_or_else(|| invalid("set_object_overlay_visibility requires visible"))?;
         let changed = self.objects_visible != visible;
         self.objects_visible = visible;
+        let _ = self
+            .native_layers
+            .set_visibility("segmentation_geojson", visible);
         let mut response = self.object_visibility_snapshot(params)?;
         response
             .as_object_mut()
@@ -1209,6 +2025,7 @@ impl MosaicModel {
         }
         if let Some(show) = params.get("show_text_labels").and_then(Value::as_bool) {
             self.show_text_labels = show;
+            let _ = self.native_layers.set_visibility("text_labels", show);
         }
         if let Some(gap) = params.get("group_gap").and_then(Value::as_f64) {
             if !gap.is_finite() {
@@ -1599,6 +2416,223 @@ impl MosaicModel {
                 "No mosaic resource is currently open",
             )
         })
+    }
+}
+
+fn initial_native_layers(
+    channels: &[MosaicChannelModel],
+    items: &[MosaicItemModel],
+) -> NativeLayersModel {
+    let mut layers = channels
+        .iter()
+        .map(|channel| {
+            json!({
+                "layer_id":format!("channel:{}", channel.index),
+                "kind":"channel",
+                "name":channel.name,
+                "stack":"channels",
+                "order":channel.index,
+                "active":channel.index == 0,
+                "visible":channel.visible,
+                "available":true,
+                "offset_world":[0.0,0.0],
+                "presentation":{
+                    "visible":channel.visible,
+                    "color_rgb":channel.color_rgb,
+                    "window":channel.window.map(|(minimum,maximum)| json!({"min":minimum,"max":maximum})),
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    let has_segmentation = items.iter().any(|item| item.segmentation_path.is_some());
+    layers.push(json!({
+        "layer_id":"segmentation_geojson",
+        "kind":"segmentation_geojson",
+        "name":"Segmentation (GeoJSON)",
+        "stack":"overlays",
+        "order":0,
+        "active":channels.is_empty(),
+        "visible":false,
+        "available":has_segmentation,
+        "offset_world":[0.0,0.0],
+        "presentation":{"visible":false},
+    }));
+    layers.push(json!({
+        "layer_id":"text_labels",
+        "kind":"text_labels",
+        "name":"Text labels",
+        "stack":"overlays",
+        "order":1,
+        "active":channels.is_empty() && !has_segmentation,
+        "visible":true,
+        "available":true,
+        "offset_world":[0.0,0.0],
+        "presentation":{"visible":true},
+    }));
+    NativeLayersModel::restore(&Value::Array(layers))
+        .expect("canonical mosaic native-layer inventory is valid")
+}
+
+fn estimate_level_bytes(
+    document: &ControlOpenedDocument,
+    level: usize,
+    selected_channel_count: usize,
+) -> u64 {
+    let descriptor = &document.descriptor;
+    let Some(level) = descriptor.levels.get(level) else {
+        return 0;
+    };
+    let Some(&height) = level.shape.get(descriptor.dims.y) else {
+        return 0;
+    };
+    let Some(&width) = level.shape.get(descriptor.dims.x) else {
+        return 0;
+    };
+    let channel_count = if descriptor.dims.c.is_some() {
+        selected_channel_count as u64
+    } else {
+        u64::from(selected_channel_count > 0)
+    };
+    let bytes_per_sample = match level.dtype.as_str() {
+        "|u1" | "|i1" => 1,
+        "<u2" | ">u2" | "<i2" | ">i2" => 2,
+        "<f4" | ">f4" | "<u4" | ">u4" | "<i4" | ">i4" => 4,
+        _ => 2,
+    };
+    channel_count
+        .checked_mul(height)
+        .and_then(|value| value.checked_mul(width))
+        .and_then(|value| value.checked_mul(bytes_per_sample))
+        .unwrap_or(0)
+}
+
+fn canonical_channel_sort(value: &str) -> Option<&'static str> {
+    match value {
+        "manual" | "project_order" => Some("manual"),
+        "name_asc" | "alphabetical_asc" => Some("name_asc"),
+        "name_desc" | "alphabetical_desc" => Some("name_desc"),
+        "visible_first" | "enabled_desc" => Some("visible_first"),
+        "hidden_first" | "enabled_asc" => Some("hidden_first"),
+        _ => None,
+    }
+}
+
+fn ensure_channel_group(
+    groups: &mut ProjectLayerGroups,
+    requested_id: Option<u64>,
+    requested_name: Option<&str>,
+    color_rgb: Option<[u8; 3]>,
+) -> u64 {
+    if let Some(group_id) = requested_id
+        && let Some(group) = groups
+            .channel_groups
+            .iter_mut()
+            .find(|group| group.id == group_id)
+    {
+        if let Some(name) = requested_name {
+            group.name = name.to_string();
+        }
+        if let Some(color) = color_rgb {
+            group.color_rgb = color;
+        }
+        return group_id;
+    }
+    if let Some(name) = requested_name
+        && let Some(group) = groups
+            .channel_groups
+            .iter_mut()
+            .find(|group| group.name == name)
+    {
+        if let Some(color) = color_rgb {
+            group.color_rgb = color;
+        }
+        return group.id;
+    }
+    let next_id = requested_id
+        .filter(|id| !groups.channel_groups.iter().any(|group| group.id == *id))
+        .unwrap_or_else(|| {
+            groups
+                .channel_groups
+                .iter()
+                .map(|group| group.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1)
+                .max(1)
+        });
+    groups.channel_groups.push(ProjectChannelGroup {
+        id: next_id,
+        name: requested_name
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Group {next_id}")),
+        expanded: true,
+        color_rgb: color_rgb.unwrap_or([255, 255, 255]),
+    });
+    next_id
+}
+
+fn color_from_params(params: &Value) -> Result<Option<[u8; 3]>, ControlError> {
+    if let Some(values) = params.get("color_rgb") {
+        let values = values
+            .as_array()
+            .filter(|values| values.len() == 3)
+            .ok_or_else(|| invalid("color_rgb must contain three integers from 0 to 255"))?;
+        return Ok(Some([
+            json_u8(&values[0])?,
+            json_u8(&values[1])?,
+            json_u8(&values[2])?,
+        ]));
+    }
+    let Some(value) = params
+        .get("color")
+        .or_else(|| params.get("colour"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let color = match value.trim().to_ascii_lowercase().as_str() {
+        "white" => Some([255, 255, 255]),
+        "black" => Some([0, 0, 0]),
+        "red" => Some([230, 57, 70]),
+        "green" => Some([42, 157, 143]),
+        "blue" => Some([69, 123, 157]),
+        "cyan" => Some([0, 188, 212]),
+        "magenta" => Some([216, 27, 96]),
+        "yellow" => Some([255, 202, 40]),
+        "orange" => Some([251, 133, 0]),
+        "purple" => Some([126, 87, 194]),
+        "pink" => Some([244, 143, 177]),
+        "lime" => Some([139, 195, 74]),
+        "teal" => Some([0, 150, 136]),
+        "amber" => Some([255, 193, 7]),
+        "gray" | "grey" => Some([158, 158, 158]),
+        _ => parse_hex_color(value),
+    };
+    color
+        .map(Some)
+        .ok_or_else(|| invalid(format!("unknown color '{value}'")))
+}
+
+fn parse_hex_color(value: &str) -> Option<[u8; 3]> {
+    let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    match value.len() {
+        6 => Some([
+            u8::from_str_radix(&value[0..2], 16).ok()?,
+            u8::from_str_radix(&value[2..4], 16).ok()?,
+            u8::from_str_radix(&value[4..6], 16).ok()?,
+        ]),
+        3 => Some([
+            u8::from_str_radix(&value[0..1], 16)
+                .ok()?
+                .saturating_mul(17),
+            u8::from_str_radix(&value[1..2], 16)
+                .ok()?
+                .saturating_mul(17),
+            u8::from_str_radix(&value[2..3], 16)
+                .ok()?
+                .saturating_mul(17),
+        ]),
+        _ => None,
     }
 }
 

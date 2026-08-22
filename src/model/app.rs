@@ -419,6 +419,105 @@ impl AppModel {
         self.mode
     }
 
+    pub(crate) fn projection_revision(&self) -> u64 {
+        self.projection_revision
+    }
+
+    pub(crate) fn presented_projection_revision(&self) -> u64 {
+        self.presented_projection_revision
+    }
+
+    pub(crate) fn prepare_project_capture(&mut self) -> Result<Value, ControlError> {
+        self.show_project()
+    }
+
+    pub(crate) fn capture_viewport_id(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Option<String>, ControlError> {
+        match self.mode {
+            ModelMode::Single => {
+                let workspace = &self.dataset()?.workspace;
+                let id = match requested {
+                    Some(value) => ViewportId::new(value)
+                        .map_err(|error| invalid(error.to_string()))?,
+                    None => workspace.active_id().clone(),
+                };
+                if workspace.get(&id).is_none() {
+                    return Err(ControlError::new(
+                        ControlErrorKind::ResourceNotFound,
+                        format!("viewport '{id}' was not found"),
+                    ));
+                }
+                Ok(Some(id.to_string()))
+            }
+            ModelMode::Mosaic => {
+                self.mosaic.require_ready()?;
+                if requested.is_some() {
+                    return Err(invalid(
+                        "viewport_id is not supported by the mosaic viewer capture",
+                    ));
+                }
+                Ok(None)
+            }
+            ModelMode::Project => Err(ControlError::new(
+                ControlErrorKind::WrongMode,
+                "No dataset viewer is currently open",
+            )),
+            ModelMode::Transition => Err(ControlError::new(
+                ControlErrorKind::NotReady,
+                "Odon is currently transitioning between views",
+            )),
+        }
+    }
+
+    pub(crate) fn capture_default_filename(&self) -> Result<String, ControlError> {
+        if self.mode == ModelMode::Mosaic {
+            self.mosaic.default_screenshot_filename()
+        } else {
+            let dataset = self.dataset()?;
+            Ok(default_screenshot_filename(
+                &dataset.descriptor.source.display_name(),
+            ))
+        }
+    }
+
+    pub(crate) fn begin_presentation_capture(&mut self, generation: u64, status: &str) {
+        self.readiness.begin_scoped(
+            OperationKind::Presentation,
+            generation.to_string(),
+            generation,
+            status,
+        );
+    }
+
+    pub(crate) fn finish_presentation_capture(&mut self, generation: u64, status: &str) {
+        self.readiness.finish_scoped(
+            OperationKind::Presentation,
+            &generation.to_string(),
+            generation,
+            status,
+        );
+    }
+
+    pub(crate) fn fail_presentation_capture(&mut self, generation: u64, status: &str) {
+        self.readiness.fail_scoped(
+            OperationKind::Presentation,
+            &generation.to_string(),
+            generation,
+            status,
+        );
+    }
+
+    pub(crate) fn cancel_presentation_capture(&mut self, generation: u64, status: &str) {
+        self.readiness.cancel_scoped(
+            OperationKind::Presentation,
+            &generation.to_string(),
+            generation,
+            status,
+        );
+    }
+
     pub fn project_snapshot(&self) -> ProjectModelSnapshot {
         self.project.snapshot()
     }
@@ -506,6 +605,106 @@ impl AppModel {
 
     pub(crate) fn mosaic_object_resources(&self) -> Vec<(usize, Arc<ControlObjectResource>)> {
         self.mosaic.object_resources()
+    }
+
+    pub(crate) fn mosaic_pinned_level_resources(
+        &self,
+    ) -> Vec<(usize, Arc<ControlPinnedLevelResource>)> {
+        self.mosaic.pinned_level_resources()
+    }
+
+    pub(crate) fn prepare_mosaic_memory_pin(
+        &mut self,
+        params: &Value,
+    ) -> Result<super::MosaicMemoryPinSpec, ControlError> {
+        let spec = self.mosaic.prepare_memory_pin(params)?;
+        self.readiness.begin_scoped(
+            OperationKind::MemoryPin,
+            mosaic_memory_scope(&spec),
+            spec.operation_generation,
+            format!(
+                "Pinning mosaic level {} for {} ROI(s)",
+                spec.level,
+                spec.items.len()
+            ),
+        );
+        Ok(spec)
+    }
+
+    pub(crate) fn install_mosaic_memory_pin(
+        &mut self,
+        spec: &super::MosaicMemoryPinSpec,
+        result: super::MosaicMemoryPinResult,
+        system: Option<SystemMemorySnapshot>,
+    ) -> Option<Value> {
+        let response = self.mosaic.install_memory_pin(spec, result, system)?;
+        self.readiness.finish_scoped(
+            OperationKind::MemoryPin,
+            &mosaic_memory_scope(spec),
+            spec.operation_generation,
+            "Mosaic pinned level ready",
+        );
+        Some(response)
+    }
+
+    pub(crate) fn finish_mosaic_memory_confirmation(
+        &mut self,
+        spec: &super::MosaicMemoryPinSpec,
+        system: Option<SystemMemorySnapshot>,
+        risk: &str,
+        projected_bytes: u64,
+        available_bytes: u64,
+    ) -> Option<Value> {
+        let response = self.mosaic.finish_memory_confirmation(
+            spec,
+            system,
+            risk,
+            projected_bytes,
+            available_bytes,
+        )?;
+        self.readiness.finish_scoped(
+            OperationKind::MemoryPin,
+            &mosaic_memory_scope(spec),
+            spec.operation_generation,
+            "Mosaic RAM pinning requires confirmation",
+        );
+        Some(response)
+    }
+
+    pub(crate) fn fail_mosaic_memory_pin(
+        &mut self,
+        spec: &super::MosaicMemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        let message = message.into();
+        if !self.mosaic.fail_memory_pin(spec, message.clone()) {
+            return false;
+        }
+        self.readiness.fail_scoped(
+            OperationKind::MemoryPin,
+            &mosaic_memory_scope(spec),
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    pub(crate) fn cancel_mosaic_memory_pin(
+        &mut self,
+        spec: &super::MosaicMemoryPinSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        let message = message.into();
+        if !self.mosaic.cancel_memory_pin(spec, message.clone()) {
+            return false;
+        }
+        self.readiness.cancel_scoped(
+            OperationKind::MemoryPin,
+            &mosaic_memory_scope(spec),
+            spec.operation_generation,
+            message,
+        );
+        true
     }
 
     pub(crate) fn prepare_mosaic_object_load(
@@ -2298,9 +2497,14 @@ impl AppModel {
     }
 
     pub fn screenshot_settings_snapshot(&self) -> Result<Value, ControlError> {
-        let dataset = self.dataset()?;
+        let default_filename = if self.mode == ModelMode::Mosaic {
+            self.mosaic.default_screenshot_filename()?
+        } else {
+            let dataset = self.dataset()?;
+            default_screenshot_filename(&dataset.descriptor.source.display_name())
+        };
         Ok(self.screenshot_preferences.snapshot(
-            &default_screenshot_filename(&dataset.descriptor.source.display_name()),
+            &default_filename,
             self.screenshot_settings_generation,
             self.screenshot_settings_pending,
         ))
@@ -2311,7 +2515,11 @@ impl AppModel {
         params: &Value,
         normalized_output_dir: Option<Option<PathBuf>>,
     ) -> Result<(u64, ScreenshotPreferences), ControlError> {
-        self.dataset()?;
+        if self.mode == ModelMode::Mosaic {
+            self.mosaic.require_ready()?;
+        } else {
+            self.dataset()?;
+        }
         let candidate = self
             .screenshot_preferences
             .updated(params, normalized_output_dir)?;
@@ -6443,6 +6651,15 @@ impl AppModel {
                 present: false,
             }));
         }
+        if method == "viewer.screenshot.settings.get" {
+            return Some(
+                self.screenshot_settings_snapshot()
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: false,
+                    }),
+            );
+        }
         if method.starts_with("mosaic.") {
             if self.mode != ModelMode::Mosaic {
                 return Some(Err(ControlError::new(
@@ -6546,6 +6763,12 @@ impl AppModel {
         }
         if self.mode == ModelMode::Mosaic {
             if let Some(result) = self.mosaic.dispatch_shared(method, params) {
+                if result.is_ok() && matches!(method, "memory.unpin" | "memory.unpin_all") {
+                    self.readiness.cancel_kind_pending(
+                        OperationKind::MemoryPin,
+                        "Mosaic pinned memory was unloaded",
+                    );
+                }
                 return Some(result.map(|(response, present)| ModelDispatch { response, present }));
             }
         }
@@ -9571,6 +9794,24 @@ fn estimate_pinned_level_bytes(
         .and_then(|value| value.checked_mul(width))
         .and_then(|value| value.checked_mul(bytes_per_sample))
         .unwrap_or(0)
+}
+
+fn mosaic_memory_scope(spec: &super::MosaicMemoryPinSpec) -> String {
+    let mut item_ids = spec
+        .items
+        .iter()
+        .map(|item| item.item_id)
+        .collect::<Vec<_>>();
+    item_ids.sort_unstable();
+    format!(
+        "mosaic:{}:level:{}",
+        item_ids
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        spec.level
+    )
 }
 
 fn numeric_object_properties(resource: &ControlObjectResource) -> Vec<String> {
