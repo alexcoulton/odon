@@ -21,6 +21,13 @@ pub struct SpatialImageLayers {
     next_id: u64,
 }
 
+#[derive(Clone)]
+pub struct PreparedSpatialImage {
+    pub element: SpatialDataElement,
+    pub dataset: OmeZarrDataset,
+    pub store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+}
+
 impl SpatialImageLayers {
     pub fn clear(&mut self) {
         self.images.clear();
@@ -42,6 +49,28 @@ impl SpatialImageLayers {
             None,
             format!("Image: {}", element.name),
             root.join(&element.rel_group),
+            gpu_available,
+            smooth_pixels,
+        )?;
+        self.images.push(layer);
+        Ok(id)
+    }
+
+    pub fn load_prepared_image(
+        &mut self,
+        prepared: PreparedSpatialImage,
+        gpu_available: bool,
+        smooth_pixels: bool,
+    ) -> anyhow::Result<u64> {
+        let id = self.next_id.max(1);
+        self.next_id = id.wrapping_add(1).max(1);
+        let layer = SpatialImageLayer::open_prepared(
+            id,
+            None,
+            None,
+            format!("Image: {}", prepared.element.name),
+            prepared.dataset,
+            prepared.store,
             gpu_available,
             smooth_pixels,
         )?;
@@ -121,6 +150,34 @@ impl SpatialImageLayer {
         smooth_pixels: bool,
     ) -> anyhow::Result<Self> {
         let (dataset, store) = OmeZarrDataset::open_local(&path)?;
+        Self::open_prepared(
+            id,
+            external_id,
+            external_resource_id,
+            name,
+            dataset,
+            store,
+            gpu_available,
+            smooth_pixels,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_prepared(
+        id: u64,
+        external_id: Option<String>,
+        external_resource_id: Option<String>,
+        name: String,
+        dataset: OmeZarrDataset,
+        store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+        gpu_available: bool,
+        smooth_pixels: bool,
+    ) -> anyhow::Result<Self> {
+        let path = dataset
+            .source
+            .local_path()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
         let mut status = String::new();
         let (raw_loader, tiles_gl) = if gpu_available {
             let raw_loader = spawn_raw_tile_loader(

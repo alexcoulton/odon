@@ -23,11 +23,14 @@ use crate::control::registry::ExecutionOwner;
 use crate::control::{
     ControlError, ControlErrorKind, ResourceRegistry, TaskRegistry, TaskServiceHandle, TaskState,
 };
-use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
+use crate::data::dataset_kind::{
+    LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
+};
 use crate::data::dataset_source::DatasetSource;
 use crate::data::document::{
+    AlternateDatasetBackend, AlternateDocumentResource, ControlOpenedDocument,
     CoreDatasetInspector, DatasetInspection, DatasetInspector, OmeZarrDocumentResource,
-    OpenedDocument, open_local_ome_zarr,
+    OpenedDocument, UnavailableAlternateDatasetBackend, open_local_ome_zarr,
 };
 use crate::data::ome::{OmeZarrDataset, retrieve_image_subset_u16};
 use crate::data::project_config::{ProjectConfig, ProjectMaskLayer, ProjectRoi};
@@ -81,7 +84,10 @@ use application::{
 pub use channel_io::read_channel_intensity_stats;
 use channels::begin_channel_intensity;
 use completion::{finish_load, reject_actor_request};
-use datasets::{begin_dataset_inspection, begin_ome_zarr_load};
+use datasets::{
+    begin_dataset_inspection, begin_ome_zarr_load, begin_spatialdata_load, begin_tiff_load,
+    begin_xenium_load,
+};
 use deep_links::{
     begin_deep_link_resolution, deep_link_resolution_response, resolve_deep_link_on_worker,
 };

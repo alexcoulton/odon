@@ -280,6 +280,39 @@ impl OmeZarrViewerApp {
         self.bump_render_id();
     }
 
+    pub fn attach_prepared_spatialdata_layers(
+        &mut self,
+        spatial_root: PathBuf,
+        image_transform: SpatialDataTransform2,
+        extra_images: Vec<crate::spatialdata::PreparedSpatialImage>,
+        labels: Option<SpatialDataElement>,
+        tables: Vec<SpatialDataElement>,
+        shapes: Vec<SpatialDataElement>,
+        points: Option<(SpatialDataElement, usize)>,
+    ) {
+        self.attach_spatialdata_layers(
+            spatial_root,
+            image_transform,
+            Vec::new(),
+            labels,
+            tables,
+            shapes,
+            points,
+        );
+        for mut image in extra_images {
+            image.element.transform = image.element.transform.relative_to(image_transform);
+            if let Err(error) = self.spatial_image_layers.load_prepared_image(
+                image,
+                self.tiles_gl.is_some(),
+                self.smooth_pixels,
+            ) {
+                eprintln!("failed to realize prepared SpatialData image layer: {error}");
+            }
+        }
+        self.rebuild_layer_orders();
+        self.bump_render_id();
+    }
+
     pub fn sync_control_external_layers(
         &mut self,
         layers: &[LayerSnapshot],
@@ -578,6 +611,21 @@ impl OmeZarrViewerApp {
         self.xenium_layers.clear();
         self.xenium_layers
             .attach(dataset_root, cells_zip, transcripts_zip, pixel_size_um);
+        self.xenium_cells_offset_world = egui::Vec2::ZERO;
+        self.xenium_transcripts_offset_world = egui::Vec2::ZERO;
+        self.bump_render_id();
+    }
+
+    pub fn attach_prepared_xenium_layers(
+        &mut self,
+        dataset_root: PathBuf,
+        cells: Option<crate::xenium::PreparedXeniumCells>,
+        transcripts: Option<crate::xenium::PreparedXeniumTranscripts>,
+        pixel_size_um: f32,
+    ) {
+        self.xenium_layers.clear();
+        self.xenium_layers
+            .attach_prepared(dataset_root, cells, transcripts, pixel_size_um);
         self.xenium_cells_offset_world = egui::Vec2::ZERO;
         self.xenium_transcripts_offset_world = egui::Vec2::ZERO;
         self.bump_render_id();

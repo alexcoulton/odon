@@ -19,6 +19,19 @@ use crate::xenium::transcripts::{
     load_transcripts_meta,
 };
 
+#[derive(Clone)]
+pub struct PreparedXeniumCells {
+    pub path: PathBuf,
+    pub bins: Arc<LineSegmentsBins>,
+}
+
+#[derive(Clone)]
+pub struct PreparedXeniumTranscripts {
+    pub path: PathBuf,
+    pub meta: Arc<XeniumTranscriptsMeta>,
+    pub payload: Arc<XeniumTranscriptsAllPayload>,
+}
+
 #[derive(Debug, Default)]
 pub struct XeniumLayers {
     pub dataset_root: Option<PathBuf>,
@@ -43,6 +56,27 @@ impl XeniumLayers {
         self.dataset_root = Some(dataset_root);
         self.cells = cells_zip.map(|p| XeniumCellsLayer::new(p, pixel_size_um));
         self.transcripts = transcripts_zip.map(|p| XeniumTranscriptsLayer::new(p, pixel_size_um));
+    }
+
+    pub fn attach_prepared(
+        &mut self,
+        dataset_root: PathBuf,
+        cells: Option<PreparedXeniumCells>,
+        transcripts: Option<PreparedXeniumTranscripts>,
+        pixel_size_um: f32,
+    ) {
+        self.dataset_root = Some(dataset_root);
+        self.cells = cells.map(|prepared| {
+            XeniumCellsLayer::from_prepared(prepared.path, pixel_size_um, prepared.bins)
+        });
+        self.transcripts = transcripts.map(|prepared| {
+            XeniumTranscriptsLayer::from_prepared(
+                prepared.path,
+                pixel_size_um,
+                prepared.meta,
+                prepared.payload,
+            )
+        });
     }
 
     pub fn tick(&mut self) {
@@ -75,7 +109,26 @@ pub struct XeniumCellsLayer {
 
 impl XeniumCellsLayer {
     pub fn new(cells_zip: PathBuf, pixel_size_um: f32) -> Self {
-        let mut s = Self {
+        let mut s = Self::empty(cells_zip, pixel_size_um);
+        s.request_load();
+        s
+    }
+
+    pub fn from_prepared(
+        cells_zip: PathBuf,
+        pixel_size_um: f32,
+        bins: Arc<LineSegmentsBins>,
+    ) -> Self {
+        let mut layer = Self::empty(cells_zip, pixel_size_um);
+        let segments = bins.segments.len();
+        layer.bins = Some(bins);
+        layer.generation = layer.generation.wrapping_add(1).max(1);
+        layer.status = format!("Loaded {segments} segments.");
+        layer
+    }
+
+    fn empty(cells_zip: PathBuf, pixel_size_um: f32) -> Self {
+        Self {
             name: "Cells (Xenium)".to_string(),
             visible: true,
             opacity: 0.75,
@@ -88,9 +141,7 @@ impl XeniumCellsLayer {
             gl: LineBinsGlRenderer::new(1024),
             load_rx: None,
             status: String::new(),
-        };
-        s.request_load();
-        s
+        }
     }
 
     fn request_load(&mut self) {
@@ -251,7 +302,24 @@ struct XeniumGenePoints {
 impl XeniumTranscriptsLayer {
     pub fn new(zip: PathBuf, pixel_size_um: f32) -> Self {
         let meta = load_transcripts_meta(&zip).ok().map(Arc::new);
-        let mut s = Self {
+        let mut layer = Self::empty(zip, pixel_size_um, meta);
+        layer.request_preload_all();
+        layer
+    }
+
+    pub fn from_prepared(
+        zip: PathBuf,
+        pixel_size_um: f32,
+        meta: Arc<XeniumTranscriptsMeta>,
+        payload: Arc<XeniumTranscriptsAllPayload>,
+    ) -> Self {
+        let mut layer = Self::empty(zip, pixel_size_um, Some(meta));
+        layer.apply_preloaded_payload((*payload).clone());
+        layer
+    }
+
+    fn empty(zip: PathBuf, pixel_size_um: f32, meta: Option<Arc<XeniumTranscriptsMeta>>) -> Self {
+        Self {
             name: "Transcripts (Xenium)".to_string(),
             visible: false,
             style: PointsStyle {
@@ -278,9 +346,7 @@ impl XeniumTranscriptsLayer {
             hover_positions_world: None,
             hover_bins: None,
             status: String::new(),
-        };
-        s.request_preload_all();
-        s
+        }
     }
 
     fn ensure_gene(&mut self, gene_name: &str) -> &mut XeniumGenePoints {
@@ -331,6 +397,42 @@ impl XeniumTranscriptsLayer {
                 let _ = tx.send(msg);
             })
             .ok();
+    }
+
+    fn apply_preloaded_payload(&mut self, payload: XeniumTranscriptsAllPayload) {
+        let XeniumTranscriptsAllPayload {
+            positions_by_gene,
+            qv_by_gene,
+            id_by_gene,
+            total_points,
+        } = payload;
+        let mut preloaded: Vec<Option<PreloadedGeneData>> = Vec::new();
+        for ((positions, values), ids) in positions_by_gene
+            .into_iter()
+            .zip(qv_by_gene.into_iter())
+            .zip(id_by_gene.into_iter())
+        {
+            if positions.is_empty() {
+                preloaded.push(None);
+                continue;
+            }
+            let ids = (!ids.is_empty()).then(|| Arc::new(ids));
+            preloaded.push(Some(PreloadedGeneData {
+                lod_levels: Arc::new(build_point_lods(&positions, &values)),
+                positions_world: Arc::new(positions),
+                values: Arc::new(values),
+                ids,
+            }));
+        }
+        self.preloaded = Some(preloaded);
+        self.status = format!("Preloaded {total_points} transcripts.");
+        let preloaded = self.preloaded.as_deref();
+        for gene in self.genes.values_mut() {
+            if gene.series.enabled && gene.series.positions_world.is_none() {
+                Self::attach_preloaded_for_gene(preloaded, gene);
+            }
+        }
+        self.rebuild_hover_index();
     }
 
     fn attach_preloaded_for_gene(
@@ -410,47 +512,7 @@ impl XeniumTranscriptsLayer {
                 Ok(msg) => {
                     self.preload_rx = None;
                     match msg {
-                        Ok(payload) => {
-                            let XeniumTranscriptsAllPayload {
-                                positions_by_gene,
-                                qv_by_gene,
-                                id_by_gene,
-                                total_points,
-                            } = payload;
-                            let mut preloaded: Vec<Option<PreloadedGeneData>> = Vec::new();
-                            for ((pos, qv), ids) in positions_by_gene
-                                .into_iter()
-                                .zip(qv_by_gene.into_iter())
-                                .zip(id_by_gene.into_iter())
-                            {
-                                if pos.is_empty() {
-                                    preloaded.push(None);
-                                    continue;
-                                }
-                                let ids = if ids.is_empty() {
-                                    None
-                                } else {
-                                    Some(Arc::new(ids))
-                                };
-                                preloaded.push(Some(PreloadedGeneData {
-                                    lod_levels: Arc::new(build_point_lods(&pos, &qv)),
-                                    positions_world: Arc::new(pos),
-                                    values: Arc::new(qv),
-                                    ids,
-                                }));
-                            }
-                            self.preloaded = Some(preloaded);
-                            self.status = format!("Preloaded {total_points} transcripts.");
-
-                            // Attach data to any already-enabled genes.
-                            let preloaded = self.preloaded.as_deref();
-                            for g in self.genes.values_mut() {
-                                if g.series.enabled && g.series.positions_world.is_none() {
-                                    Self::attach_preloaded_for_gene(preloaded, g);
-                                }
-                            }
-                            self.rebuild_hover_index();
-                        }
+                        Ok(payload) => self.apply_preloaded_payload(payload),
                         Err(err) => {
                             self.status = format!("Preload failed: {err}");
                         }

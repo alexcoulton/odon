@@ -116,7 +116,10 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         )));
                         return;
                     }
-                    *render_document = Some(Arc::new(RenderDocument { generation, opened }));
+                    *render_document = Some(Arc::new(RenderDocument {
+                        generation,
+                        opened: opened.into_control(),
+                    }));
                     publish_projection(
                         model,
                         render_document.clone(),
@@ -165,6 +168,182 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         )));
                     }
                 }
+            }
+        }
+        LoadCompletion::Tiff {
+            generation,
+            request,
+            path,
+            z,
+            t,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.fail_dataset_open_for_generation(generation, "TIFF open was cancelled");
+                reject_cancelled_request(request, diagnostics, "TIFF dataset open");
+                return;
+            }
+            match result {
+                Ok(opened) => {
+                    if !model.install_document_for_generation(
+                        generation,
+                        opened.descriptor.clone(),
+                        Vec::new(),
+                        None,
+                    ) {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "TIFF dataset open was superseded by a newer request",
+                            )
+                            .with_data(json!({
+                                "path": path.to_string_lossy(),
+                                "generation": generation,
+                            })),
+                        );
+                        return;
+                    }
+                    *render_document = Some(Arc::new(RenderDocument {
+                        generation,
+                        opened: opened.into_control(),
+                    }));
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                    finish_request(
+                        request,
+                        json!({
+                            "opened": true,
+                            "mode": "single",
+                            "kind": "tiff",
+                            "path": path.to_string_lossy(),
+                            "plane": {"z": z, "t": t},
+                            "model_ready": true,
+                            "resources_ready": true,
+                            "presentation_ready": false,
+                        }),
+                        diagnostics,
+                    );
+                }
+                Err(error) => {
+                    let message = format!("failed to open TIFF plane Z={z}, T={t}: {error}");
+                    if model.fail_dataset_open_for_generation(generation, &message) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message)
+                                .with_data(json!({"path": path.to_string_lossy()})),
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed TIFF open was superseded by a newer request",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        LoadCompletion::SpatialData {
+            generation,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model
+                    .fail_dataset_open_for_generation(generation, "SpatialData open was cancelled");
+                reject_cancelled_request(request, diagnostics, "SpatialData open");
+                return;
+            }
+            match result {
+                Ok((opened, identity)) => commit_alternate_document(
+                    model,
+                    render_document,
+                    generation,
+                    request,
+                    opened,
+                    json!({
+                        "kind":"spatialdata",
+                        "path":identity.root.to_string_lossy(),
+                        "image":identity.image,
+                        "extra_images":identity.extra_images,
+                        "labels":identity.labels,
+                        "shapes":identity.shapes,
+                        "points":identity.points,
+                        "points_max":identity.points_max,
+                    }),
+                    "SpatialData open was superseded by a newer request",
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                ),
+                Err(error) => fail_alternate_document(
+                    model,
+                    generation,
+                    request,
+                    format!("failed to open SpatialData dataset: {error}"),
+                    "failed SpatialData open was superseded by a newer request",
+                    diagnostics,
+                ),
+            }
+        }
+        LoadCompletion::Xenium {
+            generation,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.fail_dataset_open_for_generation(generation, "Xenium open was cancelled");
+                reject_cancelled_request(request, diagnostics, "Xenium open");
+                return;
+            }
+            match result {
+                Ok((opened, identity)) => commit_alternate_document(
+                    model,
+                    render_document,
+                    generation,
+                    request,
+                    opened,
+                    json!({
+                        "kind":"xenium",
+                        "path":identity.root.to_string_lossy(),
+                        "imagery":identity.imagery,
+                        "imagery_path":identity.imagery_path.to_string_lossy(),
+                        "cells_loaded":identity.cells_loaded,
+                        "transcripts_loaded":identity.transcripts_loaded,
+                        "pixel_size_um":identity.pixel_size_um,
+                    }),
+                    "Xenium open was superseded by a newer request",
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                ),
+                Err(error) => fail_alternate_document(
+                    model,
+                    generation,
+                    request,
+                    format!("failed to open Xenium dataset: {error}"),
+                    "failed Xenium open was superseded by a newer request",
+                    diagnostics,
+                ),
             }
         }
         LoadCompletion::RemoteList {
@@ -302,7 +481,10 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         );
                         return;
                     }
-                    *render_document = Some(Arc::new(RenderDocument { generation, opened }));
+                    *render_document = Some(Arc::new(RenderDocument {
+                        generation,
+                        opened: opened.into_control(),
+                    }));
                     remote_session.finish_s3_open(generation);
                     publish_projection(
                         model,
@@ -399,6 +581,87 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             }
         }
         _ => unreachable!("completion domain mismatch"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn commit_alternate_document(
+    model: &mut AppModel,
+    render_document: &mut Option<Arc<RenderDocument>>,
+    generation: u64,
+    request: OdonControlRequest,
+    opened: OpenedDocument<AlternateDocumentResource>,
+    mut response: Value,
+    superseded_message: &str,
+    presentation_tx: &Sender<RenderProjection>,
+    presentation_coalesce_rx: &Receiver<RenderProjection>,
+    wake_ui: &UiWake,
+    diagnostics: &ActorDiagnostics,
+) {
+    if !model.install_document_for_generation(
+        generation,
+        opened.descriptor.clone(),
+        Vec::new(),
+        None,
+    ) {
+        diagnostics
+            .stale_worker_completions
+            .fetch_add(1, Ordering::Relaxed);
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(ControlErrorKind::Conflict, superseded_message),
+        );
+        return;
+    }
+    *render_document = Some(Arc::new(RenderDocument {
+        generation,
+        opened: opened.into_control(),
+    }));
+    publish_projection(
+        model,
+        render_document.clone(),
+        presentation_tx,
+        presentation_coalesce_rx,
+        wake_ui,
+        diagnostics,
+    );
+    response
+        .as_object_mut()
+        .expect("alternate open response object")
+        .extend([
+            ("opened".to_string(), Value::Bool(true)),
+            ("mode".to_string(), Value::String("single".to_string())),
+            ("model_ready".to_string(), Value::Bool(true)),
+            ("resources_ready".to_string(), Value::Bool(true)),
+            ("presentation_ready".to_string(), Value::Bool(false)),
+        ]);
+    finish_request(request, response, diagnostics);
+}
+
+fn fail_alternate_document(
+    model: &mut AppModel,
+    generation: u64,
+    request: OdonControlRequest,
+    message: String,
+    superseded_message: &str,
+    diagnostics: &ActorDiagnostics,
+) {
+    if model.fail_dataset_open_for_generation(generation, &message) {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(ControlErrorKind::Application, message),
+        );
+    } else {
+        diagnostics
+            .stale_worker_completions
+            .fetch_add(1, Ordering::Relaxed);
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(ControlErrorKind::Conflict, superseded_message),
+        );
     }
 }
 

@@ -125,6 +125,21 @@ pub(super) fn dispatch_request(
         begin_ome_zarr_load(model, request, load_job_tx, diagnostics);
         return;
     }
+    if request.command.method() == "datasets.open_tiff" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_tiff_load(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "datasets.open_spatialdata" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_spatialdata_load(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if request.command.method() == "datasets.open_xenium" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_xenium_load(model, request, load_job_tx, diagnostics);
+        return;
+    }
     if request.command.method() == "datasets.inspect" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_dataset_inspection(model, request, load_job_tx, diagnostics);

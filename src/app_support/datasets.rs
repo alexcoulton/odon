@@ -1,10 +1,14 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use odon::data::document::{
-    DatasetElementInspection, DatasetElementTransform, DatasetInspection, DatasetInspectionKind,
-    DatasetInspectionMetadata, DatasetInspector, OmeTiffChannelInspection, OmeTiffInspection,
+    AlternateDatasetBackend, AlternateDocumentResource, DatasetElementInspection,
+    DatasetElementTransform, DatasetInspection, DatasetInspectionKind, DatasetInspectionMetadata,
+    DatasetInspector, DocumentDescriptor, DocumentKind, OmeTiffChannelInspection,
+    OmeTiffInspection, OpenedDocument, SpatialDataOpenIdentity, SpatialDataOpenOptions,
     TiffChannelInspection, TiffInspectionMetadata, TiffLevelInspection, TiffPlaneInspection,
-    TiffPlanesInspection, XeniumInspectionMetadata, inspect_core_dataset,
+    TiffPlanesInspection, XeniumInspectionMetadata, XeniumOpenIdentity, XeniumOpenOptions,
+    inspect_core_dataset,
 };
 
 use crate::data::dataset_kind::{
@@ -18,6 +22,281 @@ use crate::xenium::{TiffPlaneSelection, TiffPyramid, discover_xenium_explorer};
 /// This service contains no egui, window, or GPU state. It lives in the native binary only because
 /// TIFF, SpatialData, and Xenium readers have not all moved into the core library yet.
 pub(crate) struct NativeDatasetInspector;
+
+pub(crate) struct NativeAlternateDatasetBackend;
+
+#[derive(Clone)]
+pub(crate) struct PreparedSpatialDataDocument {
+    pub root: std::path::PathBuf,
+    pub image_transform: crate::spatialdata::SpatialDataTransform2,
+    pub extra_images: Vec<crate::spatialdata::PreparedSpatialImage>,
+    pub labels: Option<SpatialDataElement>,
+    pub tables: Vec<SpatialDataElement>,
+    pub shapes: Vec<SpatialDataElement>,
+    pub points: Option<(SpatialDataElement, usize)>,
+}
+
+#[derive(Clone)]
+pub(crate) enum PreparedXeniumImagery {
+    OmeZarr,
+    Tiff(Arc<TiffPyramid>),
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedXeniumDocument {
+    pub root: std::path::PathBuf,
+    pub imagery: PreparedXeniumImagery,
+    pub cells: Option<crate::xenium::PreparedXeniumCells>,
+    pub transcripts: Option<crate::xenium::PreparedXeniumTranscripts>,
+    pub pixel_size_um: f32,
+}
+
+fn selected_spatial_element(
+    elements: &[SpatialDataElement],
+    name: &str,
+    kind: &str,
+) -> anyhow::Result<SpatialDataElement> {
+    elements
+        .iter()
+        .find(|element| element.name == name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("SpatialData {kind} element '{name}' was not found"))
+}
+
+impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
+    fn open_tiff(
+        &self,
+        path: &Path,
+        z: usize,
+        t: usize,
+    ) -> anyhow::Result<OpenedDocument<AlternateDocumentResource>> {
+        let pyramid = Arc::new(TiffPyramid::open_with_selection(
+            path,
+            TiffPlaneSelection { z, t },
+        )?);
+        pyramid.validate_supported_ome_layout()?;
+        let dataset_name = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("tiff")
+            .to_string();
+        let dataset = crate::app::build_tiff_dataset(
+            path.to_path_buf(),
+            dataset_name,
+            pyramid.to_levels_info(),
+            pyramid.dims(),
+            pyramid.default_channels_named("image"),
+            pyramid.abs_max,
+            pyramid.physical_pixel_size_xy(),
+        );
+        let store = crate::app::dummy_local_store_for_path(path)?;
+        let descriptor = DocumentDescriptor::from_alternate(&dataset, DocumentKind::Tiff);
+        Ok(OpenedDocument {
+            descriptor,
+            resource: AlternateDocumentResource::new(dataset, store, pyramid),
+        })
+    }
+
+    fn open_spatialdata(
+        &self,
+        path: &Path,
+        options: &SpatialDataOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        SpatialDataOpenIdentity,
+    )> {
+        let discovery = discover_spatialdata(path)?;
+        let image = selected_spatial_element(&discovery.images, &options.image, "image")?;
+        let extra_images = options
+            .extra_images
+            .iter()
+            .map(|name| selected_spatial_element(&discovery.images, name, "image"))
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|element| element.name != image.name)
+            .collect::<Vec<_>>();
+        let labels = options
+            .labels
+            .as_deref()
+            .map(|name| selected_spatial_element(&discovery.labels, name, "label"))
+            .transpose()?;
+        let shapes = options
+            .shapes
+            .iter()
+            .map(|name| selected_spatial_element(&discovery.shapes, name, "shape"))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let points = options
+            .points
+            .as_deref()
+            .map(|name| selected_spatial_element(&discovery.points, name, "points"))
+            .transpose()?;
+        let image_root = discovery.root.join(&image.rel_group);
+        let (dataset, store) = crate::data::ome::OmeZarrDataset::open_local(&image_root)?;
+        let descriptor = DocumentDescriptor::from_alternate(&dataset, DocumentKind::SpatialData);
+        let identity = SpatialDataOpenIdentity {
+            root: discovery.root.clone(),
+            image: image.name.clone(),
+            extra_images: extra_images
+                .iter()
+                .map(|element| element.name.clone())
+                .collect(),
+            labels: labels.as_ref().map(|element| element.name.clone()),
+            shapes: shapes.iter().map(|element| element.name.clone()).collect(),
+            points: points.as_ref().map(|element| element.name.clone()),
+            points_max: options.points_max,
+        };
+        let prepared_extra_images = extra_images
+            .iter()
+            .cloned()
+            .map(|element| {
+                let image_root = discovery.root.join(&element.rel_group);
+                let (dataset, store) = crate::data::ome::OmeZarrDataset::open_local(&image_root)?;
+                Ok(crate::spatialdata::PreparedSpatialImage {
+                    element,
+                    dataset,
+                    store,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let payload = PreparedSpatialDataDocument {
+            root: discovery.root,
+            image_transform: image.transform,
+            extra_images: prepared_extra_images,
+            labels,
+            tables: discovery.tables,
+            shapes,
+            points: points.map(|element| (element, options.points_max)),
+        };
+        Ok((
+            OpenedDocument {
+                descriptor,
+                resource: AlternateDocumentResource::new(dataset, store, Arc::new(payload)),
+            },
+            identity,
+        ))
+    }
+
+    fn open_xenium(
+        &self,
+        path: &Path,
+        options: &XeniumOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        XeniumOpenIdentity,
+    )> {
+        let discovery = discover_xenium_explorer(path)?;
+        let selected = match options.imagery.as_str() {
+            "ome_zarr" => discovery
+                .morphology_mip_omezarr
+                .clone()
+                .map(|path| ("ome_zarr", path)),
+            "tiff" => discovery
+                .morphology_mip_tiff
+                .clone()
+                .map(|path| ("tiff", path)),
+            _ => discovery
+                .morphology_mip_omezarr
+                .clone()
+                .map(|path| ("ome_zarr", path))
+                .or_else(|| {
+                    discovery
+                        .morphology_mip_tiff
+                        .clone()
+                        .map(|path| ("tiff", path))
+                }),
+        };
+        let Some((imagery_kind, imagery_path)) = selected else {
+            anyhow::bail!(
+                "requested Xenium {} imagery is unavailable",
+                options.imagery
+            );
+        };
+        let cells = options
+            .load_cells
+            .then(|| discovery.cells_zarr_zip.clone())
+            .flatten();
+        let transcripts = options
+            .load_transcripts
+            .then(|| discovery.transcripts_zarr_zip.clone())
+            .flatten();
+        let prepared_cells = cells
+            .as_ref()
+            .map(|path| {
+                crate::xenium::load_cells_outline_bins(
+                    path,
+                    crate::xenium::XeniumPolygonSet::Cell,
+                    discovery.pixel_size_um,
+                )
+                .map(|bins| crate::xenium::PreparedXeniumCells {
+                    path: path.clone(),
+                    bins,
+                })
+            })
+            .transpose()?;
+        let prepared_transcripts = transcripts
+            .as_ref()
+            .map(|path| {
+                let meta = Arc::new(crate::xenium::load_transcripts_meta(path)?);
+                let payload = Arc::new(crate::xenium::load_transcripts_all_points(
+                    path,
+                    &meta,
+                    discovery.pixel_size_um,
+                    0,
+                )?);
+                Ok::<_, anyhow::Error>(crate::xenium::PreparedXeniumTranscripts {
+                    path: path.clone(),
+                    meta,
+                    payload,
+                })
+            })
+            .transpose()?;
+        let (dataset, store, imagery) = if imagery_kind == "ome_zarr" {
+            let (dataset, store) = crate::data::ome::OmeZarrDataset::open_local(&imagery_path)?;
+            (dataset, store, PreparedXeniumImagery::OmeZarr)
+        } else {
+            let pyramid = Arc::new(TiffPyramid::open_with_selection(
+                &imagery_path,
+                TiffPlaneSelection { z: 0, t: 0 },
+            )?);
+            pyramid.validate_supported_ome_layout()?;
+            let dataset = crate::app::build_tiff_dataset(
+                discovery.root.clone(),
+                "xenium".to_string(),
+                pyramid.to_levels_info(),
+                pyramid.dims(),
+                pyramid.default_channels_named("morphology"),
+                pyramid.abs_max,
+                pyramid.physical_pixel_size_xy(),
+            );
+            let store = crate::app::dummy_local_store_for_path(&discovery.root)?;
+            (dataset, store, PreparedXeniumImagery::Tiff(pyramid))
+        };
+        let descriptor = DocumentDescriptor::from_alternate(&dataset, DocumentKind::Xenium);
+        let identity = XeniumOpenIdentity {
+            root: discovery.root.clone(),
+            imagery: imagery_kind.to_string(),
+            imagery_path,
+            cells_loaded: prepared_cells.is_some(),
+            transcripts_loaded: prepared_transcripts.is_some(),
+            pixel_size_um: discovery.pixel_size_um,
+        };
+        let payload = PreparedXeniumDocument {
+            root: discovery.root,
+            imagery,
+            cells: prepared_cells,
+            transcripts: prepared_transcripts,
+            pixel_size_um: discovery.pixel_size_um,
+        };
+        Ok((
+            OpenedDocument {
+                descriptor,
+                resource: AlternateDocumentResource::new(dataset, store, Arc::new(payload)),
+            },
+            identity,
+        ))
+    }
+}
 
 impl DatasetInspector for NativeDatasetInspector {
     fn inspect(&self, path: &Path) -> DatasetInspection {

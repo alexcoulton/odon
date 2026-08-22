@@ -658,31 +658,60 @@ impl OmeZarrViewerApp {
         )
     }
 
-    pub fn new_tiff_runtime_with_plane(
+    /// Realize renderer-only TIFF loaders from metadata and an immutable pyramid prepared by the
+    /// control actor's native worker adapter. No TIFF metadata is reopened on the UI thread.
+    pub fn new_tiff_runtime_from_resource(
         ctx: &egui::Context,
         gpu_available: bool,
-        image_path: PathBuf,
-        z: usize,
-        t: usize,
+        resource: &crate::data::document::AlternateDocumentResource,
         auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         apply_napari_like_dark(ctx);
-        let dataset_name = image_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("tiff")
-            .to_string();
-        Self::new_tiff_runtime_named_with_plane(
+        let assets = build_tiff_runtime_assets_from_resource(gpu_available, resource)?;
+        let tiles_gl = gpu_available.then(|| TilesGl::new(RAW_TILE_CACHE_CAPACITY_TILES));
+        let mut app = Self::new_runtime_with_handles(
             ctx,
             gpu_available,
-            image_path.clone(),
-            image_path,
-            dataset_name,
-            "image".to_string(),
-            crate::xenium::TiffPlaneSelection { z, t },
+            assets.dataset,
+            assets.store,
+            assets.loader,
+            assets.raw_loader,
+            tiles_gl,
+            assets.hist_loader,
+            assets.chanmax_loader,
+            assets.chanmax_level,
             auto_contrast_settings,
-        )
+        );
+        app.tiff_plane_state = assets.tiff_plane_state;
+        Ok(app)
+    }
+
+    pub fn new_tiff_runtime_from_prepared_resource(
+        ctx: &egui::Context,
+        gpu_available: bool,
+        resource: &crate::data::document::AlternateDocumentResource,
+        pyramid: Arc<crate::xenium::TiffPyramid>,
+        auto_contrast_settings: AutoContrastSettings,
+    ) -> anyhow::Result<Self> {
+        apply_napari_like_dark(ctx);
+        let assets =
+            build_tiff_runtime_assets_from_prepared_resource(gpu_available, resource, pyramid)?;
+        let tiles_gl = gpu_available.then(|| TilesGl::new(RAW_TILE_CACHE_CAPACITY_TILES));
+        let mut app = Self::new_runtime_with_handles(
+            ctx,
+            gpu_available,
+            assets.dataset,
+            assets.store,
+            assets.loader,
+            assets.raw_loader,
+            tiles_gl,
+            assets.hist_loader,
+            assets.chanmax_loader,
+            assets.chanmax_level,
+            auto_contrast_settings,
+        );
+        app.tiff_plane_state = assets.tiff_plane_state;
+        Ok(app)
     }
 
     pub(super) fn new_tiff_runtime_named(

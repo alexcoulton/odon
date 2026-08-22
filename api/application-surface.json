@@ -695,8 +695,8 @@
       "permissions": ["application.open"],
       "python_sync": ["odon.resources:Application.open_tiff", "odon.resources:Datasets.open_tiff"],
       "python_async": ["odon.async_resources:AsyncApplication.open_tiff", "odon.async_resources:AsyncDatasets.open_tiff"],
-      "tests": ["rust:ome_tiff_z_plane_selection_changes_ifd_mapping", "python:test_typed_tiff_plane_wrapper"],
-      "notes": "datasets.inspect returns TIFF levels, channels, OME dimensions, physical pixel sizes, and available Z/T extents."
+      "tests": ["rust:ome_tiff_z_plane_selection_changes_ifd_mapping", "rust:tiff_open_reaches_resource_readiness_without_a_ui_frame", "rust:superseding_open_rejects_a_stale_tiff_completion", "python:test_typed_tiff_plane_wrapper"],
+      "notes": "datasets.inspect returns TIFF levels, channels, OME dimensions, physical pixel sizes, and available Z/T extents. TIFF metadata and its immutable pyramid are prepared on the bounded actor worker and reused by the renderer."
     },
     {
       "id": "DATA-03.remote",
@@ -711,8 +711,8 @@
       "permissions": ["application.open", "datasets.credentials.read", "datasets.credentials.write", "datasets.remote.read"],
       "python_sync": ["odon.resources:Datasets.open_http", "odon.resources:S3Datasets.get_session", "odon.resources:S3Datasets.configure_session", "odon.resources:S3Datasets.clear_session", "odon.resources:S3Datasets.list", "odon.resources:S3Datasets.open"],
       "python_async": ["odon.async_resources:AsyncDatasets.open_http", "odon.async_resources:AsyncS3Datasets.get_session", "odon.async_resources:AsyncS3Datasets.configure_session", "odon.async_resources:AsyncS3Datasets.clear_session", "odon.async_resources:AsyncS3Datasets.list", "odon.async_resources:AsyncS3Datasets.open"],
-      "tests": ["rust:remote_store_inputs_and_prefix_navigation_are_deterministic", "python:test_remote_dataset_wrappers"],
-      "notes": "S3 secrets are session-only, never returned by API results, and cleared explicitly. Persistent credential storage is intentionally unsupported."
+      "tests": ["rust:remote_store_inputs_and_prefix_navigation_are_deterministic", "rust:remote_sessions_listing_and_opens_complete_without_a_ui_frame", "rust:clearing_a_session_invalidates_in_flight_remote_work", "rust:clearing_a_session_prevents_a_stale_s3_document_install", "python:test_remote_dataset_wrappers"],
+      "notes": "S3 secrets are session-only, never returned by API results, and cleared explicitly. S3 list and HTTP/S3 open execute on bounded actor workers without a UI frame. Persistent credential storage is intentionally unsupported."
     },
     {
       "id": "DATA-04.spatialdata",
@@ -727,8 +727,8 @@
       "permissions": ["application.open"],
       "python_sync": ["odon.resources:Datasets.open_spatialdata"],
       "python_async": ["odon.async_resources:AsyncDatasets.open_spatialdata"],
-      "tests": ["python:test_typed_dataset_open_wrappers"],
-      "notes": "datasets.inspect owns discovery and returns the typed elements accepted by this method."
+      "tests": ["rust:spatialdata_and_xenium_open_without_a_ui_frame", "python:test_typed_dataset_open_wrappers"],
+      "notes": "datasets.inspect owns discovery and returns the typed elements accepted by this method. Discovery, selection validation, and primary image preparation are actor-worker owned; typed secondary-resource preparation is still being completed."
     },
     {
       "id": "DATA-05.xenium",
@@ -743,8 +743,8 @@
       "permissions": ["application.open"],
       "python_sync": ["odon.resources:Datasets.open_xenium"],
       "python_async": ["odon.async_resources:AsyncDatasets.open_xenium"],
-      "tests": ["python:test_typed_dataset_open_wrappers"],
-      "notes": "Callers explicitly choose auto, OME-Zarr, or TIFF imagery and whether cell/transcript archives are attached."
+      "tests": ["rust:spatialdata_and_xenium_open_without_a_ui_frame", "python:test_typed_dataset_open_wrappers"],
+      "notes": "Callers explicitly choose auto, OME-Zarr, or TIFF imagery and whether cell/transcript archives are attached. Discovery, selection validation, and primary imagery preparation are actor-worker owned; typed cell/transcript resource preparation is still being completed."
     },
     {
       "id": "DATA-06.target",

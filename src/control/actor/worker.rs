@@ -6,6 +6,7 @@ pub(super) fn spawn_resource_workers(
     object_loader: Option<Arc<dyn ObjectResourceLoader>>,
     dataset_inspector: Arc<dyn DatasetInspector>,
     remote_backend: Arc<dyn RemoteDatasetBackend>,
+    alternate_backend: Arc<dyn AlternateDatasetBackend>,
 ) -> anyhow::Result<()> {
     for index in 0..LOAD_WORKERS {
         let jobs = load_job_rx.clone();
@@ -13,6 +14,7 @@ pub(super) fn spawn_resource_workers(
         let object_loader = object_loader.clone();
         let dataset_inspector = Arc::clone(&dataset_inspector);
         let remote_backend = Arc::clone(&remote_backend);
+        let alternate_backend = Arc::clone(&alternate_backend);
         thread::Builder::new()
             .name(format!("odon-resource-worker-{index}"))
             .spawn(move || {
@@ -73,6 +75,64 @@ pub(super) fn spawn_resource_workers(
                                     generation,
                                     request,
                                     path,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::Tiff {
+                            generation,
+                            request,
+                            path,
+                            z,
+                            t,
+                        } => {
+                            let result = alternate_backend.open_tiff(&path, z, t);
+                            if completions
+                                .send(LoadCompletion::Tiff {
+                                    generation,
+                                    request,
+                                    path,
+                                    z,
+                                    t,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::SpatialData {
+                            generation,
+                            request,
+                            path,
+                            options,
+                        } => {
+                            let result = alternate_backend.open_spatialdata(&path, &options);
+                            if completions
+                                .send(LoadCompletion::SpatialData {
+                                    generation,
+                                    request,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::Xenium {
+                            generation,
+                            request,
+                            path,
+                            options,
+                        } => {
+                            let result = alternate_backend.open_xenium(&path, &options);
+                            if completions
+                                .send(LoadCompletion::Xenium {
+                                    generation,
+                                    request,
                                     result,
                                 })
                                 .is_err()

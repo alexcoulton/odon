@@ -2187,7 +2187,7 @@ struct TiffRuntimeAssets {
     tiff_plane_state: Option<TiffPlaneState>,
 }
 
-fn dummy_local_store_for_path(
+pub(crate) fn dummy_local_store_for_path(
     path: &Path,
 ) -> anyhow::Result<Arc<dyn zarrs::storage::ReadableStorageTraits>> {
     let store_root = if path.is_dir() {
@@ -2551,7 +2551,7 @@ fn parse_mcp_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
     None
 }
 
-fn build_tiff_dataset(
+pub(crate) fn build_tiff_dataset(
     dataset_root: PathBuf,
     dataset_name: String,
     levels: Vec<crate::data::ome::LevelInfo>,
@@ -2656,8 +2656,70 @@ fn build_tiff_runtime_assets(
         pyramid.abs_max,
         pyramid.physical_pixel_size_xy(),
     );
-    let dims_yx = (dataset.dims.y, dataset.dims.x);
     let store = dummy_local_store_for_path(&dataset_root)?;
+    build_tiff_runtime_assets_from_parts(
+        gpu_available,
+        dataset_root,
+        image_path,
+        dataset_name,
+        channel_name,
+        pyramid,
+        dataset,
+        store,
+    )
+}
+
+fn build_tiff_runtime_assets_from_resource(
+    gpu_available: bool,
+    resource: &crate::data::document::AlternateDocumentResource,
+) -> anyhow::Result<TiffRuntimeAssets> {
+    let pyramid = resource
+        .payload::<crate::xenium::TiffPyramid>()
+        .ok_or_else(|| anyhow::anyhow!("TIFF document has an incompatible native resource"))?;
+    build_tiff_runtime_assets_from_prepared_resource(gpu_available, resource, pyramid)
+}
+
+fn build_tiff_runtime_assets_from_prepared_resource(
+    gpu_available: bool,
+    resource: &crate::data::document::AlternateDocumentResource,
+    pyramid: Arc<crate::xenium::TiffPyramid>,
+) -> anyhow::Result<TiffRuntimeAssets> {
+    let dataset = resource.dataset.clone();
+    let dataset_root = dataset
+        .source
+        .local_path()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("TIFF document has no local source path"))?;
+    let image_path = pyramid.path.clone();
+    let dataset_name = dataset
+        .multiscale
+        .name
+        .clone()
+        .unwrap_or_else(|| "tiff".to_string());
+    build_tiff_runtime_assets_from_parts(
+        gpu_available,
+        dataset_root,
+        image_path,
+        dataset_name,
+        "image".to_string(),
+        pyramid,
+        dataset,
+        Arc::clone(&resource.store),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_tiff_runtime_assets_from_parts(
+    gpu_available: bool,
+    dataset_root: PathBuf,
+    image_path: PathBuf,
+    dataset_name: String,
+    channel_name: String,
+    pyramid: Arc<crate::xenium::TiffPyramid>,
+    dataset: OmeZarrDataset,
+    store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
+) -> anyhow::Result<TiffRuntimeAssets> {
+    let dims_yx = (dataset.dims.y, dataset.dims.x);
     let tile_loader_threads = recommended_tile_loader_threads();
     let loader =
         crate::xenium::spawn_tiff_tile_loader(pyramid.clone(), dims_yx, tile_loader_threads)?;

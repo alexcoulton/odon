@@ -1,6 +1,6 @@
 pub struct RenderDocument {
     pub generation: u64,
-    pub opened: OpenedDocument<OmeZarrDocumentResource>,
+    pub opened: ControlOpenedDocument,
 }
 
 impl RenderDocument {
@@ -9,11 +9,11 @@ impl RenderDocument {
     }
 
     pub fn dataset(&self) -> &OmeZarrDataset {
-        &self.opened.resource.dataset
+        self.opened.resource.dataset()
     }
 
     pub fn store(&self) -> &Arc<dyn ReadableStorageTraits> {
-        &self.opened.resource.store
+        self.opened.resource.store()
     }
 }
 

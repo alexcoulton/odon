@@ -2,12 +2,12 @@
 
 Status: implementation in progress. The original local OME-Zarr/two-viewport background-safety
 slice is implemented and has automated no-frame coverage. The broader application-surface
-migration is 191 of 261 registered application methods, leaving 70. Mode- and target-aware route
+migration is 200 of 261 registered application methods, leaving 61. Mode- and target-aware route
 metadata, scoped readiness, application settings/recent projects, lifecycle decisions, dataset
 inspection, and deep-link parsing/resolution/filter/generation are now actor-owned. The control
 actor has also been reorganized into a small façade with dedicated runtime, dispatch, worker,
-completion, projection, diagnostics, domain, and test modules. The main remaining work is remote
-and alternate document opening, project-resource transactions, retained compute tasks, mosaic
+completion, projection, diagnostics, domain, and test modules. The main remaining work is
+alternate document opening, project-resource transactions, retained compute tasks, mosaic
 state, explicit presentation tasks, duplicate renderer-owned semantic state, and real platform
 occlusion acceptance. Before those migrations continue, the former 27,951-line `src/app.rs` has
 also been converted into a responsibility-based `src/app/` module tree with an explicit legacy
@@ -100,6 +100,13 @@ The background-safe first vertical slice is now implemented in
 - deep-link parsing, resolution against current/external/example projects, filter extraction, and
   generation from structured or current actor state are frame-independent; transactional apply
   remains in Wave 2; and
+- remote S3 session management, S3 browsing, and HTTP/S3 OME-Zarr opening are actor-owned; remote
+  I/O runs on bounded workers, credentials remain in an actor-private redacted service, and
+  clearing a session invalidates dependent listings and opens; and
+- TIFF, SpatialData, and Xenium primary-document discovery and opening are actor-owned; TIFF
+  projections retain the worker-prepared pyramid so resuming presentation does not reparse TIFF
+  metadata, while typed secondary-resource preparation for SpatialData/Xenium remains in Wave 2D;
+  and
 - retained task creation, polling, progress, cancellation, completion, failure, and forgetting are
   ordered through the actor-owned task service while transport remains a thin client; and
 - actor implementation code is split by responsibility and domain: the façade contains no command
@@ -120,14 +127,14 @@ remove the duplicate semantic storage and extend that command-only boundary to
 the remaining domains. Cross-platform manual covered/minimized/Space
 acceptance also remains outstanding.
 
-As of this revision, 207 commands are listed as actor-capable: 191 of the 261
+As of this revision, 216 commands are listed as actor-capable: 200 of the 261
 application-registry methods, 15 of the 34 protocol-service methods, plus the actor-only
-method-availability query. This count is diagnostic, not a completion metric: 70 application
+method-availability query. This count is diagnostic, not a completion metric: 61 application
 methods remain outside the actor list, and some listed methods are still hybrid or fall back by
 mode or target. The other 24 protocol
 services (handshake, event/task management, and declarative-UI registries) already execute outside
 the render loop but have not all been folded into the canonical actor. Major remaining domains
-include project ROI/resource opening, alternate datasets, threshold computation, analysis,
+include project ROI/resource opening, alternate local datasets, threshold computation, analysis,
 measurements, exports, memory control, mosaic, and explicit presentation tasks.
 
 ## Updated Execution Plan (Authoritative)
@@ -166,18 +173,18 @@ recorded before Gate A is declared complete.
 
 ### Current method ledger
 
-The registry currently contains 261 application methods. The actor list contains 191 of them;
-70 remain. The remaining inventory is fixed by registry family as follows. The two mosaic-opening
+The registry currently contains 261 application methods. The actor list contains 200 of them;
+61 remain. The remaining inventory is fixed by registry family as follows. The two mosaic-opening
 methods are shown with the mosaic workstream because they depend on the canonical mosaic model,
 even though their registry names live under `project.*` and `datasets.*`.
 
 | Remaining workstream | Methods | Count |
 | --- | --- | ---: |
-| Project resources, single-document sources, S3, and deep-link transactions | `project.objects.preload.*`, `project.rois.open`, non-mosaic `datasets.open_*`, `datasets.s3.*`, `deep_links.apply` | 15 |
+| Project resources and deep-link transactions | `project.objects.preload.*`, `project.rois.open`, `deep_links.apply` | 6 |
 | Single-view resource and compute domains | screenshot settings, `memory.*`, threshold preview, analysis, measurements, and object exports | 32 |
 | Mosaic semantic state and resources | `mosaic.*`, `project.rois.open_selected_mosaic`, `datasets.open_mosaic_samplesheet` | 19 |
 | Pixel presentation and capture | viewer/workspace/application/project screenshot capture | 4 |
-| **Total** |  | **70** |
+| **Total** |  | **61** |
 
 The 191-method actor count must not be interpreted as 191 methods being universally complete.
 For example, a method may execute in the actor for a primary single-image target but use the
@@ -310,8 +317,8 @@ explicit and prevents the broad method waves from building on another global-bus
 | 8 | Wave 2A source-neutral document contract and inspection | Complete for OME-Zarr/inspection foundation | OME-Zarr and inspection produce typed descriptors and complete without a frame; alternate adapters remain Wave 2D |
 | 9 | Actor-owned retained-task kernel | Complete as a foundation | Actor orders task mutation; transport is a thin observer; blocked-worker cancellation remains responsive |
 | 10 | Wave 2B deep-link resolution | Complete | Current, external, and example-project resolution works without frames |
-| 11 | Wave 2C remote sessions and remote OME-Zarr | Pending | HTTP/S3 list/open works without frames and secrets never enter model snapshots |
-| 12 | Wave 2D TIFF/SpatialData/Xenium adapters | Pending | Each source reaches model/resource readiness without renderer construction |
+| 11 | Wave 2C remote sessions and remote OME-Zarr | Complete | HTTP/S3 list/open no-frame tests cover cancellation, stale work, and credential redaction; native single-open uses the same actor commands |
+| 12 | Wave 2D TIFF/SpatialData/Xenium adapters | In progress | All three opens are actor-routed and reach primary-document readiness without a frame; selected SpatialData/Xenium subresources still need typed actor-owned preparation |
 | 13 | Wave 2E project preload and ROI-open transaction | Pending | ROI open installs its document and required resources before replying; stale work is rejected |
 | 14 | Wave 2F transactional deep-link apply | Pending | External project/ROI/view application completes atomically with frames paused |
 | 15 | Wave 3 retained compute/resources | Pending | Threshold, analysis, measurement, memory, and export tasks progress and cancel without frames |
@@ -328,7 +335,7 @@ independently reviewable.
 
 Three numbers must be reported separately throughout implementation:
 
-- **registry coverage:** currently 191/261 application methods actor-capable;
+- **registry coverage:** currently 200/261 application methods actor-capable;
 - **route coverage:** the supported mode/target routes that are actor-owned; the evaluator exists,
   and the verifier must now enumerate and count its declared variants; and
 - **acceptance coverage:** commands proven to complete under paused frames and real OS occlusion.
@@ -391,8 +398,9 @@ an observable settings-persistence failure event in addition to readiness/status
 
 ### Wave 2 — project resources, alternate datasets, and deep-link transactions
 
-Status: in progress. Dataset inspection and deep-link parse/resolve/filter/generate are actor-owned
-and have no-frame actor tests. Fifteen non-mosaic methods remain in this wave. The
+Status: in progress. Dataset inspection, remote session/list/open, and deep-link
+parse/resolve/filter/generate are actor-owned and have no-frame actor tests. Six non-mosaic
+methods remain outside the actor list in this wave. The
 two mosaic-opening methods formerly grouped here are deliberately deferred to Wave 4 so they are
 implemented once against the canonical mosaic model rather than temporarily reproducing legacy
 mosaic ownership.
@@ -439,6 +447,10 @@ missing, malformed, cancelled, and superseded cases have stable errors and canno
 
 #### Wave 2C — remote session service and remote OME-Zarr
 
+Status: complete. The actor owns an in-memory credential service and redacted session snapshot;
+bounded workers perform S3 listing and HTTP/S3 opens; session generations reject stale work; and
+the native single-dataset remote dialog submits the same actor commands as Python and MCP.
+
 Methods: `datasets.s3.configure_session`, `datasets.s3.get_session`,
 `datasets.s3.clear_session`, `datasets.s3.list`, `datasets.open_http`, and `datasets.open_s3`.
 
@@ -455,6 +467,13 @@ tests, and no-frame HTTP/S3 opens pass. Network integration tests may use determ
 servers/emulators; real-provider smoke tests remain optional release evidence.
 
 #### Wave 2D — alternate local and structured dataset adapters
+
+Status: in progress. TIFF, SpatialData, and Xenium opening now run as generation-checked actor
+transactions on the bounded worker pool and publish source-neutral prepared documents. TIFF
+metadata is parsed once and its immutable pyramid is reused when presentation resumes. SpatialData
+and Xenium discovery, selection validation, and primary imagery preparation are also worker-owned;
+their selected secondary imagery, labels, shapes, points, tables, cells, and transcripts still need
+dedicated typed resource handles so no initial subresource I/O begins from renderer construction.
 
 Methods: `datasets.open_tiff`, `datasets.open_spatialdata`, and `datasets.open_xenium`.
 
@@ -511,7 +530,7 @@ frames are paused; returning to Odon renders the final projection without anothe
 
 Wave 2 exit evidence:
 
-- all fifteen remaining non-mosaic methods in this wave have actor routes for every supported target;
+- all six remaining non-mosaic methods in this wave have actor routes for every supported target;
 - every supported single-document source can be inspected/opened without a frame;
 - secrets and renderer-only handles never appear in serializable model state;
 - cancelling or superseding a remote/local/project/deep-link open cannot install stale resources;

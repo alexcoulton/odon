@@ -68,6 +68,202 @@ pub(super) fn begin_ome_zarr_load(
     }
 }
 
+pub(super) fn begin_tiff_load(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) {
+    let Some(raw_path) = request.command.params().get("path").and_then(Value::as_str) else {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::invalid_params("datasets.open_tiff", "path is required"),
+        );
+        return;
+    };
+    let requested_path = expand_path(raw_path);
+    let Some(path) = normalize_local_dataset_path(&requested_path) else {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::invalid_params(
+                "datasets.open_tiff",
+                "path is not a local TIFF / OME-TIFF file",
+            ),
+        );
+        return;
+    };
+    if classify_local_dataset_path(&path) != Some(LocalDatasetKind::Tiff) {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::invalid_params(
+                "datasets.open_tiff",
+                "path is not a TIFF / OME-TIFF dataset",
+            ),
+        );
+        return;
+    }
+    let z = request
+        .command
+        .params()
+        .get("z")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let t = request
+        .command
+        .params()
+        .get("t")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    if load_job_tx.is_full() {
+        reject_worker_submission(request, diagnostics);
+        return;
+    }
+    let generation = model.begin_dataset_open(path.to_string_lossy());
+    match load_job_tx.try_send(LoadJob::Tiff {
+        generation,
+        request,
+        path,
+        z,
+        t,
+    }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(error) => {
+            let LoadJob::Tiff { request, .. } = error.into_inner() else {
+                unreachable!("TIFF submission returns its own job")
+            };
+            model.fail_dataset_open_for_generation(
+                generation,
+                "TIFF dataset loader workers are unavailable",
+            );
+            reject_worker_submission(request, diagnostics);
+        }
+    }
+}
+
+pub(super) fn begin_spatialdata_load(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) {
+    let Some(raw_path) = request.command.params().get("path").and_then(Value::as_str) else {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::invalid_params("datasets.open_spatialdata", "path is required"),
+        );
+        return;
+    };
+    let path = expand_path(raw_path);
+    let mut options = request.command.params().clone();
+    options.as_object_mut().map(|object| object.remove("path"));
+    let options =
+        match serde_json::from_value::<crate::data::document::SpatialDataOpenOptions>(options) {
+            Ok(options) => options,
+            Err(error) => {
+                reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::invalid_params(
+                        "datasets.open_spatialdata",
+                        format!("invalid SpatialData options: {error}"),
+                    ),
+                );
+                return;
+            }
+        };
+    if load_job_tx.is_full() {
+        reject_worker_submission(request, diagnostics);
+        return;
+    }
+    let generation = model.begin_dataset_open(path.to_string_lossy());
+    match load_job_tx.try_send(LoadJob::SpatialData {
+        generation,
+        request,
+        path,
+        options,
+    }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(error) => {
+            let LoadJob::SpatialData { request, .. } = error.into_inner() else {
+                unreachable!("SpatialData submission returns its own job")
+            };
+            model.fail_dataset_open_for_generation(
+                generation,
+                "SpatialData loader workers are unavailable",
+            );
+            reject_worker_submission(request, diagnostics);
+        }
+    }
+}
+
+pub(super) fn begin_xenium_load(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) {
+    let Some(raw_path) = request.command.params().get("path").and_then(Value::as_str) else {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::invalid_params("datasets.open_xenium", "path is required"),
+        );
+        return;
+    };
+    let requested_path = expand_path(raw_path);
+    let path = normalize_local_dataset_path(&requested_path).unwrap_or(requested_path);
+    let mut options = request.command.params().clone();
+    options.as_object_mut().map(|object| object.remove("path"));
+    let options = match serde_json::from_value::<crate::data::document::XeniumOpenOptions>(options)
+    {
+        Ok(options) => options,
+        Err(error) => {
+            reject_actor_request(
+                request,
+                diagnostics,
+                ControlError::invalid_params(
+                    "datasets.open_xenium",
+                    format!("invalid Xenium options: {error}"),
+                ),
+            );
+            return;
+        }
+    };
+    if load_job_tx.is_full() {
+        reject_worker_submission(request, diagnostics);
+        return;
+    }
+    let generation = model.begin_dataset_open(path.to_string_lossy());
+    match load_job_tx.try_send(LoadJob::Xenium {
+        generation,
+        request,
+        path,
+        options,
+    }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(error) => {
+            let LoadJob::Xenium { request, .. } = error.into_inner() else {
+                unreachable!("Xenium submission returns its own job")
+            };
+            model.fail_dataset_open_for_generation(
+                generation,
+                "Xenium loader workers are unavailable",
+            );
+            reject_worker_submission(request, diagnostics);
+        }
+    }
+}
+
 pub(super) fn begin_dataset_inspection(
     model: &mut AppModel,
     request: OdonControlRequest,

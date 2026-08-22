@@ -944,7 +944,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             Object
         ),
         method!(
@@ -954,7 +954,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             Object
         ),
         method!(
@@ -974,7 +974,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             SpatialDataOpen
         ),
         method!(
@@ -984,7 +984,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             XeniumOpen
         ),
         method!(
@@ -994,7 +994,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             HttpOpen
         ),
         method!(
@@ -1044,7 +1044,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             S3Prefix
         ),
         method!(
@@ -1094,7 +1094,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.state.changed"),
-            READY_MODES,
+            ALL_MODES,
             DeepLinkApply
         ),
         method!(
@@ -1104,7 +1104,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             TiffOpen
         ),
         method!(
@@ -1114,7 +1114,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("application.mode.changed"),
-            READY_MODES,
+            ALL_MODES,
             Object
         ),
         method!(
@@ -1124,7 +1124,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("project.active_roi.changed"),
-            READY_MODES,
+            ALL_MODES,
             Object
         ),
         method!(

@@ -43,7 +43,7 @@ pub fn spawn_control_actor(
     wake_ui: UiWake,
     resource_registry: Arc<ResourceRegistry>,
 ) -> anyhow::Result<ControlActorChannels> {
-    spawn_control_actor_with_services(wake_ui, resource_registry, None, None, None, None)
+    spawn_control_actor_with_services(wake_ui, resource_registry, None, None, None, None, None)
 }
 
 pub fn spawn_control_actor_with_object_loader(
@@ -51,7 +51,15 @@ pub fn spawn_control_actor_with_object_loader(
     resource_registry: Arc<ResourceRegistry>,
     object_loader: Option<Arc<dyn ObjectResourceLoader>>,
 ) -> anyhow::Result<ControlActorChannels> {
-    spawn_control_actor_with_services(wake_ui, resource_registry, object_loader, None, None, None)
+    spawn_control_actor_with_services(
+        wake_ui,
+        resource_registry,
+        object_loader,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 pub fn spawn_control_actor_with_services(
@@ -61,6 +69,7 @@ pub fn spawn_control_actor_with_services(
     dataset_inspector: Option<Arc<dyn DatasetInspector>>,
     task_registry: Option<Arc<TaskRegistry>>,
     remote_backend: Option<Arc<dyn RemoteDatasetBackend>>,
+    alternate_backend: Option<Arc<dyn AlternateDatasetBackend>>,
 ) -> anyhow::Result<ControlActorChannels> {
     let (request_tx, request_rx) =
         crossbeam_channel::bounded::<OdonControlRequest>(ACTOR_QUEUE_CAPACITY);
@@ -83,6 +92,8 @@ pub fn spawn_control_actor_with_services(
         dataset_inspector.unwrap_or_else(|| Arc::new(CoreDatasetInspector));
     let remote_backend: Arc<dyn RemoteDatasetBackend> =
         remote_backend.unwrap_or_else(|| Arc::new(CoreRemoteDatasetBackend));
+    let alternate_backend: Arc<dyn AlternateDatasetBackend> =
+        alternate_backend.unwrap_or_else(|| Arc::new(UnavailableAlternateDatasetBackend));
 
     spawn_resource_workers(
         load_job_rx,
@@ -90,6 +101,7 @@ pub fn spawn_control_actor_with_services(
         object_loader,
         dataset_inspector,
         remote_backend,
+        alternate_backend,
     )?;
 
     thread::Builder::new()
@@ -210,7 +222,8 @@ fn apply_model_update(
                             store,
                             runtime_guard: None,
                         },
-                    },
+                    }
+                    .into_control(),
                 }));
             }
         }

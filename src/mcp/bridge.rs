@@ -60,20 +60,21 @@ pub struct OdonControlRequest {
 
 impl OdonControlBridge {
     pub fn spawn_default(ctx: egui::Context) -> anyhow::Result<Self> {
-        Self::spawn_inner(DEFAULT_ADDR, ctx, true, None, None)
+        Self::spawn_inner(DEFAULT_ADDR, ctx, true, None, None, None)
     }
 
     pub fn spawn_default_with_object_loader(
         ctx: egui::Context,
         object_loader: Arc<dyn crate::model::ObjectResourceLoader>,
     ) -> anyhow::Result<Self> {
-        Self::spawn_inner(DEFAULT_ADDR, ctx, true, Some(object_loader), None)
+        Self::spawn_inner(DEFAULT_ADDR, ctx, true, Some(object_loader), None, None)
     }
 
     pub fn spawn_default_with_services(
         ctx: egui::Context,
         object_loader: Arc<dyn crate::model::ObjectResourceLoader>,
         dataset_inspector: Arc<dyn crate::data::document::DatasetInspector>,
+        alternate_backend: Arc<dyn crate::data::document::AlternateDatasetBackend>,
     ) -> anyhow::Result<Self> {
         Self::spawn_inner(
             DEFAULT_ADDR,
@@ -81,11 +82,12 @@ impl OdonControlBridge {
             true,
             Some(object_loader),
             Some(dataset_inspector),
+            Some(alternate_backend),
         )
     }
 
     pub fn spawn(addr: &str, ctx: egui::Context) -> anyhow::Result<Self> {
-        Self::spawn_inner(addr, ctx, false, None, None)
+        Self::spawn_inner(addr, ctx, false, None, None, None)
     }
 
     fn spawn_inner(
@@ -94,6 +96,7 @@ impl OdonControlBridge {
         publish: bool,
         object_loader: Option<Arc<dyn crate::model::ObjectResourceLoader>>,
         dataset_inspector: Option<Arc<dyn crate::data::document::DatasetInspector>>,
+        alternate_backend: Option<Arc<dyn crate::data::document::AlternateDatasetBackend>>,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         let local_addr = listener.local_addr()?;
@@ -119,6 +122,7 @@ impl OdonControlBridge {
             dataset_inspector,
             Some(Arc::clone(&task_registry)),
             None,
+            alternate_backend,
         )?;
         let identity = Arc::new(ControlServerIdentity {
             instance_id: manifest

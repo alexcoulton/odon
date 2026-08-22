@@ -1,7 +1,8 @@
+use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use zarrs::storage::ReadableStorageTraits;
 
 use super::dataset_kind::{
@@ -51,6 +52,12 @@ impl DocumentDescriptor {
             render_kind: dataset.render_kind,
         }
     }
+
+    pub fn from_alternate(dataset: &OmeZarrDataset, kind: DocumentKind) -> Self {
+        let mut descriptor = Self::from_ome_zarr(dataset);
+        descriptor.kind = kind;
+        descriptor
+    }
 }
 
 /// A model descriptor paired with a source-specific, Send-compatible resource handle.
@@ -70,6 +77,216 @@ pub struct OmeZarrDocumentResource {
     /// Keeps source-specific asynchronous infrastructure alive for synchronous storage adapters.
     /// Local and HTTP stores do not need one; S3 stores retain their Tokio runtime here.
     pub runtime_guard: Option<Arc<tokio::runtime::Runtime>>,
+}
+
+/// A source-specific document prepared by a native adapter without constructing an egui/GPU
+/// renderer. The actor owns the common dataset/store metadata while the immutable native payload
+/// is downcast only by the corresponding renderer adapter when a presentation frame is available.
+#[derive(Clone)]
+pub struct AlternateDocumentResource {
+    pub dataset: OmeZarrDataset,
+    pub store: Arc<dyn ReadableStorageTraits>,
+    payload: Arc<dyn Any + Send + Sync>,
+}
+
+impl AlternateDocumentResource {
+    pub fn new<T>(
+        dataset: OmeZarrDataset,
+        store: Arc<dyn ReadableStorageTraits>,
+        payload: Arc<T>,
+    ) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        Self {
+            dataset,
+            store,
+            payload,
+        }
+    }
+
+    pub fn payload<T>(&self) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        Arc::clone(&self.payload).downcast::<T>().ok()
+    }
+}
+
+/// Source-neutral resource installed in render projections.
+#[derive(Clone)]
+pub enum DocumentResource {
+    OmeZarr(OmeZarrDocumentResource),
+    Alternate(AlternateDocumentResource),
+}
+
+impl DocumentResource {
+    pub fn dataset(&self) -> &OmeZarrDataset {
+        match self {
+            Self::OmeZarr(resource) => &resource.dataset,
+            Self::Alternate(resource) => &resource.dataset,
+        }
+    }
+
+    pub fn store(&self) -> &Arc<dyn ReadableStorageTraits> {
+        match self {
+            Self::OmeZarr(resource) => &resource.store,
+            Self::Alternate(resource) => &resource.store,
+        }
+    }
+
+    pub fn runtime_guard(&self) -> Option<Arc<tokio::runtime::Runtime>> {
+        match self {
+            Self::OmeZarr(resource) => resource.runtime_guard.clone(),
+            Self::Alternate(_) => None,
+        }
+    }
+}
+
+pub type ControlOpenedDocument = OpenedDocument<DocumentResource>;
+
+impl OpenedDocument<OmeZarrDocumentResource> {
+    pub fn into_control(self) -> ControlOpenedDocument {
+        OpenedDocument {
+            descriptor: self.descriptor,
+            resource: DocumentResource::OmeZarr(self.resource),
+        }
+    }
+}
+
+impl OpenedDocument<AlternateDocumentResource> {
+    pub fn into_control(self) -> ControlOpenedDocument {
+        OpenedDocument {
+            descriptor: self.descriptor,
+            resource: DocumentResource::Alternate(self.resource),
+        }
+    }
+}
+
+/// Native source adapters are injected into the library actor so the actor remains independent of
+/// TIFF/SpatialData/Xenium renderer modules while still owning their asynchronous transactions.
+pub trait AlternateDatasetBackend: Send + Sync {
+    fn open_tiff(
+        &self,
+        path: &Path,
+        z: usize,
+        t: usize,
+    ) -> anyhow::Result<OpenedDocument<AlternateDocumentResource>>;
+
+    fn open_spatialdata(
+        &self,
+        _path: &Path,
+        _options: &SpatialDataOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        SpatialDataOpenIdentity,
+    )> {
+        anyhow::bail!("native SpatialData dataset adapter is unavailable")
+    }
+
+    fn open_xenium(
+        &self,
+        _path: &Path,
+        _options: &XeniumOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        XeniumOpenIdentity,
+    )> {
+        anyhow::bail!("native Xenium dataset adapter is unavailable")
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpatialDataOpenOptions {
+    pub image: String,
+    #[serde(default)]
+    pub extra_images: Vec<String>,
+    pub labels: Option<String>,
+    #[serde(default)]
+    pub shapes: Vec<String>,
+    pub points: Option<String>,
+    #[serde(default = "default_spatial_points_max")]
+    pub points_max: usize,
+}
+
+fn default_spatial_points_max() -> usize {
+    200_000
+}
+
+#[derive(Debug, Clone)]
+pub struct SpatialDataOpenIdentity {
+    pub root: PathBuf,
+    pub image: String,
+    pub extra_images: Vec<String>,
+    pub labels: Option<String>,
+    pub shapes: Vec<String>,
+    pub points: Option<String>,
+    pub points_max: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XeniumOpenOptions {
+    #[serde(default = "default_xenium_imagery")]
+    pub imagery: String,
+    #[serde(default = "default_true")]
+    pub load_cells: bool,
+    #[serde(default = "default_true")]
+    pub load_transcripts: bool,
+}
+
+fn default_xenium_imagery() -> String {
+    "auto".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone)]
+pub struct XeniumOpenIdentity {
+    pub root: PathBuf,
+    pub imagery: String,
+    pub imagery_path: PathBuf,
+    pub cells_loaded: bool,
+    pub transcripts_loaded: bool,
+    pub pixel_size_um: f32,
+}
+
+pub struct UnavailableAlternateDatasetBackend;
+
+impl AlternateDatasetBackend for UnavailableAlternateDatasetBackend {
+    fn open_tiff(
+        &self,
+        _path: &Path,
+        _z: usize,
+        _t: usize,
+    ) -> anyhow::Result<OpenedDocument<AlternateDocumentResource>> {
+        anyhow::bail!("native TIFF dataset adapter is unavailable")
+    }
+
+    fn open_spatialdata(
+        &self,
+        _path: &Path,
+        _options: &SpatialDataOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        SpatialDataOpenIdentity,
+    )> {
+        anyhow::bail!("native SpatialData dataset adapter is unavailable")
+    }
+
+    fn open_xenium(
+        &self,
+        _path: &Path,
+        _options: &XeniumOpenOptions,
+    ) -> anyhow::Result<(
+        OpenedDocument<AlternateDocumentResource>,
+        XeniumOpenIdentity,
+    )> {
+        anyhow::bail!("native Xenium dataset adapter is unavailable")
+    }
 }
 
 pub fn open_local_ome_zarr(path: &Path) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>> {

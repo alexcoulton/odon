@@ -116,10 +116,36 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
 fn spawn_test_actor_with_remote(backend: Arc<dyn RemoteDatasetBackend>) -> ControlActorChannels {
     let events = EventHub::shared();
     let resources = ResourceRegistry::shared(events);
-    spawn_control_actor_with_services(Arc::new(|| {}), resources, None, None, None, Some(backend))
-        .unwrap()
+    spawn_control_actor_with_services(
+        Arc::new(|| {}),
+        resources,
+        None,
+        None,
+        None,
+        Some(backend),
+        None,
+    )
+    .unwrap()
 }
 
+fn spawn_test_actor_with_alternate(
+    backend: Arc<dyn AlternateDatasetBackend>,
+) -> ControlActorChannels {
+    let events = EventHub::shared();
+    let resources = ResourceRegistry::shared(events);
+    spawn_control_actor_with_services(
+        Arc::new(|| {}),
+        resources,
+        None,
+        None,
+        None,
+        None,
+        Some(backend),
+    )
+    .unwrap()
+}
+
+mod alternate_datasets;
 mod backpressure;
 mod dataset_inspection;
 mod deep_link_resolution;

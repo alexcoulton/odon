@@ -28,7 +28,7 @@ use crate::objects::{ObjectPreloadMode, ObjectPreloadSettings, PreloadedObjectLa
 use crate::project::{
     ProjectObjectCacheUiState, ProjectSpace, ProjectSpaceAction, ProjectViewSpec,
 };
-use crate::spatialdata::{SpatialDataDiscovery, SpatialDataElement, discover_spatialdata};
+use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use crate::xenium::{TiffPlaneSelection, TiffPyramid, discover_xenium_explorer};
 use crate::{log_debug, log_info, log_warn};
@@ -758,10 +758,13 @@ impl RootApp {
             Arc::new(crate::objects::NativeObjectControlService);
         let dataset_inspector: Arc<dyn odon::data::document::DatasetInspector> =
             Arc::new(crate::app_support::datasets::NativeDatasetInspector);
+        let alternate_backend: Arc<dyn odon::data::document::AlternateDatasetBackend> =
+            Arc::new(crate::app_support::datasets::NativeAlternateDatasetBackend);
         match OdonControlBridge::spawn_default_with_services(
             ctx.clone(),
             object_loader,
             dataset_inspector,
+            alternate_backend,
         ) {
             Ok(bridge) => Some(bridge),
             Err(err) => {
@@ -1014,14 +1017,108 @@ impl RootApp {
             if let Some(path) = document.path() {
                 project_space.handle_dropped_paths([path.to_path_buf()]);
             }
-            let mut app = OmeZarrViewerApp::new_runtime(
-                ctx,
-                self.gpu_available,
-                document.dataset().clone(),
-                Arc::clone(document.store()),
-                self.app_settings.auto_contrast,
-            );
-            app.set_remote_runtime(document.opened.resource.runtime_guard.clone());
+            let app = match &document.opened.resource {
+                odon::data::document::DocumentResource::OmeZarr(_) => {
+                    Ok(OmeZarrViewerApp::new_runtime(
+                        ctx,
+                        self.gpu_available,
+                        document.dataset().clone(),
+                        Arc::clone(document.store()),
+                        self.app_settings.auto_contrast,
+                    ))
+                }
+                odon::data::document::DocumentResource::Alternate(resource)
+                    if document.opened.descriptor.kind
+                        == odon::data::document::DocumentKind::Tiff =>
+                {
+                    OmeZarrViewerApp::new_tiff_runtime_from_resource(
+                        ctx,
+                        self.gpu_available,
+                        resource,
+                        self.app_settings.auto_contrast,
+                    )
+                }
+                odon::data::document::DocumentResource::Alternate(resource)
+                    if document.opened.descriptor.kind
+                        == odon::data::document::DocumentKind::SpatialData =>
+                {
+                    let payload = resource
+                        .payload::<crate::app_support::datasets::PreparedSpatialDataDocument>()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("SpatialData document has an incompatible resource")
+                        });
+                    payload.map(|payload| {
+                        let mut app = OmeZarrViewerApp::new_runtime(
+                            ctx,
+                            self.gpu_available,
+                            resource.dataset.clone(),
+                            Arc::clone(&resource.store),
+                            self.app_settings.auto_contrast,
+                        );
+                        app.attach_prepared_spatialdata_layers(
+                            payload.root.clone(),
+                            payload.image_transform,
+                            payload.extra_images.clone(),
+                            payload.labels.clone(),
+                            payload.tables.clone(),
+                            payload.shapes.clone(),
+                            payload.points.clone(),
+                        );
+                        app
+                    })
+                }
+                odon::data::document::DocumentResource::Alternate(resource)
+                    if document.opened.descriptor.kind
+                        == odon::data::document::DocumentKind::Xenium =>
+                {
+                    let payload = resource
+                        .payload::<crate::app_support::datasets::PreparedXeniumDocument>()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Xenium document has an incompatible resource")
+                        });
+                    payload.and_then(|payload| {
+                        let mut app = match &payload.imagery {
+                            crate::app_support::datasets::PreparedXeniumImagery::OmeZarr => {
+                                OmeZarrViewerApp::new_runtime(
+                                    ctx,
+                                    self.gpu_available,
+                                    resource.dataset.clone(),
+                                    Arc::clone(&resource.store),
+                                    self.app_settings.auto_contrast,
+                                )
+                            }
+                            crate::app_support::datasets::PreparedXeniumImagery::Tiff(pyramid) => {
+                                OmeZarrViewerApp::new_tiff_runtime_from_prepared_resource(
+                                    ctx,
+                                    self.gpu_available,
+                                    resource,
+                                    Arc::clone(pyramid),
+                                    self.app_settings.auto_contrast,
+                                )?
+                            }
+                        };
+                        app.attach_prepared_xenium_layers(
+                            payload.root.clone(),
+                            payload.cells.clone(),
+                            payload.transcripts.clone(),
+                            payload.pixel_size_um,
+                        );
+                        Ok(app)
+                    })
+                }
+                odon::data::document::DocumentResource::Alternate(_) => Err(anyhow::anyhow!(
+                    "no renderer adapter for {:?}",
+                    document.opened.descriptor.kind
+                )),
+            };
+            let mut app = match app {
+                Ok(app) => app,
+                Err(error) => {
+                    log_warn!("could not realize actor document renderer: {error}");
+                    return false;
+                }
+            };
+            app.set_remote_runtime(document.opened.resource.runtime_guard());
             self.configure_single_app(&mut app);
             app.set_project_space(project_space);
             self.mode = Mode::Single(app);
@@ -1430,14 +1527,11 @@ impl RootApp {
             "project.open" => self.control_open_project(params),
             "datasets.open_ome_zarr" => self.control_open_ome_zarr(params),
             "datasets.inspect" => self.control_inspect_dataset(params),
-            "datasets.open_spatialdata" => self.control_open_spatialdata(ctx, params),
-            "datasets.open_xenium" => self.control_open_xenium(ctx, params),
             "deep_links.parse" => self.control_parse_deep_link(params),
             "deep_links.resolve" => self.control_resolve_deep_link(params),
             "deep_links.filters.get" => self.control_get_deep_link_filters(params),
             "deep_links.generate" => self.control_generate_deep_link(params),
             "deep_links.apply" => self.control_apply_deep_link(params),
-            "datasets.open_tiff" => self.control_open_tiff(ctx, params),
             "datasets.open_mosaic_samplesheet" => self.control_open_mosaic_samplesheet(ctx, params),
             "project.rois.open" => self.control_open_roi(params),
             "project.save" => self.control_save_project(),
@@ -5298,61 +5392,6 @@ impl RootApp {
         )
     }
 
-    fn control_open_tiff(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
-            return serde_json::json!({"error": "path is required"});
-        };
-        let path = expand_control_path(raw_path);
-        let Some(path) = normalize_local_dataset_path(&path) else {
-            return serde_json::json!({"error": "path is not a local TIFF / OME-TIFF file"});
-        };
-        if classify_local_dataset_path(&path) != Some(LocalDatasetKind::Tiff) {
-            return serde_json::json!({"error": "path is not a TIFF / OME-TIFF dataset"});
-        }
-        let z = params
-            .get("z")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
-        let t = params
-            .get("t")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
-        let mut app = match OmeZarrViewerApp::new_tiff_runtime_with_plane(
-            ctx,
-            self.gpu_available,
-            path.clone(),
-            z,
-            t,
-            self.app_settings.auto_contrast,
-        ) {
-            Ok(app) => app,
-            Err(error) => {
-                return serde_json::json!({
-                    "error": format!("failed to open TIFF plane Z={z}, T={t}: {error}"),
-                    "path": path.to_string_lossy(),
-                });
-            }
-        };
-        let project_space = match self.take_current_project_space() {
-            Ok(project_space) => project_space,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        self.configure_single_app(&mut app);
-        app.set_project_space(project_space);
-        self.mode = Mode::Single(app);
-        serde_json::json!({
-            "opened": true,
-            "mode": "single",
-            "kind": "tiff",
-            "path": path.to_string_lossy(),
-            "plane": {"z": z, "t": t},
-        })
-    }
-
     fn control_inspect_dataset(&self, params: &serde_json::Value) -> serde_json::Value {
         let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
             return serde_json::json!({"error": "path is required"});
@@ -5521,257 +5560,6 @@ impl RootApp {
                 "can_open": false,
                 "error": "path is not a supported OME-Zarr, TIFF, SpatialData, or Xenium source",
             }),
-        }
-    }
-
-    fn spatial_element(
-        elements: &[SpatialDataElement],
-        name: &str,
-        kind: &str,
-    ) -> Result<SpatialDataElement, String> {
-        elements
-            .iter()
-            .find(|element| element.name == name)
-            .cloned()
-            .ok_or_else(|| format!("SpatialData {kind} element '{name}' was not found"))
-    }
-
-    fn control_open_spatialdata(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
-            return serde_json::json!({"error": "path is required"});
-        };
-        let Some(image_name) = params.get("image").and_then(serde_json::Value::as_str) else {
-            return serde_json::json!({"error": "image is required"});
-        };
-        let root = expand_control_path(raw_path);
-        let discovery = match discover_spatialdata(&root) {
-            Ok(discovery) => discovery,
-            Err(error) => {
-                return serde_json::json!({
-                    "error": format!("failed to discover SpatialData elements: {error}"),
-                    "path": root.to_string_lossy(),
-                });
-            }
-        };
-        let image = match Self::spatial_element(&discovery.images, image_name, "image") {
-            Ok(element) => element,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let resolve_many = |key: &str,
-                            elements: &[SpatialDataElement],
-                            kind: &str|
-         -> Result<Vec<SpatialDataElement>, String> {
-            params
-                .get(key)
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(|name| Self::spatial_element(elements, name, kind))
-                .collect()
-        };
-        let extra_images = match resolve_many("extra_images", &discovery.images, "image") {
-            Ok(elements) => elements
-                .into_iter()
-                .filter(|element| element.name != image.name)
-                .collect::<Vec<_>>(),
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let shapes = match resolve_many("shapes", &discovery.shapes, "shape") {
-            Ok(elements) => elements,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let labels = match params.get("labels").and_then(serde_json::Value::as_str) {
-            Some(name) => match Self::spatial_element(&discovery.labels, name, "label") {
-                Ok(element) => Some(element),
-                Err(error) => return serde_json::json!({"error": error}),
-            },
-            None => None,
-        };
-        let points = match params.get("points").and_then(serde_json::Value::as_str) {
-            Some(name) => match Self::spatial_element(&discovery.points, name, "points") {
-                Ok(element) => Some(element),
-                Err(error) => return serde_json::json!({"error": error}),
-            },
-            None => None,
-        };
-        let points_max = params
-            .get("points_max")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(200_000) as usize;
-        let project_space = match self.take_current_project_space() {
-            Ok(project_space) => project_space,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let image_root = discovery.root.join(&image.rel_group);
-        match OmeZarrDataset::open_local(&image_root) {
-            Ok((dataset, store)) => {
-                let mut app = OmeZarrViewerApp::new_runtime(
-                    ctx,
-                    self.gpu_available,
-                    dataset,
-                    store,
-                    self.app_settings.auto_contrast,
-                );
-                self.configure_single_app(&mut app);
-                app.set_project_space(project_space);
-                app.attach_spatialdata_layers(
-                    discovery.root.clone(),
-                    image.transform,
-                    extra_images.clone(),
-                    labels.clone(),
-                    discovery.tables.clone(),
-                    shapes.clone(),
-                    points.clone().map(|element| (element, points_max)),
-                );
-                if let Some(viewport) = ctx.input(|input| input.viewport().inner_rect) {
-                    app.fit_to_viewport(viewport);
-                }
-                self.mode = Mode::Single(app);
-                serde_json::json!({
-                    "opened": true,
-                    "mode": "single",
-                    "kind": "spatialdata",
-                    "path": discovery.root.to_string_lossy(),
-                    "image": image.name,
-                    "extra_images": extra_images.iter().map(|element| &element.name).collect::<Vec<_>>(),
-                    "labels": labels.as_ref().map(|element| &element.name),
-                    "shapes": shapes.iter().map(|element| &element.name).collect::<Vec<_>>(),
-                    "points": points.as_ref().map(|element| &element.name),
-                    "points_max": points_max,
-                })
-            }
-            Err(error) => {
-                self.mode = Mode::Project { project_space };
-                serde_json::json!({
-                    "error": format!("failed to open SpatialData image '{}': {error}", image.name),
-                    "path": image_root.to_string_lossy(),
-                })
-            }
-        }
-    }
-
-    fn control_open_xenium(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
-            return serde_json::json!({"error": "path is required"});
-        };
-        let path = expand_control_path(raw_path);
-        let discovery = match discover_xenium_explorer(&path) {
-            Ok(discovery) => discovery,
-            Err(error) => {
-                return serde_json::json!({
-                    "error": format!("failed to discover Xenium experiment: {error}"),
-                    "path": path.to_string_lossy(),
-                });
-            }
-        };
-        let imagery = params
-            .get("imagery")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("auto");
-        let selected = match imagery {
-            "ome_zarr" => discovery
-                .morphology_mip_omezarr
-                .clone()
-                .map(|path| ("ome_zarr", path)),
-            "tiff" => discovery
-                .morphology_mip_tiff
-                .clone()
-                .map(|path| ("tiff", path)),
-            _ => discovery
-                .morphology_mip_omezarr
-                .clone()
-                .map(|path| ("ome_zarr", path))
-                .or_else(|| {
-                    discovery
-                        .morphology_mip_tiff
-                        .clone()
-                        .map(|path| ("tiff", path))
-                }),
-        };
-        let Some((imagery_kind, imagery_path)) = selected else {
-            return serde_json::json!({
-                "error": format!("requested Xenium {imagery} imagery is unavailable"),
-                "path": discovery.root.to_string_lossy(),
-            });
-        };
-        let cells = params
-            .get("load_cells")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true)
-            .then(|| discovery.cells_zarr_zip.clone())
-            .flatten();
-        let transcripts = params
-            .get("load_transcripts")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true)
-            .then(|| discovery.transcripts_zarr_zip.clone())
-            .flatten();
-        let project_space = match self.take_current_project_space() {
-            Ok(project_space) => project_space,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let app_result = if imagery_kind == "ome_zarr" {
-            OmeZarrDataset::open_local(&imagery_path).map(|(dataset, store)| {
-                let mut app = OmeZarrViewerApp::new_runtime(
-                    ctx,
-                    self.gpu_available,
-                    dataset,
-                    store,
-                    self.app_settings.auto_contrast,
-                );
-                app.attach_xenium_layers(
-                    discovery.root.clone(),
-                    cells.clone(),
-                    transcripts.clone(),
-                    discovery.pixel_size_um,
-                );
-                app
-            })
-        } else {
-            OmeZarrViewerApp::new_xenium_runtime(
-                ctx,
-                self.gpu_available,
-                discovery.root.clone(),
-                imagery_path.clone(),
-                cells.clone(),
-                transcripts.clone(),
-                discovery.pixel_size_um,
-                self.app_settings.auto_contrast,
-            )
-        };
-        match app_result {
-            Ok(mut app) => {
-                self.configure_single_app(&mut app);
-                app.set_project_space(project_space);
-                self.mode = Mode::Single(app);
-                serde_json::json!({
-                    "opened": true,
-                    "mode": "single",
-                    "kind": "xenium",
-                    "path": discovery.root.to_string_lossy(),
-                    "imagery": imagery_kind,
-                    "imagery_path": imagery_path.to_string_lossy(),
-                    "cells_loaded": cells.is_some(),
-                    "transcripts_loaded": transcripts.is_some(),
-                    "pixel_size_um": discovery.pixel_size_um,
-                })
-            }
-            Err(error) => {
-                self.mode = Mode::Project { project_space };
-                serde_json::json!({
-                    "error": format!("failed to open Xenium {imagery_kind} imagery: {error}"),
-                    "path": imagery_path.to_string_lossy(),
-                })
-            }
         }
     }
 
@@ -7982,6 +7770,24 @@ impl RootApp {
             return;
         };
 
+        if let Some(bridge) = self.control_bridge.as_ref() {
+            let params = serde_json::json!({
+                "path":root,
+                "image":img.name,
+                "extra_images":[],
+                "labels":labels.as_ref().map(|element| element.name.clone()),
+                "shapes":shapes.iter().map(|element| element.name.clone()).collect::<Vec<_>>(),
+                "points":points.as_ref().map(|element| element.name.clone()),
+                "points_max":points_max,
+            });
+            if bridge.submit_native_command(ctx, "datasets.open_spatialdata", params) {
+                self.spatial_open = None;
+            } else if let Some(dlg) = self.spatial_open.as_mut() {
+                dlg.status = "Odon's control actor is busy; retry Open.".to_string();
+            }
+            return;
+        }
+
         // Take the project space from the current mode (the dialog always runs in Project mode).
         let project_space = match std::mem::replace(&mut self.mode, Mode::Transition) {
             Mode::Project { project_space } => project_space,
@@ -8208,25 +8014,17 @@ impl eframe::App for RootApp {
                             if let Some(root) =
                                 FileDialog::new().set_title("Open OME-Zarr").pick_folder()
                             {
-                                let ps = match &mut self.mode {
-                                    Mode::Project { project_space } => {
-                                        let mut ps = std::mem::take(project_space);
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Single(app) => {
-                                        let mut ps = app.take_project_space();
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        let mut ps = mosaic.take_project_space();
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Transition => ProjectSpace::default(),
-                                };
-                                open_single = Some((root, ps));
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "datasets.open_ome_zarr",
+                                        params: serde_json::json!({"path":root}),
+                                    });
+                                } else {
+                                    let ps = self
+                                        .take_current_project_space()
+                                        .unwrap_or_else(|_| ProjectSpace::default());
+                                    open_single = Some((root, ps));
+                                }
                             }
                         }
                         NativeMenuAction::OpenTiff => {
@@ -8235,25 +8033,17 @@ impl eframe::App for RootApp {
                                 .set_title("Open TIFF / OME-TIFF")
                                 .pick_file()
                             {
-                                let ps = match &mut self.mode {
-                                    Mode::Project { project_space } => {
-                                        let mut ps = std::mem::take(project_space);
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Single(app) => {
-                                        let mut ps = app.take_project_space();
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        let mut ps = mosaic.take_project_space();
-                                        ps.handle_dropped_paths([root.clone()]);
-                                        ps
-                                    }
-                                    Mode::Transition => ProjectSpace::default(),
-                                };
-                                open_single = Some((root, ps));
+                                if self.control_bridge.is_some() {
+                                    native_menu_control_intents.push(NativeControlIntent {
+                                        method: "datasets.open_tiff",
+                                        params: serde_json::json!({"path":root}),
+                                    });
+                                } else {
+                                    let ps = self
+                                        .take_current_project_space()
+                                        .unwrap_or_else(|_| ProjectSpace::default());
+                                    open_single = Some((root, ps));
+                                }
                             }
                         }
                         NativeMenuAction::OpenProject => {

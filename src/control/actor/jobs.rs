@@ -28,6 +28,30 @@ pub(super) enum LoadCompletion {
             Option<ControlLabelResource>,
         )>,
     },
+    Tiff {
+        generation: u64,
+        request: OdonControlRequest,
+        path: PathBuf,
+        z: usize,
+        t: usize,
+        result: anyhow::Result<OpenedDocument<AlternateDocumentResource>>,
+    },
+    SpatialData {
+        generation: u64,
+        request: OdonControlRequest,
+        result: anyhow::Result<(
+            OpenedDocument<AlternateDocumentResource>,
+            crate::data::document::SpatialDataOpenIdentity,
+        )>,
+    },
+    Xenium {
+        generation: u64,
+        request: OdonControlRequest,
+        result: anyhow::Result<(
+            OpenedDocument<AlternateDocumentResource>,
+            crate::data::document::XeniumOpenIdentity,
+        )>,
+    },
     RemoteList {
         session_generation: u64,
         operation_generation: u64,
@@ -172,6 +196,9 @@ impl LoadCompletion {
             Self::DatasetInspect { .. }
             | Self::DeepLinkResolve { .. }
             | Self::OmeZarr { .. }
+            | Self::Tiff { .. }
+            | Self::SpatialData { .. }
+            | Self::Xenium { .. }
             | Self::RemoteList { .. }
             | Self::RemoteOpen { .. }
             | Self::ChannelIntensity { .. } => CompletionDomain::Opening,
@@ -210,6 +237,25 @@ pub(super) enum LoadJob {
         generation: u64,
         request: OdonControlRequest,
         path: PathBuf,
+    },
+    Tiff {
+        generation: u64,
+        request: OdonControlRequest,
+        path: PathBuf,
+        z: usize,
+        t: usize,
+    },
+    SpatialData {
+        generation: u64,
+        request: OdonControlRequest,
+        path: PathBuf,
+        options: crate::data::document::SpatialDataOpenOptions,
+    },
+    Xenium {
+        generation: u64,
+        request: OdonControlRequest,
+        path: PathBuf,
+        options: crate::data::document::XeniumOpenOptions,
     },
     RemoteList {
         session_generation: u64,

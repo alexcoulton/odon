@@ -7,7 +7,7 @@ mod parquet_shapes;
 pub use discover::{
     SpatialDataDiscovery, SpatialDataElement, SpatialDataTransform2, discover_spatialdata,
 };
-pub use image_layers::{SpatialImageLayer, SpatialImageLayers};
+pub use image_layers::{PreparedSpatialImage, SpatialImageLayer, SpatialImageLayers};
 pub use layers::{PositiveCellSelectionTarget, SpatialDataLayers, SpatialShapesLayer};
 pub use parquet_points::{PointsLoadOptions, PointsMeta, PointsPayload, load_points_sample};
 pub use parquet_shapes::{

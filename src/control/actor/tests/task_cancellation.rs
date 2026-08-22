@@ -32,6 +32,7 @@ fn actor_owned_task_cancellation_remains_responsive_during_worker_io() {
         })),
         None,
         None,
+        None,
     )
     .unwrap();
     let task = channels
