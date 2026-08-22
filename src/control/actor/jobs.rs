@@ -228,6 +228,11 @@ pub(super) enum LoadCompletion {
         spec: MeasurementSpec,
         result: anyhow::Result<(ControlObjectResource, usize)>,
     },
+    ObjectExport {
+        request: OdonControlRequest,
+        spec: ObjectExportSpec,
+        result: anyhow::Result<ObjectExportResult>,
+    },
     SamplesheetInspect {
         request: OdonControlRequest,
         result: Value,
@@ -361,7 +366,8 @@ impl LoadCompletion {
             Self::AnalysisCompute { .. }
             | Self::AnalysisPresetImport { .. }
             | Self::AnalysisPresetExport { .. }
-            | Self::Measurement { .. } => CompletionDomain::Objects,
+            | Self::Measurement { .. }
+            | Self::ObjectExport { .. } => CompletionDomain::Objects,
             Self::ObjectFilter { .. } | Self::ObjectSelectionFilter { .. } => {
                 CompletionDomain::Objects
             }
@@ -511,6 +517,10 @@ pub(super) enum LoadJob {
         request: OdonControlRequest,
         document: Arc<RenderDocument>,
         spec: MeasurementSpec,
+    },
+    ObjectExport {
+        request: OdonControlRequest,
+        spec: ObjectExportSpec,
     },
     SamplesheetInspect {
         request: OdonControlRequest,

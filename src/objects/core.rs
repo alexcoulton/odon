@@ -35,6 +35,12 @@ struct PreparedObjectFilterClause<'a> {
     column_matcher: Option<ObjectPropertyContainsMatcher>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NativeObjectExportIntent {
+    pub(crate) method: &'static str,
+    pub(crate) params: serde_json::Value,
+}
+
 impl ObjectsLayer {
     fn cancel_current_load(&mut self) {
         if let Some(cancel) = self.object_load_cancel.take() {
@@ -4397,10 +4403,15 @@ impl ObjectsLayer {
         Ok(())
     }
 
-    pub fn ui_export_dialog(&mut self, ctx: &egui::Context) {
+    pub fn ui_export_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        actor_managed: bool,
+    ) -> Option<NativeObjectExportIntent> {
         let Some(mut dialog) = self.object_export_dialog.clone() else {
-            return;
+            return None;
         };
+        let mut actor_intent = None;
 
         let mut keep_open = true;
         let mut close_requested = false;
@@ -4495,12 +4506,29 @@ impl ObjectsLayer {
             };
             let path = file_dialog.set_file_name(&default_name).save_file();
             if let Some(path) = path {
-                match self.start_object_export(dialog.format, path.clone(), selected_columns) {
-                    Ok(()) => {
-                        close_requested = true;
-                    }
-                    Err(err) => {
-                        self.status = format!("Export failed: {err}");
+                if actor_managed {
+                    let method = match dialog.format {
+                        ObjectExportFormat::GeoParquet => "exports.objects.export_geoparquet",
+                        ObjectExportFormat::Csv => "exports.objects.export_csv",
+                    };
+                    actor_intent = Some(NativeObjectExportIntent {
+                        method,
+                        params: serde_json::json!({
+                            "path":path,
+                            "scope":"all",
+                            "columns":selected_columns.into_iter().collect::<Vec<_>>(),
+                        }),
+                    });
+                    self.status = format!("Exporting objects to {}...", path.to_string_lossy());
+                    close_requested = true;
+                } else {
+                    match self.start_object_export(dialog.format, path.clone(), selected_columns) {
+                        Ok(()) => {
+                            close_requested = true;
+                        }
+                        Err(err) => {
+                            self.status = format!("Export failed: {err}");
+                        }
                     }
                 }
             }
@@ -4510,6 +4538,17 @@ impl ObjectsLayer {
             self.object_export_dialog = None;
         } else {
             self.object_export_dialog = Some(dialog);
+        }
+        actor_intent
+    }
+
+    pub(crate) fn apply_control_actor_export_state(&mut self, state: &serde_json::Value) {
+        self.actor_object_export_running = state
+            .get("running")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Some(status) = state.get("status").and_then(serde_json::Value::as_str) {
+            self.status = status.to_string();
         }
     }
 
@@ -4584,7 +4623,7 @@ impl ObjectsLayer {
     }
 
     pub fn is_exporting(&self) -> bool {
-        self.object_export_rx.is_some()
+        self.object_export_rx.is_some() || self.actor_object_export_running
     }
 
     pub fn control_export_state_json(&self) -> serde_json::Value {

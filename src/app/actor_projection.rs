@@ -1,6 +1,32 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn apply_control_actor_object_export_state(
+        &mut self,
+        generation: u64,
+        state: &serde_json::Value,
+    ) {
+        if generation <= self.control_actor_object_export_generation {
+            return;
+        }
+        self.seg_objects.apply_control_actor_export_state(state);
+        self.control_actor_object_export_generation = generation;
+    }
+
+    pub fn apply_control_actor_measurement_state(
+        &mut self,
+        generation: u64,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        if generation <= self.control_actor_measurement_generation {
+            return Ok(());
+        }
+        self.seg_objects
+            .apply_control_actor_measurement_state(state)?;
+        self.control_actor_measurement_generation = generation;
+        Ok(())
+    }
+
     pub fn apply_control_actor_analysis_state(
         &mut self,
         generation: u64,

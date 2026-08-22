@@ -289,6 +289,25 @@ pub(super) fn dispatch_request(
         }
         return;
     }
+    if matches!(
+        request.command.method(),
+        "exports.objects.start"
+            | "exports.objects.export_csv"
+            | "exports.objects.export_geoparquet"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_object_export(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
     if request.command.method() == "project.open" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_project_open(model, request, load_job_tx, diagnostics);

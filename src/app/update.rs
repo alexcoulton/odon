@@ -368,25 +368,42 @@ impl eframe::App for OmeZarrViewerApp {
                         );
                         ui.separator();
                         if self.seg_objects.object_count() > 0 {
-                            self.seg_objects.ui_measurements(
+                            let actions = self.seg_objects.ui_measurements(
                                 ui,
                                 &self.dataset,
                                 self.store.clone(),
                                 &self.channels,
                                 self.seg_objects_offset_world,
+                                self.control_actor_measurement_generation > 0,
                             );
+                            for action in actions {
+                                let (method, params) = match action {
+                                    crate::objects::MeasurementUiAction::Configure(params) => {
+                                        ("viewer.measurements.configure", params)
+                                    }
+                                    crate::objects::MeasurementUiAction::Start(params) => {
+                                        ("viewer.measurements.start", params)
+                                    }
+                                    crate::objects::MeasurementUiAction::Cancel => {
+                                        ("viewer.measurements.cancel", serde_json::json!({}))
+                                    }
+                                };
+                                self.native_control_intents
+                                    .push(NativeControlIntent { method, params });
+                            }
                         } else if let LayerId::SpatialShape(id) = self.active_layer {
                             if let Some(layer) =
                                 self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
                             {
                                 let offset_world = layer.offset_world;
                                 if let Some(objects) = layer.object_layer_mut() {
-                                    objects.ui_measurements(
+                                    let _ = objects.ui_measurements(
                                         ui,
                                         &self.dataset,
                                         self.store.clone(),
                                         &self.channels,
                                         offset_world,
+                                        false,
                                     );
                                 } else {
                                     ui.heading("Measurements");

@@ -2031,6 +2031,8 @@ pub struct OmeZarrViewerApp {
     control_actor_mask_generation: u64,
     control_actor_threshold_generation: u64,
     control_actor_analysis_generation: u64,
+    control_actor_measurement_generation: u64,
+    control_actor_object_export_generation: u64,
     control_actor_mask_undo_available: bool,
     control_actor_tile_policy_generation: u64,
     native_mask_actor_intent_emitted: bool,

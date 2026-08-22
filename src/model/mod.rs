@@ -7,6 +7,7 @@ mod layers;
 mod masks;
 mod measurement;
 mod memory;
+mod object_export;
 mod objects;
 mod project;
 mod project_preload;
@@ -32,6 +33,10 @@ pub use memory::{
     ControlPinnedLevelResource, TileLoadingPolicy, TilePrefetchAggressiveness, TilePrefetchMode,
 };
 pub(crate) use memory::{PinnedMemoryModel, SystemMemorySnapshot, TileLoadingModel};
+pub(crate) use object_export::{
+    ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
+    object_export_columns, write_object_export,
+};
 pub use objects::{
     ControlObjectFeature, ControlObjectFilterResult, ControlObjectResource, ObjectResourceLoader,
 };

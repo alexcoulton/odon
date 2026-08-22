@@ -272,6 +272,11 @@ pub fn is_parameter_routed_primary_object_method(method: &str) -> bool {
             | "viewer.measurements.start"
             | "viewer.measurements.cancel"
             | "viewer.measurements.properties.list"
+            | "exports.objects.columns"
+            | "exports.objects.get_state"
+            | "exports.objects.start"
+            | "exports.objects.export_csv"
+            | "exports.objects.export_geoparquet"
     )
 }
 

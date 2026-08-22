@@ -22,6 +22,7 @@ pub(crate) enum OperationKind {
     ThresholdPreview,
     Analysis,
     Measurement,
+    ObjectExport,
 }
 
 impl OperationKind {
@@ -45,6 +46,7 @@ impl OperationKind {
             Self::ThresholdPreview => "threshold_preview",
             Self::Analysis => "analysis",
             Self::Measurement => "measurement",
+            Self::ObjectExport => "object_export",
         }
     }
 }

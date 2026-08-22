@@ -38,6 +38,7 @@ mod analysis;
 mod core;
 mod filter_query;
 mod measurements;
+pub(crate) use measurements::MeasurementUiAction;
 mod render;
 
 use self::analysis::SimpleHistogram;
@@ -626,6 +627,7 @@ pub struct ObjectsLayer {
     bulk_measurement_concurrency: usize,
     bulk_measurement_filtered_only: bool,
     bulk_measurement_prefix: String,
+    actor_bulk_measurement_running: bool,
     analysis_plot_mode: AnalysisPlotMode,
     analysis_hist_channel: usize,
     analysis_scatter_x_channel: usize,
@@ -693,6 +695,7 @@ pub struct ObjectsLayer {
     object_load_dialog: Option<ObjectTableLoadDialog>,
     object_export_dialog: Option<ObjectExportDialog>,
     object_export_rx: Option<Receiver<ObjectExportEvent>>,
+    actor_object_export_running: bool,
     object_export_request_id: u64,
     pending_zoom_object_index: Option<usize>,
 
@@ -1806,6 +1809,7 @@ impl Default for ObjectsLayer {
                 .unwrap_or(4),
             bulk_measurement_filtered_only: false,
             bulk_measurement_prefix: "mean_intensity_".to_string(),
+            actor_bulk_measurement_running: false,
             analysis_plot_mode: AnalysisPlotMode::Histogram,
             analysis_hist_channel: 0,
             analysis_scatter_x_channel: 0,
@@ -1871,6 +1875,7 @@ impl Default for ObjectsLayer {
             object_load_dialog: None,
             object_export_dialog: None,
             object_export_rx: None,
+            actor_object_export_running: false,
             object_export_request_id: 0,
             pending_zoom_object_index: None,
             object_load_request_id: 0,

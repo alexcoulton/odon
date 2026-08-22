@@ -48,12 +48,13 @@ use crate::model::{
     ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
     ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
     LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
-    ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ScreenshotPreferences,
-    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
-    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
-    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
-    threshold_mask_polygons,
+    ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader,
+    ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
+    ProjectObjectPreloadSource, ScreenshotPreferences, SettingsMutationOutcome,
+    SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
+    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
+    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
+    write_object_export,
 };
 use crate::settings::AppSettings;
 
@@ -76,6 +77,7 @@ mod mask_io;
 mod masks;
 mod measurements;
 mod memory;
+mod object_exports;
 mod objects;
 mod project_io;
 mod project_preload;
@@ -121,6 +123,7 @@ use mask_io::export_mask_layers_geojson;
 use masks::{begin_mask_export, begin_mask_import};
 use measurements::begin_measurement;
 use memory::begin_memory_pin;
+use object_exports::begin_object_export;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
 use project_io::{
     discover_omezarr_roots_under, export_samplesheet_rois, import_samplesheet_rois,

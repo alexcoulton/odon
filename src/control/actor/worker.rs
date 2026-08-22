@@ -528,6 +528,20 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::ObjectExport { request, spec } => {
+                            let result =
+                                write_object_export(&spec, || worker_request_cancelled(&request));
+                            if completions
+                                .send(LoadCompletion::ObjectExport {
+                                    request,
+                                    spec,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::SamplesheetInspect {
                             request,
                             path,

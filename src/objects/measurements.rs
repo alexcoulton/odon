@@ -42,6 +42,13 @@ fn default_bulk_measurement_prefix(metric: BulkMeasurementMetric) -> &'static st
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum MeasurementUiAction {
+    Configure(serde_json::Value),
+    Start(serde_json::Value),
+    Cancel,
+}
+
 impl ObjectsLayer {
     pub fn ui_measurements(
         &mut self,
@@ -50,17 +57,19 @@ impl ObjectsLayer {
         store: Arc<dyn ReadableStorageTraits>,
         channels: &[ChannelInfo],
         local_to_world_offset: egui::Vec2,
-    ) {
+        actor_managed: bool,
+    ) -> Vec<MeasurementUiAction> {
+        let mut actions = Vec::new();
         ui.heading("Measurements");
         if !self.has_data() {
             ui.label("Measurements are available for loaded polygon object layers.");
-            return;
+            return actions;
         }
         if self.display_mode != ObjectDisplayMode::Polygons {
             ui.label(
                 "This first measurement implementation is available for polygon object layers only.",
             );
-            return;
+            return actions;
         }
 
         let Some(level_info) = dataset.levels.get(
@@ -68,8 +77,9 @@ impl ObjectsLayer {
                 .min(dataset.levels.len().saturating_sub(1)),
         ) else {
             ui.label("No image levels available.");
-            return;
+            return actions;
         };
+        let configuration_before = self.measurement_configuration_json();
         let level_w = level_info.shape.get(dataset.dims.x).copied().unwrap_or(0);
         let level_h = level_info.shape.get(dataset.dims.y).copied().unwrap_or(0);
         let raster_bytes = level_w.saturating_mul(level_h).saturating_mul(4);
@@ -159,7 +169,12 @@ impl ObjectsLayer {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
-                    !self.is_bulk_measuring() && !self.is_analyzing() && target_count > 0,
+                    !(if actor_managed {
+                        self.actor_bulk_measurement_running
+                    } else {
+                        self.is_bulk_measuring()
+                    }) && !self.is_analyzing()
+                        && target_count > 0,
                     egui::Button::new(format!(
                         "Measure {} intensities",
                         bulk_measurement_metric_label(self.bulk_measurement_metric)
@@ -167,25 +182,45 @@ impl ObjectsLayer {
                 )
                 .clicked()
             {
-                self.request_bulk_measurement(
-                    dataset,
-                    store.clone(),
-                    channels,
-                    local_to_world_offset,
-                );
+                if actor_managed {
+                    actions.push(MeasurementUiAction::Start(
+                        self.measurement_configuration_json(),
+                    ));
+                } else {
+                    self.request_bulk_measurement(
+                        dataset,
+                        store.clone(),
+                        channels,
+                        local_to_world_offset,
+                    );
+                }
             }
             if ui
-                .add_enabled(self.is_bulk_measuring(), egui::Button::new("Cancel"))
+                .add_enabled(
+                    if actor_managed {
+                        self.actor_bulk_measurement_running
+                    } else {
+                        self.is_bulk_measuring()
+                    },
+                    egui::Button::new("Cancel"),
+                )
                 .clicked()
             {
-                if let Some(cancel) = self.bulk_measurement_cancel.as_ref() {
+                if actor_managed {
+                    actions.push(MeasurementUiAction::Cancel);
+                    self.bulk_measurement_status = "Cancelling measurements...".to_string();
+                } else if let Some(cancel) = self.bulk_measurement_cancel.as_ref() {
                     cancel.store(true, Ordering::Relaxed);
                     self.bulk_measurement_status = "Cancelling measurements...".to_string();
                 }
             }
         });
 
-        if self.is_bulk_measuring() {
+        if if actor_managed {
+            self.actor_bulk_measurement_running
+        } else {
+            self.is_bulk_measuring()
+        } {
             let denom = self.bulk_measurement_progress_total.max(1) as f32;
             let progress = self.bulk_measurement_progress_completed as f32 / denom;
             ui.add(
@@ -240,6 +275,79 @@ impl ObjectsLayer {
                 "Exact median uses a flat per-channel pixel buffer in RAM, so runtime and memory can increase substantially on large datasets.",
             );
         }
+        let configuration_after = self.measurement_configuration_json();
+        if actor_managed && configuration_before != configuration_after {
+            actions.insert(0, MeasurementUiAction::Configure(configuration_after));
+        }
+        actions
+    }
+
+    fn measurement_configuration_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "metric":bulk_measurement_metric_label(self.bulk_measurement_metric),
+            "level":self.bulk_measurement_level,
+            "concurrency":self.bulk_measurement_concurrency,
+            "filtered_only":self.bulk_measurement_filtered_only,
+            "prefix":self.bulk_measurement_prefix,
+        })
+    }
+
+    pub(crate) fn apply_control_actor_measurement_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        let metric = state
+            .get("metric")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("mean");
+        self.bulk_measurement_metric = match metric {
+            "mean" => BulkMeasurementMetric::Mean,
+            "median" | "exact_median" => BulkMeasurementMetric::Median,
+            _ => return Err(format!("actor measurement metric '{metric}' is invalid")),
+        };
+        if let Some(level) = state
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+        {
+            self.bulk_measurement_level = level;
+        }
+        if let Some(concurrency) = state
+            .get("concurrency")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+        {
+            self.bulk_measurement_concurrency = concurrency;
+        }
+        if let Some(filtered_only) = state
+            .get("filtered_only")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.bulk_measurement_filtered_only = filtered_only;
+        }
+        if let Some(prefix) = state.get("prefix").and_then(serde_json::Value::as_str) {
+            self.bulk_measurement_prefix = prefix.to_string();
+        }
+        self.actor_bulk_measurement_running = state
+            .get("running")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        self.bulk_measurement_status = state
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.bulk_measurement_progress_completed = state
+            .pointer("/progress/completed")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(0);
+        self.bulk_measurement_progress_total = state
+            .pointer("/progress/total")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(0);
+        Ok(())
     }
 
     pub(super) fn bulk_measurement_target_indices(&self) -> Vec<usize> {

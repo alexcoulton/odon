@@ -862,10 +862,18 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn ui_object_export_dialogs(&mut self, ctx: &egui::Context) {
-        self.seg_objects.ui_export_dialog(ctx);
+        if let Some(intent) = self
+            .seg_objects
+            .ui_export_dialog(ctx, self.control_actor_object_export_generation > 0)
+        {
+            self.native_control_intents.push(NativeControlIntent {
+                method: intent.method,
+                params: intent.params,
+            });
+        }
         for layer in &mut self.spatial_layers.shapes {
             if let Some(objects) = layer.object_layer_mut() {
-                objects.ui_export_dialog(ctx);
+                let _ = objects.ui_export_dialog(ctx, false);
             }
         }
     }

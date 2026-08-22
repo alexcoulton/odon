@@ -329,8 +329,62 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::ObjectExport {
+            request,
+            spec,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.fail_object_export(&spec, "Object export was cancelled");
+                reject_cancelled_request(request, diagnostics, "object export");
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    if let Some(response) = model.finish_object_export(&spec, &result) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        finish_request(request, response, diagnostics);
+                    } else {
+                        reject_stale_object_export(request, diagnostics);
+                    }
+                }
+                Err(error) => {
+                    let message = format!("object export failed: {error}");
+                    if model.fail_object_export(&spec, &message) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        reject_stale_object_export(request, diagnostics);
+                    }
+                }
+            }
+        }
         _ => unreachable!("completion domain mismatch"),
     }
+}
+
+fn reject_stale_object_export(request: OdonControlRequest, diagnostics: &ActorDiagnostics) {
+    diagnostics
+        .stale_worker_completions
+        .fetch_add(1, Ordering::Relaxed);
+    reject_actor_request(
+        request,
+        diagnostics,
+        ControlError::new(
+            ControlErrorKind::Conflict,
+            "object export was superseded by newer document or object state",
+        ),
+    );
 }
 
 fn reject_stale_analysis(request: OdonControlRequest, diagnostics: &ActorDiagnostics) {

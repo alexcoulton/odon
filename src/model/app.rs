@@ -24,12 +24,13 @@ use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
     AnalysisModel, ControlLabelResource, ControlObjectFilterResult, ControlObjectResource,
     ControlPinnedLevelResource, ControlThresholdPreviewResource, LabelZarrDataset, MaskModel,
-    MeasurementMetric, MeasurementModel, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
+    MeasurementMetric, MeasurementModel, ObjectExportFormat, ObjectExportModel, ObjectExportResult,
+    ObjectExportSpec, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
     ProjectObjectPreloadCatalog, ProjectObjectPreloadProjection, ProjectObjectPreloadScope,
     ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ReadinessModel,
     ScreenshotPreferences, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
-    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, parse_world_points,
-    parse_world_rect, project_object_preload_candidates,
+    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, object_export_columns,
+    parse_world_points, parse_world_rect, project_object_preload_candidates,
 };
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
@@ -234,6 +235,7 @@ pub struct AppModel {
     threshold_preview: ThresholdPreviewModel,
     analysis: AnalysisModel,
     measurement: MeasurementModel,
+    object_export: ObjectExportModel,
     measured_viewports: HashSet<ViewportId>,
     renderer_gpu_available: bool,
 }
@@ -400,6 +402,7 @@ impl AppModel {
             threshold_preview: ThresholdPreviewModel::default(),
             analysis: AnalysisModel::default(),
             measurement: MeasurementModel::default(),
+            object_export: ObjectExportModel::default(),
             measured_viewports: HashSet::new(),
             renderer_gpu_available: false,
         }
@@ -1786,6 +1789,15 @@ impl AppModel {
             .snapshot(&dataset.descriptor, target_count, properties))
     }
 
+    pub fn measurement_generation(&self) -> u64 {
+        self.measurement.generation()
+    }
+
+    pub fn measurement_projection_state(&self) -> Value {
+        self.measurement_snapshot(&json!({}))
+            .unwrap_or_else(|_| json!({}))
+    }
+
     pub(crate) fn configure_measurement(&mut self, params: &Value) -> Result<Value, ControlError> {
         self.require_primary_analysis_target(params, "measurements")?;
         let levels = self.dataset()?.descriptor.levels.len();
@@ -1919,6 +1931,209 @@ impl AppModel {
             );
         }
         Ok(json!({"cancelled":cancelled,"status":self.measurement.status}))
+    }
+
+    pub(crate) fn object_export_columns_snapshot(
+        &self,
+        params: &Value,
+    ) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "object export")?;
+        let resource = self.dataset()?.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "object export requires object data",
+            )
+        })?;
+        let columns = object_export_columns(resource, self.analysis.state());
+        Ok(json!({"columns":columns,"total":columns.len()}))
+    }
+
+    pub(crate) fn object_export_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_primary_analysis_target(params, "object export")?;
+        self.dataset()?.object_resource.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "object export requires object data",
+            )
+        })?;
+        Ok(self.object_export.snapshot())
+    }
+
+    pub fn object_export_generation(&self) -> u64 {
+        self.object_export.generation()
+    }
+
+    pub fn object_export_projection_state(&self) -> Value {
+        self.object_export.snapshot()
+    }
+
+    pub(crate) fn prepare_object_export(
+        &mut self,
+        params: &Value,
+        path: PathBuf,
+        forced_format: Option<ObjectExportFormat>,
+    ) -> Result<ObjectExportSpec, ControlError> {
+        self.require_primary_analysis_target(params, "object export")?;
+        let dataset = self.dataset()?;
+        let resource = dataset.object_resource.clone().ok_or_else(|| {
+            ControlError::new(
+                ControlErrorKind::NotReady,
+                "object export requires object data",
+            )
+        })?;
+        let format = forced_format.unwrap_or_else(|| {
+            match params
+                .get("format")
+                .and_then(Value::as_str)
+                .or_else(|| path.extension().and_then(|extension| extension.to_str()))
+                .unwrap_or("csv")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "parquet" | "geoparquet" => ObjectExportFormat::GeoParquet,
+                _ => ObjectExportFormat::Csv,
+            }
+        });
+        if forced_format.is_none()
+            && let Some(format_name) = params.get("format").and_then(Value::as_str)
+            && !matches!(format_name, "csv" | "parquet" | "geoparquet")
+        {
+            return Err(invalid("format must be 'csv' or 'geoparquet'"));
+        }
+        let overwrite = match params.get("overwrite") {
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| invalid("overwrite must be a boolean"))?,
+            None => false,
+        };
+        let available = object_export_columns(&resource, self.analysis.state());
+        let columns = match params.get("columns") {
+            Some(value) => value
+                .as_array()
+                .ok_or_else(|| invalid("columns must be an array of names"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| invalid("columns must contain strings"))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            None => available.clone(),
+        };
+        if columns.is_empty() {
+            return Err(invalid("at least one export column is required"));
+        }
+        let mut unique_columns = HashSet::new();
+        for column in &columns {
+            if !unique_columns.insert(column) {
+                return Err(invalid(format!("duplicate export column '{column}'")));
+            }
+            if !available.contains(column) {
+                return Err(invalid(format!("unknown export column '{column}'")));
+            }
+        }
+        let scope = params.get("scope").and_then(Value::as_str).unwrap_or("all");
+        let viewport = &dataset.workspace.active().state;
+        let mut row_indices = match scope {
+            "all" => (0..resource.features.len()).collect::<Vec<_>>(),
+            "filtered" if viewport.object_filter_active => {
+                viewport.object_filter_indices.as_ref().clone()
+            }
+            "filtered" => (0..resource.features.len()).collect::<Vec<_>>(),
+            "selected" => dataset
+                .object_selection
+                .selected_indices()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            _ => return Err(invalid("scope must be 'all', 'filtered', or 'selected'")),
+        };
+        row_indices.sort_unstable();
+        if row_indices.is_empty() {
+            return Err(invalid(format!(
+                "the '{scope}' export scope contains no objects"
+            )));
+        }
+        let selected_indices = dataset.object_selection.selected_indices();
+        let document_generation = self.document_generation;
+        let resource_generation = self.installed_object_resource_generation;
+        let operation_generation = self.object_export.begin(&path, row_indices.len())?;
+        self.readiness.begin(
+            OperationKind::ObjectExport,
+            operation_generation,
+            format!("Exporting objects to {}", path.to_string_lossy()),
+        );
+        Ok(ObjectExportSpec {
+            document_generation,
+            resource_generation,
+            operation_generation,
+            path,
+            overwrite,
+            format,
+            scope: scope.to_string(),
+            resource,
+            row_indices: Arc::new(row_indices),
+            columns: Arc::new(columns),
+            selected_indices: Arc::new(selected_indices),
+            analysis_state: self.analysis.state().clone(),
+        })
+    }
+
+    pub(crate) fn finish_object_export(
+        &mut self,
+        spec: &ObjectExportSpec,
+        result: &ObjectExportResult,
+    ) -> Option<Value> {
+        if spec.document_generation != self.document_generation
+            || spec.resource_generation != self.installed_object_resource_generation
+        {
+            return None;
+        }
+        let output = self.object_export.finish(
+            spec.operation_generation,
+            &spec.path,
+            spec.format,
+            result,
+        )?;
+        self.readiness.finish(
+            OperationKind::ObjectExport,
+            spec.operation_generation,
+            "Object export complete",
+        );
+        Some(json!({
+            "started":true,
+            "completed":true,
+            "request_id":spec.operation_generation,
+            "path":spec.path.to_string_lossy(),
+            "format":spec.format.as_str(),
+            "scope":spec.scope,
+            "object_count":result.object_count,
+            "column_count":result.column_count,
+            "bytes":result.bytes,
+            "output":output,
+        }))
+    }
+
+    pub(crate) fn fail_object_export(
+        &mut self,
+        spec: &ObjectExportSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        if spec.document_generation != self.document_generation
+            || spec.resource_generation != self.installed_object_resource_generation
+        {
+            return false;
+        }
+        let message = message.into();
+        if !self.object_export.fail(spec.operation_generation, &message) {
+            return false;
+        }
+        self.readiness.fail(
+            OperationKind::ObjectExport,
+            spec.operation_generation,
+            message,
+        );
+        true
     }
 
     pub fn screenshot_settings_snapshot(&self) -> Result<Value, ControlError> {
@@ -5240,6 +5455,7 @@ impl AppModel {
         self.threshold_preview.reset(default_threshold_level);
         self.analysis.reset();
         self.measurement.reset();
+        self.object_export.reset();
         self.measured_viewports
             .retain(|id| id.as_str() == "viewport-1");
         self.mode = ModelMode::Single;
@@ -5922,6 +6138,11 @@ impl AppModel {
                 | "viewer.measurements.start"
                 | "viewer.measurements.cancel"
                 | "viewer.measurements.properties.list"
+                | "exports.objects.columns"
+                | "exports.objects.get_state"
+                | "exports.objects.start"
+                | "exports.objects.export_csv"
+                | "exports.objects.export_geoparquet"
                 | "viewer.native_layers.list"
                 | "viewer.native_layers.get"
                 | "viewer.native_layers.set_active"
@@ -6316,6 +6537,13 @@ impl AppModel {
                     unreachable!("measurement work uses the bounded worker dispatcher")
                 }
                 "viewer.measurements.cancel" => self.cancel_measurement(params)?,
+                "exports.objects.columns" => self.object_export_columns_snapshot(params)?,
+                "exports.objects.get_state" => self.object_export_snapshot(params)?,
+                "exports.objects.start"
+                | "exports.objects.export_csv"
+                | "exports.objects.export_geoparquet" => {
+                    unreachable!("object export uses the bounded worker dispatcher")
+                }
                 "viewer.native_layers.list" => self.native_layers_global()?,
                 "viewer.native_layers.get" => self.native_layer_global(params)?,
                 "viewer.native_layers.set_active"
@@ -6419,6 +6647,8 @@ impl AppModel {
                 | "viewer.analysis.warmup.get"
                 | "viewer.measurements.get"
                 | "viewer.measurements.properties.list"
+                | "exports.objects.columns"
+                | "exports.objects.get_state"
                 | "viewer.native_layers.list"
                 | "viewer.native_layers.get"
                 | "viewer.masks.layers.list"

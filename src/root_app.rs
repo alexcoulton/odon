@@ -939,6 +939,16 @@ impl RootApp {
             ) {
                 log_warn!("could not realize actor analysis state: {error}");
             }
+            if let Err(error) = app.apply_control_actor_measurement_state(
+                projection.measurement_generation,
+                &projection.measurement_state,
+            ) {
+                log_warn!("could not realize actor measurement state: {error}");
+            }
+            app.apply_control_actor_object_export_state(
+                projection.object_export_generation,
+                &projection.object_export_state,
+            );
         }
         self.apply_project_object_preload_projection(&projection.project_object_preload);
         if projection.mode == ModelMode::Project {
@@ -1151,6 +1161,16 @@ impl RootApp {
             ) {
                 log_warn!("could not realize actor analysis state: {error}");
             }
+            if let Err(error) = app.apply_control_actor_measurement_state(
+                projection.measurement_generation,
+                &projection.measurement_state,
+            ) {
+                log_warn!("could not realize actor measurement state: {error}");
+            }
+            app.apply_control_actor_object_export_state(
+                projection.object_export_generation,
+                &projection.object_export_state,
+            );
         }
         self.apply_control_projection_workspace(
             projection.workspace.as_ref(),

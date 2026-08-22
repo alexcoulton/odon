@@ -47,10 +47,16 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                         id: "cell-a".to_string(),
                         bbox_world: [0.0, 0.0, 10.0, 10.0],
                         centroid_world: [5.0, 5.0],
-                        polygons_world: Arc::new(Vec::new()),
+                        polygons_world: Arc::new(vec![vec![
+                            [0.0, 0.0],
+                            [10.0, 0.0],
+                            [10.0, 10.0],
+                            [0.0, 10.0],
+                            [0.0, 0.0],
+                        ]]),
                         point_position_world: Some([5.0, 5.0]),
-                        area_px: 0.0,
-                        perimeter_px: 0.0,
+                        area_px: 100.0,
+                        perimeter_px: 40.0,
                         properties: json!({"phenotype":"tumour","score":0.9})
                             .as_object()
                             .unwrap()
@@ -60,10 +66,16 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                         id: "cell-b".to_string(),
                         bbox_world: [20.0, 20.0, 30.0, 30.0],
                         centroid_world: [25.0, 25.0],
-                        polygons_world: Arc::new(Vec::new()),
+                        polygons_world: Arc::new(vec![vec![
+                            [20.0, 20.0],
+                            [30.0, 20.0],
+                            [30.0, 30.0],
+                            [20.0, 30.0],
+                            [20.0, 20.0],
+                        ]]),
                         point_position_world: Some([25.0, 25.0]),
-                        area_px: 0.0,
-                        perimeter_px: 0.0,
+                        area_px: 100.0,
+                        perimeter_px: 40.0,
                         properties: json!({"phenotype":"immune","score":0.2})
                             .as_object()
                             .unwrap()
@@ -156,7 +168,9 @@ mod events;
 mod labels;
 mod lifecycle;
 mod masks;
+mod measurements;
 mod memory;
+mod object_exports;
 mod objects;
 mod project_preload;
 mod project_roi_open;

@@ -34,6 +34,10 @@ impl ObjectSelectionModel {
         self.generation
     }
 
+    pub(crate) fn selected_indices(&self) -> HashSet<usize> {
+        self.selected_indices.iter().copied().collect()
+    }
+
     pub(crate) fn projection_json(&self) -> Value {
         json!({
             "generation": self.generation,

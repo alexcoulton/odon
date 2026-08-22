@@ -44,7 +44,7 @@ impl Default for MeasurementModel {
             status: String::new(),
             completed: 0,
             total: 0,
-            generation: 0,
+            generation: 1,
         }
     }
 }
@@ -101,6 +101,7 @@ impl MeasurementModel {
                 .map(str::to_string)
                 .ok_or_else(|| invalid("prefix must be a non-empty string"))?;
         }
+        self.generation = self.generation.wrapping_add(1).max(1);
         Ok(())
     }
 
@@ -130,6 +131,7 @@ impl MeasurementModel {
         self.running = false;
         self.completed = self.total;
         self.status = format!("Measured {measured} object(s)");
+        self.generation = self.generation.wrapping_add(1).max(1);
         true
     }
     pub(crate) fn fail(&mut self, generation: u64, message: String) -> bool {
@@ -138,7 +140,12 @@ impl MeasurementModel {
         }
         self.running = false;
         self.status = message;
+        self.generation = self.generation.wrapping_add(1).max(1);
         true
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
     pub(crate) fn snapshot(
         &self,
