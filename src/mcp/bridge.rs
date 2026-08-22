@@ -118,6 +118,7 @@ impl OdonControlBridge {
             object_loader,
             dataset_inspector,
             Some(Arc::clone(&task_registry)),
+            None,
         )?;
         let identity = Arc::new(ControlServerIdentity {
             instance_id: manifest
@@ -396,6 +397,29 @@ impl OdonControlBridge {
 
     pub fn submit_native_command(&self, ctx: &egui::Context, method: &str, params: Value) -> bool {
         self.queue_native_command(ctx, "native-ui".to_string(), method, params)
+    }
+
+    pub fn submit_native_command_with_reply(
+        &self,
+        ctx: &egui::Context,
+        method: &str,
+        params: Value,
+    ) -> Option<Receiver<Result<Value, ControlError>>> {
+        let command = ControlCommand::decode(method, params).ok()?;
+        let (reply, result) = crossbeam_channel::bounded(1);
+        self.tx
+            .try_send(OdonControlRequest {
+                command,
+                reply,
+                session_id: "native-ui".to_string(),
+                request_id: None,
+                event_hub: Arc::clone(&self.event_hub),
+                task_registry: Arc::clone(&self.task_registry),
+                task_id: None,
+            })
+            .ok()?;
+        ctx.request_repaint();
+        Some(result)
     }
 
     pub fn external_layers(

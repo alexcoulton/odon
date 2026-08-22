@@ -31,6 +31,7 @@ use crate::data::document::{
 };
 use crate::data::ome::{OmeZarrDataset, retrieve_image_subset_u16};
 use crate::data::project_config::{ProjectConfig, ProjectMaskLayer, ProjectRoi};
+use crate::data::remote_store::{CoreRemoteDatasetBackend, RemoteDatasetBackend};
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };
@@ -66,6 +67,7 @@ mod objects;
 mod project_io;
 mod projection;
 mod projects;
+mod remote;
 mod request;
 mod resources;
 mod routing;
@@ -98,6 +100,10 @@ pub use projection::{PlatformEffect, RenderDocument, RenderProjection};
 use projects::{
     begin_project_discovery, begin_project_open, begin_project_save, begin_samplesheet_export,
     begin_samplesheet_import, begin_samplesheet_inspect,
+};
+use remote::{
+    RemoteOpenIdentity, RemoteOpenSpec, RemoteSessionState, begin_remote_http_open,
+    begin_remote_list, begin_remote_s3_open,
 };
 use request::{expand_path, finish_request, reject_worker_submission};
 use resources::{begin_label_load, begin_object_resource_load};

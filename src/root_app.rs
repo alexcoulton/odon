@@ -19,8 +19,7 @@ use crate::data::dataset_source::DatasetSource;
 use crate::data::ome::OmeZarrDataset;
 use crate::data::project_config::ProjectRoi;
 use crate::data::remote_store::{
-    S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
-    build_s3_store, list_s3_prefix,
+    S3BrowseEntry, S3BrowseListing, S3Store, build_http_store, build_s3_store,
 };
 use crate::data::samplesheet::load_samplesheet_csv;
 use crate::deep_link::DeepLinkRequest;
@@ -472,8 +471,6 @@ enum RemoteMode {
 }
 
 struct RootRemoteS3BrowserState {
-    session: S3Browser,
-    signature: String,
     current_prefix: String,
     parent_prefix: Option<String>,
     entries: Vec<S3BrowseEntry>,
@@ -482,12 +479,20 @@ struct RootRemoteS3BrowserState {
     listing_cache: HashMap<String, S3BrowseListing>,
 }
 
-enum RootRemoteAction {
-    OpenSingle {
-        dataset: OmeZarrDataset,
-        store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
-        runtime: Option<Arc<tokio::runtime::Runtime>>,
+enum RootRemoteControlPending {
+    Configure {
+        reply: crossbeam_channel::Receiver<Result<serde_json::Value, ControlError>>,
+        browse_prefix: String,
     },
+    List {
+        reply: crossbeam_channel::Receiver<Result<serde_json::Value, ControlError>>,
+    },
+    Open {
+        reply: crossbeam_channel::Receiver<Result<serde_json::Value, ControlError>>,
+    },
+}
+
+enum RootRemoteAction {
     OpenS3Mosaic(Vec<S3DatasetSelection>),
     AddToProject(Vec<DatasetSource>),
 }
@@ -643,6 +648,7 @@ pub struct RootApp {
     remote_s3_secret_key: String,
     remote_status: String,
     remote_s3_browser: Option<RootRemoteS3BrowserState>,
+    remote_control_pending: Option<RootRemoteControlPending>,
     label_prompt_preference: LabelPromptSessionPreference,
     app_settings: AppSettings,
     settings_open: bool,
@@ -779,17 +785,6 @@ impl RootApp {
                 format!("Settings load failed: {err}"),
             ),
         }
-    }
-
-    fn remote_s3_signature(&self) -> String {
-        format!(
-            "{}\n{}\n{}\n{}\n{}",
-            self.remote_s3_endpoint.trim(),
-            self.remote_s3_region.trim(),
-            self.remote_s3_bucket.trim(),
-            self.remote_s3_access_key.trim(),
-            self.remote_s3_secret_key.trim()
-        )
     }
 
     fn clear_remote_s3_browser(&mut self) {
@@ -1026,6 +1021,7 @@ impl RootApp {
                 Arc::clone(document.store()),
                 self.app_settings.auto_contrast,
             );
+            app.set_remote_runtime(document.opened.resource.runtime_guard.clone());
             self.configure_single_app(&mut app);
             app.set_project_space(project_space);
             self.mode = Mode::Single(app);
@@ -1436,12 +1432,6 @@ impl RootApp {
             "datasets.inspect" => self.control_inspect_dataset(params),
             "datasets.open_spatialdata" => self.control_open_spatialdata(ctx, params),
             "datasets.open_xenium" => self.control_open_xenium(ctx, params),
-            "datasets.open_http" => self.control_open_http(ctx, params),
-            "datasets.s3.get_session" => self.control_get_s3_session(),
-            "datasets.s3.configure_session" => self.control_configure_s3_session(params),
-            "datasets.s3.clear_session" => self.control_clear_s3_session(),
-            "datasets.s3.list" => self.control_list_s3(params),
-            "datasets.open_s3" => self.control_open_s3(ctx, params),
             "deep_links.parse" => self.control_parse_deep_link(params),
             "deep_links.resolve" => self.control_resolve_deep_link(params),
             "deep_links.filters.get" => self.control_get_deep_link_filters(params),
@@ -5785,226 +5775,6 @@ impl RootApp {
         }
     }
 
-    fn control_open_http(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let Some(url) = params
-            .get("url")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-        else {
-            return serde_json::json!({"error": "url is required"});
-        };
-        let url = url.trim_end_matches('/').to_string();
-        let store = match build_http_store(&url) {
-            Ok(store) => store,
-            Err(error) => {
-                return serde_json::json!({"error": format!("invalid HTTP source: {error}")});
-            }
-        };
-        let source = DatasetSource::Http {
-            base_url: url.clone(),
-        };
-        let dataset = match OmeZarrDataset::open_with_store(source, store.clone()) {
-            Ok(dataset) => dataset,
-            Err(error) => {
-                return serde_json::json!({
-                    "error": format!("failed to open remote OME-Zarr: {error}"),
-                    "url": url,
-                });
-            }
-        };
-        let project_space = match self.take_current_project_space() {
-            Ok(project_space) => project_space,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let mut app = OmeZarrViewerApp::new_runtime(
-            ctx,
-            self.gpu_available,
-            dataset,
-            store,
-            self.app_settings.auto_contrast,
-        );
-        self.configure_single_app(&mut app);
-        app.set_project_space(project_space);
-        self.mode = Mode::Single(app);
-        serde_json::json!({"opened": true, "mode": "single", "kind": "http_ome_zarr", "url": url})
-    }
-
-    fn control_get_s3_session(&self) -> serde_json::Value {
-        let configured = !self.remote_s3_endpoint.trim().is_empty()
-            && !self.remote_s3_bucket.trim().is_empty()
-            && !self.remote_s3_access_key.trim().is_empty()
-            && !self.remote_s3_secret_key.trim().is_empty();
-        serde_json::json!({
-            "configured": configured,
-            "endpoint": configured.then(|| self.remote_s3_endpoint.trim()),
-            "region": configured.then(|| self.remote_s3_region.trim()),
-            "bucket": configured.then(|| self.remote_s3_bucket.trim()),
-            "credentials": if configured { "session_only_redacted" } else { "none" },
-            "persisted": false,
-        })
-    }
-
-    fn control_configure_s3_session(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let string = |name: &str| {
-            params
-                .get(name)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        };
-        let (Some(mut endpoint), Some(bucket), Some(access_key), Some(secret_key)) = (
-            string("endpoint"),
-            string("bucket"),
-            string("access_key"),
-            string("secret_key"),
-        ) else {
-            return serde_json::json!({"error": "endpoint, bucket, access_key, and secret_key are required"});
-        };
-        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-            endpoint = format!("https://{endpoint}");
-        }
-        let region = string("region").unwrap_or_else(|| "auto".to_string());
-        if let Err(error) = build_s3_browser(&endpoint, &region, &bucket, &access_key, &secret_key)
-        {
-            return serde_json::json!({"error": format!("invalid S3 session configuration: {error}")});
-        }
-        self.remote_s3_endpoint = endpoint;
-        self.remote_s3_region = region;
-        self.remote_s3_bucket = bucket;
-        self.remote_s3_access_key = access_key;
-        self.remote_s3_secret_key = secret_key;
-        self.remote_s3_prefix.clear();
-        self.clear_remote_s3_browser();
-        self.control_get_s3_session()
-    }
-
-    fn control_clear_s3_session(&mut self) -> serde_json::Value {
-        self.remote_s3_endpoint.clear();
-        self.remote_s3_region = "auto".to_string();
-        self.remote_s3_bucket.clear();
-        self.remote_s3_prefix.clear();
-        self.remote_s3_access_key.clear();
-        self.remote_s3_secret_key.clear();
-        self.clear_remote_s3_browser();
-        serde_json::json!({"cleared": true, "configured": false, "persisted": false})
-    }
-
-    fn control_list_s3(&self, params: &serde_json::Value) -> serde_json::Value {
-        if self.remote_s3_access_key.trim().is_empty()
-            || self.remote_s3_secret_key.trim().is_empty()
-        {
-            return serde_json::json!({"error": "S3 session credentials are not configured"});
-        }
-        let prefix = params
-            .get("prefix")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let browser = match build_s3_browser(
-            &self.remote_s3_endpoint,
-            &self.remote_s3_region,
-            &self.remote_s3_bucket,
-            &self.remote_s3_access_key,
-            &self.remote_s3_secret_key,
-        ) {
-            Ok(browser) => browser,
-            Err(error) => {
-                return serde_json::json!({"error": format!("failed to connect to S3: {error}")});
-            }
-        };
-        match list_s3_prefix(&browser, prefix) {
-            Ok(listing) => serde_json::json!({
-                "endpoint": self.remote_s3_endpoint,
-                "region": self.remote_s3_region,
-                "bucket": self.remote_s3_bucket,
-                "prefix": listing.prefix,
-                "parent_prefix": listing.parent_prefix,
-                "current_is_dataset": listing.current_is_dataset,
-                "entries": listing.entries.into_iter().map(|entry| serde_json::json!({
-                    "name": entry.name,
-                    "prefix": entry.prefix,
-                    "is_dataset": entry.is_dataset,
-                })).collect::<Vec<_>>(),
-            }),
-            Err(error) => {
-                serde_json::json!({"error": format!("failed to list S3 prefix: {error}")})
-            }
-        }
-    }
-
-    fn control_open_s3(
-        &mut self,
-        ctx: &egui::Context,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        if self.remote_s3_access_key.trim().is_empty()
-            || self.remote_s3_secret_key.trim().is_empty()
-        {
-            return serde_json::json!({"error": "S3 session credentials are not configured"});
-        }
-        let prefix = params
-            .get("prefix")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .trim_matches('/')
-            .to_string();
-        let S3Store { store, runtime } = match build_s3_store(
-            &self.remote_s3_endpoint,
-            &self.remote_s3_region,
-            &self.remote_s3_bucket,
-            &prefix,
-            &self.remote_s3_access_key,
-            &self.remote_s3_secret_key,
-        ) {
-            Ok(store) => store,
-            Err(error) => {
-                return serde_json::json!({"error": format!("failed to connect to S3: {error}")});
-            }
-        };
-        let source = DatasetSource::S3 {
-            endpoint: self.remote_s3_endpoint.clone(),
-            region: self.remote_s3_region.clone(),
-            bucket: self.remote_s3_bucket.clone(),
-            prefix: prefix.clone(),
-        };
-        let dataset = match OmeZarrDataset::open_with_store(source, store.clone()) {
-            Ok(dataset) => dataset,
-            Err(error) => {
-                return serde_json::json!({"error": format!("failed to open S3 OME-Zarr: {error}")});
-            }
-        };
-        let project_space = match self.take_current_project_space() {
-            Ok(project_space) => project_space,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let mut app = OmeZarrViewerApp::new_runtime(
-            ctx,
-            self.gpu_available,
-            dataset,
-            store,
-            self.app_settings.auto_contrast,
-        );
-        app.set_remote_runtime(Some(runtime));
-        self.configure_single_app(&mut app);
-        app.set_project_space(project_space);
-        self.mode = Mode::Single(app);
-        serde_json::json!({
-            "opened": true,
-            "mode": "single",
-            "kind": "s3_ome_zarr",
-            "endpoint": self.remote_s3_endpoint,
-            "region": self.remote_s3_region,
-            "bucket": self.remote_s3_bucket,
-            "prefix": prefix,
-        })
-    }
-
     fn control_parse_deep_link(&self, params: &serde_json::Value) -> serde_json::Value {
         let Some(url) = params.get("url").and_then(serde_json::Value::as_str) else {
             return serde_json::json!({"error": "url is required"});
@@ -6714,41 +6484,7 @@ impl RootApp {
         }
     }
 
-    fn apply_remote_s3_listing(
-        &mut self,
-        session: S3Browser,
-        signature: String,
-        listing: S3BrowseListing,
-        selected_dataset_prefixes: HashSet<String>,
-    ) {
-        let current_prefix = listing.prefix.clone();
-        let parent_prefix = listing.parent_prefix.clone();
-        let entries = listing.entries.clone();
-        let current_is_dataset = listing.current_is_dataset;
-        self.remote_s3_browser = Some(RootRemoteS3BrowserState {
-            session,
-            signature,
-            current_prefix: current_prefix.clone(),
-            parent_prefix,
-            entries,
-            current_is_dataset,
-            selected_dataset_prefixes,
-            listing_cache: HashMap::new(),
-        });
-        if let Some(state) = self.remote_s3_browser.as_mut() {
-            state.listing_cache.insert(current_prefix, listing);
-        }
-    }
-
-    fn connect_remote_s3_browser(&mut self) -> anyhow::Result<()> {
-        let browser = build_s3_browser(
-            &self.remote_s3_endpoint,
-            &self.remote_s3_region,
-            &self.remote_s3_bucket,
-            &self.remote_s3_access_key,
-            &self.remote_s3_secret_key,
-        )?;
-        let signature = self.remote_s3_signature();
+    fn start_remote_s3_connect(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let browse_prefix = if self.remote_s3_prefix.trim().ends_with(".ome.zarr")
             || self.remote_s3_prefix.trim().ends_with(".zarr")
         {
@@ -6761,46 +6497,158 @@ impl RootApp {
         } else {
             self.remote_s3_prefix.trim().trim_matches('/').to_string()
         };
-        let listing = list_s3_prefix(&browser, &browse_prefix)?;
-        self.apply_remote_s3_listing(browser, signature, listing, Default::default());
+        let bridge = self
+            .control_bridge
+            .as_ref()
+            .ok_or_else(|| "Odon's control actor is unavailable".to_string())?;
+        let reply = bridge
+            .submit_native_command_with_reply(
+                ctx,
+                "datasets.s3.configure_session",
+                serde_json::json!({
+                    "endpoint":self.remote_s3_endpoint,
+                    "region":self.remote_s3_region,
+                    "bucket":self.remote_s3_bucket,
+                    "access_key":self.remote_s3_access_key,
+                    "secret_key":self.remote_s3_secret_key,
+                }),
+            )
+            .ok_or_else(|| "Could not submit S3 session configuration".to_string())?;
+        self.remote_control_pending = Some(RootRemoteControlPending::Configure {
+            reply,
+            browse_prefix,
+        });
+        self.remote_status = "Connecting to S3...".to_string();
         Ok(())
     }
 
-    fn refresh_remote_s3_browser(&mut self) -> anyhow::Result<()> {
-        let Some(state) = self.remote_s3_browser.take() else {
-            anyhow::bail!("not connected to S3");
-        };
-        let listing = list_s3_prefix(&state.session, &state.current_prefix)?;
-        let mut selected = state.selected_dataset_prefixes;
-        let mut cache = state.listing_cache;
-        cache.insert(listing.prefix.clone(), listing.clone());
-        self.apply_remote_s3_listing(state.session, state.signature, listing, selected.clone());
-        if let Some(next) = self.remote_s3_browser.as_mut() {
-            next.selected_dataset_prefixes = std::mem::take(&mut selected);
-            next.listing_cache = cache;
+    fn start_remote_s3_list(&mut self, ctx: &egui::Context, prefix: String) -> Result<(), String> {
+        if let Some(listing) = self
+            .remote_s3_browser
+            .as_ref()
+            .and_then(|state| state.listing_cache.get(&prefix))
+            .cloned()
+        {
+            self.apply_actor_remote_s3_listing(listing);
+            self.remote_status.clear();
+            return Ok(());
         }
+        let bridge = self
+            .control_bridge
+            .as_ref()
+            .ok_or_else(|| "Odon's control actor is unavailable".to_string())?;
+        let reply = bridge
+            .submit_native_command_with_reply(
+                ctx,
+                "datasets.s3.list",
+                serde_json::json!({"prefix":prefix}),
+            )
+            .ok_or_else(|| "Could not submit S3 listing request".to_string())?;
+        self.remote_control_pending = Some(RootRemoteControlPending::List { reply });
+        self.remote_status = "Listing S3 prefix...".to_string();
         Ok(())
     }
 
-    fn browse_remote_s3_prefix(&mut self, prefix: String) -> anyhow::Result<()> {
-        let Some(state) = self.remote_s3_browser.take() else {
-            anyhow::bail!("not connected to S3");
+    fn start_remote_single_open(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let (method, params) = match self.remote_mode {
+            RemoteMode::Http => {
+                let mut url = self
+                    .remote_http_url
+                    .trim()
+                    .trim_end_matches('/')
+                    .to_string();
+                if url.is_empty() {
+                    return Err("URL is empty".to_string());
+                }
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    url = format!("https://{url}");
+                }
+                ("datasets.open_http", serde_json::json!({"url":url}))
+            }
+            RemoteMode::S3 => (
+                "datasets.open_s3",
+                serde_json::json!({
+                    "prefix":self.remote_s3_prefix.trim().trim_matches('/'),
+                }),
+            ),
         };
-        let mut selected = state.selected_dataset_prefixes;
-        let mut cache = state.listing_cache;
-        let listing = if let Some(cached) = cache.get(&prefix).cloned() {
-            cached
-        } else {
-            let listing = list_s3_prefix(&state.session, &prefix)?;
-            cache.insert(prefix.clone(), listing.clone());
-            listing
-        };
-        self.apply_remote_s3_listing(state.session, state.signature, listing, selected.clone());
-        if let Some(next) = self.remote_s3_browser.as_mut() {
-            next.selected_dataset_prefixes = std::mem::take(&mut selected);
-            next.listing_cache = cache;
-        }
+        let bridge = self
+            .control_bridge
+            .as_ref()
+            .ok_or_else(|| "Odon's control actor is unavailable".to_string())?;
+        let reply = bridge
+            .submit_native_command_with_reply(ctx, method, params)
+            .ok_or_else(|| "Could not submit remote dataset open".to_string())?;
+        self.remote_control_pending = Some(RootRemoteControlPending::Open { reply });
+        self.remote_status = "Opening remote OME-Zarr...".to_string();
         Ok(())
+    }
+
+    fn apply_actor_remote_s3_listing(&mut self, listing: S3BrowseListing) {
+        let (selected_dataset_prefixes, mut listing_cache) = self
+            .remote_s3_browser
+            .take()
+            .map(|state| (state.selected_dataset_prefixes, state.listing_cache))
+            .unwrap_or_default();
+        listing_cache.insert(listing.prefix.clone(), listing.clone());
+        self.remote_s3_browser = Some(RootRemoteS3BrowserState {
+            current_prefix: listing.prefix,
+            parent_prefix: listing.parent_prefix,
+            entries: listing.entries,
+            current_is_dataset: listing.current_is_dataset,
+            selected_dataset_prefixes,
+            listing_cache,
+        });
+    }
+
+    fn poll_remote_control_pending(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.remote_control_pending.as_ref() else {
+            return;
+        };
+        let result = match pending {
+            RootRemoteControlPending::Configure { reply, .. }
+            | RootRemoteControlPending::List { reply }
+            | RootRemoteControlPending::Open { reply } => reply.try_recv(),
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(16));
+                return;
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                self.remote_control_pending = None;
+                self.remote_status = "Remote control request disconnected".to_string();
+                return;
+            }
+        };
+        let pending = self
+            .remote_control_pending
+            .take()
+            .expect("pending remote operation was inspected above");
+        match (pending, result) {
+            (RootRemoteControlPending::Configure { browse_prefix, .. }, Ok(_)) => {
+                if let Err(error) = self.start_remote_s3_list(ctx, browse_prefix) {
+                    self.remote_status = error;
+                }
+            }
+            (RootRemoteControlPending::List { .. }, Ok(response)) => {
+                match serde_json::from_value::<S3BrowseListing>(response) {
+                    Ok(listing) => {
+                        self.apply_actor_remote_s3_listing(listing);
+                        self.remote_status.clear();
+                    }
+                    Err(error) => {
+                        self.remote_status = format!("Invalid S3 listing response: {error}");
+                    }
+                }
+            }
+            (RootRemoteControlPending::Open { .. }, Ok(_)) => {
+                self.remote_dialog_open = false;
+                self.remote_status.clear();
+            }
+            (_, Err(error)) => self.remote_status = error.to_string(),
+        }
     }
 
     fn selected_remote_s3_datasets(&self) -> Vec<S3DatasetSelection> {
@@ -6831,77 +6679,12 @@ impl RootApp {
             .collect()
     }
 
-    fn open_remote_dataset_from_dialog(&mut self) -> anyhow::Result<RootRemoteAction> {
-        match self.remote_mode {
-            RemoteMode::Http => {
-                let mut url = self
-                    .remote_http_url
-                    .trim()
-                    .trim_end_matches('/')
-                    .to_string();
-                if url.is_empty() {
-                    anyhow::bail!("URL is empty");
-                }
-                if !url.starts_with("http://") && !url.starts_with("https://") {
-                    url = format!("https://{url}");
-                }
-                let store = build_http_store(&url)?;
-                let source = crate::data::dataset_source::DatasetSource::Http { base_url: url };
-                let dataset = OmeZarrDataset::open_with_store(source, store.clone())?;
-                Ok(RootRemoteAction::OpenSingle {
-                    dataset,
-                    store,
-                    runtime: None,
-                })
-            }
-            RemoteMode::S3 => {
-                let mut endpoint = self.remote_s3_endpoint.trim().to_string();
-                let region = self.remote_s3_region.trim().to_string();
-                let bucket = self.remote_s3_bucket.trim().to_string();
-                let prefix = self.remote_s3_prefix.trim().trim_matches('/').to_string();
-                let access_key = self.remote_s3_access_key.trim().to_string();
-                let secret_key = self.remote_s3_secret_key.trim().to_string();
-                if endpoint.is_empty() || bucket.is_empty() {
-                    anyhow::bail!("endpoint and bucket are required");
-                }
-                if access_key.is_empty() || secret_key.is_empty() {
-                    anyhow::bail!("access key / secret key are required");
-                }
-                if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-                    endpoint = format!("https://{endpoint}");
-                }
-                let S3Store { store, runtime } = build_s3_store(
-                    &endpoint,
-                    &region,
-                    &bucket,
-                    &prefix,
-                    &access_key,
-                    &secret_key,
-                )?;
-                let source = crate::data::dataset_source::DatasetSource::S3 {
-                    endpoint,
-                    region: if region.is_empty() {
-                        "auto".to_string()
-                    } else {
-                        region
-                    },
-                    bucket,
-                    prefix,
-                };
-                let dataset = OmeZarrDataset::open_with_store(source, store.clone())?;
-                Ok(RootRemoteAction::OpenSingle {
-                    dataset,
-                    store,
-                    runtime: Some(runtime),
-                })
-            }
-        }
-    }
-
     fn ui_remote_dialog(&mut self, ctx: &egui::Context) -> Option<RootRemoteAction> {
+        self.poll_remote_control_pending(ctx);
         if !self.remote_dialog_open {
             return None;
         }
+        let remote_busy = self.remote_control_pending.is_some();
         let mut open = self.remote_dialog_open;
         let mut s3_inputs_changed = false;
         let mut connect_s3 = false;
@@ -6971,12 +6754,15 @@ impl RootApp {
                             } else {
                                 "Connect"
                             };
-                            if ui.button(connect_label).clicked() {
+                            if ui
+                                .add_enabled(!remote_busy, egui::Button::new(connect_label))
+                                .clicked()
+                            {
                                 connect_s3 = true;
                             }
                             if ui
                                 .add_enabled(
-                                    self.remote_s3_browser.is_some(),
+                                    !remote_busy && self.remote_s3_browser.is_some(),
                                     egui::Button::new("Refresh"),
                                 )
                                 .clicked()
@@ -7121,7 +6907,10 @@ impl RootApp {
                         self.remote_dialog_open = false;
                         self.remote_status.clear();
                     }
-                    if ui.button("Open").clicked() {
+                    if ui
+                        .add_enabled(!remote_busy, egui::Button::new("Open"))
+                        .clicked()
+                    {
                         open_single = true;
                     }
                     let selected_remote = self.selected_remote_s3_datasets();
@@ -7155,30 +6944,35 @@ impl RootApp {
 
         if s3_inputs_changed {
             self.clear_remote_s3_browser();
+            self.remote_control_pending = None;
+            if let Some(bridge) = self.control_bridge.as_ref() {
+                let _ = bridge.submit_native_command(
+                    ctx,
+                    "datasets.s3.clear_session",
+                    serde_json::json!({}),
+                );
+            }
         }
         if connect_s3 {
-            match self.connect_remote_s3_browser() {
-                Ok(()) => self.remote_status.clear(),
-                Err(err) => self.remote_status = format!("{err}"),
+            if let Err(err) = self.start_remote_s3_connect(ctx) {
+                self.remote_status = err;
             }
         } else if refresh_s3 {
-            match self.refresh_remote_s3_browser() {
-                Ok(()) => self.remote_status.clear(),
-                Err(err) => self.remote_status = format!("{err}"),
+            let prefix = self
+                .remote_s3_browser
+                .as_ref()
+                .map(|state| state.current_prefix.clone())
+                .unwrap_or_default();
+            if let Err(err) = self.start_remote_s3_list(ctx, prefix) {
+                self.remote_status = err;
             }
         } else if let Some(prefix) = browse_to {
-            match self.browse_remote_s3_prefix(prefix) {
-                Ok(()) => self.remote_status.clear(),
-                Err(err) => self.remote_status = format!("{err}"),
+            if let Err(err) = self.start_remote_s3_list(ctx, prefix) {
+                self.remote_status = err;
             }
         } else if open_single {
-            match self.open_remote_dataset_from_dialog() {
-                Ok(req) => {
-                    self.remote_dialog_open = false;
-                    self.remote_status.clear();
-                    action = Some(req);
-                }
-                Err(err) => self.remote_status = format!("{err}"),
+            if let Err(err) = self.start_remote_single_open(ctx) {
+                self.remote_status = err;
             }
         } else if open_mosaic {
             let selected = self.selected_remote_s3_datasets();
@@ -7256,6 +7050,7 @@ impl RootApp {
             remote_s3_secret_key: String::new(),
             remote_status: String::new(),
             remote_s3_browser: None,
+            remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
             app_settings,
             settings_open: false,
@@ -7328,6 +7123,7 @@ impl RootApp {
             remote_s3_secret_key: String::new(),
             remote_status: String::new(),
             remote_s3_browser: None,
+            remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
             app_settings,
             settings_open: false,
@@ -7400,6 +7196,7 @@ impl RootApp {
             remote_s3_secret_key: String::new(),
             remote_status: String::new(),
             remote_s3_browser: None,
+            remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
             app_settings,
             settings_open: false,
@@ -8269,12 +8066,6 @@ impl eframe::App for RootApp {
         self.sync_project_object_preload_scope(current_project_path);
 
         let open_mosaic: Option<Vec<PathBuf>> = None;
-        let mut open_remote_single: Option<(
-            OmeZarrDataset,
-            Arc<dyn zarrs::storage::ReadableStorageTraits>,
-            Option<Arc<tokio::runtime::Runtime>>,
-            ProjectSpace,
-        )> = None;
         let mut open_remote_s3_mosaic: Option<(Vec<crate::app::S3DatasetSelection>, ProjectSpace)> =
             None;
         let mut back_to_single = false;
@@ -9154,13 +8945,6 @@ impl eframe::App for RootApp {
                 Mode::Transition => (ProjectSpace::default(), None, None),
             };
             match action {
-                RootRemoteAction::OpenSingle {
-                    dataset,
-                    store,
-                    runtime,
-                } => {
-                    open_remote_single = Some((dataset, store, runtime, project_space));
-                }
                 RootRemoteAction::OpenS3Mosaic(datasets) => {
                     open_remote_s3_mosaic = Some((datasets, project_space));
                 }
@@ -9240,19 +9024,6 @@ impl eframe::App for RootApp {
                     apply_started.elapsed().as_secs_f32()
                 );
             }
-        }
-        if let Some((dataset, store, runtime, project_space)) = open_remote_single {
-            let mut app = OmeZarrViewerApp::new_runtime(
-                ctx,
-                self.gpu_available,
-                dataset,
-                store,
-                self.app_settings.auto_contrast,
-            );
-            app.set_remote_runtime(runtime);
-            self.configure_single_app(&mut app);
-            app.set_project_space(project_space);
-            self.mode = Mode::Single(app);
         }
         if let Some((paths, ps)) = open_mosaic_from_project {
             self.open_mosaic_from_project(ctx, paths, ps);

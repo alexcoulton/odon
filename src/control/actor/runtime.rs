@@ -43,7 +43,7 @@ pub fn spawn_control_actor(
     wake_ui: UiWake,
     resource_registry: Arc<ResourceRegistry>,
 ) -> anyhow::Result<ControlActorChannels> {
-    spawn_control_actor_with_services(wake_ui, resource_registry, None, None, None)
+    spawn_control_actor_with_services(wake_ui, resource_registry, None, None, None, None)
 }
 
 pub fn spawn_control_actor_with_object_loader(
@@ -51,7 +51,7 @@ pub fn spawn_control_actor_with_object_loader(
     resource_registry: Arc<ResourceRegistry>,
     object_loader: Option<Arc<dyn ObjectResourceLoader>>,
 ) -> anyhow::Result<ControlActorChannels> {
-    spawn_control_actor_with_services(wake_ui, resource_registry, object_loader, None, None)
+    spawn_control_actor_with_services(wake_ui, resource_registry, object_loader, None, None, None)
 }
 
 pub fn spawn_control_actor_with_services(
@@ -60,6 +60,7 @@ pub fn spawn_control_actor_with_services(
     object_loader: Option<Arc<dyn ObjectResourceLoader>>,
     dataset_inspector: Option<Arc<dyn DatasetInspector>>,
     task_registry: Option<Arc<TaskRegistry>>,
+    remote_backend: Option<Arc<dyn RemoteDatasetBackend>>,
 ) -> anyhow::Result<ControlActorChannels> {
     let (request_tx, request_rx) =
         crossbeam_channel::bounded::<OdonControlRequest>(ACTOR_QUEUE_CAPACITY);
@@ -80,8 +81,16 @@ pub fn spawn_control_actor_with_services(
     diagnostics.set_alive(true);
     let dataset_inspector: Arc<dyn DatasetInspector> =
         dataset_inspector.unwrap_or_else(|| Arc::new(CoreDatasetInspector));
+    let remote_backend: Arc<dyn RemoteDatasetBackend> =
+        remote_backend.unwrap_or_else(|| Arc::new(CoreRemoteDatasetBackend));
 
-    spawn_resource_workers(load_job_rx, load_tx, object_loader, dataset_inspector)?;
+    spawn_resource_workers(
+        load_job_rx,
+        load_tx,
+        object_loader,
+        dataset_inspector,
+        remote_backend,
+    )?;
 
     thread::Builder::new()
         .name("odon-control-actor".to_string())
@@ -91,6 +100,7 @@ pub fn spawn_control_actor_with_services(
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut model = AppModel::project();
                     let mut render_document = None;
+                    let mut remote_session = RemoteSessionState::default();
                     loop {
                         while let Ok(update) = model_rx.try_recv() {
                             apply_model_update(
@@ -117,6 +127,7 @@ pub fn spawn_control_actor_with_services(
                                     &platform_effect_tx,
                                     &load_job_tx,
                                     &render_document,
+                                    &mut remote_session,
                                     &resource_registry,
                                     &wake_ui,
                                     &diagnostics,
@@ -128,6 +139,7 @@ pub fn spawn_control_actor_with_services(
                                     &mut model,
                                     &mut render_document,
                                     completion,
+                                    &mut remote_session,
                                     &resource_registry,
                                     &presentation_tx,
                                     &presentation_coalesce_rx,
@@ -193,7 +205,11 @@ fn apply_model_update(
                         descriptor: crate::data::document::DocumentDescriptor::from_ome_zarr(
                             &dataset,
                         ),
-                        resource: OmeZarrDocumentResource { dataset, store },
+                        resource: OmeZarrDocumentResource {
+                            dataset,
+                            store,
+                            runtime_guard: None,
+                        },
                     },
                 }));
             }

@@ -28,6 +28,24 @@ pub(super) enum LoadCompletion {
             Option<ControlLabelResource>,
         )>,
     },
+    RemoteList {
+        session_generation: u64,
+        operation_generation: u64,
+        operation_scope: String,
+        request: OdonControlRequest,
+        result: anyhow::Result<crate::data::remote_store::S3BrowseListing>,
+    },
+    RemoteOpen {
+        generation: u64,
+        session_generation: Option<u64>,
+        request: OdonControlRequest,
+        identity: RemoteOpenIdentity,
+        result: anyhow::Result<(
+            OpenedDocument<OmeZarrDocumentResource>,
+            Vec<String>,
+            Option<ControlLabelResource>,
+        )>,
+    },
     ChannelIntensity {
         generation: u64,
         request: OdonControlRequest,
@@ -154,6 +172,8 @@ impl LoadCompletion {
             Self::DatasetInspect { .. }
             | Self::DeepLinkResolve { .. }
             | Self::OmeZarr { .. }
+            | Self::RemoteList { .. }
+            | Self::RemoteOpen { .. }
             | Self::ChannelIntensity { .. } => CompletionDomain::Opening,
             Self::ProjectOpen { .. }
             | Self::ProjectSave { .. }
@@ -190,6 +210,20 @@ pub(super) enum LoadJob {
         generation: u64,
         request: OdonControlRequest,
         path: PathBuf,
+    },
+    RemoteList {
+        session_generation: u64,
+        operation_generation: u64,
+        operation_scope: String,
+        request: OdonControlRequest,
+        credentials: crate::data::remote_store::S3SessionCredentials,
+        prefix: String,
+    },
+    RemoteOpen {
+        generation: u64,
+        session_generation: Option<u64>,
+        request: OdonControlRequest,
+        spec: RemoteOpenSpec,
     },
     ChannelIntensity {
         generation: u64,

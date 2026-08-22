@@ -197,6 +197,7 @@ pub struct AppModel {
     presented_projection_revision: u64,
     document_generation: u64,
     dataset_inspection_operation_generation: u64,
+    remote_listing_operation_generation: u64,
     deep_link_resolve_operation_generation: u64,
     project_operation_generation: u64,
     project_operation_pending: bool,
@@ -261,6 +262,7 @@ impl AppModel {
             presented_projection_revision: 0,
             document_generation: 0,
             dataset_inspection_operation_generation: 0,
+            remote_listing_operation_generation: 0,
             deep_link_resolve_operation_generation: 0,
             project_operation_generation: 0,
             project_operation_pending: false,
@@ -3072,6 +3074,56 @@ impl AppModel {
     ) -> bool {
         self.readiness
             .finish_scoped(OperationKind::DatasetInspection, scope, generation, status)
+    }
+
+    pub fn begin_remote_listing(&mut self, scope: String) -> u64 {
+        self.remote_listing_operation_generation = self
+            .remote_listing_operation_generation
+            .wrapping_add(1)
+            .max(1);
+        let generation = self.remote_listing_operation_generation;
+        self.readiness.begin_scoped(
+            OperationKind::RemoteListing,
+            scope,
+            generation,
+            "Listing remote S3 prefix",
+        );
+        generation
+    }
+
+    pub fn finish_remote_listing(&mut self, scope: &str, generation: u64) -> bool {
+        self.readiness.finish_scoped(
+            OperationKind::RemoteListing,
+            scope,
+            generation,
+            "Remote S3 listing complete",
+        )
+    }
+
+    pub fn fail_remote_listing(
+        &mut self,
+        scope: &str,
+        generation: u64,
+        status: impl Into<String>,
+    ) -> bool {
+        self.readiness
+            .fail_scoped(OperationKind::RemoteListing, scope, generation, status)
+    }
+
+    pub fn cancel_remote_listing(
+        &mut self,
+        scope: &str,
+        generation: u64,
+        status: impl Into<String>,
+    ) -> bool {
+        self.readiness
+            .cancel_scoped(OperationKind::RemoteListing, scope, generation, status)
+    }
+
+    pub fn cancel_pending_remote_listings(&mut self, status: impl Into<String>) {
+        let status = status.into();
+        self.readiness
+            .cancel_kind_pending(OperationKind::RemoteListing, &status);
     }
 
     pub fn cancel_dataset_inspection(

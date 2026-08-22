@@ -67,13 +67,20 @@ pub struct OpenedDocument<R> {
 pub struct OmeZarrDocumentResource {
     pub dataset: OmeZarrDataset,
     pub store: Arc<dyn ReadableStorageTraits>,
+    /// Keeps source-specific asynchronous infrastructure alive for synchronous storage adapters.
+    /// Local and HTTP stores do not need one; S3 stores retain their Tokio runtime here.
+    pub runtime_guard: Option<Arc<tokio::runtime::Runtime>>,
 }
 
 pub fn open_local_ome_zarr(path: &Path) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>> {
     let (dataset, store) = OmeZarrDataset::open_local(path)?;
     Ok(OpenedDocument {
         descriptor: DocumentDescriptor::from_ome_zarr(&dataset),
-        resource: OmeZarrDocumentResource { dataset, store },
+        resource: OmeZarrDocumentResource {
+            dataset,
+            store,
+            runtime_guard: None,
+        },
     })
 }
 

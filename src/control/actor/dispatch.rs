@@ -9,6 +9,7 @@ pub(super) fn dispatch_request(
     platform_effect_tx: &Sender<PlatformEffect>,
     load_job_tx: &Sender<LoadJob>,
     render_document: &Option<Arc<RenderDocument>>,
+    remote_session: &mut RemoteSessionState,
     resource_registry: &ResourceRegistry,
     wake_ui: &UiWake,
     diagnostics: &ActorDiagnostics,
@@ -80,6 +81,43 @@ pub(super) fn dispatch_request(
             diagnostics,
         );
         return;
+    }
+
+    match request.command.method() {
+        "datasets.s3.get_session" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            finish_request(request, remote_session.snapshot(), diagnostics);
+            return;
+        }
+        "datasets.s3.configure_session" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            let params = request.command.params().clone();
+            let response = remote_session.configure(&params, model);
+            finish_request(request, response, diagnostics);
+            return;
+        }
+        "datasets.s3.clear_session" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            let response = remote_session.clear(model);
+            finish_request(request, response, diagnostics);
+            return;
+        }
+        "datasets.s3.list" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            begin_remote_list(model, remote_session, request, load_job_tx, diagnostics);
+            return;
+        }
+        "datasets.open_http" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            begin_remote_http_open(model, request, load_job_tx, diagnostics);
+            return;
+        }
+        "datasets.open_s3" => {
+            diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+            begin_remote_s3_open(model, remote_session, request, load_job_tx, diagnostics);
+            return;
+        }
+        _ => {}
     }
 
     if request.command.method() == "datasets.open_ome_zarr" {

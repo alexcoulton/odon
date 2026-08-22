@@ -8,6 +8,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
     let CompletionContext {
         model,
         render_document,
+        remote_session: _,
         resource_registry,
         presentation_tx,
         presentation_coalesce_rx,

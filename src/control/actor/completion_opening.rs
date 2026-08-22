@@ -5,6 +5,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
     let CompletionContext {
         model,
         render_document,
+        remote_session,
         presentation_tx,
         presentation_coalesce_rx,
         wake_ui,
@@ -166,6 +167,194 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::RemoteList {
+            session_generation,
+            operation_generation,
+            operation_scope,
+            request,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.cancel_remote_listing(
+                    &operation_scope,
+                    operation_generation,
+                    "Remote S3 listing was cancelled",
+                );
+                reject_cancelled_request(request, diagnostics, "remote S3 listing");
+                return;
+            }
+            if !remote_session.is_current(session_generation) {
+                model.cancel_remote_listing(
+                    &operation_scope,
+                    operation_generation,
+                    "S3 session changed before listing completed",
+                );
+                diagnostics
+                    .stale_worker_completions
+                    .fetch_add(1, Ordering::Relaxed);
+                reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::new(
+                        ControlErrorKind::Conflict,
+                        "S3 listing was superseded by a session change",
+                    ),
+                );
+                return;
+            }
+            match result {
+                Ok(listing) => {
+                    if !model.finish_remote_listing(&operation_scope, operation_generation) {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "S3 listing was superseded by a newer request",
+                            ),
+                        );
+                        return;
+                    }
+                    let session = remote_session.snapshot();
+                    finish_request(
+                        request,
+                        json!({
+                            "endpoint": session["endpoint"],
+                            "region": session["region"],
+                            "bucket": session["bucket"],
+                            "prefix": listing.prefix,
+                            "parent_prefix": listing.parent_prefix,
+                            "current_is_dataset": listing.current_is_dataset,
+                            "entries": listing.entries,
+                            "session_generation": session_generation,
+                        }),
+                        diagnostics,
+                    );
+                }
+                Err(error) => {
+                    let message = format!("failed to list S3 prefix: {error}");
+                    model.fail_remote_listing(&operation_scope, operation_generation, &message);
+                    reject_actor_request(
+                        request,
+                        diagnostics,
+                        ControlError::new(ControlErrorKind::Application, message),
+                    );
+                }
+            }
+        }
+        LoadCompletion::RemoteOpen {
+            generation,
+            session_generation,
+            request,
+            identity,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.fail_dataset_open_for_generation(generation, "remote open was cancelled");
+                remote_session.finish_s3_open(generation);
+                reject_cancelled_request(request, diagnostics, "remote dataset open");
+                return;
+            }
+            if let Some(session_generation) = session_generation
+                && !remote_session.is_current(session_generation)
+            {
+                model.fail_dataset_open_for_generation(
+                    generation,
+                    "S3 session changed before dataset open completed",
+                );
+                remote_session.finish_s3_open(generation);
+                diagnostics
+                    .stale_worker_completions
+                    .fetch_add(1, Ordering::Relaxed);
+                reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::new(
+                        ControlErrorKind::Conflict,
+                        "S3 dataset open was superseded by a session change",
+                    ),
+                );
+                return;
+            }
+            match result {
+                Ok((opened, label_available, root_label_resource)) => {
+                    let root_label_resource = root_label_resource.map(Arc::new);
+                    if !model.install_document_for_generation(
+                        generation,
+                        opened.descriptor.clone(),
+                        label_available,
+                        root_label_resource,
+                    ) {
+                        remote_session.finish_s3_open(generation);
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "remote dataset open was superseded by a newer request",
+                            ),
+                        );
+                        return;
+                    }
+                    *render_document = Some(Arc::new(RenderDocument { generation, opened }));
+                    remote_session.finish_s3_open(generation);
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                    let mut response = remote_open_response(&identity);
+                    response.as_object_mut().unwrap().extend([
+                        ("opened".to_string(), Value::Bool(true)),
+                        ("mode".to_string(), Value::String("single".to_string())),
+                        ("model_ready".to_string(), Value::Bool(true)),
+                        ("resources_ready".to_string(), Value::Bool(true)),
+                        ("presentation_ready".to_string(), Value::Bool(false)),
+                    ]);
+                    finish_request(request, response, diagnostics);
+                }
+                Err(error) => {
+                    remote_session.finish_s3_open(generation);
+                    let message = match identity {
+                        RemoteOpenIdentity::Http { .. } => {
+                            format!("failed to open remote OME-Zarr: {error}")
+                        }
+                        RemoteOpenIdentity::S3 { .. } => {
+                            format!("failed to open S3 OME-Zarr: {error}")
+                        }
+                    };
+                    if model.fail_dataset_open_for_generation(generation, &message) {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message)
+                                .with_data(remote_open_response(&identity)),
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "failed remote dataset open was superseded by a newer request",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         LoadCompletion::ChannelIntensity {
             generation,
             request,
@@ -210,5 +399,26 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             }
         }
         _ => unreachable!("completion domain mismatch"),
+    }
+}
+
+fn remote_open_response(identity: &RemoteOpenIdentity) -> Value {
+    match identity {
+        RemoteOpenIdentity::Http { url } => json!({
+            "kind":"http_ome_zarr",
+            "url":url,
+        }),
+        RemoteOpenIdentity::S3 {
+            endpoint,
+            region,
+            bucket,
+            prefix,
+        } => json!({
+            "kind":"s3_ome_zarr",
+            "endpoint":endpoint,
+            "region":region,
+            "bucket":bucket,
+            "prefix":prefix,
+        }),
     }
 }

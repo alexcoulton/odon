@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 pub(crate) enum OperationKind {
     Document,
     DatasetInspection,
+    RemoteListing,
     DeepLinkResolve,
     ProjectIo,
     Labels,
@@ -20,6 +21,7 @@ impl OperationKind {
         match self {
             Self::Document => "document",
             Self::DatasetInspection => "dataset_inspection",
+            Self::RemoteListing => "remote_listing",
             Self::DeepLinkResolve => "deep_link_resolve",
             Self::ProjectIo => "project_io",
             Self::Labels => "labels",

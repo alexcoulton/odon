@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct CompletionContext<'a> {
     pub(super) model: &'a mut AppModel,
     pub(super) render_document: &'a mut Option<Arc<RenderDocument>>,
+    pub(super) remote_session: &'a mut RemoteSessionState,
     pub(super) resource_registry: &'a ResourceRegistry,
     pub(super) presentation_tx: &'a Sender<RenderProjection>,
     pub(super) presentation_coalesce_rx: &'a Receiver<RenderProjection>,
@@ -16,6 +17,7 @@ pub(super) fn finish_load(
     model: &mut AppModel,
     render_document: &mut Option<Arc<RenderDocument>>,
     completion: LoadCompletion,
+    remote_session: &mut RemoteSessionState,
     resource_registry: &ResourceRegistry,
     presentation_tx: &Sender<RenderProjection>,
     presentation_coalesce_rx: &Receiver<RenderProjection>,
@@ -31,6 +33,7 @@ pub(super) fn finish_load(
     let context = CompletionContext {
         model,
         render_document,
+        remote_session,
         resource_registry,
         presentation_tx,
         presentation_coalesce_rx,

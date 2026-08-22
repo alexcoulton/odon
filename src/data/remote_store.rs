@@ -5,6 +5,144 @@ use object_store::ObjectStore;
 use object_store::path::Path as ObjectPath;
 use zarrs::storage::ReadableStorageTraits;
 
+use super::dataset_source::DatasetSource;
+use super::document::{DocumentDescriptor, OmeZarrDocumentResource, OpenedDocument};
+use super::ome::OmeZarrDataset;
+
+/// Session-only S3 credentials passed directly from the control actor to a bounded worker.
+///
+/// Deliberately does not implement `Debug` or `Serialize`: secrets must never enter snapshots,
+/// diagnostics, events, or accidental debug output.
+#[derive(Clone)]
+pub struct S3SessionCredentials {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
+}
+
+impl S3SessionCredentials {
+    pub fn normalized(
+        endpoint: &str,
+        region: &str,
+        bucket: &str,
+        access_key: &str,
+        secret_key: &str,
+    ) -> Self {
+        let endpoint = endpoint.trim().trim_end_matches('/');
+        let endpoint = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            endpoint.to_string()
+        } else {
+            format!("https://{endpoint}")
+        };
+        Self {
+            endpoint,
+            region: if region.trim().is_empty() {
+                "auto".to_string()
+            } else {
+                region.trim().to_string()
+            },
+            bucket: bucket.trim().to_string(),
+            access_key: access_key.trim().to_string(),
+            secret_key: secret_key.trim().to_string(),
+        }
+    }
+
+    pub fn redact_message(&self, message: &str) -> String {
+        let mut redacted = message.to_string();
+        for secret in [&self.access_key, &self.secret_key] {
+            if !secret.is_empty() {
+                redacted = redacted.replace(secret, "[redacted]");
+            }
+        }
+        redacted
+    }
+}
+
+pub trait RemoteDatasetBackend: Send + Sync {
+    fn list_s3(
+        &self,
+        credentials: &S3SessionCredentials,
+        prefix: &str,
+    ) -> anyhow::Result<S3BrowseListing>;
+
+    fn open_http(&self, url: &str) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>>;
+
+    fn open_s3(
+        &self,
+        credentials: &S3SessionCredentials,
+        prefix: &str,
+    ) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>>;
+}
+
+pub struct CoreRemoteDatasetBackend;
+
+impl RemoteDatasetBackend for CoreRemoteDatasetBackend {
+    fn list_s3(
+        &self,
+        credentials: &S3SessionCredentials,
+        prefix: &str,
+    ) -> anyhow::Result<S3BrowseListing> {
+        let browser = build_s3_browser(
+            &credentials.endpoint,
+            &credentials.region,
+            &credentials.bucket,
+            &credentials.access_key,
+            &credentials.secret_key,
+        )?;
+        list_s3_prefix(&browser, prefix)
+    }
+
+    fn open_http(&self, url: &str) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>> {
+        let url = url.trim().trim_end_matches('/').to_string();
+        let store = build_http_store(&url)?;
+        let source = DatasetSource::Http {
+            base_url: url.clone(),
+        };
+        let dataset = OmeZarrDataset::open_with_store(source, Arc::clone(&store))?;
+        Ok(OpenedDocument {
+            descriptor: DocumentDescriptor::from_ome_zarr(&dataset),
+            resource: OmeZarrDocumentResource {
+                dataset,
+                store,
+                runtime_guard: None,
+            },
+        })
+    }
+
+    fn open_s3(
+        &self,
+        credentials: &S3SessionCredentials,
+        prefix: &str,
+    ) -> anyhow::Result<OpenedDocument<OmeZarrDocumentResource>> {
+        let prefix = normalize_prefix(prefix);
+        let S3Store { store, runtime } = build_s3_store(
+            &credentials.endpoint,
+            &credentials.region,
+            &credentials.bucket,
+            &prefix,
+            &credentials.access_key,
+            &credentials.secret_key,
+        )?;
+        let source = DatasetSource::S3 {
+            endpoint: credentials.endpoint.clone(),
+            region: credentials.region.clone(),
+            bucket: credentials.bucket.clone(),
+            prefix,
+        };
+        let dataset = OmeZarrDataset::open_with_store(source, Arc::clone(&store))?;
+        Ok(OpenedDocument {
+            descriptor: DocumentDescriptor::from_ome_zarr(&dataset),
+            resource: OmeZarrDocumentResource {
+                dataset,
+                store,
+                runtime_guard: Some(runtime),
+            },
+        })
+    }
+}
+
 pub fn build_http_store(base_url: &str) -> anyhow::Result<Arc<dyn ReadableStorageTraits>> {
     let base_url = base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
@@ -30,14 +168,14 @@ pub struct S3Browser {
     pub runtime: Arc<tokio::runtime::Runtime>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct S3BrowseEntry {
     pub prefix: String,
     pub name: String,
     pub is_dataset: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct S3BrowseListing {
     pub prefix: String,
     pub parent_prefix: Option<String>,

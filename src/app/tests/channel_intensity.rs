@@ -24,7 +24,11 @@ fn background_worker_preserves_channel_intensity_statistics() {
         generation: model.document_generation(),
         opened: odon::data::document::OpenedDocument {
             descriptor: odon::data::document::DocumentDescriptor::from_ome_zarr(&dataset),
-            resource: odon::data::document::OmeZarrDocumentResource { dataset, store },
+            resource: odon::data::document::OmeZarrDocumentResource {
+                dataset,
+                store,
+                runtime_guard: None,
+            },
         },
     };
     let actor = odon::control::actor::read_channel_intensity_stats(&document, &spec)

@@ -31,6 +31,7 @@ fn actor_owned_task_cancellation_remains_responsive_during_worker_io() {
             release: Mutex::new(release_rx),
         })),
         None,
+        None,
     )
     .unwrap();
     let task = channels
