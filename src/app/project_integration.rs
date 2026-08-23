@@ -758,8 +758,17 @@ impl OmeZarrViewerApp {
         };
 
         if opened {
-            self.show_right_panel = true;
-            self.right_tab = RightTab::Analysis;
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.panels.set",
+                params: serde_json::json!({
+                    "left":self.show_left_panel,
+                    "right":true,
+                }),
+            });
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.ui.set_right_tab",
+                params: serde_json::json!({"tab":"analysis"}),
+            });
         } else {
             self.set_status(
                 "Mapping settings are available for segmentation objects and object-backed SpatialData shape layers.",

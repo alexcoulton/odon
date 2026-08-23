@@ -135,6 +135,27 @@ fn actor_native_layer_projection_is_the_only_committed_renderer_write() {
 }
 
 #[test]
+fn native_layer_commits_queue_before_first_projection_without_mutating_renderer_state() {
+    let mut app = fixture_app();
+    app.control_actor_workspace_revision = 0;
+    let active_before = app.active_layer;
+    let offset_before = app.layer_offset_world(LayerId::Channel(0));
+
+    app.commit_active_layer(LayerId::Channel(1));
+    let active = take_one(&mut app, "viewer.viewports.layers.set_active");
+    assert_eq!(active.params["if_presentation_revision"], 1);
+    assert_eq!(app.active_layer, active_before);
+
+    assert!(app.commit_layer_offsets(&[LayerOffsetEntry {
+        layer: LayerId::Channel(0),
+        offset_world: egui::vec2(12.0, -4.0),
+    }]));
+    let offset = take_one(&mut app, "viewer.viewports.layers.state.replace");
+    assert_eq!(offset.params["if_presentation_revision"], 1);
+    assert_eq!(app.layer_offset_world(LayerId::Channel(0)), offset_before);
+}
+
+#[test]
 fn first_native_layer_projection_cannot_feed_an_active_mask_command_back_to_the_actor() {
     let mut app = fixture_app();
     app.control_actor_workspace_revision = 0;

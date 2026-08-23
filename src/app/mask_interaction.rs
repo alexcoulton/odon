@@ -304,9 +304,6 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn finish_native_layer_move(&mut self, state: &LayerMoveState) {
-        if !self.native_layers_actor_owned() {
-            return;
-        }
         let mut desired_native = self.control_native_layer_snapshot_list();
         let mut desired = self.mask_layers.clone();
         let mut mask_changed = false;

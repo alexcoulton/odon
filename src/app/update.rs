@@ -159,17 +159,14 @@ impl eframe::App for OmeZarrViewerApp {
                 }
                 ui.separator();
                 let panels_before = (self.show_left_panel, self.show_right_panel);
-                top_bar::ui_panel_toggles(
-                    ui,
-                    &mut self.show_left_panel,
-                    &mut self.show_right_panel,
-                );
-                if panels_before != (self.show_left_panel, self.show_right_panel) {
+                let (mut show_left_panel, mut show_right_panel) = panels_before;
+                top_bar::ui_panel_toggles(ui, &mut show_left_panel, &mut show_right_panel);
+                if panels_before != (show_left_panel, show_right_panel) {
                     self.native_control_intents.push(NativeControlIntent {
                         method: "viewer.panels.set",
                         params: serde_json::json!({
-                            "left": self.show_left_panel,
-                            "right": self.show_right_panel,
+                            "left": show_left_panel,
+                            "right": show_right_panel,
                         }),
                     });
                 }
@@ -191,24 +188,13 @@ impl eframe::App for OmeZarrViewerApp {
                 ui.checkbox(&mut show_hud, "HUD");
                 ui.checkbox(&mut show_scale_bar, "Scale Bar");
                 let rendering_after = (smooth_pixels, show_tile_debug, show_hud, show_scale_bar);
-                if rendering_after != rendering_before
-                    && !self.submit_native_active_viewport_rendering(
+                if rendering_after != rendering_before {
+                    self.submit_native_active_viewport_rendering(
                         smooth_pixels,
                         show_scale_bar,
                         show_hud,
                         show_tile_debug,
-                    )
-                {
-                    self.smooth_pixels = smooth_pixels;
-                    self.show_tile_debug = show_tile_debug;
-                    self.show_hud = show_hud;
-                    self.show_scale_bar = show_scale_bar;
-                    // Smoothness is presentation-local. The CPU render ID and
-                    // each GPU paint callback carry the selected sampling mode,
-                    // so changing one view must not clear another view's cache.
-                    if smooth_pixels != rendering_before.0 {
-                        self.bump_render_id();
-                    }
+                    );
                 }
 
                 if have_channels {
@@ -468,7 +454,6 @@ impl eframe::App for OmeZarrViewerApp {
                     }
                 },
             );
-            self.right_tab = tab;
             if tab != previous_tab {
                 self.native_control_intents.push(NativeControlIntent {
                     method: "viewer.ui.set_right_tab",

@@ -156,7 +156,7 @@
         "projection_source": "viewport layer presentation projection",
         "renderer_consumers": "layer panels and quick-contrast UI",
         "persistence_consumers": "project workspace for externally visible active targets",
-        "native_commit_point": "typed native-layer command",
+        "native_commit_point": "typed native-layer command with no projection-readiness mutation fallback",
         "milestone": 3
       },
       {
@@ -178,7 +178,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor viewport UI settings",
         "projection_source": "viewport presentation projection",
-        "renderer_consumers": "egui panel layout",
+        "renderer_consumers": "egui panel layout; actor-owned panel/right-tab controls wait for projection while left-tab selection remains local",
         "persistence_consumers": "project workspace and settings",
         "native_commit_point": "typed viewer UI command",
         "milestone": 3
@@ -420,7 +420,7 @@
         "projection_source": "native-layer projection",
         "renderer_consumers": "canvas transforms",
         "persistence_consumers": "project workspace and saved views",
-        "native_commit_point": "typed native-layer transform command after gesture",
+        "native_commit_point": "typed native-layer transform command after gesture with no projection-readiness fallback",
         "milestone": 3
       },
       {
@@ -432,7 +432,7 @@
         "projection_source": "native-layer and channel projection",
         "renderer_consumers": "layer panels and paint ordering",
         "persistence_consumers": "project workspace and saved views",
-        "native_commit_point": "typed ordering command",
+        "native_commit_point": "typed ordering command with no projection-readiness fallback",
         "milestone": 3
       },
       {

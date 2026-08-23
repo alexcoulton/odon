@@ -82,6 +82,12 @@ fn native_channel_controls_queue_before_first_projection_without_mutating_render
     let contrast = take_one(&mut app, "viewer.viewports.layers.state.replace");
     assert_eq!(contrast.params["if_presentation_revision"], 1);
     assert_eq!(app.channels[0].window, window_before);
+
+    let scale_bar_before = app.show_scale_bar;
+    assert!(app.submit_native_scale_bar_visibility(!scale_bar_before));
+    let rendering = take_one(&mut app, "viewer.viewports.rendering.set");
+    assert_eq!(rendering.params["if_presentation_revision"], 1);
+    assert_eq!(app.show_scale_bar, scale_bar_before);
 }
 
 #[test]

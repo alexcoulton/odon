@@ -2,17 +2,13 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(super) fn ui_layer_properties(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let actor_transaction = self.native_layers_actor_owned().then(|| {
-            (
-                self.control_native_layer_snapshot_list(),
-                self.seg_objects.viewport_filter_state(),
-                self.active_viewport_command_scope(),
-            )
-        });
+        let actor_transaction = (
+            self.control_native_layer_snapshot_list(),
+            self.seg_objects.viewport_filter_state(),
+            self.active_viewport_command_scope(),
+        );
         self.ui_layer_properties_inner(ui, ctx);
-        let Some((before_native, before_filter, actor_scope)) = actor_transaction else {
-            return;
-        };
+        let (before_native, before_filter, actor_scope) = actor_transaction;
         let after_filter = self.seg_objects.viewport_filter_state();
         let mut after_native = self.control_native_layer_snapshot_list();
         if after_filter != before_filter {
@@ -145,15 +141,8 @@ impl OmeZarrViewerApp {
             });
 
             rot = deg.to_radians();
-            if transform_changed && self.native_layers_actor_owned() {
+            if transform_changed {
                 self.submit_native_channel_transform(idx, None, Some(scale), Some(rot));
-            } else {
-                if let Some(dst) = self.channel_scales.get_mut(idx) {
-                    *dst = scale;
-                }
-                if let Some(dst) = self.channel_rotations_rad.get_mut(idx) {
-                    *dst = rot;
-                }
             }
         }
 

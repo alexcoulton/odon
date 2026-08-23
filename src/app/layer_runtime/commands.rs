@@ -1,10 +1,6 @@
 use super::*;
 
 impl OmeZarrViewerApp {
-    pub(in crate::app) fn native_layers_actor_owned(&self) -> bool {
-        self.control_actor_workspace_revision > 0
-    }
-
     pub(crate) fn control_projection_gesture_active(&self) -> bool {
         self.layer_move.is_some()
             || self.layer_transform.is_some()
@@ -235,38 +231,12 @@ impl OmeZarrViewerApp {
     }
 
     pub(in crate::app) fn commit_active_layer(&mut self, id: LayerId) {
-        if self.native_layers_actor_owned() {
-            if self.mask_actor_owned() {
-                match id {
-                    LayerId::Mask(mask_id)
-                        if self.mask_layers.iter().any(|layer| layer.id == mask_id) =>
-                    {
-                        self.submit_native_mask_active_layer(Some(mask_id));
-                    }
-                    _ if matches!(self.active_layer, LayerId::Mask(_)) => {
-                        self.submit_native_mask_active_layer(None);
-                    }
-                    _ => {}
-                }
-            }
-            self.submit_native_layer_active(id);
-            return;
-        }
-        self.set_active_layer_local(id);
-    }
-
-    pub(in crate::app) fn set_active_layer(&mut self, id: LayerId) {
-        self.set_active_layer_local(id);
-    }
-
-    pub(in crate::app) fn set_active_layer_local(&mut self, id: LayerId) {
-        if self.mask_actor_owned() && !self.native_layers_actor_owned() {
+        if self.mask_actor_owned() {
             match id {
                 LayerId::Mask(mask_id)
                     if self.mask_layers.iter().any(|layer| layer.id == mask_id) =>
                 {
                     self.submit_native_mask_active_layer(Some(mask_id));
-                    return;
                 }
                 _ if matches!(self.active_layer, LayerId::Mask(_)) => {
                     self.submit_native_mask_active_layer(None);
@@ -274,6 +244,14 @@ impl OmeZarrViewerApp {
                 _ => {}
             }
         }
+        self.submit_native_layer_active(id);
+    }
+
+    pub(in crate::app) fn set_active_layer(&mut self, id: LayerId) {
+        self.set_active_layer_local(id);
+    }
+
+    pub(in crate::app) fn set_active_layer_local(&mut self, id: LayerId) {
         self.active_layer = id;
         if self
             .selected_mask_polygon

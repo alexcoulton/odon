@@ -2083,7 +2083,7 @@ impl eframe::App for RootApp {
                         NativeMenuAction::SetScaleBarVisible(visible) => {
                             self.view_show_scale_bar = visible;
                             if let Mode::Single(app) = &mut self.mode {
-                                app.set_show_scale_bar(visible);
+                                app.submit_native_scale_bar_visibility(visible);
                             }
                         }
                         action @ (NativeMenuAction::CloseWindow | NativeMenuAction::Quit) => {

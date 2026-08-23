@@ -1203,10 +1203,40 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
             "native channel controls must not regain projection-readiness mutation fallbacks: {actor_only_channel_source}"
         );
     }
+    for actor_only_layer_source in [
+        "layer_runtime/commands.rs",
+        "layer_runtime/offsets.rs",
+        "layer_properties.rs",
+        "layers_ui.rs",
+        "mask_interaction.rs",
+        "canvas/interactions.rs",
+    ] {
+        assert!(
+            !source(app_dir.join(actor_only_layer_source)).contains("native_layers_actor_owned"),
+            "native layer controls must not regain projection-readiness mutation fallbacks: {actor_only_layer_source}"
+        );
+    }
+    let update = source(app_dir.join("update.rs"));
+    for forbidden_presentation_write in [
+        "self.show_left_panel =",
+        "self.show_right_panel =",
+        "self.right_tab =",
+        "self.smooth_pixels =",
+        "self.show_scale_bar =",
+        "self.show_hud =",
+        "self.show_tile_debug =",
+    ] {
+        assert!(
+            !update.contains(forbidden_presentation_write),
+            "native presentation controls must wait for actor projection: {forbidden_presentation_write}"
+        );
+    }
+    assert!(!source(app_dir.join("project_integration.rs")).contains("self.right_tab ="));
 
     let root = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app.rs"));
     assert!(root.contains("app.control_renderer_observation_snapshot()"));
     assert!(root.contains("report_renderer_observation("));
+    assert!(!root.contains("app.set_show_scale_bar(visible)"));
 }
 
 #[test]

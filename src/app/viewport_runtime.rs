@@ -34,6 +34,15 @@ impl OmeZarrViewerApp {
         )
     }
 
+    pub(crate) fn submit_native_scale_bar_visibility(&mut self, show: bool) -> bool {
+        self.submit_native_active_viewport_rendering(
+            self.smooth_pixels,
+            show,
+            self.show_hud,
+            self.show_tile_debug,
+        )
+    }
+
     pub(super) fn submit_native_active_viewport_plane(
         &mut self,
         mode: ViewPlaneMode,

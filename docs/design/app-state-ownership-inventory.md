@@ -349,6 +349,12 @@ Channel visibility/order controls, active-channel stepping, contrast, RGB preset
 groups now follow the same command-only rule before and after the first projection. Renderer
 channel values are consumed projection data; the deleted readiness branches can no longer treat
 them as a startup semantic authority.
+Generic native-layer activation, visibility, ordering, offsets, transforms, and property edits no
+longer branch on whether the first projection has arrived. Gesture fields retain only their
+preview and starting revision; the committed state is a typed actor command. Panel visibility,
+right-tab selection, rendering preferences, and the native scale-bar action likewise wait for
+projection instead of changing actor-owned renderer fields directly. `left_tab` remains local and
+must be classified or modeled before the panel-settings ledger row closes.
 
 ## Native cutover status
 

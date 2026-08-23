@@ -201,6 +201,10 @@ container remain to be narrowed before the first ownership slice is closed. Nati
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
 the renderer only as the current paint/UI input.
+Generic native-layer activation, visibility, ordering, offsets, transforms, and property
+transactions now obey the same rule. Actor-owned panel toggles, right-tab selection, viewport
+rendering preferences, and the native scale-bar menu also remain unchanged locally until their
+projection arrives. The locally selected left panel tab is still an unmodeled compatibility item.
 
 Ownership slices, in order:
 

@@ -354,10 +354,7 @@ impl OmeZarrViewerApp {
                     self.ensure_loaded_layer_offset_baselines_for(&targets);
                     self.push_layer_offsets_undo_snapshot(&targets);
                     self.layer_move = Some(LayerMoveState {
-                        actor_scope: self
-                            .native_layers_actor_owned()
-                            .then(|| self.active_viewport_command_scope())
-                            .flatten(),
+                        actor_scope: self.active_viewport_command_scope(),
                         targets: targets
                             .into_iter()
                             .map(|layer| LayerOffsetEntry {
@@ -477,10 +474,7 @@ impl OmeZarrViewerApp {
                         start_pointer_screen: pointer,
                         start_angle_rad,
                         start_len_screen,
-                        actor_scope: self
-                            .native_layers_actor_owned()
-                            .then(|| self.active_viewport_command_scope())
-                            .flatten(),
+                        actor_scope: self.active_viewport_command_scope(),
                     });
                 } else {
                     self.layer_transform = None;

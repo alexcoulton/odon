@@ -161,27 +161,10 @@ impl OmeZarrViewerApp {
                             .add(egui::Checkbox::new(&mut all, "All").indeterminate(overlays_mixed))
                             .changed()
                         {
-                            if self.native_layers_actor_owned() {
-                                self.submit_native_layer_visibilities(
-                                    overlay_ids.iter().copied(),
-                                    all,
-                                );
-                            } else {
-                                let mut mask_visibility_changed = false;
-                                for id in overlay_ids {
-                                    if !self.layer_is_available(id) {
-                                        continue;
-                                    }
-                                    if let Some(v) = self.layer_visible_mut(id) {
-                                        mask_visibility_changed |=
-                                            matches!(id, LayerId::Mask(_)) && *v != all;
-                                        *v = all;
-                                    }
-                                }
-                                if mask_visibility_changed {
-                                    self.mark_mask_layers_project_dirty();
-                                }
-                            }
+                            self.submit_native_layer_visibilities(
+                                overlay_ids.iter().copied(),
+                                all,
+                            );
                             self.bump_render_id();
                         }
                     });
@@ -250,18 +233,10 @@ impl OmeZarrViewerApp {
                                                     .on_hover_text("Toggle all annotation layers in group")
                                                     .changed()
                                                 {
-                                                    if self.native_layers_actor_owned() {
-                                                        self.submit_native_layer_visibilities(
-                                                            members.iter().copied().map(LayerId::Annotation),
-                                                            set_all,
-                                                        );
-                                                    } else {
-                                                        for &mid in members {
-                                                            if let Some(v) = self.layer_visible_mut(LayerId::Annotation(mid)) {
-                                                                *v = set_all;
-                                                            }
-                                                        }
-                                                    }
+                                                    self.submit_native_layer_visibilities(
+                                                        members.iter().copied().map(LayerId::Annotation),
+                                                        set_all,
+                                                    );
                                                     group.visible = set_all;
                                                     groups_changed = true;
                                                     self.bump_render_id();
@@ -387,16 +362,7 @@ impl OmeZarrViewerApp {
                             }
                         }
                         if let Some(v) = resp.visible_changed {
-                            let mut mask_visibility_changed = false;
-                            if self.native_layers_actor_owned() {
-                                self.submit_native_layer_visibility(id, v);
-                            } else if let Some(dst) = self.layer_visible_mut(id) {
-                                mask_visibility_changed = matches!(id, LayerId::Mask(_)) && *dst != v;
-                                *dst = v;
-                            }
-                            if mask_visibility_changed && !self.mask_actor_owned() {
-                                self.mark_mask_layers_project_dirty();
-                            }
+                            self.submit_native_layer_visibility(id, v);
                         }
                         if resp.changed {
                             self.bump_render_id();
@@ -496,32 +462,21 @@ impl OmeZarrViewerApp {
             dropped = Some((group, from, to));
         });
         if let Some((group, from, to)) = dropped {
-            if self.native_layers_actor_owned() {
-                match group {
-                    LayerGroup::Overlays => {
-                        let mut order = self.overlay_layer_order.clone();
-                        layer_list::reorder_vec(&mut order, from, to);
-                        self.submit_native_layer_order("overlays", order);
-                    }
-                    LayerGroup::Channels => {
-                        let mut order = self
-                            .channel_layer_order
-                            .iter()
-                            .copied()
-                            .map(LayerId::Channel)
-                            .collect::<Vec<_>>();
-                        layer_list::reorder_vec(&mut order, from, to);
-                        self.submit_native_layer_order("channels", order);
-                    }
+            match group {
+                LayerGroup::Overlays => {
+                    let mut order = self.overlay_layer_order.clone();
+                    layer_list::reorder_vec(&mut order, from, to);
+                    self.submit_native_layer_order("overlays", order);
                 }
-            } else {
-                match group {
-                    LayerGroup::Overlays => {
-                        layer_list::reorder_vec(&mut self.overlay_layer_order, from, to)
-                    }
-                    LayerGroup::Channels => {
-                        layer_list::reorder_vec(&mut self.channel_layer_order, from, to)
-                    }
+                LayerGroup::Channels => {
+                    let mut order = self
+                        .channel_layer_order
+                        .iter()
+                        .copied()
+                        .map(LayerId::Channel)
+                        .collect::<Vec<_>>();
+                    layer_list::reorder_vec(&mut order, from, to);
+                    self.submit_native_layer_order("channels", order);
                 }
             }
             self.bump_render_id();

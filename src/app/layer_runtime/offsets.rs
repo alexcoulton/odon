@@ -295,48 +295,8 @@ impl OmeZarrViewerApp {
     }
 
     pub(in crate::app) fn commit_layer_offsets(&mut self, offsets: &[LayerOffsetEntry]) -> bool {
-        if self.native_layers_actor_owned() {
-            let mut state = self.control_native_layer_snapshot_list();
-            let mut state_changed = false;
-            let mut desired_masks = self.mask_actor_owned().then(|| self.mask_layers.clone());
-            let mut mask_changed = false;
-            for entry in offsets {
-                if let (LayerId::Mask(id), Some(layers)) = (entry.layer, desired_masks.as_mut()) {
-                    if let Some(layer) = layers.iter_mut().find(|layer| layer.id == id)
-                        && (layer.offset_world - entry.offset_world).length_sq() > 1e-12
-                    {
-                        layer.offset_world = entry.offset_world;
-                        mask_changed = true;
-                    }
-                    continue;
-                }
-                let layer_id = Self::layer_id_storage_key(entry.layer);
-                if let Some(layer) = state.as_array_mut().and_then(|layers| {
-                    layers.iter_mut().find(|layer| {
-                        layer.get("layer_id").and_then(serde_json::Value::as_str)
-                            == Some(layer_id.as_str())
-                    })
-                }) {
-                    let desired = serde_json::json!([entry.offset_world.x, entry.offset_world.y]);
-                    if layer.get("offset_world") != Some(&desired) {
-                        layer["offset_world"] = desired;
-                        state_changed = true;
-                    }
-                }
-            }
-            if state_changed {
-                self.submit_native_layer_state_replace(state);
-            }
-            if mask_changed {
-                self.submit_native_mask_state_replace(
-                    desired_masks.as_deref().unwrap_or_default(),
-                    self.mask_selection_value(),
-                );
-            }
-            return state_changed || mask_changed;
-        }
-
-        let mut local_offsets = Vec::new();
+        let mut state = self.control_native_layer_snapshot_list();
+        let mut state_changed = false;
         let mut desired_masks = self.mask_actor_owned().then(|| self.mask_layers.clone());
         let mut mask_changed = false;
         for entry in offsets {
@@ -347,9 +307,24 @@ impl OmeZarrViewerApp {
                     layer.offset_world = entry.offset_world;
                     mask_changed = true;
                 }
-            } else {
-                local_offsets.push(entry.clone());
+                continue;
             }
+            let layer_id = Self::layer_id_storage_key(entry.layer);
+            if let Some(layer) = state.as_array_mut().and_then(|layers| {
+                layers.iter_mut().find(|layer| {
+                    layer.get("layer_id").and_then(serde_json::Value::as_str)
+                        == Some(layer_id.as_str())
+                })
+            }) {
+                let desired = serde_json::json!([entry.offset_world.x, entry.offset_world.y]);
+                if layer.get("offset_world") != Some(&desired) {
+                    layer["offset_world"] = desired;
+                    state_changed = true;
+                }
+            }
+        }
+        if state_changed {
+            self.submit_native_layer_state_replace(state);
         }
         if mask_changed {
             self.submit_native_mask_state_replace(
@@ -357,6 +332,6 @@ impl OmeZarrViewerApp {
                 self.mask_selection_value(),
             );
         }
-        self.apply_layer_offsets(&local_offsets) || mask_changed
+        state_changed || mask_changed
     }
 }
