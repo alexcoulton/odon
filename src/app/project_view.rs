@@ -65,6 +65,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn project_ui_state(&self) -> ProjectUiState {
         ProjectUiState {
             show_left_panel: Some(self.show_left_panel),

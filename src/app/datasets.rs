@@ -42,7 +42,9 @@ impl OmeZarrViewerApp {
         self.submit_native_layer_state_replace(state);
 
         if let Some(ch) = self.channels.get(next_idx) {
-            let _ = self.cell_thresholds.sync_marker_from_channel_name(&ch.name);
+            let _ = self
+                .legacy_cell_threshold_points
+                .sync_marker_from_channel_name(&ch.name);
         }
     }
 
@@ -72,6 +74,8 @@ impl OmeZarrViewerApp {
         }
     }
 
+    /// Legacy project materialization retained only to characterize pre-actor project files.
+    #[cfg(test)]
     pub(super) fn auto_load_project_roi_segmentation(&mut self) {
         if self.seg_objects.loaded_geojson.is_some()
             || self.seg_geojson.loaded_geojson.is_some()
@@ -113,7 +117,7 @@ impl OmeZarrViewerApp {
         };
 
         let Some(ext) = segpath.extension().and_then(|s| s.to_str()) else {
-            self.roi_selector.set_status(format!(
+            self.roi_selector_ui.set_status(format!(
                 "Project segmentation path has no supported extension: {}",
                 segpath.to_string_lossy()
             ));
@@ -121,7 +125,7 @@ impl OmeZarrViewerApp {
         };
 
         if !segpath.exists() {
-            self.roi_selector.set_status(format!(
+            self.roi_selector_ui.set_status(format!(
                 "Project segmentation path was not found: {}",
                 segpath.to_string_lossy()
             ));
@@ -133,7 +137,7 @@ impl OmeZarrViewerApp {
                 self.seg_objects
                     .load_path(segpath.clone(), self.seg_objects.downsample_factor);
                 self.set_active_layer(LayerId::SegmentationObjects);
-                self.roi_selector.set_status(format!(
+                self.roi_selector_ui.set_status(format!(
                     "Loading segmentation: {}",
                     segpath
                         .file_name()
@@ -142,7 +146,7 @@ impl OmeZarrViewerApp {
                 ));
             }
             _ => {
-                self.roi_selector.set_status(format!(
+                self.roi_selector_ui.set_status(format!(
                     "Project segmentation format is not supported for single view: {}",
                     segpath.to_string_lossy()
                 ));
@@ -158,7 +162,7 @@ impl OmeZarrViewerApp {
         match action {
             RoiSelectorAction::OpenRoi(roi) => {
                 if roi.dataset_source().is_none() {
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status("Open ROI failed: ROI has no dataset source.".to_string());
                     return;
                 }
@@ -171,7 +175,7 @@ impl OmeZarrViewerApp {
             RoiSelectorAction::LoadLabels => {
                 let name = self.seg_label_selected.trim().to_string();
                 if name.is_empty() {
-                    self.roi_selector.set_status(
+                    self.roi_selector_ui.set_status(
                         "Load Labels failed: the actor has no selected label group.".to_string(),
                     );
                 } else {
@@ -179,28 +183,28 @@ impl OmeZarrViewerApp {
                         method: "viewer.labels.load",
                         params: serde_json::json!({"name":name}),
                     });
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status(format!("Loading labels/{name}..."));
                 }
             }
             RoiSelectorAction::LoadMasks => match self.request_exclusion_masks_reload() {
                 Ok(n) => {
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status(format!("Loaded masks ({n} shapes)."));
                 }
                 Err(err) => {
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status(format!("Load Masks failed: {err}"));
                 }
             },
             RoiSelectorAction::SaveMasks => {
                 let Some(local_root) = self.dataset.source.local_path() else {
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status("Save Masks is supported for local datasets only.".to_string());
                     return;
                 };
                 if !self.drawing_mask_polygon.is_empty() {
-                    self.roi_selector.set_status(
+                    self.roi_selector_ui.set_status(
                         "Finish polygon (Enter/double-click) or cancel (Esc) before saving."
                             .to_string(),
                     );
@@ -212,18 +216,18 @@ impl OmeZarrViewerApp {
                         && layer.source_geojson.is_none()
                         && !layer.polygons_world.is_empty()
                 }) {
-                    self.roi_selector
+                    self.roi_selector_ui
                         .set_status("No drawn masks to save.".to_string());
                     return;
                 }
 
-                let Some(cfg) = self.roi_selector.masks_config_for_roi(local_root) else {
-                    self.roi_selector.set_status(
+                let Some(cfg) = self.roi_selector_ui.masks_config_for_roi(local_root) else {
+                    self.roi_selector_ui.set_status(
                         "Save Masks failed: no matching dataset in Project config.".to_string(),
                     );
                     return;
                 };
-                let entry = self.roi_selector.roi_entry_for_path(local_root);
+                let entry = self.roi_selector_ui.roi_entry_for_path(local_root);
 
                 match resolve_masks_geojson_path_and_downsample(local_root, &cfg, entry.as_ref()) {
                     Ok(resolved) => {
@@ -245,13 +249,13 @@ impl OmeZarrViewerApp {
                             "viewer.masks.persistence.append_geojson",
                             params,
                         );
-                        self.roi_selector.set_status(format!(
+                        self.roi_selector_ui.set_status(format!(
                             "Saving drawn masks -> {}",
                             resolved.geojson_path.to_string_lossy()
                         ));
                     }
                     Err(err) => {
-                        self.roi_selector
+                        self.roi_selector_ui
                             .set_status(format!("Save Masks failed: {err}"));
                     }
                 }
@@ -263,10 +267,10 @@ impl OmeZarrViewerApp {
         let Some(local_root) = self.dataset.source.local_path() else {
             anyhow::bail!("exclusion masks are supported for local datasets only");
         };
-        let Some(cfg) = self.roi_selector.masks_config_for_roi(local_root) else {
+        let Some(cfg) = self.roi_selector_ui.masks_config_for_roi(local_root) else {
             anyhow::bail!("no matching dataset entry in Project config");
         };
-        let entry = self.roi_selector.roi_entry_for_path(local_root);
+        let entry = self.roi_selector_ui.roi_entry_for_path(local_root);
         let resolved = resolve_masks_geojson_path_and_downsample(local_root, &cfg, entry.as_ref())?;
         let existing = self.mask_layers.iter().find(|layer| {
             !layer.editable

@@ -305,21 +305,19 @@ impl OmeZarrViewerApp {
         }
 
         if notes.is_empty() {
-            self.roi_selector.set_status("Opened Odon deep link.");
+            self.roi_selector_ui.set_status("Opened Odon deep link.");
         } else {
-            self.roi_selector
+            self.roi_selector_ui
                 .set_status(format!("Opened Odon deep link; {}", notes.join("; ")));
         }
-        self.sync_current_view_state_into_project_space();
     }
 
     pub fn install_preloaded_project_segmentation(&mut self, preloaded: &PreloadedObjectLayer) {
         self.seg_objects.install_preloaded(preloaded);
         self.restore_project_object_state_after_segmentation_load();
         self.set_active_layer(LayerId::SegmentationObjects);
-        self.roi_selector
+        self.roi_selector_ui
             .set_status("Loaded cached project segmentation.");
-        self.sync_current_view_state_into_project_space();
     }
 
     pub(super) fn restore_project_object_state_after_segmentation_load(&mut self) {

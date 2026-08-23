@@ -36,12 +36,12 @@ impl eframe::App for OmeZarrViewerApp {
 
         // Push project config updates into custom panels that depend on it.
         let cfg_gen = self.project_space.config_generation();
-        if cfg_gen != self.project_cfg_seen {
-            self.project_cfg_seen = cfg_gen;
+        if cfg_gen != self.control_actor_project_config_generation {
+            self.control_actor_project_config_generation = cfg_gen;
             let cfg = self.project_space.config().clone();
-            self.roi_selector
+            self.roi_selector_ui
                 .set_project_config(cfg.clone(), &self.dataset.source);
-            self.cell_thresholds.set_project_config(cfg);
+            self.legacy_cell_threshold_points.set_project_config(cfg);
         }
 
         // Napari-like "close window" prompt.
@@ -75,8 +75,9 @@ impl eframe::App for OmeZarrViewerApp {
         self.spatial_image_layers.tick();
         self.spatial_layers.tick();
         self.xenium_layers.tick();
-        self.cell_thresholds.tick(&mut self.cell_points);
-        self.roi_selector.tick();
+        self.legacy_cell_threshold_points
+            .tick(&mut self.cell_points);
+        self.roi_selector_ui.tick();
         refresh_system_memory_if_needed(
             &mut self.system_memory,
             &mut self.system_memory_last_refresh,
@@ -137,10 +138,10 @@ impl eframe::App for OmeZarrViewerApp {
                 if let Some(step) = top_bar::ui_prev_next_channel(ui, have_channels) {
                     self.step_selected_channel_visibility(step);
                 }
-                if self.roi_selector.has_multiple_rois() {
+                if self.roi_selector_ui.has_multiple_rois() {
                     ui.separator();
                     if let Some(step) = top_bar::ui_prev_next_roi(ui, true) {
-                        if let Some(action) = self.roi_selector.step_roi_action(step) {
+                        if let Some(action) = self.roi_selector_ui.step_roi_action(step) {
                             self.handle_roi_selector_action(ctx, action);
                         }
                     }
@@ -222,7 +223,6 @@ impl eframe::App for OmeZarrViewerApp {
                     LeftTab::Layers => self.ui_layers(ui, ctx),
                     LeftTab::Project => {
                         let cur = self.dataset.source.local_path().map(Path::to_path_buf);
-                        self.sync_current_view_state_into_project_space();
                         if let Some(action) = self.project_space.ui(ui, cur.as_deref()) {
                             self.handle_project_space_action(action);
                         }
@@ -485,7 +485,7 @@ impl eframe::App for OmeZarrViewerApp {
                             crate::ui::help::HelpTopic::RoiSelectorPanel,
                         );
                         ui.separator();
-                        if let Some(action) = self.roi_selector.ui(ui) {
+                        if let Some(action) = self.roi_selector_ui.ui(ui) {
                             self.handle_roi_selector_action(ctx, action);
                         }
                     }

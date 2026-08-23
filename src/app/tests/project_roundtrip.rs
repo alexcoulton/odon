@@ -48,6 +48,7 @@ fn layer_transforms_order_masks_and_ui_roundtrip_through_project_state() {
     app.smooth_pixels = false;
 
     sync_complete_state_to_active_viewport_for_test(&mut app);
+    app.sync_current_view_state_into_project_space();
     let source = app.dataset.source.clone();
     let project = app.take_project_space();
     let view = project.roi_view_state(&source).expect("saved ROI view");

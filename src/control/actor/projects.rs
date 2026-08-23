@@ -76,7 +76,7 @@ pub(super) fn begin_project_save(
         )));
         return;
     };
-    let (payload, saved_config_generation) = match model.project_persistence_payload() {
+    let (payload, saved_config_generation) = match model.prepare_lifecycle_project_save() {
         Ok(payload) => payload,
         Err(error) => {
             diagnostics

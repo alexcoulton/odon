@@ -1078,6 +1078,7 @@ impl ObjectsLayer {
         None
     }
 
+    #[cfg(test)]
     pub fn load_path(&mut self, path: PathBuf, downsample_factor: f32) {
         self.request_load(path, downsample_factor, None);
     }

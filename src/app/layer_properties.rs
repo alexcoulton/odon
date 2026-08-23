@@ -742,7 +742,7 @@ impl OmeZarrViewerApp {
                     match self.request_exclusion_masks_reload() {
                         Ok(_) => {}
                         Err(err) => {
-                            self.roi_selector
+                            self.roi_selector_ui
                                 .set_status(format!("Reload masks failed: {err}"));
                         }
                     }

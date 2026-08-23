@@ -1000,7 +1000,7 @@ fn tiff_pyramid_stays_split_by_responsibility() {
 }
 
 #[test]
-fn cell_threshold_panel_stays_split_by_responsibility() {
+fn legacy_cell_threshold_point_adapter_stays_split_by_responsibility() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let facade = source(root.join("src/custom/cell_thresholds.rs"));
     let data = source(root.join("src/custom/cell_thresholds/data.rs"));
@@ -1010,7 +1010,7 @@ fn cell_threshold_panel_stays_split_by_responsibility() {
         facade.lines().count() <= 900,
         "the cell-threshold panel has regrown into a UI, parquet, and file-format monolith"
     );
-    assert!(facade.contains("impl CellThresholdsPanel"));
+    assert!(facade.contains("impl CellThresholdPointsAdapter"));
     assert!(!facade.contains("ParquetRecordBatchReaderBuilder"));
     assert!(!facade.contains("fn parse_csv("));
 
@@ -2155,4 +2155,30 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
         total_fields, 289,
         "review the ownership ledger when host fields change"
     );
+}
+
+#[test]
+fn project_persistence_and_roi_ui_have_no_renderer_reverse_sync_path() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let app = root.join("src/app");
+    let update = source(app.join("update.rs"));
+    let deep_links = source(app.join("deep_links.rs"));
+    let projects = source(app.join("projects.rs"));
+    let actor_projects = source(root.join("src/control/actor/projects.rs"));
+    let actor_persistence = source(root.join("src/model/app/settings_deep_links.rs"));
+
+    assert!(
+        projects
+            .contains("#[cfg(test)]\n    pub(super) fn sync_current_view_state_into_project_space")
+    );
+    assert!(!update.contains("sync_current_view_state_into_project_space"));
+    assert!(!deep_links.contains("sync_current_view_state_into_project_space"));
+    let take_project_space = projects
+        .split("pub fn take_project_space")
+        .nth(1)
+        .and_then(|tail| tail.split("pub fn project_space").next())
+        .expect("viewer exposes its projected ProjectSpace shell");
+    assert!(!take_project_space.contains("sync_current_view_state_into_project_space"));
+    assert!(actor_projects.contains("model.prepare_lifecycle_project_save()"));
+    assert!(actor_persistence.contains("self.sync_current_dataset_view_to_project()?"));
 }

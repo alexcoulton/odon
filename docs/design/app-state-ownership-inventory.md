@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 175 | 159 | 16 | 0 | 0 |
+| `OmeZarrViewerApp` | 175 | 163 | 12 | 0 | 0 |
 | `RootApp` | 36 | 32 | 4 | 0 | 0 |
 | `MosaicViewerApp` | 78 | 66 | 12 | 0 | 0 |
-| **Total** | **289** | **257** | **32** | **0** | **0** |
+| **Total** | **289** | **261** | **28** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -70,8 +70,8 @@ not necessarily the owner in the current compatibility implementation.
 | Active layer/selection UI | `active_layer`, `selected_channel_layers`, `channel_select_anchor_idx`, `selected_channel_group_id`, `quick_contrast_target`, `selected_overlay_layers`, `overlay_select_anchor_pos` | Mixed semantic active target and UI multi-selection | Actor owns active layer/group where externally visible; anchors and multi-select are transient UI; Wave 6/7 |
 | Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab` | Projectable UI settings and platform dialog state | Actor settings for visible panels/tabs; close dialog remains transient platform UI; Wave 6/7 |
 | Memory/pinning | `memory_selected_channels`, `pending_memory_load`, `pinned_levels`, `control_actor_memory_state`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Channel and confirmation drafts; immutable actor resources and projected lifecycle; non-authoritative OS-memory observation; projected tile-policy preference | Actor owns pin/unpin lifecycle and bounded work; renderer retains only drafts, immutable buffers, projection observation, OS warning sample, and tile-scheduler policy; Milestone 5B complete |
-| Project/ROI panels | `project_space`, `project_cfg_seen`, `roi_selector`, `cell_thresholds` | Actor project mirror plus legacy panel models | Actor project/analysis models; UI keeps only drafts; Waves 2E and 3, mirror removal Wave 7 |
-| Point data | `cell_points` | Legacy point resource adapter | Actor point resource registry/shared payload; Milestone 5 |
+| Project/ROI panels | `project_space`, `control_actor_project_config_generation`, `roi_selector_ui` | Actor projection plus consumed-generation observation and ROI browse/validation drafts | Actor owns project persistence at a known config generation; UI actions are typed commands; Milestone 5C complete |
+| Legacy cell-threshold points | `legacy_cell_threshold_points`, `cell_points` | Renderer-only compatibility resource adapter and point draw cache with no public semantic surface | Actor analysis/project state remains authoritative; immutable point values are presentation input only; Milestone 5C complete |
 | Annotation data | `annotation_layers` | Renderer adapters over actor projection and shared immutable datasets | Retain renderer adapters; actor owns identity, source configuration, styles, persistence, readiness, and resource generations; Milestone 4 complete |
 | Masks | `mask_layers`, `control_actor_mask_generation`, `control_actor_mask_undo_available` | Read-only actor projection consumed by mask rendering and properties UI | Retain the projection and generation; all mask identity, edit, persistence, and undo semantics are actor-owned |
 | Mask gestures | `tool_mode`, `drawing_mask_layer`, `drawing_mask_polygon`, `selected_mask_polygon`, `selected_mask_vertex`, `dragging_mask_vertex`, `moving_mask_polygon` | Frame-local edit previews tagged with their starting actor generation | Retain gestures transiently; committed polygons and offsets enter typed actor transactions |
@@ -295,8 +295,9 @@ The properties boundary is subdivided by state domain rather than widget order:
 state, and color/legend plus project-display persistence. These are renderer projection helpers on
 the same `ObjectsLayer`; actor commands and revisions remain authoritative.
 
-The custom cell-threshold panel also has an explicit I/O boundary. `custom/cell_thresholds.rs`
-owns panel state, interactions, and projection into the renderer points layer;
+The legacy cell-threshold point adapter also has an explicit I/O boundary.
+`custom/cell_thresholds.rs` owns a renderer-only compatibility resource and projection into the
+points layer; it has no public command or persistence surface;
 `cell_thresholds/data.rs` owns dataset-path inference, parquet schema inspection, and the bounded
 point loader; and `cell_thresholds/threshold_files.rs` owns CSV/JSON threshold configuration
 parsing. The split does not promote the panel to a semantic owner: it remains renderer-side

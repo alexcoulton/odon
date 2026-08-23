@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 4 complete; Milestone 5 has two ownership rows remaining
+Status: in progress — Milestones 0 through 4 complete; Milestone 5 has one ownership row remaining
 
 Date: 2026-08-23
 
@@ -54,16 +54,16 @@ histogram and automatic-contrast workers, and renderer-local memory-pinning work
 
 ### Current measured checkpoint
 
-The executable ledger currently covers 289 concrete host fields. It has 257 retained fields and 32
+The executable ledger currently covers 289 concrete host fields. It has 261 retained fields and 28
 fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
 command emulators.
 
 | Milestone | Open rows | Open fields | Remaining ownership domains |
 | --- | ---: | ---: | --- |
-| 5 | 2 | 7 | project UI and external spatial adapters |
+| 5 | 1 | 3 | external spatial adapters |
 | 6 | 9 | 12 | host requests, native command outboxes, root mode/deep-link/projection relays, mosaic shell state |
 | 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
-| **Total** | **13** | **32** | |
+| **Total** | **12** | **28** | |
 
 `Retain` means the field has a valid final role as a renderer resource/observation, transient UI
 draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
@@ -343,10 +343,10 @@ Exit criteria:
 
 Purpose: finish the less frame-sensitive but persistence-critical ownership domains.
 
-Status: in progress. The histogram/automatic-contrast and unified memory-pinning slices are
-implemented in the current checkpoints. Earlier slices checkpointed settings and mosaic project
-projections, project object preload, remote datasets, labels, TIFF planes/tile policy, and threshold
-analysis. Two executable-ledger rows remain, containing 7 fields.
+Status: in progress. The histogram/automatic-contrast, unified memory-pinning, and project/legacy
+analysis UI slices are implemented in the current checkpoints. Earlier slices checkpointed
+settings and mosaic project projections, project object preload, remote datasets, labels, TIFF
+planes/tile policy, and threshold analysis. One executable-ledger row remains, containing 3 fields.
 
 Work:
 
@@ -425,17 +425,20 @@ guard, and exact ownership-ledger coverage passed. The cumulative Rust library (
 (203 passed, 4 ignored extended fixtures), data-contract (10), and Python SDK (96) suites and
 all-target compilation also passed.
 
-#### 5C — project and legacy analysis UI
+#### 5C — project and legacy analysis UI — complete
 
-Open row: `viewer.project_ui` (4 fields).
+Closed row: `viewer.project_ui` (4 fields), split into explicit actor projection, renderer
+generation observation, ROI UI draft, and renderer-only compatibility-resource rows.
 
 - split `project_space` into an immutable actor projection plus renderer-only panel/draft state, or
   remove the viewer copy where `RootApp` can provide the projection directly;
-- classify `project_cfg_seen` as a renderer generation observation rather than configuration state;
+- rename `project_cfg_seen` to `control_actor_project_config_generation` and classify it as a
+  renderer generation observation rather than configuration state;
 - replace `roi_selector` semantic behavior with typed project/ROI commands while retaining only its
   selection and validation drafts;
-- remove or narrow the legacy `cell_thresholds` panel so shared point data and threshold semantics
-  come from actor resources; and
+- narrow the legacy `cell_thresholds` object to the renderer-only
+  `legacy_cell_threshold_points` compatibility adapter; it has no command or persistence surface,
+  while public threshold semantics remain actor-owned; and
 - retire production-unreachable project restore/auto-load helpers once characterization tests have
   been moved to the actor model.
 
@@ -458,6 +461,13 @@ Commit gate: renderer adapter `tick` methods perform presentation/resource consu
 filesystem/network/decoder work; no-frame SpatialData and Xenium resource tests pass; the final
 Milestone 5 row is closed.
 
+Checkpoint evidence: project save now captures the canonical actor workspace immediately before
+building its immutable persistence payload, and a no-frame round trip proves a camera edit is saved
+without renderer synchronization. Production panel drawing, deep-link application, and
+`take_project_space` no longer reconstruct project state from the renderer. The legacy encoder and
+restorer are test-only, ROI actions enter typed commands, and source guards reject renderer reverse
+synchronization.
+
 #### 5E — Milestone 5 cumulative gate
 
 - run formatting, all-target compilation, Rust library/bin/data-contract suites, Python SDK tests,
@@ -466,7 +476,7 @@ Milestone 5 row is closed.
 - update the ownership inventory counts and milestone narrative to the exact tested commit; and
 - record task-queue and projection-allocation regressions before declaring Milestone 5 complete.
 
-Milestone 6 may begin only when both current Milestone 5 rows are closed and this cumulative
+Milestone 6 may begin only when the current Milestone 5 row is closed and this cumulative
 gate passes.
 
 ## Milestone 6 — narrow the application shell and platform boundary
@@ -655,9 +665,10 @@ From the present checkpoint, work proceeds in this order:
    and the two local worker services are deleted.
 2. **5B memory — complete:** viewer and mosaic native controls now share actor-owned bounded work,
    lifecycle projection, cancellation, supersession, and immutable resources.
-3. **5C project UI — next:** narrow the remaining project/ROI/legacy-analysis panels after their resource
-   dependencies are actor-owned.
-4. **5D external spatial adapters:** move the last decoder/load lifecycles behind shared resources;
+3. **5C project UI — complete:** project persistence captures the actor workspace at a known
+   generation, reverse renderer synchronization is absent from production, and panel/resource
+   fields have explicit final roles.
+4. **5D external spatial adapters — next:** move the last decoder/load lifecycles behind shared resources;
    then run the **5E cumulative gate** and checkpoint Milestone 5.
 5. **6A–6C application shell:** classify platform effects, remove shell semantic authority, and
    consolidate native command ingress; then checkpoint Milestone 6.

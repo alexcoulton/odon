@@ -321,6 +321,11 @@ impl AppModel {
         {
             self.sync_masks_to_project()?;
         }
+        // Capture the canonical actor workspace immediately before creating the immutable save
+        // payload. Persistence must never depend on a renderer panel having observed a frame.
+        if self.dataset.is_some() {
+            self.sync_current_dataset_view_to_project()?;
+        }
         self.project_persistence_payload()
     }
 

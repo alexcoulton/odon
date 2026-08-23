@@ -107,7 +107,7 @@ impl OmeZarrViewerApp {
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
         self.apply_view_state_from_project_space();
-        self.project_cfg_seen = u64::MAX;
+        self.control_actor_project_config_generation = u64::MAX;
         self.restore_mask_layers_from_project_space();
         self.restore_loaded_layer_offsets_from_current_project_view_or_capture();
         self.auto_load_project_roi_segmentation();
@@ -118,7 +118,7 @@ impl OmeZarrViewerApp {
     /// objects from actor-owned immutable handles.
     pub fn set_project_space_from_actor(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
-        self.project_cfg_seen = u64::MAX;
+        self.control_actor_project_config_generation = u64::MAX;
     }
 
     pub fn set_remote_runtime(&mut self, runtime: Option<Arc<tokio::runtime::Runtime>>) {
@@ -720,7 +720,7 @@ impl OmeZarrViewerApp {
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
-        self.roi_selector.set_status(status);
+        self.roi_selector_ui.set_status(status);
     }
 
     pub fn open_mapping_settings(&mut self) {

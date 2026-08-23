@@ -285,6 +285,7 @@ impl ObjectsLayer {
         self.analysis_selection_rx.is_some()
     }
 
+    #[cfg(test)]
     pub(super) fn request_load(
         &mut self,
         path: PathBuf,

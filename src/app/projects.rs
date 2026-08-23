@@ -1,6 +1,7 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    #[cfg(test)]
     pub(super) fn project_workspace_view_state(&self) -> Option<ProjectWorkspaceViewState> {
         let workspace = self.viewport_workspace.as_ref()?;
         if workspace.len() <= 1 {
@@ -246,6 +247,9 @@ impl OmeZarrViewerApp {
         Ok(())
     }
 
+    /// Characterization-only encoder for legacy project files. Production persistence is built
+    /// from the actor's workspace at a known model revision.
+    #[cfg(test)]
     pub(super) fn sync_current_view_state_into_project_space(&mut self) {
         self.sync_runtime_to_active_viewport();
         self.ensure_loaded_layer_offset_baselines();
@@ -545,7 +549,6 @@ impl OmeZarrViewerApp {
     }
 
     pub fn take_project_space(&mut self) -> ProjectSpace {
-        self.sync_current_view_state_into_project_space();
         std::mem::take(&mut self.project_space)
     }
 

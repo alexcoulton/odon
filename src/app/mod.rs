@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,7 +29,7 @@ use crate::app_support::screenshot::{
     next_numbered_screenshot_path,
 };
 use crate::camera::Camera;
-use crate::custom::cell_thresholds::CellThresholdsPanel;
+use crate::custom::cell_thresholds::CellThresholdPointsAdapter;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
 use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
@@ -59,9 +61,13 @@ use crate::objects::{
 use crate::project::ProjectAnnotationLayerState;
 use crate::project::groups as layer_groups;
 use crate::project::{
-    ProjectCameraState, ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
-    ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction, ProjectUiState,
-    ProjectViewChannelRef, ProjectViewSpec, ProjectViewportViewState, ProjectWorkspaceViewState,
+    ProjectCameraState, ProjectObjectCacheUiState, ProjectSpace, ProjectSpaceAction,
+    ProjectViewChannelRef, ProjectViewSpec,
+};
+#[cfg(test)]
+use crate::project::{
+    ProjectChannelViewState, ProjectRoiViewState, ProjectSegmentationViewState, ProjectUiState,
+    ProjectViewportViewState, ProjectWorkspaceViewState,
 };
 use crate::render::labels_gl::{LabelDraw, LabelsGl, OutlinesParams};
 use crate::render::labels_raw::{
@@ -994,6 +1000,7 @@ impl ViewerViewportState {
         Ok(())
     }
 
+    #[cfg(test)]
     fn project_presentation_json(&self) -> serde_json::Value {
         let masks = self
             .masks
@@ -1742,6 +1749,7 @@ impl ViewerViewportState {
         app.show_tile_debug = self.show_tile_debug;
     }
 
+    #[cfg(test)]
     fn layer_visible(&self, id: LayerId) -> Option<bool> {
         match id {
             LayerId::Channel(index) => self.channels.get(index).map(|channel| channel.visible),
@@ -1898,9 +1906,10 @@ pub struct OmeZarrViewerApp {
     left_tab: LeftTab,
     right_tab: RightTab,
     project_space: ProjectSpace,
-    project_cfg_seen: u64,
-    roi_selector: RoiSelectorPanel,
-    cell_thresholds: CellThresholdsPanel,
+    /// Last actor-projected project configuration generation consumed by renderer-only panels.
+    control_actor_project_config_generation: u64,
+    roi_selector_ui: RoiSelectorPanel,
+    legacy_cell_threshold_points: CellThresholdPointsAdapter,
     cell_points: PointsLayer,
     annotation_layers: Vec<AnnotationPointsLayer>,
     mask_layers: Vec<MaskLayer>,
@@ -2517,10 +2526,12 @@ fn rotate_vec2(v: egui::Vec2, rotation_rad: f32) -> egui::Vec2 {
     egui::vec2(v.x * c - v.y * s, v.x * s + v.y * c)
 }
 
+#[cfg(test)]
 fn vec2_to_array(v: egui::Vec2) -> [f32; 2] {
     [v.x, v.y]
 }
 
+#[cfg(test)]
 fn layer_offsets_differ(a: egui::Vec2, b: egui::Vec2) -> bool {
     (a - b).length_sq() > 1e-12
 }

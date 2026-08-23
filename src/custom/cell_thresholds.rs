@@ -18,8 +18,13 @@ use threshold_files::{load_auto_thresholds_json, load_thresholds_csv};
 use crate::data::project_config::ProjectConfig;
 use crate::render::points::{Point, PointsLayer};
 
+/// Renderer-only compatibility adapter for the legacy project-configured centroid overlay.
+///
+/// It has no public command surface and never participates in project persistence. Durable
+/// threshold analysis is owned by the control actor; this adapter only materializes immutable
+/// point values into the existing point renderer.
 #[derive(Debug, Clone)]
-pub struct CellThresholdsPanel {
+pub struct CellThresholdPointsAdapter {
     enabled: bool,
     status: String,
 
@@ -142,7 +147,7 @@ struct LoadResponse {
     max: f32,
 }
 
-impl CellThresholdsPanel {
+impl CellThresholdPointsAdapter {
     pub fn set_project_config(&mut self, project: ProjectConfig) {
         self.project = project;
         let root = self.dataset_root.clone();

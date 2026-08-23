@@ -80,6 +80,22 @@ fn project_open_edit_and_save_roundtrip_without_a_ui_frame() {
         .expect("layer installation completes without UI drain")
         .unwrap();
 
+    let (open_roi, open_roi_rx) = request("project.rois.open", json!({"roi":"fixture"}));
+    channels.request_tx.send(open_roi).unwrap();
+    open_roi_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("project ROI opens without UI drain")
+        .unwrap();
+    let (camera, camera_rx) = request(
+        "viewer.camera.set",
+        json!({"center_world_lvl0":[17.0, 29.0], "zoom":2.5}),
+    );
+    channels.request_tx.send(camera).unwrap();
+    camera_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("camera edit completes without UI drain")
+        .unwrap();
+
     // Saving immediately after the layer reply must observe the layer transaction. Both
     // commands now share the actor mailbox; there is no cross-mailbox notification race.
     let (save, save_rx) = request("project.save_as", json!({"path":output}));
@@ -119,6 +135,17 @@ fn project_open_edit_and_save_roundtrip_without_a_ui_frame() {
         written["config"]["control_layers"][0]["layer_id"],
         "project-layer"
     );
+    let saved_view = &written["state"]["roi_views"]
+        .as_object()
+        .expect("save captures actor ROI views")
+        .values()
+        .next()
+        .expect("active ROI view is present");
+    assert_eq!(
+        saved_view["camera"]["center_world_lvl0"],
+        json!([17.0, 29.0])
+    );
+    assert_eq!(saved_view["camera"]["zoom_screen_per_lvl0_px"], 2.5);
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.project.load_generation, 1);
     assert_eq!(

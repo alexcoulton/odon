@@ -142,6 +142,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::app) fn restore_loaded_layer_offsets_from_project_view(
         &mut self,
         view: &ProjectRoiViewState,
@@ -162,6 +163,7 @@ impl OmeZarrViewerApp {
         self.ensure_loaded_layer_offset_baselines();
     }
 
+    #[cfg(test)]
     pub(in crate::app) fn restore_loaded_layer_offsets_from_current_project_view_or_capture(
         &mut self,
     ) {

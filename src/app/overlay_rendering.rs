@@ -466,7 +466,9 @@ impl OmeZarrViewerApp {
     ) {
         let off = self.layer_offset_world(LayerId::Points);
         if let Some(renderer) = self.points_gl.clone() {
-            if let Some((generation, positions_world, values)) = self.cell_thresholds.gpu_points() {
+            if let Some((generation, positions_world, values)) =
+                self.legacy_cell_threshold_points.gpu_points()
+            {
                 let data = PointsGlDrawData {
                     generation,
                     positions_world,
@@ -475,7 +477,7 @@ impl OmeZarrViewerApp {
                 let params = PointsGlDrawParams {
                     center_world: self.camera.center_world_lvl0,
                     zoom_screen_per_world: self.camera.zoom_screen_per_lvl0_px,
-                    threshold: self.cell_thresholds.threshold(),
+                    threshold: self.legacy_cell_threshold_points.threshold(),
                     style: self.cell_points.style.clone(),
                     visible: self.cell_points.visible,
                     local_to_world_offset: off,

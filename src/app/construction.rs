@@ -131,9 +131,9 @@ impl OmeZarrViewerApp {
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Properties,
             project_space: ProjectSpace::default(),
-            project_cfg_seen: 0,
-            roi_selector: RoiSelectorPanel::new(&dataset.source),
-            cell_thresholds: CellThresholdsPanel::new(
+            control_actor_project_config_generation: 0,
+            roi_selector_ui: RoiSelectorPanel::new(&dataset.source),
+            legacy_cell_threshold_points: CellThresholdPointsAdapter::new(
                 dataset
                     .source
                     .local_path()
@@ -402,9 +402,9 @@ impl OmeZarrViewerApp {
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Properties,
             project_space: ProjectSpace::default(),
-            project_cfg_seen: 0,
-            roi_selector: RoiSelectorPanel::new(&dataset.source),
-            cell_thresholds: CellThresholdsPanel::new(
+            control_actor_project_config_generation: 0,
+            roi_selector_ui: RoiSelectorPanel::new(&dataset.source),
+            legacy_cell_threshold_points: CellThresholdPointsAdapter::new(
                 dataset
                     .source
                     .local_path()
@@ -700,9 +700,9 @@ impl OmeZarrViewerApp {
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Properties,
             project_space: ProjectSpace::default(),
-            project_cfg_seen: 0,
-            roi_selector: RoiSelectorPanel::new(&dataset.source),
-            cell_thresholds: CellThresholdsPanel::new(
+            control_actor_project_config_generation: 0,
+            roi_selector_ui: RoiSelectorPanel::new(&dataset.source),
+            legacy_cell_threshold_points: CellThresholdPointsAdapter::new(
                 dataset
                     .source
                     .local_path()
