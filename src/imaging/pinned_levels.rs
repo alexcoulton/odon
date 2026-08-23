@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context;
 use parking_lot::Mutex;
-use zarrs::array::{Array, ArraySubset};
-use zarrs::storage::ReadableStorageTraits;
 
-use crate::data::ome::{Dims, LevelInfo, retrieve_image_subset_u16};
+use crate::data::ome::{Dims, LevelInfo};
+#[cfg(test)]
 use crate::render::array_dims::squeeze_to_2d;
 use crate::render::tiles::{RenderChannel, TileKey, TileResponse};
 use crate::render::tiles_raw::{RawTileKey, RawTileResponse};
@@ -33,17 +31,9 @@ struct PinnedLevelData {
     bytes: u64,
 }
 
-#[derive(Debug, Clone)]
-enum PinnedLevelState {
-    Loading { request_id: u64 },
-    Loaded(PinnedLevelData),
-    Failed(String),
-}
-
 #[derive(Default)]
 struct PinnedLevelsInner {
-    levels: HashMap<usize, PinnedLevelState>,
-    next_request_id: u64,
+    levels: HashMap<usize, PinnedLevelData>,
 }
 
 impl PinnedLevels {
@@ -56,17 +46,11 @@ impl PinnedLevels {
     pub fn status(&self, level: usize) -> PinnedLevelStatus {
         match self.inner.lock().levels.get(&level) {
             None => PinnedLevelStatus::Unloaded,
-            Some(PinnedLevelState::Loading { .. }) => PinnedLevelStatus::Loading,
-            Some(PinnedLevelState::Loaded(data)) => PinnedLevelStatus::Loaded {
+            Some(data) => PinnedLevelStatus::Loaded {
                 bytes: data.bytes,
                 channels_loaded: data.channel_offsets.len(),
             },
-            Some(PinnedLevelState::Failed(err)) => PinnedLevelStatus::Failed(err.clone()),
         }
-    }
-
-    pub fn unload(&self, level: usize) {
-        self.inner.lock().levels.remove(&level);
     }
 
     pub fn total_loaded_bytes(&self) -> u64 {
@@ -74,19 +58,8 @@ impl PinnedLevels {
             .lock()
             .levels
             .values()
-            .filter_map(|state| match state {
-                PinnedLevelState::Loaded(data) => Some(data.bytes),
-                _ => None,
-            })
+            .map(|data| data.bytes)
             .sum()
-    }
-
-    pub fn has_loading(&self) -> bool {
-        self.inner
-            .lock()
-            .levels
-            .values()
-            .any(|state| matches!(state, PinnedLevelState::Loading { .. }))
     }
 
     pub fn replace_control_actor_resources(
@@ -98,62 +71,17 @@ impl PinnedLevels {
             .map(|resource| {
                 (
                     resource.level(),
-                    PinnedLevelState::Loaded(PinnedLevelData {
+                    PinnedLevelData {
                         width: resource.width(),
                         height: resource.height(),
                         channel_offsets: resource.channel_offsets().as_ref().clone(),
                         data: Arc::clone(resource.data()),
                         bytes: resource.bytes(),
-                    }),
+                    },
                 )
             })
             .collect();
         self.inner.lock().levels = levels;
-    }
-
-    pub fn request_load(
-        &self,
-        store: Arc<dyn ReadableStorageTraits>,
-        dims: Dims,
-        levels: Vec<LevelInfo>,
-        level: usize,
-        selected_channels: Vec<u64>,
-    ) {
-        let request_id = {
-            let mut inner = self.inner.lock();
-            inner.next_request_id = inner.next_request_id.wrapping_add(1).max(1);
-            let request_id = inner.next_request_id;
-            inner
-                .levels
-                .insert(level, PinnedLevelState::Loading { request_id });
-            request_id
-        };
-
-        let this = self.clone();
-        std::thread::Builder::new()
-            .name(format!("pin-level-{level}"))
-            .spawn(move || {
-                let result = load_full_level(store, dims, levels, level, &selected_channels);
-                let mut inner = this.inner.lock();
-                let is_current = matches!(
-                    inner.levels.get(&level),
-                    Some(PinnedLevelState::Loading { request_id: current }) if *current == request_id
-                );
-                if !is_current {
-                    return;
-                }
-                match result {
-                    Ok(data) => {
-                        inner.levels.insert(level, PinnedLevelState::Loaded(data));
-                    }
-                    Err(err) => {
-                        inner
-                            .levels
-                            .insert(level, PinnedLevelState::Failed(err.to_string()));
-                    }
-                }
-            })
-            .ok();
     }
 
     pub fn try_get_raw_tile(
@@ -163,7 +91,7 @@ impl PinnedLevels {
         level: &LevelInfo,
     ) -> Option<RawTileResponse> {
         let data = match self.inner.lock().levels.get(&key.level) {
-            Some(PinnedLevelState::Loaded(data)) => data.clone(),
+            Some(data) => data.clone(),
             _ => return None,
         };
         let channel_offset = data.channel_offsets.get(&key.channel).copied()?;
@@ -186,7 +114,7 @@ impl PinnedLevels {
         source_level_info: &LevelInfo,
     ) -> Option<RawTileResponse> {
         let data = match self.inner.lock().levels.get(&source_level) {
-            Some(PinnedLevelState::Loaded(data)) => data.clone(),
+            Some(data) => data.clone(),
             _ => return None,
         };
         let channel_offset = data.channel_offsets.get(&key.channel).copied()?;
@@ -218,7 +146,7 @@ impl PinnedLevels {
             return None;
         }
         let data = match self.inner.lock().levels.get(&key.level) {
-            Some(PinnedLevelState::Loaded(data)) => data.clone(),
+            Some(data) => data.clone(),
             _ => return None,
         };
 
@@ -276,7 +204,7 @@ impl PinnedLevels {
             return None;
         }
         let data = match self.inner.lock().levels.get(&source_level) {
-            Some(PinnedLevelState::Loaded(data)) => data.clone(),
+            Some(data) => data.clone(),
             _ => return None,
         };
 
@@ -342,101 +270,7 @@ impl Default for PinnedLevels {
     }
 }
 
-fn load_full_level(
-    store: Arc<dyn ReadableStorageTraits>,
-    dims: Dims,
-    levels: Vec<LevelInfo>,
-    level: usize,
-    selected_channels: &[u64],
-) -> anyhow::Result<PinnedLevelData> {
-    let info = levels
-        .get(level)
-        .cloned()
-        .with_context(|| format!("missing level {level}"))?;
-    let zarr_path = format!("/{}", info.path.trim_start_matches('/'));
-    let array: Array<dyn ReadableStorageTraits> = Array::open(store, &zarr_path)?;
-
-    if let Some(c_dim) = dims.c {
-        let height = *info.shape.get(dims.y).unwrap_or(&0) as usize;
-        let width = *info.shape.get(dims.x).unwrap_or(&0) as usize;
-        let plane_len = height.saturating_mul(width);
-        let mut raw = Vec::<u16>::new();
-        let mut channel_offsets = HashMap::<u64, usize>::new();
-
-        for &channel in selected_channels {
-            let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(info.shape.len());
-            for dim in 0..info.shape.len() {
-                if dim == c_dim {
-                    ranges.push(channel..(channel + 1));
-                } else if dim == dims.y || dim == dims.x {
-                    ranges.push(0..info.shape[dim]);
-                } else {
-                    ranges.push(0..1);
-                }
-            }
-            let subset = ArraySubset::new_with_ranges(&ranges);
-            let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-            let plane = pinned_level_plane(data, dims.y, dims.x)
-                .context("unexpected dimensionality for pinned level channel")?;
-            let (plane_raw, offset) = plane.into_raw_vec_and_offset();
-            if offset.unwrap_or(0) != 0 {
-                anyhow::bail!("unexpected non-zero offset in pinned level channel buffer");
-            }
-            if plane_raw.len() != plane_len {
-                anyhow::bail!("unexpected plane length while pinning level");
-            }
-            channel_offsets.insert(channel, raw.len() / plane_len.max(1));
-            raw.extend_from_slice(&plane_raw);
-        }
-
-        if channel_offsets.is_empty() {
-            anyhow::bail!("none of the selected channels were pinned");
-        }
-
-        Ok(PinnedLevelData {
-            width,
-            height,
-            channel_offsets,
-            bytes: (raw.len() as u64).saturating_mul(2),
-            data: Arc::new(raw),
-        })
-    } else {
-        if selected_channels.is_empty() {
-            anyhow::bail!("no channels selected for pinning");
-        }
-
-        let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(info.shape.len());
-        for dim in 0..info.shape.len() {
-            if dim == dims.y || dim == dims.x {
-                ranges.push(0..info.shape[dim]);
-            } else {
-                ranges.push(0..1);
-            }
-        }
-        let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-        let data = pinned_level_plane(data, dims.y, dims.x)
-            .context("unexpected dimensionality for pinned level")?;
-        let height = data.shape()[0];
-        let width = data.shape()[1];
-        let (raw, offset) = data.into_raw_vec_and_offset();
-        if offset.unwrap_or(0) != 0 {
-            anyhow::bail!("unexpected non-zero offset in pinned level buffer");
-        }
-        let mut channel_offsets = HashMap::new();
-        for &channel in selected_channels {
-            channel_offsets.insert(channel, 0);
-        }
-        Ok(PinnedLevelData {
-            width,
-            height,
-            channel_offsets,
-            bytes: (raw.len() as u64).saturating_mul(2),
-            data: Arc::new(raw),
-        })
-    }
-}
-
+#[cfg(test)]
 fn pinned_level_plane(
     data: ndarray::ArrayD<u16>,
     y_dim: usize,

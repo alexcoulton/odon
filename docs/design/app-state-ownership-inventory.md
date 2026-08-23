@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 175 | 152 | 16 | 7 | 0 |
+| `OmeZarrViewerApp` | 175 | 159 | 16 | 0 | 0 |
 | `RootApp` | 36 | 32 | 4 | 0 | 0 |
-| `MosaicViewerApp` | 77 | 62 | 12 | 3 | 0 |
-| **Total** | **288** | **246** | **26** | **16** | **0** |
+| `MosaicViewerApp` | 78 | 66 | 12 | 0 | 0 |
+| **Total** | **289** | **257** | **32** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -69,7 +69,7 @@ not necessarily the owner in the current compatibility implementation.
 | Channel and plane semantics | `selected_channel`, `view_plane_mode`, `draft_view_slice_level0`, `current_x_level0`, `current_y_level0`, `current_z_level0`, `channels`, `channel_window_overrides`, `fast_object_rendering`, `channel_list_search` | Actor-owned values with compatibility mirrors plus a transient slice draft | Actor semantic except `draft_view_slice_level0`; renderer consumes projection; Wave 7 mirror removal |
 | Active layer/selection UI | `active_layer`, `selected_channel_layers`, `channel_select_anchor_idx`, `selected_channel_group_id`, `quick_contrast_target`, `selected_overlay_layers`, `overlay_select_anchor_pos` | Mixed semantic active target and UI multi-selection | Actor owns active layer/group where externally visible; anchors and multi-select are transient UI; Wave 6/7 |
 | Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab` | Projectable UI settings and platform dialog state | Actor settings for visible panels/tabs; close dialog remains transient platform UI; Wave 6/7 |
-| Memory/pinning | `memory_selected_channels`, `pinned_levels`, `pending_memory_load`, `memory_status`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Legacy memory operation, resources, and UI status | Actor retained task and resource generations; system snapshot may remain UI cache; Wave 3 |
+| Memory/pinning | `memory_selected_channels`, `pending_memory_load`, `pinned_levels`, `control_actor_memory_state`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Channel and confirmation drafts; immutable actor resources and projected lifecycle; non-authoritative OS-memory observation; projected tile-policy preference | Actor owns pin/unpin lifecycle and bounded work; renderer retains only drafts, immutable buffers, projection observation, OS warning sample, and tile-scheduler policy; Milestone 5B complete |
 | Project/ROI panels | `project_space`, `project_cfg_seen`, `roi_selector`, `cell_thresholds` | Actor project mirror plus legacy panel models | Actor project/analysis models; UI keeps only drafts; Waves 2E and 3, mirror removal Wave 7 |
 | Point data | `cell_points` | Legacy point resource adapter | Actor point resource registry/shared payload; Milestone 5 |
 | Annotation data | `annotation_layers` | Renderer adapters over actor projection and shared immutable datasets | Retain renderer adapters; actor owns identity, source configuration, styles, persistence, readiness, and resource generations; Milestone 4 complete |

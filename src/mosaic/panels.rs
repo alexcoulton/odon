@@ -517,6 +517,11 @@ impl MosaicViewerApp {
             &rows,
             &mut self.memory_selected_channels,
         );
+        if let Some(status) = self.control_actor_memory_state["status"].as_str()
+            && !status.is_empty()
+        {
+            ui.label(status);
+        }
         ui.separator();
 
         let selected_global_channels = self.selected_memory_global_channels();
@@ -566,7 +571,7 @@ impl MosaicViewerApp {
                             }
                             eligible += 1;
                             bytes = bytes.saturating_add(estimate);
-                            match self.pinned_levels.status(item.id, level_idx) {
+                            match self.projected_memory_level_status(item.id, level_idx) {
                                 MosaicPinnedLevelStatus::Unloaded => {}
                                 MosaicPinnedLevelStatus::Loading => loading += 1,
                                 MosaicPinnedLevelStatus::Loaded { .. } => loaded += 1,
@@ -604,19 +609,17 @@ impl MosaicViewerApp {
                                 )
                                 .clicked()
                             {
-                                let (requests, requested_bytes) = self
-                                    .memory_load_requests_for_all_rois(
-                                        level_idx,
-                                        &selected_global_channels,
-                                    );
-                                let count = requests.len();
                                 self.start_memory_load(
                                     format!(
-                                        "Loading {} channel(s) from level {level_idx} into RAM for {count} ROI(s)",
+                                        "Loading {} channel(s) from level {level_idx} into RAM for {eligible} ROI(s)",
                                         selected_channel_count
                                     ),
-                                    requests,
-                                    requested_bytes,
+                                    serde_json::json!({
+                                        "scope":"all",
+                                        "level":level_idx,
+                                        "channels":selected_global_channels,
+                                    }),
+                                    bytes,
                                 );
                             }
                             if ui
@@ -626,9 +629,10 @@ impl MosaicViewerApp {
                                 )
                                 .clicked()
                             {
-                                let count = self.unload_level_for_all_rois(level_idx);
-                                self.status =
-                                    format!("Unloaded level {level_idx} for {count} ROI(s)");
+                                self.submit_native_control_intent(
+                                    "memory.unpin",
+                                    serde_json::json!({"scope":"all","level":level_idx}),
+                                );
                             }
                         });
                         ui.end_row();
@@ -679,7 +683,7 @@ impl MosaicViewerApp {
                         Some(&selected_global_channels),
                     )
                     .unwrap_or(0);
-                    let status = self.pinned_levels.status(dataset_id, level_idx);
+                    let status = self.projected_memory_level_status(dataset_id, level_idx);
 
                     ui.label(level_idx.to_string());
                     ui.label(format!("{channels} x {shape_y} x {shape_x}"));
@@ -727,23 +731,19 @@ impl MosaicViewerApp {
                             )
                             .clicked()
                         {
-                            if let Some((request, requested_bytes)) = self
-                                .memory_load_request_for_dataset(
-                                    dataset_id,
-                                    source.clone(),
-                                    level_idx,
-                                    &selected_global_channels,
-                                )
-                            {
-                                self.start_memory_load(
-                                    format!(
-                                        "Loading {} channel(s) from ROI '{}' level {} into RAM",
-                                        selected_channel_count, sample_id, level_idx
-                                    ),
-                                    vec![request],
-                                    requested_bytes,
-                                );
-                            }
+                            self.start_memory_load(
+                                format!(
+                                    "Loading {} channel(s) from ROI '{}' level {} into RAM",
+                                    selected_channel_count, sample_id, level_idx
+                                ),
+                                serde_json::json!({
+                                    "scope":"item",
+                                    "item":dataset_id,
+                                    "level":level_idx,
+                                    "channels":selected_global_channels,
+                                }),
+                                estimate,
+                            );
                         }
                         if ui
                             .add_enabled(
@@ -752,10 +752,13 @@ impl MosaicViewerApp {
                             )
                             .clicked()
                         {
-                            self.pinned_levels.unload(dataset_id, level_idx);
-                            self.status = format!(
-                                "Unloaded ROI '{}' level {} from RAM",
-                                sample_id, level_idx
+                            self.submit_native_control_intent(
+                                "memory.unpin",
+                                serde_json::json!({
+                                    "scope":"item",
+                                    "item":dataset_id,
+                                    "level":level_idx,
+                                }),
                             );
                         }
                     });

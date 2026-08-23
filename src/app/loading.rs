@@ -14,7 +14,7 @@ impl OmeZarrViewerApp {
         busy |= self.seg_objects.is_busy();
         busy |= self.spatial_image_layers.is_busy();
         busy |= self.spatial_layers.is_busy();
-        busy |= self.pinned_levels.has_loading();
+        busy |= self.projected_memory_running();
         busy
     }
 
@@ -49,7 +49,7 @@ impl OmeZarrViewerApp {
         if self.spatial_layers.is_busy() {
             reasons.push("spatial_layers");
         }
-        if self.pinned_levels.has_loading() {
+        if self.projected_memory_running() {
             reasons.push("pinned_levels");
         }
         reasons
@@ -127,7 +127,7 @@ impl OmeZarrViewerApp {
             Some("Running SpatialData layer analysis...")
         } else if self.seg_geojson.is_busy() {
             Some("Loading segmentation...")
-        } else if self.pinned_levels.has_loading() {
+        } else if self.projected_memory_running() {
             Some("Pinning image level into RAM...")
         } else if self.is_loading_scene() {
             Some("Loading image tiles...")

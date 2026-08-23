@@ -1787,6 +1787,48 @@ fn document_tiff_plane_and_tile_policy_commits_are_actor_only() {
 }
 
 #[test]
+fn viewer_and_mosaic_memory_operations_are_actor_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let viewer_ui = source(root.join("src/app/memory_ui.rs"));
+    let viewer_pinned = source(root.join("src/imaging/pinned_levels.rs"));
+    let mosaic_ui = source(root.join("src/mosaic/panels.rs"));
+    let mosaic_memory = source(root.join("src/mosaic/memory_navigation.rs"));
+    let mosaic_pinned = source(root.join("src/mosaic/io.rs"));
+    let projection = source(root.join("src/control/actor/projection.rs"));
+    let worker = source(root.join("src/control/actor/worker.rs"));
+
+    for method in ["memory.pin", "memory.unpin"] {
+        assert!(viewer_ui.contains(method));
+    }
+    assert!(mosaic_memory.contains("memory.pin"));
+    assert!(mosaic_ui.contains("memory.unpin"));
+    for renderer in [&viewer_ui, &mosaic_ui, &mosaic_memory] {
+        for forbidden in [
+            "pinned_levels.request_load",
+            "pinned_levels.unload",
+            "PendingPinnedLevelLoadRequest",
+            "PendingMemoryLoadRequest",
+        ] {
+            assert!(
+                !renderer.contains(forbidden),
+                "memory semantics must not return to the renderer: {forbidden}"
+            );
+        }
+    }
+    for adapter in [&viewer_pinned, &mosaic_pinned] {
+        for forbidden in ["fn request_load(", "fn load_full_level(", "pin-level-"] {
+            assert!(
+                !adapter.contains(forbidden),
+                "pinned renderer resources must not own load workers: {forbidden}"
+            );
+        }
+    }
+    assert!(projection.contains("memory_state: model.memory_projection_state()"));
+    assert!(worker.contains("LoadJob::MemoryPin"));
+    assert!(worker.contains("LoadJob::MosaicMemoryPin"));
+}
+
+#[test]
 fn threshold_controls_wait_for_actor_projection_and_shared_resources() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let controls = source(root.join("src/app/contrast_ui.rs"));
@@ -2110,7 +2152,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 288,
+        total_fields, 289,
         "review the ownership ledger when host fields change"
     );
 }

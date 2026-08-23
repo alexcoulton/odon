@@ -33,121 +33,73 @@ impl MosaicViewerApp {
         )
     }
 
+    pub(super) fn projected_memory_running(&self) -> bool {
+        self.control_actor_memory_state["running"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+
+    pub(super) fn projected_memory_level_status(
+        &self,
+        dataset_id: usize,
+        level: usize,
+    ) -> MosaicPinnedLevelStatus {
+        let projected = self.control_actor_memory_state["items"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["id"].as_u64() == Some(dataset_id as u64))
+            })
+            .and_then(|item| item["levels"].as_array())
+            .and_then(|levels| {
+                levels
+                    .iter()
+                    .find(|entry| entry["level"].as_u64() == Some(level as u64))
+            });
+        match projected
+            .and_then(|entry| entry["status"].as_str())
+            .unwrap_or("unloaded")
+        {
+            "loading" => MosaicPinnedLevelStatus::Loading,
+            "loaded" => MosaicPinnedLevelStatus::Loaded {
+                bytes: projected
+                    .and_then(|entry| entry["loaded_bytes"].as_u64())
+                    .unwrap_or(0),
+                channels_loaded: projected
+                    .and_then(|entry| entry["channels_loaded"].as_u64())
+                    .unwrap_or(0) as usize,
+            },
+            "failed" => MosaicPinnedLevelStatus::Failed(
+                projected
+                    .and_then(|entry| entry["error"].as_str())
+                    .unwrap_or("memory pin failed")
+                    .to_string(),
+            ),
+            _ => self.pinned_levels.status(dataset_id, level),
+        }
+    }
+
     pub(super) fn start_memory_load(
         &mut self,
         summary: String,
-        requests: Vec<PendingMemoryLoadRequest>,
+        params: serde_json::Value,
         requested_bytes: u64,
     ) {
-        if requests.is_empty() {
-            self.status = "No eligible channels selected for RAM pinning.".to_string();
-            return;
-        }
         if let Some(risk) = self.memory_risk(requested_bytes) {
             self.pending_memory_load = Some(PendingMemoryAction {
                 summary,
-                payload: requests,
+                payload: params,
                 risk,
             });
         } else {
-            self.execute_memory_load(summary, requests);
+            self.execute_memory_load(params);
         }
     }
 
-    pub(super) fn execute_memory_load(
-        &mut self,
-        summary: String,
-        requests: Vec<PendingMemoryLoadRequest>,
-    ) {
-        let count = requests.len();
-        for request in requests {
-            self.pinned_levels.request_load(
-                request.dataset_id,
-                request.source,
-                request.level,
-                request.selected_global_channels,
-            );
-        }
-        self.status = if count == 0 {
-            "No eligible channels selected for RAM pinning.".to_string()
-        } else {
-            summary
-        };
-    }
-
-    pub(super) fn memory_load_requests_for_all_rois(
-        &self,
-        level: usize,
-        selected_global_channels: &[u64],
-    ) -> (Vec<PendingMemoryLoadRequest>, u64) {
-        let mut requests = Vec::new();
-        let mut total_bytes = 0u64;
-        for item in &self.items {
-            let Some(source) = self.sources.get(item.id).cloned() else {
-                continue;
-            };
-            if source.levels.get(level).is_none() {
-                continue;
-            }
-            let estimate = estimate_level_ram_bytes_for_channels(
-                &source,
-                level,
-                Some(selected_global_channels),
-            )
-            .unwrap_or(0);
-            if estimate == 0 {
-                continue;
-            }
-            total_bytes = total_bytes.saturating_add(estimate);
-            requests.push(PendingMemoryLoadRequest {
-                dataset_id: item.id,
-                source,
-                level,
-                selected_global_channels: selected_global_channels.to_vec(),
-            });
-        }
-        (requests, total_bytes)
-    }
-
-    pub(super) fn memory_load_request_for_dataset(
-        &self,
-        dataset_id: usize,
-        source: MosaicSource,
-        level: usize,
-        selected_global_channels: &[u64],
-    ) -> Option<(PendingMemoryLoadRequest, u64)> {
-        let requested_bytes =
-            estimate_level_ram_bytes_for_channels(&source, level, Some(selected_global_channels))
-                .unwrap_or(0);
-        if requested_bytes == 0 {
-            return None;
-        }
-        Some((
-            PendingMemoryLoadRequest {
-                dataset_id,
-                source,
-                level,
-                selected_global_channels: selected_global_channels.to_vec(),
-            },
-            requested_bytes,
-        ))
-    }
-
-    pub(super) fn unload_level_for_all_rois(&mut self, level: usize) -> usize {
-        let mut count = 0usize;
-        for item in &self.items {
-            if self
-                .sources
-                .get(item.id)
-                .and_then(|s| s.levels.get(level))
-                .is_none()
-            {
-                continue;
-            }
-            self.pinned_levels.unload(item.id, level);
-            count += 1;
-        }
-        count
+    pub(super) fn execute_memory_load(&mut self, mut params: serde_json::Value) {
+        params["force"] = serde_json::Value::Bool(true);
+        self.submit_native_control_intent("memory.pin", params);
     }
 
     pub(super) fn refine_item_order(&self, visible_world: egui::Rect) -> Vec<usize> {

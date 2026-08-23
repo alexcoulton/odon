@@ -848,10 +848,10 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn ui_memory_load_dialog(&mut self, ctx: &egui::Context) {
-        if let Some((summary, requests)) =
+        if let Some((_summary, params)) =
             ui_pending_memory_action_dialog(ctx, &mut self.pending_memory_load)
         {
-            self.execute_memory_load(summary, requests);
+            self.execute_memory_load(params);
         }
     }
 

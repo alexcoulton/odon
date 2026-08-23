@@ -224,6 +224,27 @@ impl AppModel {
         self.pinned_memory.resources()
     }
 
+    pub(crate) fn memory_projection_state(&mut self) -> Arc<Value> {
+        let generation = match self.mode {
+            ModelMode::Single => self.pinned_memory.projection_generation(),
+            ModelMode::Mosaic => self.mosaic.memory_projection_generation(),
+            ModelMode::Project | ModelMode::Transition => 0,
+        };
+        if let Some((mode, cached_generation, state)) = &self.memory_projection_cache
+            && *mode == self.mode
+            && *cached_generation == generation
+        {
+            return Arc::clone(state);
+        }
+        let state = Arc::new(match self.mode {
+            ModelMode::Single => self.memory_snapshot().unwrap_or_else(|_| json!({})),
+            ModelMode::Mosaic => self.mosaic.memory_snapshot().unwrap_or_else(|_| json!({})),
+            ModelMode::Project | ModelMode::Transition => json!({}),
+        });
+        self.memory_projection_cache = Some((self.mode, generation, Arc::clone(&state)));
+        state
+    }
+
     pub(super) fn memory_snapshot(&self) -> Result<Value, ControlError> {
         let dataset = self.dataset()?;
         let selected = if self.pinned_memory.selected_channels().is_empty() {

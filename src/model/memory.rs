@@ -76,10 +76,19 @@ pub(crate) struct PinnedMemoryModel {
     status: String,
     system: Option<SystemMemorySnapshot>,
     operation_generation: u64,
+    projection_generation: u64,
     pending: HashMap<usize, u64>,
 }
 
 impl PinnedMemoryModel {
+    fn touch_projection(&mut self) {
+        self.projection_generation = self.projection_generation.wrapping_add(1).max(1);
+    }
+
+    pub(crate) fn projection_generation(&self) -> u64 {
+        self.projection_generation
+    }
+
     pub(crate) fn selected_channels(&self) -> &[usize] {
         &self.selected_channels
     }
@@ -94,6 +103,7 @@ impl PinnedMemoryModel {
         self.selected_channels = selected_channels;
         self.status = status;
         self.pending.insert(level, self.operation_generation);
+        self.touch_projection();
         self.operation_generation
     }
 
@@ -120,6 +130,7 @@ impl PinnedMemoryModel {
         self.status = format!("Loaded pinned level {level} into RAM.");
         self.levels
             .insert(level, PinnedLevelModelState::Loaded(resource));
+        self.touch_projection();
         true
     }
 
@@ -135,6 +146,7 @@ impl PinnedMemoryModel {
         self.pending.remove(&level);
         self.system = system;
         self.status = format!("RAM pinning level {level} requires confirmation.");
+        self.touch_projection();
         true
     }
 
@@ -146,6 +158,7 @@ impl PinnedMemoryModel {
         self.status = message.clone();
         self.levels
             .insert(level, PinnedLevelModelState::Failed(message));
+        self.touch_projection();
         true
     }
 
@@ -155,6 +168,7 @@ impl PinnedMemoryModel {
         }
         self.pending.remove(&level);
         self.status = message;
+        self.touch_projection();
         true
     }
 
@@ -163,6 +177,7 @@ impl PinnedMemoryModel {
         self.pending.remove(&level);
         let removed = self.levels.remove(&level).is_some();
         self.status = format!("Unloaded pinned level {level} from RAM.");
+        self.touch_projection();
         removed
     }
 
@@ -172,6 +187,7 @@ impl PinnedMemoryModel {
         let count = self.levels.len();
         self.levels.clear();
         self.status = format!("Unloaded {count} pinned level(s) from RAM.");
+        self.touch_projection();
         count
     }
 
@@ -181,6 +197,7 @@ impl PinnedMemoryModel {
         self.pending.clear();
         self.selected_channels = (0..channel_count).collect();
         self.status.clear();
+        self.touch_projection();
     }
 
     pub(crate) fn resources(&self) -> Vec<Arc<ControlPinnedLevelResource>> {

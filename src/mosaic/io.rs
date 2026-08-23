@@ -109,17 +109,9 @@ struct PinnedLevelData {
     bytes: u64,
 }
 
-#[derive(Debug, Clone)]
-enum PinnedLevelState {
-    Loading { request_id: u64 },
-    Loaded(PinnedLevelData),
-    Failed(String),
-}
-
 #[derive(Default)]
 struct MosaicPinnedLevelsInner {
-    levels: HashMap<(usize, usize), PinnedLevelState>,
-    next_request_id: u64,
+    levels: HashMap<(usize, usize), PinnedLevelData>,
 }
 
 impl MosaicPinnedLevels {
@@ -132,29 +124,23 @@ impl MosaicPinnedLevels {
     pub fn status(&self, dataset_id: usize, level: usize) -> MosaicPinnedLevelStatus {
         match self.inner.lock().levels.get(&(dataset_id, level)) {
             None => MosaicPinnedLevelStatus::Unloaded,
-            Some(PinnedLevelState::Loading { .. }) => MosaicPinnedLevelStatus::Loading,
-            Some(PinnedLevelState::Loaded(data)) => MosaicPinnedLevelStatus::Loaded {
+            Some(data) => MosaicPinnedLevelStatus::Loaded {
                 bytes: data.bytes,
                 channels_loaded: data.channel_offsets.len(),
             },
-            Some(PinnedLevelState::Failed(err)) => MosaicPinnedLevelStatus::Failed(err.clone()),
         }
-    }
-
-    pub fn unload(&self, dataset_id: usize, level: usize) {
-        self.inner.lock().levels.remove(&(dataset_id, level));
     }
 
     pub fn install(&self, dataset_id: usize, resource: Arc<ControlPinnedLevelResource>) {
         self.inner.lock().levels.insert(
             (dataset_id, resource.level()),
-            PinnedLevelState::Loaded(PinnedLevelData {
+            PinnedLevelData {
                 width: resource.width(),
                 height: resource.height(),
                 channel_offsets: resource.channel_offsets().as_ref().clone(),
                 data: Arc::clone(resource.data()),
                 bytes: resource.bytes(),
-            }),
+            },
         );
     }
 
@@ -180,67 +166,8 @@ impl MosaicPinnedLevels {
             .lock()
             .levels
             .values()
-            .filter_map(|state| match state {
-                PinnedLevelState::Loaded(data) => Some(data.bytes),
-                _ => None,
-            })
+            .map(|data| data.bytes)
             .sum()
-    }
-
-    pub fn has_loading(&self) -> bool {
-        self.inner
-            .lock()
-            .levels
-            .values()
-            .any(|state| matches!(state, PinnedLevelState::Loading { .. }))
-    }
-
-    pub fn request_load(
-        &self,
-        dataset_id: usize,
-        source: MosaicSource,
-        level: usize,
-        selected_global_channels: Vec<u64>,
-    ) {
-        let request_id = {
-            let mut inner = self.inner.lock();
-            inner.next_request_id = inner.next_request_id.wrapping_add(1).max(1);
-            let request_id = inner.next_request_id;
-            inner.levels.insert(
-                (dataset_id, level),
-                PinnedLevelState::Loading { request_id },
-            );
-            request_id
-        };
-
-        let this = self.clone();
-        std::thread::Builder::new()
-            .name(format!("mosaic-pin-level-{dataset_id}-{level}"))
-            .spawn(move || {
-                let result = load_full_level(&source, level, &selected_global_channels);
-                let mut inner = this.inner.lock();
-                let is_current = matches!(
-                    inner.levels.get(&(dataset_id, level)),
-                    Some(PinnedLevelState::Loading { request_id: current }) if *current == request_id
-                );
-                if !is_current {
-                    return;
-                }
-                match result {
-                    Ok(data) => {
-                        inner
-                            .levels
-                            .insert((dataset_id, level), PinnedLevelState::Loaded(data));
-                    }
-                    Err(err) => {
-                        inner.levels.insert(
-                            (dataset_id, level),
-                            PinnedLevelState::Failed(err.to_string()),
-                        );
-                    }
-                }
-            })
-            .ok();
     }
 
     fn try_get_tile(
@@ -251,7 +178,7 @@ impl MosaicPinnedLevels {
         level: &LevelInfo,
     ) -> Option<MosaicRawTileResponse> {
         let data = match self.inner.lock().levels.get(&(key.dataset_id, key.level)) {
-            Some(PinnedLevelState::Loaded(data)) => data.clone(),
+            Some(data) => data.clone(),
             _ => return None,
         };
 
@@ -527,129 +454,6 @@ fn mosaic_raw_tile_worker(
     }
 
     Ok(())
-}
-
-fn load_full_level(
-    source: &MosaicSource,
-    level: usize,
-    selected_global_channels: &[u64],
-) -> anyhow::Result<PinnedLevelData> {
-    let info = source
-        .levels
-        .get(level)
-        .with_context(|| format!("missing level {level}"))?;
-    let store = source.store.clone();
-    let zarr_path = format!("/{}", info.path.trim_start_matches('/'));
-    let array: Array<dyn ReadableStorageTraits> = Array::open(store, &zarr_path)?;
-
-    if let Some(c_dim) = source.dims.c {
-        let height = *info.shape.get(source.dims.y).unwrap_or(&0) as usize;
-        let width = *info.shape.get(source.dims.x).unwrap_or(&0) as usize;
-        let plane_len = height.saturating_mul(width);
-        let mut raw = Vec::<u16>::new();
-        let mut channel_offsets = HashMap::<u64, usize>::new();
-
-        for &gid in selected_global_channels {
-            let Some(dataset_channel) = source.channel_map.get(gid as usize).copied().flatten()
-            else {
-                continue;
-            };
-            let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(info.shape.len());
-            for dim in 0..info.shape.len() {
-                if dim == c_dim {
-                    ranges.push(dataset_channel..(dataset_channel + 1));
-                } else if dim == source.dims.y || dim == source.dims.x {
-                    ranges.push(0..info.shape[dim]);
-                } else {
-                    ranges.push(0..1);
-                }
-            }
-            let subset = ArraySubset::new_with_ranges(&ranges);
-            let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-            let plane = squeeze_to_2d(data, source.dims.y, source.dims.x)
-                .context("unexpected dimensionality for pinned mosaic level")?;
-            let (plane_raw, offset) = plane.into_raw_vec_and_offset();
-            if offset.unwrap_or(0) != 0 {
-                anyhow::bail!("unexpected non-zero offset in pinned mosaic level channel buffer");
-            }
-            if plane_raw.len() != plane_len {
-                anyhow::bail!("unexpected plane length while pinning mosaic level");
-            }
-            channel_offsets.insert(gid, raw.len() / plane_len.max(1));
-            raw.extend_from_slice(&plane_raw);
-        }
-
-        if channel_offsets.is_empty() {
-            anyhow::bail!("none of the selected channels are present in this ROI");
-        }
-
-        Ok(PinnedLevelData {
-            height,
-            width,
-            channel_offsets,
-            bytes: (raw.len() as u64).saturating_mul(2),
-            data: Arc::new(raw),
-        })
-    } else {
-        let matched_global_channels = if selected_global_channels.is_empty() {
-            all_global_channels(source)
-        } else {
-            selected_global_channels
-                .iter()
-                .copied()
-                .filter(|gid| {
-                    source
-                        .channel_map
-                        .get(*gid as usize)
-                        .copied()
-                        .flatten()
-                        .is_some()
-                })
-                .collect::<Vec<_>>()
-        };
-        if matched_global_channels.is_empty() {
-            anyhow::bail!("none of the selected channels are present in this ROI");
-        }
-
-        let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(info.shape.len());
-        for dim in 0..info.shape.len() {
-            if dim == source.dims.y || dim == source.dims.x {
-                ranges.push(0..info.shape[dim]);
-            } else {
-                ranges.push(0..1);
-            }
-        }
-        let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve_image_subset_u16(&array, &subset, &info.dtype)?;
-        let data = squeeze_to_2d(data, source.dims.y, source.dims.x)
-            .context("unexpected dimensionality for pinned mosaic level")?;
-        let height = data.shape()[0];
-        let width = data.shape()[1];
-        let (raw, offset) = data.into_raw_vec_and_offset();
-        if offset.unwrap_or(0) != 0 {
-            anyhow::bail!("unexpected non-zero offset in pinned mosaic level buffer");
-        }
-        let mut channel_offsets = HashMap::new();
-        for gid in matched_global_channels {
-            channel_offsets.insert(gid, 0);
-        }
-        Ok(PinnedLevelData {
-            height,
-            width,
-            channel_offsets,
-            bytes: (raw.len() as u64).saturating_mul(2),
-            data: Arc::new(raw),
-        })
-    }
-}
-
-fn all_global_channels(source: &MosaicSource) -> Vec<u64> {
-    source
-        .channel_map
-        .iter()
-        .enumerate()
-        .filter_map(|(gid, mapped)| mapped.map(|_| gid as u64))
-        .collect()
 }
 
 #[cfg(test)]

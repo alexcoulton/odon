@@ -36,7 +36,7 @@ impl MosaicViewerApp {
         let image_tiles_busy = self.tiles_gl.is_busy();
         let segmentation = self.seg_geojson.control_loading_snapshot();
         let segmentation_busy = self.seg_geojson.is_busy();
-        let pinned_levels_loading = self.pinned_levels.has_loading();
+        let pinned_levels_loading = self.projected_memory_running();
         let screenshot_pending = self.screenshot_pending.is_some();
         let screenshot_in_flight = self.screenshot_in_flight.is_some();
 

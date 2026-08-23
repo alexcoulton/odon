@@ -499,7 +499,10 @@ impl RootApp {
             {
                 log_warn!("could not realize actor tile-loading policy: {error}");
             }
-            app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            app.apply_control_actor_memory(
+                projection.memory_state.as_ref(),
+                &projection.pinned_levels,
+            );
             app.apply_control_actor_channel_compute(
                 projection.channel_compute_generation,
                 &projection.channel_compute_state,
@@ -598,6 +601,7 @@ impl RootApp {
                 mosaic.set_project_space(project_space);
                 if let Err(error) = mosaic.apply_control_actor_state(
                     &projection.mosaic_state,
+                    projection.memory_state.as_ref(),
                     &projection.mosaic_object_resources,
                     &projection.mosaic_pinned_levels,
                 ) {
@@ -615,6 +619,7 @@ impl RootApp {
                     .apply_control_actor_project_projection(&projection.project);
                 if let Err(error) = mosaic.apply_control_actor_state(
                     &projection.mosaic_state,
+                    projection.memory_state.as_ref(),
                     &projection.mosaic_object_resources,
                     &projection.mosaic_pinned_levels,
                 ) {
@@ -792,7 +797,10 @@ impl RootApp {
             {
                 log_warn!("could not realize actor tile-loading policy: {error}");
             }
-            app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            app.apply_control_actor_memory(
+                projection.memory_state.as_ref(),
+                &projection.pinned_levels,
+            );
             app.apply_control_actor_channel_compute(
                 projection.channel_compute_generation,
                 &projection.channel_compute_state,

@@ -79,69 +79,73 @@ impl OmeZarrViewerApp {
         )
     }
 
+    pub(super) fn projected_memory_running(&self) -> bool {
+        self.control_actor_memory_state["running"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+
+    pub(super) fn projected_memory_level_status(&self, level: usize) -> PinnedLevelStatus {
+        let projected = self.control_actor_memory_state["levels"]
+            .as_array()
+            .and_then(|levels| {
+                levels
+                    .iter()
+                    .find(|entry| entry["level"].as_u64() == Some(level as u64))
+            });
+        match projected
+            .and_then(|entry| entry["status"].as_str())
+            .unwrap_or("unloaded")
+        {
+            "loading" => PinnedLevelStatus::Loading,
+            "loaded" => PinnedLevelStatus::Loaded {
+                bytes: projected
+                    .and_then(|entry| entry["loaded_bytes"].as_u64())
+                    .unwrap_or(0),
+                channels_loaded: projected
+                    .and_then(|entry| entry["channels_loaded"].as_u64())
+                    .unwrap_or(0) as usize,
+            },
+            "failed" => PinnedLevelStatus::Failed(
+                projected
+                    .and_then(|entry| entry["error"].as_str())
+                    .unwrap_or("memory pin failed")
+                    .to_string(),
+            ),
+            _ => self.pinned_levels.status(level),
+        }
+    }
+
     pub(super) fn start_memory_load(
         &mut self,
         summary: String,
-        requests: Vec<PendingPinnedLevelLoadRequest>,
+        params: serde_json::Value,
         requested_bytes: u64,
     ) {
-        if requests.is_empty() {
-            self.memory_status = "No eligible channels selected for RAM pinning.".to_string();
-            return;
-        }
         if let Some(risk) = self.memory_risk(requested_bytes) {
             self.pending_memory_load = Some(PendingMemoryAction {
                 summary,
-                payload: requests,
+                payload: params,
                 risk,
             });
         } else {
-            self.execute_memory_load(summary, requests);
+            self.execute_memory_load(params);
         }
     }
 
-    pub(super) fn execute_memory_load(
-        &mut self,
-        summary: String,
-        requests: Vec<PendingPinnedLevelLoadRequest>,
-    ) {
-        if requests.is_empty() {
-            self.memory_status = "No eligible channels selected for RAM pinning.".to_string();
-            return;
-        }
-        if self.z_extent_level0().is_some_and(|extent| extent > 1) {
-            self.memory_status =
-                "RAM pinning is currently unavailable for OME-Zarr z-stacks.".to_string();
-            return;
-        }
-        for request in requests {
-            if self.control_actor_tile_policy_generation > 0 {
-                self.native_control_intents.push(NativeControlIntent {
-                    method: "memory.pin",
-                    params: serde_json::json!({
-                        "level":request.level,
-                        "channels":request.selected_channels,
-                        "force":true,
-                    }),
-                });
-            } else {
-                self.pinned_levels.request_load(
-                    self.store.clone(),
-                    self.dataset.dims.clone(),
-                    self.dataset.levels.clone(),
-                    request.level,
-                    request.selected_channels,
-                );
-            }
-        }
-        self.memory_status = summary;
+    pub(super) fn execute_memory_load(&mut self, mut params: serde_json::Value) {
+        params["force"] = serde_json::Value::Bool(true);
+        self.native_control_intents.push(NativeControlIntent {
+            method: "memory.pin",
+            params,
+        });
     }
 
     pub(super) fn ui_memory_load_dialog(&mut self, ctx: &egui::Context) {
-        if let Some((summary, requests)) =
+        if let Some((_summary, params)) =
             ui_pending_memory_action_dialog(ctx, &mut self.pending_memory_load)
         {
-            self.execute_memory_load(summary, requests);
+            self.execute_memory_load(params);
         }
     }
 
@@ -298,8 +302,10 @@ impl OmeZarrViewerApp {
             ui.label(format!("Current draw level: {level}"));
         }
         ui.label("Loading is manual. The app estimates RAM usage but does not enforce a system-memory limit.");
-        if !self.memory_status.is_empty() {
-            ui.label(self.memory_status.clone());
+        if let Some(status) = self.control_actor_memory_state["status"].as_str()
+            && !status.is_empty()
+        {
+            ui.label(status);
         }
         if z_stacks_unsupported {
             ui.colored_label(
@@ -353,7 +359,8 @@ impl OmeZarrViewerApp {
                     } else {
                         format_bytes(estimate)
                     });
-                    match self.pinned_levels.status(level_idx) {
+                    let level_status = self.projected_memory_level_status(level_idx);
+                    match &level_status {
                         PinnedLevelStatus::Unloaded => {
                             if self.last_target_level == Some(level_idx) {
                                 ui.label("Streaming (current)");
@@ -370,7 +377,7 @@ impl OmeZarrViewerApp {
                         } => {
                             ui.label(format!(
                                 "Pinned ({}; {} ch)",
-                                format_bytes(bytes),
+                                format_bytes(*bytes),
                                 channels_loaded
                             ));
                         }
@@ -401,30 +408,22 @@ impl OmeZarrViewerApp {
                                     "Loading {} channel(s) from level {level_idx} into RAM",
                                     selected_channel_ids.len()
                                 ),
-                                vec![PendingPinnedLevelLoadRequest {
-                                    level: level_idx,
-                                    selected_channels: selected_channel_ids.clone(),
-                                }],
+                                serde_json::json!({
+                                    "level":level_idx,
+                                    "channels":selected_channel_ids,
+                                }),
                                 estimate,
                             );
                         }
-                        let can_unload = !matches!(
-                            self.pinned_levels.status(level_idx),
-                            PinnedLevelStatus::Unloaded
-                        );
+                        let can_unload = !matches!(level_status, PinnedLevelStatus::Unloaded);
                         if ui
                             .add_enabled(can_unload, egui::Button::new("Unload"))
                             .clicked()
                         {
-                            if self.control_actor_tile_policy_generation > 0 {
-                                self.native_control_intents.push(NativeControlIntent {
-                                    method: "memory.unpin",
-                                    params: serde_json::json!({"level":level_idx}),
-                                });
-                            }
-                            self.pinned_levels.unload(level_idx);
-                            self.memory_status =
-                                format!("Unloaded pinned level {level_idx} from RAM.");
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "memory.unpin",
+                                params: serde_json::json!({"level":level_idx}),
+                            });
                         }
                     });
                     ui.end_row();

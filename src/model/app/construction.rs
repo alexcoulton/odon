@@ -46,6 +46,7 @@ impl AppModel {
             screenshot_settings_pending: false,
             tile_loading: TileLoadingModel::default(),
             pinned_memory: PinnedMemoryModel::default(),
+            memory_projection_cache: None,
             threshold_preview: ThresholdPreviewModel::default(),
             annotations: AnnotationModel::default(),
             analyses: HashMap::from([(ObjectTarget::Primary, AnalysisModel::default())]),

@@ -135,7 +135,7 @@ impl OmeZarrViewerApp {
                 "image_layers_busy": self.spatial_image_layers.is_busy(),
                 "shape_or_point_layers_busy": self.spatial_layers.is_busy(),
             },
-            "pinned_levels_loading": self.pinned_levels.has_loading(),
+            "pinned_levels_loading": self.projected_memory_running(),
             "screenshot": {
                 "pending": !self.screenshot_pending.is_empty(),
                 "pending_count": self.screenshot_pending.len(),

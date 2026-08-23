@@ -151,7 +151,7 @@ impl OmeZarrViewerApp {
                 || visible_raw_request_count > raw_tile_cache_capacity);
 
         let mut prefetch_needed_per_level: Vec<(usize, Vec<TileKey>)> = Vec::new();
-        if !adaptive_raw_request_mode && !self.pinned_levels.has_loading() {
+        if !adaptive_raw_request_mode && !self.projected_memory_running() {
             let target_level_prefetch_needed = needed_per_level
                 .iter()
                 .find(|(level, _, _)| *level == target_level)

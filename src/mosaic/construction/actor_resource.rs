@@ -165,6 +165,7 @@ impl MosaicViewerApp {
     pub fn apply_control_actor_state(
         &mut self,
         state: &serde_json::Value,
+        memory_state: &serde_json::Value,
         object_resources: &[(usize, Arc<odon::model::ControlObjectResource>)],
         pinned_levels: &[(usize, Arc<odon::model::ControlPinnedLevelResource>)],
     ) -> Result<(), String> {
@@ -480,6 +481,7 @@ impl MosaicViewerApp {
         }
         self.seg_geojson
             .reconcile_actor_load_state(&state["objects"]);
+        self.control_actor_memory_state = memory_state.clone();
         self.pinned_levels.replace_control_resources(pinned_levels);
         self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
         self.last_tile_request_signature = None;

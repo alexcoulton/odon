@@ -184,7 +184,7 @@ impl eframe::App for MosaicViewerApp {
         if self.tiles_gl.is_busy()
             || self.seg_geojson.is_busy()
             || self.seg_geojson_pending_visible
-            || self.pinned_levels.has_loading()
+            || self.projected_memory_running()
             || self.screenshot_pending.is_some()
             || self.screenshot_in_flight.is_some()
         {

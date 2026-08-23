@@ -3,6 +3,15 @@
 use super::*;
 
 impl MosaicModel {
+    fn touch_memory_projection(&mut self) {
+        self.memory_projection_generation =
+            self.memory_projection_generation.wrapping_add(1).max(1);
+    }
+
+    pub(crate) fn memory_projection_generation(&self) -> u64 {
+        self.memory_projection_generation
+    }
+
     pub(crate) fn pinned_level_resources(&self) -> Vec<(usize, Arc<ControlPinnedLevelResource>)> {
         self.pinned_levels
             .iter()
@@ -115,6 +124,7 @@ impl MosaicModel {
             selected_channels.len(),
             items.len()
         );
+        self.touch_memory_projection();
         Ok(MosaicMemoryPinSpec {
             resource_generation: self.resource_generation(),
             operation_generation: self.memory_operation_generation,
@@ -167,6 +177,7 @@ impl MosaicModel {
         }
         self.system_memory = system;
         self.memory_status = format!("Pinned mosaic level {} into RAM", spec.level);
+        self.touch_memory_projection();
         Some(json!({
             "started":true,
             "completed":true,
@@ -196,6 +207,7 @@ impl MosaicModel {
             "RAM pinning mosaic level {} requires confirmation",
             spec.level
         );
+        self.touch_memory_projection();
         Some(json!({
             "confirmation_required":true,
             "level":spec.level,
@@ -224,6 +236,7 @@ impl MosaicModel {
             );
         }
         self.memory_status = message;
+        self.touch_memory_projection();
         true
     }
 
@@ -239,6 +252,7 @@ impl MosaicModel {
             self.memory_pending.remove(&(item.item_id, spec.level));
         }
         self.memory_status = message.into();
+        self.touch_memory_projection();
         true
     }
 
@@ -278,7 +292,7 @@ impl MosaicModel {
         }
     }
 
-    pub(super) fn memory_snapshot(&self) -> Result<Value, ControlError> {
+    pub(crate) fn memory_snapshot(&self) -> Result<Value, ControlError> {
         let resource = self.require_resource()?;
         let selected = if self.memory_selected_channels.is_empty() {
             (0..self.channels.len()).collect::<Vec<_>>()
@@ -376,6 +390,7 @@ impl MosaicModel {
             }
         }
         self.memory_status = format!("Unloaded level {level} from {unloaded} ROI(s)");
+        self.touch_memory_projection();
         Ok(json!({"unloaded_items":unloaded,"level":level}))
     }
 
@@ -386,6 +401,7 @@ impl MosaicModel {
         let unloaded = self.pinned_levels.len();
         self.pinned_levels.clear();
         self.memory_status = format!("Unloaded {unloaded} pinned mosaic level(s) from RAM");
+        self.touch_memory_projection();
         Ok(json!({"unloaded_item_levels":unloaded}))
     }
 

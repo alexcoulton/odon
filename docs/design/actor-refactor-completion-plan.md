@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 4 complete; Milestone 5 has four ownership rows remaining
+Status: in progress — Milestones 0 through 4 complete; Milestone 5 has two ownership rows remaining
 
 Date: 2026-08-23
 
@@ -49,21 +49,21 @@ The stabilized migration base, executable ownership ledger, renderer-emulator re
 viewport/presentation migration, and object/mask/annotation migration are separately checkpointed
 milestones. Milestone 5 has already removed renderer-owned settings persistence, redundant project
 preload fields, renderer-local remote dataset I/O, renderer-side label discovery and loading, local
-TIFF-plane and tile-policy mutation, threshold projection/draft overlap, and renderer-owned image
-histogram and automatic-contrast workers.
+TIFF-plane and tile-policy mutation, threshold projection/draft overlap, renderer-owned image
+histogram and automatic-contrast workers, and renderer-local memory-pinning workers.
 
 ### Current measured checkpoint
 
-The executable ledger currently covers 288 concrete host fields. It has 246 retained fields and 42
+The executable ledger currently covers 289 concrete host fields. It has 257 retained fields and 32
 fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
 command emulators.
 
 | Milestone | Open rows | Open fields | Remaining ownership domains |
 | --- | ---: | ---: | --- |
-| 5 | 4 | 17 | single-view memory, project UI, external spatial adapters, mosaic memory |
+| 5 | 2 | 7 | project UI and external spatial adapters |
 | 6 | 9 | 12 | host requests, native command outboxes, root mode/deep-link/projection relays, mosaic shell state |
 | 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
-| **Total** | **15** | **42** | |
+| **Total** | **13** | **32** | |
 
 `Retain` means the field has a valid final role as a renderer resource/observation, transient UI
 draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
@@ -343,10 +343,10 @@ Exit criteria:
 
 Purpose: finish the less frame-sensitive but persistence-critical ownership domains.
 
-Status: in progress. The histogram/automatic-contrast slice is implemented in the current
-checkpoint. Earlier slices checkpointed settings and mosaic project
+Status: in progress. The histogram/automatic-contrast and unified memory-pinning slices are
+implemented in the current checkpoints. Earlier slices checkpointed settings and mosaic project
 projections, project object preload, remote datasets, labels, TIFF planes/tile policy, and threshold
-analysis. Four executable-ledger rows remain, containing 17 fields.
+analysis. Two executable-ledger rows remain, containing 7 fields.
 
 Work:
 
@@ -402,9 +402,11 @@ extended fixtures), data-contract (10), and Python SDK (96) suites also passed, 
 all-target compilation, generated-reference, JSON, application-surface, registry, and ownership
 ledger checks.
 
-#### 5B — memory and pinned-level operations
+#### 5B — memory and pinned-level operations — complete
 
-Open rows: `viewer.memory` (7 fields) and `mosaic.memory` (3 fields).
+Closed rows: `viewer.memory` (7 fields) and `mosaic.memory` (3 fields), split into retained actor
+projection/shared-resource observations, transient confirmation/channel drafts, renderer OS-memory
+observations, and the existing projected tile-policy row.
 
 - make pin/unpin/load policy and retained-task status actor-authoritative in both modes;
 - retain selected-channel and confirmation-dialog values only as transient UI drafts;
@@ -416,6 +418,12 @@ Open rows: `viewer.memory` (7 fields) and `mosaic.memory` (3 fields).
 
 Commit gate: no renderer code can start semantic memory loading directly; viewer and mosaic expose
 equivalent task state and policy behavior through the actor; both ledger rows are closed.
+
+Checkpoint evidence: on 2026-08-23 the single-view and mosaic no-frame pin workflows, cancellation,
+single-view and mosaic stale-result rejection, immutable projection reuse, native-routing source
+guard, and exact ownership-ledger coverage passed. The cumulative Rust library (183) and binary
+(203 passed, 4 ignored extended fixtures), data-contract (10), and Python SDK (96) suites and
+all-target compilation also passed.
 
 #### 5C — project and legacy analysis UI
 
@@ -458,7 +466,7 @@ Milestone 5 row is closed.
 - update the ownership inventory counts and milestone narrative to the exact tested commit; and
 - record task-queue and projection-allocation regressions before declaring Milestone 5 complete.
 
-Milestone 6 may begin only when all four current Milestone 5 rows are closed and this cumulative
+Milestone 6 may begin only when both current Milestone 5 rows are closed and this cumulative
 gate passes.
 
 ## Milestone 6 — narrow the application shell and platform boundary
@@ -645,9 +653,9 @@ From the present checkpoint, work proceeds in this order:
 
 1. **5A histogram/auto-contrast — complete:** image analysis and on-open contrast are actor-driven,
    and the two local worker services are deleted.
-2. **5B memory — next:** close viewer and mosaic memory together so policy and task semantics cannot
-   diverge between modes.
-3. **5C project UI:** narrow the remaining project/ROI/legacy-analysis panels after their resource
+2. **5B memory — complete:** viewer and mosaic native controls now share actor-owned bounded work,
+   lifecycle projection, cancellation, supersession, and immutable resources.
+3. **5C project UI — next:** narrow the remaining project/ROI/legacy-analysis panels after their resource
    dependencies are actor-owned.
 4. **5D external spatial adapters:** move the last decoder/load lifecycles behind shared resources;
    then run the **5E cumulative gate** and checkpoint Milestone 5.

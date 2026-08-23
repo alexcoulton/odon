@@ -102,6 +102,8 @@ fn memory_pin_loads_shared_level_data_and_unpins_without_a_frame() {
     assert!(pinned["memory"]["pinned_bytes"].as_u64().unwrap() > 0);
 
     let projection = channels.presentation_rx.try_recv().unwrap();
+    assert_eq!(projection.memory_state["running"], false);
+    assert_eq!(projection.memory_state["levels"][level]["status"], "loaded");
     assert_eq!(projection.pinned_levels.len(), 1);
     assert_eq!(projection.pinned_levels[0].level(), level);
     assert_eq!(projection.pinned_levels[0].channels_loaded(), 2);
@@ -114,6 +116,10 @@ fn memory_pin_loads_shared_level_data_and_unpins_without_a_frame() {
         .unwrap();
     assert_eq!(unpinned["unloaded"], true);
     let projection = channels.presentation_rx.try_recv().unwrap();
+    assert_eq!(
+        projection.memory_state["levels"][level]["status"],
+        "unloaded"
+    );
     assert!(projection.pinned_levels.is_empty());
 }
 
@@ -126,7 +132,9 @@ fn unpinning_supersedes_a_late_memory_pin_install() {
     let spec = model
         .prepare_memory_pin(&json!({"level":0,"channels":[0],"force":true}))
         .unwrap();
+    assert_eq!(model.memory_projection_state()["running"], true);
     model.dispatch("memory.unpin", &json!({"level":0}));
+    assert_eq!(model.memory_projection_state()["running"], false);
     let stale =
         ControlPinnedLevelResource::new(0, 1, 1, std::iter::once((0, 0)).collect(), vec![1]);
     assert!(
@@ -135,4 +143,93 @@ fn unpinning_supersedes_a_late_memory_pin_install() {
             .is_none()
     );
     assert!(model.pinned_level_resources().is_empty());
+}
+
+#[test]
+fn cancelling_memory_pin_rejects_its_late_result() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture).unwrap();
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let spec = model
+        .prepare_memory_pin(&json!({"level":0,"channels":[0],"force":true}))
+        .unwrap();
+    assert!(model.cancel_memory_pin(&spec, "cancelled by test"));
+    let stale =
+        ControlPinnedLevelResource::new(0, 1, 1, std::iter::once((0, 0)).collect(), vec![1]);
+    assert!(
+        model
+            .install_memory_pin(&spec, Arc::new(stale), None)
+            .is_none()
+    );
+    assert_eq!(model.memory_projection_state()["running"], false);
+    assert!(model.pinned_level_resources().is_empty());
+}
+
+#[test]
+fn unchanged_memory_projection_reuses_its_immutable_snapshot() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture).unwrap();
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let first = model.memory_projection_state();
+    let unchanged = model.memory_projection_state();
+    assert!(Arc::ptr_eq(&first, &unchanged));
+
+    model
+        .prepare_memory_pin(&json!({"level":0,"channels":[0],"force":true}))
+        .unwrap();
+    let pending = model.memory_projection_state();
+    assert!(!Arc::ptr_eq(&first, &pending));
+    assert_eq!(pending["running"], true);
+}
+
+#[test]
+fn mosaic_unpin_supersedes_a_late_memory_pin_install() {
+    let opened = crate::data::document::open_local_ome_zarr(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr"),
+    )
+    .unwrap();
+    let mut model = AppModel::project();
+    model
+        .bootstrap_mosaic(ControlMosaicResource {
+            generation: 1,
+            source: "memory-test".to_string(),
+            base_dir: None,
+            initial_columns: Some(1),
+            metadata_columns: Arc::new(Vec::new()),
+            items: Arc::new(vec![ControlMosaicItemResource {
+                id: 0,
+                roi_id: "ROI-A".to_string(),
+                metadata: std::collections::HashMap::new(),
+                document: opened.into_control(),
+                segmentation_path: None,
+            }]),
+        })
+        .unwrap();
+    let spec = model
+        .prepare_mosaic_memory_pin(
+            &json!({"level":0,"channels":[0],"scope":"focused","force":true}),
+        )
+        .unwrap();
+    let _ = model
+        .dispatch("memory.unpin", &json!({"level":0,"scope":"focused"}))
+        .unwrap()
+        .unwrap();
+    let stale =
+        ControlPinnedLevelResource::new(0, 1, 1, std::iter::once((0, 0)).collect(), vec![1]);
+    assert!(
+        model
+            .install_mosaic_memory_pin(
+                &spec,
+                MosaicMemoryPinResult {
+                    loaded: vec![(0, stale)],
+                    failures: Vec::new(),
+                },
+                None,
+            )
+            .is_none()
+    );
+    assert!(model.mosaic_pinned_level_resources().is_empty());
+    assert_eq!(model.memory_projection_state()["running"], false);
 }

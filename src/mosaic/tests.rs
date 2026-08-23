@@ -267,7 +267,7 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
         }],
     });
     mosaic
-        .apply_control_actor_state(&projection, &[], &[])
+        .apply_control_actor_state(&projection, &serde_json::json!({}), &[], &[])
         .expect("apply actor projection");
     assert!(!mosaic.show_text_labels);
     assert_eq!(mosaic.active_layer, MosaicLayerId::TextLabels);

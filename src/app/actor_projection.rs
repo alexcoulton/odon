@@ -212,10 +212,12 @@ impl OmeZarrViewerApp {
         Ok(())
     }
 
-    pub fn apply_control_actor_pinned_levels(
+    pub fn apply_control_actor_memory(
         &mut self,
+        state: &serde_json::Value,
         resources: &[Arc<odon::model::ControlPinnedLevelResource>],
     ) {
+        self.control_actor_memory_state = state.clone();
         self.pinned_levels
             .replace_control_actor_resources(resources);
     }

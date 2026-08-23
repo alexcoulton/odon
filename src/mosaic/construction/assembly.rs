@@ -114,6 +114,7 @@ impl MosaicViewerApp {
             system_memory: None,
             system_memory_last_refresh: None,
             pending_memory_load: None,
+            control_actor_memory_state: serde_json::json!({}),
             tile_request_generation: 1,
             last_tile_request_signature: None,
             status,

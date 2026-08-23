@@ -188,14 +188,6 @@ impl MosaicLayoutMode {
     }
 }
 
-#[derive(Debug, Clone)]
-struct PendingMemoryLoadRequest {
-    dataset_id: usize,
-    source: MosaicSource,
-    level: usize,
-    selected_global_channels: Vec<u64>,
-}
-
 pub struct MosaicViewerApp {
     items: Vec<MosaicItem>,
     sources: Arc<Vec<MosaicSource>>,
@@ -254,7 +246,8 @@ pub struct MosaicViewerApp {
     close_dialog_open: bool,
     system_memory: Option<SystemMemorySnapshot>,
     system_memory_last_refresh: Option<Instant>,
-    pending_memory_load: Option<PendingMemoryAction<Vec<PendingMemoryLoadRequest>>>,
+    pending_memory_load: Option<PendingMemoryAction<serde_json::Value>>,
+    control_actor_memory_state: serde_json::Value,
     tile_request_generation: u64,
     last_tile_request_signature: Option<TileRequestSignature>,
 

@@ -250,6 +250,7 @@ pub(crate) struct MosaicModel {
     pinned_levels: BTreeMap<(usize, usize), MosaicPinnedLevelState>,
     memory_selected_channels: Vec<usize>,
     memory_operation_generation: u64,
+    memory_projection_generation: u64,
     memory_pending: HashMap<(usize, usize), u64>,
     memory_status: String,
     system_memory: Option<SystemMemorySnapshot>,
@@ -304,6 +305,7 @@ impl Default for MosaicModel {
             pinned_levels: BTreeMap::new(),
             memory_selected_channels: Vec::new(),
             memory_operation_generation: 0,
+            memory_projection_generation: 0,
             memory_pending: HashMap::new(),
             memory_status: String::new(),
             system_memory: None,
@@ -467,6 +469,8 @@ impl MosaicModel {
         self.pinned_levels.clear();
         self.memory_selected_channels = (0..self.channels.len()).collect();
         self.memory_operation_generation = 0;
+        self.memory_projection_generation =
+            self.memory_projection_generation.wrapping_add(1).max(1);
         self.memory_pending.clear();
         self.memory_status.clear();
         self.system_memory = None;

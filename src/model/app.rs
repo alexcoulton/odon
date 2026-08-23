@@ -416,6 +416,7 @@ pub struct AppModel {
     screenshot_settings_pending: bool,
     tile_loading: TileLoadingModel,
     pinned_memory: PinnedMemoryModel,
+    memory_projection_cache: Option<(ModelMode, u64, Arc<Value>)>,
     threshold_preview: ThresholdPreviewModel,
     annotations: AnnotationModel,
     analyses: HashMap<ObjectTarget, AnalysisModel>,

@@ -1891,8 +1891,8 @@ pub struct OmeZarrViewerApp {
     show_right_panel: bool,
     close_dialog_open: bool,
     pinned_levels: PinnedLevels,
-    pending_memory_load: Option<PendingMemoryAction<Vec<PendingPinnedLevelLoadRequest>>>,
-    memory_status: String,
+    pending_memory_load: Option<PendingMemoryAction<serde_json::Value>>,
+    control_actor_memory_state: serde_json::Value,
     system_memory: Option<SystemMemorySnapshot>,
     system_memory_last_refresh: Option<Instant>,
     left_tab: LeftTab,
@@ -2022,12 +2022,6 @@ struct NativeViewportCommandScope {
 struct LayerMoveState {
     targets: Vec<LayerOffsetEntry>,
     actor_scope: Option<(String, u64)>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingPinnedLevelLoadRequest {
-    level: usize,
-    selected_channels: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
