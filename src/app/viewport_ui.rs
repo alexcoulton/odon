@@ -130,8 +130,8 @@ impl OmeZarrViewerApp {
             .viewports()
             .iter()
             .flat_map(|viewport| {
-                std::iter::once(viewport.state.active_render_id)
-                    .chain(viewport.state.previous_render_id)
+                std::iter::once(viewport.state.render.active_render_id)
+                    .chain(viewport.state.render.previous_render_id)
             })
             .filter(|render_id| *render_id != 0)
             .collect()
@@ -143,8 +143,8 @@ impl OmeZarrViewerApp {
         }
         self.viewport_workspace.as_ref().is_some_and(|workspace| {
             workspace.viewports().iter().any(|viewport| {
-                viewport.state.active_render_id == render_id
-                    || viewport.state.previous_render_id == Some(render_id)
+                viewport.state.render.active_render_id == render_id
+                    || viewport.state.render.previous_render_id == Some(render_id)
             })
         })
     }
@@ -162,14 +162,15 @@ impl OmeZarrViewerApp {
             .as_ref()
             .and_then(|workspace| {
                 workspace.viewports().iter().find_map(|viewport| {
-                    (viewport.state.active_render_id == render_id)
-                        .then_some(viewport.state.active_render_smooth_pixels)
+                    (viewport.state.render.active_render_id == render_id)
+                        .then_some(viewport.state.render.active_render_smooth_pixels)
                         .or_else(|| {
-                            (viewport.state.previous_render_id == Some(render_id)).then_some(
+                            (viewport.state.render.previous_render_id == Some(render_id)).then_some(
                                 viewport
                                     .state
+                                    .render
                                     .previous_render_smooth_pixels
-                                    .unwrap_or(viewport.state.active_render_smooth_pixels),
+                                    .unwrap_or(viewport.state.render.active_render_smooth_pixels),
                             )
                         })
                 })

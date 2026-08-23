@@ -204,7 +204,10 @@ Persisted project masks are installed in the same actor transaction. Production 
 project attachment and renderer-side dataset switching no longer call the legacy in-process view
 restorer; that routine is now compiled only for persistence characterization tests. Remaining
 annotation and other heavyweight project resources belong to the shared-resource work in
-Milestone 5. Native channel
+Milestone 5. The combined viewport value now contains an explicit nested `ViewportRenderState` for
+canvas geometry, render generations, prior plane selections, level history, fallback ceilings, and
+zoom-out retention. This makes those renderer-only fields mechanically distinct from the actor
+projection fields while the two are still carried by one workspace container. Native channel
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
 the renderer only as the current paint/UI input.

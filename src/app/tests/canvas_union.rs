@@ -28,6 +28,7 @@ fn workspace_canvas_rect_is_the_union_of_both_viewport_canvases() {
         .get_mut(&left_id)
         .unwrap()
         .state
+        .render
         .last_canvas_rect = Some(egui::Rect::from_min_max(
         egui::pos2(0.0, 10.0),
         egui::pos2(200.0, 210.0),

@@ -1269,6 +1269,40 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
 }
 
 #[test]
+fn viewport_render_history_is_explicitly_separated_from_projected_state() {
+    let app = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/mod.rs"));
+    let render_state = app
+        .split("struct ViewportRenderState {")
+        .nth(1)
+        .and_then(|tail| tail.split("struct ViewerViewportState {").next())
+        .expect("viewport render state precedes projected viewport state");
+    for field in [
+        "last_canvas_rect",
+        "active_render_id",
+        "previous_render_id",
+        "previous_view_selection",
+        "last_target_level",
+        "fallback_ceiling_level",
+        "last_visible_world_tiles",
+        "zoom_out_floor_level",
+        "zoom_out_floor_until",
+    ] {
+        assert!(
+            render_state.contains(field),
+            "renderer history field must remain isolated: {field}"
+        );
+    }
+    let projected_state = app
+        .split("struct ViewerViewportState {")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ViewerViewportState {").next())
+        .expect("projected viewport state declaration exists");
+    assert!(projected_state.contains("render: ViewportRenderState"));
+    assert!(!projected_state.contains("last_canvas_rect:"));
+    assert!(!projected_state.contains("active_render_id:"));
+}
+
+#[test]
 fn renderer_has_no_semantic_command_emulators() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/renderer_bridge");
     let mutation_prefixes = [

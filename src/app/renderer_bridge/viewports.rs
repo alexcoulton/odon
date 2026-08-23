@@ -160,7 +160,7 @@ impl OmeZarrViewerApp {
             .as_ref()?
             .viewports()
             .iter()
-            .filter_map(|viewport| viewport.state.last_canvas_rect)
+            .filter_map(|viewport| viewport.state.render.last_canvas_rect)
             .reduce(|union, rect| union.union(rect))
     }
 
@@ -183,7 +183,7 @@ impl OmeZarrViewerApp {
         self.viewport_workspace.as_ref().is_some_and(|workspace| {
             !workspace.viewports().is_empty()
                 && workspace.viewports().iter().all(|viewport| {
-                    Self::control_canvas_rect_ready(viewport.state.last_canvas_rect)
+                    Self::control_canvas_rect_ready(viewport.state.render.last_canvas_rect)
                 })
         })
     }
@@ -195,7 +195,7 @@ impl OmeZarrViewerApp {
         let viewport_id = ViewportId::new(viewport_id).ok()?;
         let viewport = self.viewport_workspace.as_ref()?.get(&viewport_id)?;
         Some(Self::control_canvas_rect_ready(
-            viewport.state.last_canvas_rect,
+            viewport.state.render.last_canvas_rect,
         ))
     }
 

@@ -795,8 +795,7 @@ struct PendingViewportScreenshot {
 }
 
 #[derive(Debug, Clone)]
-struct ViewerViewportState {
-    camera: Camera,
+struct ViewportRenderState {
     last_canvas_rect: Option<egui::Rect>,
     active_render_id: u64,
     previous_render_id: Option<u64>,
@@ -811,6 +810,12 @@ struct ViewerViewportState {
     zoom_out_floor_level: Option<usize>,
     zoom_out_floor_until: Option<Instant>,
     zoom_out_floor_visible_world_tiles: Option<egui::Rect>,
+}
+
+#[derive(Debug, Clone)]
+struct ViewerViewportState {
+    camera: Camera,
+    render: ViewportRenderState,
     selected_channel: usize,
     view_plane_mode: ViewPlaneMode,
     draft_view_slice_level0: Option<u64>,
@@ -1476,20 +1481,22 @@ impl ViewerViewportState {
     fn capture(app: &OmeZarrViewerApp) -> Self {
         Self {
             camera: app.camera.clone(),
-            last_canvas_rect: app.last_canvas_rect,
-            active_render_id: app.active_render_id,
-            previous_render_id: app.previous_render_id,
-            active_render_smooth_pixels: app.active_render_smooth_pixels,
-            previous_render_smooth_pixels: app.previous_render_smooth_pixels,
-            previous_view_selection: app.previous_view_selection,
-            previous_displayed_view_selection: app.previous_displayed_view_selection,
-            last_render_view_selection: app.last_render_view_selection,
-            last_target_level: app.last_target_level,
-            fallback_ceiling_level: app.fallback_ceiling_level,
-            last_visible_world_tiles: app.last_visible_world_tiles,
-            zoom_out_floor_level: app.zoom_out_floor_level,
-            zoom_out_floor_until: app.zoom_out_floor_until,
-            zoom_out_floor_visible_world_tiles: app.zoom_out_floor_visible_world_tiles,
+            render: ViewportRenderState {
+                last_canvas_rect: app.last_canvas_rect,
+                active_render_id: app.active_render_id,
+                previous_render_id: app.previous_render_id,
+                active_render_smooth_pixels: app.active_render_smooth_pixels,
+                previous_render_smooth_pixels: app.previous_render_smooth_pixels,
+                previous_view_selection: app.previous_view_selection,
+                previous_displayed_view_selection: app.previous_displayed_view_selection,
+                last_render_view_selection: app.last_render_view_selection,
+                last_target_level: app.last_target_level,
+                fallback_ceiling_level: app.fallback_ceiling_level,
+                last_visible_world_tiles: app.last_visible_world_tiles,
+                zoom_out_floor_level: app.zoom_out_floor_level,
+                zoom_out_floor_until: app.zoom_out_floor_until,
+                zoom_out_floor_visible_world_tiles: app.zoom_out_floor_visible_world_tiles,
+            },
             selected_channel: app.selected_channel,
             view_plane_mode: app.view_plane_mode,
             draft_view_slice_level0: app.draft_view_slice_level0,
@@ -1608,20 +1615,20 @@ impl ViewerViewportState {
 
     fn apply(&self, app: &mut OmeZarrViewerApp) {
         app.camera = self.camera.clone();
-        app.last_canvas_rect = self.last_canvas_rect;
-        app.active_render_id = self.active_render_id;
-        app.previous_render_id = self.previous_render_id;
-        app.active_render_smooth_pixels = self.active_render_smooth_pixels;
-        app.previous_render_smooth_pixels = self.previous_render_smooth_pixels;
-        app.previous_view_selection = self.previous_view_selection;
-        app.previous_displayed_view_selection = self.previous_displayed_view_selection;
-        app.last_render_view_selection = self.last_render_view_selection;
-        app.last_target_level = self.last_target_level;
-        app.fallback_ceiling_level = self.fallback_ceiling_level;
-        app.last_visible_world_tiles = self.last_visible_world_tiles;
-        app.zoom_out_floor_level = self.zoom_out_floor_level;
-        app.zoom_out_floor_until = self.zoom_out_floor_until;
-        app.zoom_out_floor_visible_world_tiles = self.zoom_out_floor_visible_world_tiles;
+        app.last_canvas_rect = self.render.last_canvas_rect;
+        app.active_render_id = self.render.active_render_id;
+        app.previous_render_id = self.render.previous_render_id;
+        app.active_render_smooth_pixels = self.render.active_render_smooth_pixels;
+        app.previous_render_smooth_pixels = self.render.previous_render_smooth_pixels;
+        app.previous_view_selection = self.render.previous_view_selection;
+        app.previous_displayed_view_selection = self.render.previous_displayed_view_selection;
+        app.last_render_view_selection = self.render.last_render_view_selection;
+        app.last_target_level = self.render.last_target_level;
+        app.fallback_ceiling_level = self.render.fallback_ceiling_level;
+        app.last_visible_world_tiles = self.render.last_visible_world_tiles;
+        app.zoom_out_floor_level = self.render.zoom_out_floor_level;
+        app.zoom_out_floor_until = self.render.zoom_out_floor_until;
+        app.zoom_out_floor_visible_world_tiles = self.render.zoom_out_floor_visible_world_tiles;
         app.selected_channel = self.selected_channel;
         app.view_plane_mode = self.view_plane_mode;
         app.draft_view_slice_level0 = self.draft_view_slice_level0;

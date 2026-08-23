@@ -344,7 +344,10 @@ view and persisted masks before producing the initial projection. Production pro
 and renderer-side dataset switching no longer invoke the in-process semantic restorer; it remains
 test-only while its persistence characterizations are converted. Mutation of the combined
 per-frame viewport container stays open in the `viewer.workspace_projection` ledger row, while
-heavyweight project resource materialization is tracked in the resource milestones.
+heavyweight project resource materialization is tracked in the resource milestones. The first
+container split is in place: `ViewportRenderState` now isolates canvas geometry, render IDs,
+previous selections, level/fallback history, and zoom-out retention from projected viewport
+semantics.
 Frame capture may retain an optimistic camera or slice preview for painting, but it no longer
 increments actor-owned navigation/presentation revisions or copies linked navigation to sibling
 viewports. Camera fit and committed plane changes always queue typed actor commands; query-only

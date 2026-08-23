@@ -1075,7 +1075,7 @@ impl OmeZarrViewerApp {
             .into_iter()
             .flat_map(|workspace| workspace.viewports())
             .filter_map(|viewport| {
-                let rect = viewport.state.last_canvas_rect?;
+                let rect = viewport.state.render.last_canvas_rect?;
                 (rect.width().is_finite()
                     && rect.height().is_finite()
                     && rect.width() > 0.0

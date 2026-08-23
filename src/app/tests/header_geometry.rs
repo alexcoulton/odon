@@ -43,7 +43,7 @@ fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
         .unwrap()
         .viewports()
         .iter()
-        .map(|viewport| viewport.state.last_canvas_rect.unwrap())
+        .map(|viewport| viewport.state.render.last_canvas_rect.unwrap())
         .collect::<Vec<_>>();
     let revisions_after_frame = app
         .viewport_workspace
@@ -96,7 +96,7 @@ fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
         .unwrap()
         .viewports()
         .iter()
-        .map(|viewport| viewport.state.last_canvas_rect.unwrap())
+        .map(|viewport| viewport.state.render.last_canvas_rect.unwrap())
         .collect::<Vec<_>>();
     assert_eq!(before_activation.len(), after_activation.len());
     for (before, after) in before_activation.iter().zip(&after_activation) {

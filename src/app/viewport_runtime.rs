@@ -289,7 +289,7 @@ impl OmeZarrViewerApp {
                     state.camera.center_world_lvl0.y,
                 ],
                 "zoom_screen_per_lvl0_px": state.camera.zoom_screen_per_lvl0_px,
-                "viewport": state.last_canvas_rect.map(|rect| [
+                "viewport": state.render.last_canvas_rect.map(|rect| [
                     rect.min.x,
                     rect.min.y,
                     rect.max.x,

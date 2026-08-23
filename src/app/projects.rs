@@ -107,7 +107,7 @@ impl OmeZarrViewerApp {
         for saved_viewport in &saved.viewports {
             let id = ViewportId::new(&saved_viewport.id).map_err(|error| error.to_string())?;
             let mut state = base.clone();
-            state.last_canvas_rect = None;
+            state.render.last_canvas_rect = None;
             if let Some(layer_groups) = saved_viewport.layer_groups.as_ref() {
                 state.layer_groups.clone_from(layer_groups);
             }
