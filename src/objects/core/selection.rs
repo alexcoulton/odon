@@ -30,12 +30,6 @@ impl ObjectsLayer {
         })
     }
 
-    pub fn select_objects_by_ids(&mut self, ids: &std::collections::HashSet<String>) -> usize {
-        let indices = self.object_indices_matching_ids(ids);
-        self.apply_object_selection_mode(&indices, "replace");
-        self.selected_object_indices.len()
-    }
-
     pub(crate) fn object_indices_matching_ids(
         &self,
         ids: &std::collections::HashSet<String>,
@@ -63,6 +57,7 @@ impl ObjectsLayer {
         indices
     }
 
+    #[cfg(test)]
     pub(in crate::objects) fn apply_object_selection_mode(
         &mut self,
         indices: &[usize],
@@ -174,15 +169,6 @@ impl ObjectsLayer {
             .unwrap_or(0)
     }
 
-    pub(super) fn select_selection_element(&mut self, idx: usize) -> usize {
-        let Some(element) = self.selection_elements.get(idx) else {
-            return 0;
-        };
-        let ids = element.object_ids.iter().cloned().collect::<HashSet<_>>();
-        self.selection_element_selected = Some(idx);
-        self.select_objects_by_ids(&ids)
-    }
-
     pub fn selection_elements_snapshot(&self) -> Vec<(usize, String, usize)> {
         self.selection_elements
             .iter()
@@ -221,7 +207,11 @@ impl ObjectsLayer {
         added
     }
 
-    pub(in crate::objects) fn ui_selection_elements_editor(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::objects) fn ui_selection_elements_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+    ) -> Option<ObjectUiAction> {
+        let mut action = None;
         ui.collapsing("Selection Elements", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
@@ -270,8 +260,12 @@ impl ObjectsLayer {
                         }
                     });
                 if let Some(idx) = clicked_idx {
-                    let count = self.select_selection_element(idx);
-                    self.status = format!("Selected {count} object(s) from saved element.");
+                    if let Some(element) = self.selection_elements.get(idx) {
+                        self.selection_element_selected = Some(idx);
+                        action = Some(ObjectUiAction::SelectIds {
+                            ids: element.object_ids.clone(),
+                        });
+                    }
                 }
                 if let Some(idx) = delete_idx {
                     self.selection_elements.remove(idx);
@@ -284,6 +278,7 @@ impl ObjectsLayer {
                 }
             }
         });
+        action
     }
 
     pub fn is_analyzing(&self) -> bool {

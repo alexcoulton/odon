@@ -11,12 +11,8 @@ impl OmeZarrViewerApp {
             "active_layer_id": active_layer_id,
             "layers": self.mask_layers.iter().map(MaskLayer::to_project).collect::<Vec<_>>(),
             "selection": self.control_get_mask_selection()["selection"].clone(),
-            "dirty": self.mask_layers_project_dirty,
-            "undo_available": if self.control_actor_mask_generation > 0 {
-                self.control_actor_mask_undo_available
-            } else {
-                !self.undo_stack.is_empty()
-            },
+            "dirty": false,
+            "undo_available": self.control_actor_mask_undo_available,
         })
     }
 

@@ -2072,15 +2072,7 @@ impl eframe::App for RootApp {
                                 .save_file()
                             {
                                 match &mut self.mode {
-                                    Mode::Single(app) => match app.export_masks_geojson(&path) {
-                                        Ok(()) => app.set_status(format!(
-                                            "Exported masks -> {}",
-                                            path.to_string_lossy()
-                                        )),
-                                        Err(err) => {
-                                            app.set_status(format!("Export masks failed: {err}"))
-                                        }
-                                    },
+                                    Mode::Single(app) => app.request_mask_export(&path, None),
                                     Mode::Project { project_space } => project_space.set_status(
                                         "Export masks failed: open a dataset first.".to_string(),
                                     ),

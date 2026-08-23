@@ -47,7 +47,7 @@ mod render;
 mod tests;
 
 use self::analysis::SimpleHistogram;
-pub use self::control_service::{NativeObjectControlService, ObjectSourceUiAction};
+pub use self::control_service::{NativeObjectControlService, ObjectUiAction};
 pub use self::core::{
     load_control_object_resource, load_control_object_resource_with_options,
     load_control_spatialdata_object_resource,

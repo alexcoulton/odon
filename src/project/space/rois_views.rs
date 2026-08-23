@@ -270,6 +270,7 @@ impl ProjectSpace {
         Ok(&self.config.rois[index])
     }
 
+    #[cfg(test)]
     pub fn roi_mask_layers(&self, roi_path: &Path) -> Option<&[ProjectMaskLayer]> {
         let key = roi_path
             .canonicalize()
@@ -473,6 +474,7 @@ impl ProjectSpace {
         self.config_generation = self.config_generation.wrapping_add(1);
     }
 
+    #[cfg(test)]
     pub fn set_roi_mask_layers(&mut self, roi_path: &Path, layers: Vec<ProjectMaskLayer>) {
         let key = roi_path
             .canonicalize()

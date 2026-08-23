@@ -268,6 +268,18 @@ Exit criteria:
 
 Purpose: establish one semantic owner while preserving renderer-efficient large resources.
 
+Status: in progress. Native primary and secondary object selection commits now enter targeted typed
+actor commands with no renderer-selection fallback. Object analysis editors restore their local
+preview after each UI transaction and submit the committed configuration through
+`viewer.analysis.set`; the actor still needs target-scoped analysis models and projections before
+primary and secondary analysis are independently owned. Mask layer identity, polygons, selection,
+undo, import, project synchronization, append, and export are actor-only. The renderer retains the
+latest projected mask layers plus generation-tagged drawing and move previews; the former local
+mask ID allocator, undo stack, project-dirty mirror, filesystem loader/writer, and readiness-based
+fallbacks have been deleted. Native mask export now selects a path in the platform UI and performs
+the actual I/O on the actor worker service. Structural guards reject reintroduction of these object
+selection and mask fallback paths.
+
 Work:
 
 - make object presentation, filters, selections, legends, and analysis configuration actor-only;

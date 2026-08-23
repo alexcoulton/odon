@@ -264,7 +264,6 @@ impl OmeZarrViewerApp {
         if !will_change {
             return false;
         }
-        self.push_layer_offsets_undo_snapshot(&targets);
         if self.commit_layer_offsets(&reset_offsets) {
             self.bump_render_id();
             true
@@ -275,21 +274,16 @@ impl OmeZarrViewerApp {
 
     pub(in crate::app) fn apply_layer_offsets(&mut self, offsets: &[LayerOffsetEntry]) -> bool {
         let mut changed = false;
-        let mut mask_changed = false;
         for entry in offsets {
             if let Some(offset) = self.layer_offset_world_mut(entry.layer) {
                 if (*offset - entry.offset_world).length_sq() > 1e-12 {
                     *offset = entry.offset_world;
                     changed = true;
-                    mask_changed |= matches!(entry.layer, LayerId::Mask(_));
                 }
             }
         }
         if changed {
             self.hist_dirty = true;
-        }
-        if mask_changed && !self.mask_actor_owned() {
-            self.mark_mask_layers_project_dirty();
         }
         changed
     }
@@ -297,11 +291,11 @@ impl OmeZarrViewerApp {
     pub(in crate::app) fn commit_layer_offsets(&mut self, offsets: &[LayerOffsetEntry]) -> bool {
         let mut state = self.control_native_layer_snapshot_list();
         let mut state_changed = false;
-        let mut desired_masks = self.mask_actor_owned().then(|| self.mask_layers.clone());
+        let mut desired_masks = self.mask_layers.clone();
         let mut mask_changed = false;
         for entry in offsets {
-            if let (LayerId::Mask(id), Some(layers)) = (entry.layer, desired_masks.as_mut()) {
-                if let Some(layer) = layers.iter_mut().find(|layer| layer.id == id)
+            if let LayerId::Mask(id) = entry.layer {
+                if let Some(layer) = desired_masks.iter_mut().find(|layer| layer.id == id)
                     && (layer.offset_world - entry.offset_world).length_sq() > 1e-12
                 {
                     layer.offset_world = entry.offset_world;
@@ -327,10 +321,7 @@ impl OmeZarrViewerApp {
             self.submit_native_layer_state_replace(state);
         }
         if mask_changed {
-            self.submit_native_mask_state_replace(
-                desired_masks.as_deref().unwrap_or_default(),
-                self.mask_selection_value(),
-            );
+            self.submit_native_mask_state_replace(&desired_masks, self.mask_selection_value());
         }
         state_changed || mask_changed
     }

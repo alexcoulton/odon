@@ -7,6 +7,7 @@ use eframe::egui;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolygonRingMode {
     /// Load exterior + interior rings (holes).
+    #[cfg(test)]
     AllRings,
     /// Load only the exterior ring (first ring).
     ExteriorOnly,
@@ -48,6 +49,7 @@ pub fn load_geojson_polylines_world(
             "polygon" => {
                 if let Some(rings) = coords.and_then(|v| v.as_array()) {
                     match ring_mode {
+                        #[cfg(test)]
                         PolygonRingMode::AllRings => {
                             for ring in rings {
                                 if let Some(points) =
@@ -76,6 +78,7 @@ pub fn load_geojson_polylines_world(
                             continue;
                         };
                         match ring_mode {
+                            #[cfg(test)]
                             PolygonRingMode::AllRings => {
                                 for ring in rings {
                                     if let Some(points) =

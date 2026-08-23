@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -413,35 +412,8 @@ impl SpatialShapesLayer {
         layer.hover_tooltip(pointer_world, self.offset_world, camera)
     }
 
-    pub fn select_at(
-        &mut self,
-        pointer_world: egui::Pos2,
-        additive: bool,
-        toggle: bool,
-        camera: &crate::camera::Camera,
-    ) -> bool {
-        let Some(layer) = self.object_layer.as_mut() else {
-            return false;
-        };
-        layer.select_at(pointer_world, self.offset_world, camera, additive, toggle);
-        true
-    }
-
-    pub fn clear_selection(&mut self) {
-        if let Some(layer) = self.object_layer.as_mut() {
-            layer.clear_selection();
-        }
-    }
-
     pub fn has_object_layer(&self) -> bool {
         self.object_layer.is_some()
-    }
-
-    pub fn select_objects_by_ids(&mut self, ids: &HashSet<String>) -> usize {
-        self.object_layer
-            .as_mut()
-            .map(|layer| layer.select_objects_by_ids(ids))
-            .unwrap_or(0)
     }
 
     pub fn object_layer_mut(&mut self) -> Option<&mut ObjectsLayer> {

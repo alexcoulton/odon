@@ -231,18 +231,14 @@ impl OmeZarrViewerApp {
     }
 
     pub(in crate::app) fn commit_active_layer(&mut self, id: LayerId) {
-        if self.mask_actor_owned() {
-            match id {
-                LayerId::Mask(mask_id)
-                    if self.mask_layers.iter().any(|layer| layer.id == mask_id) =>
-                {
-                    self.submit_native_mask_active_layer(Some(mask_id));
-                }
-                _ if matches!(self.active_layer, LayerId::Mask(_)) => {
-                    self.submit_native_mask_active_layer(None);
-                }
-                _ => {}
+        match id {
+            LayerId::Mask(mask_id) if self.mask_layers.iter().any(|layer| layer.id == mask_id) => {
+                self.submit_native_mask_active_layer(Some(mask_id));
             }
+            _ if matches!(self.active_layer, LayerId::Mask(_)) => {
+                self.submit_native_mask_active_layer(None);
+            }
+            _ => {}
         }
         self.submit_native_layer_active(id);
     }

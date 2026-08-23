@@ -378,14 +378,6 @@ impl OmeZarrViewerApp {
             .map_err(|error| format!("actor mask projection is invalid: {error}"))?
             .unwrap_or_default();
         self.mask_layers = layers.iter().map(MaskLayer::from_project).collect();
-        self.next_mask_layer_id = self
-            .mask_layers
-            .iter()
-            .map(|layer| layer.id)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1)
-            .max(1);
         self.active_layer = projection
             .get("active_layer_id")
             .and_then(serde_json::Value::as_u64)
@@ -435,7 +427,6 @@ impl OmeZarrViewerApp {
             });
             self.selected_mask_vertex = vertex_index;
         }
-        self.undo_stack.clear();
         if self.drawing_mask_layer.is_some_and(|id| {
             !self
                 .mask_layers
@@ -447,10 +438,6 @@ impl OmeZarrViewerApp {
         }
         self.dragging_mask_vertex = None;
         self.moving_mask_polygon = None;
-        self.mask_layers_project_dirty = projection
-            .get("dirty")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
         self.control_actor_mask_undo_available = projection
             .get("undo_available")
             .and_then(serde_json::Value::as_bool)

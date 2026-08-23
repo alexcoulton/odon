@@ -196,17 +196,4 @@ impl OmeZarrViewerApp {
             format!("{sanitized}.geojson")
         }
     }
-
-    pub fn export_masks_geojson(&self, path: &Path) -> anyhow::Result<()> {
-        save_mask_layers_geojson(path, &self.mask_layers)
-    }
-
-    pub fn export_mask_layer_geojson(&self, layer_id: u64, path: &Path) -> anyhow::Result<()> {
-        let layer = self
-            .mask_layers
-            .iter()
-            .find(|layer| layer.id == layer_id)
-            .ok_or_else(|| anyhow::anyhow!("mask layer not found"))?;
-        save_mask_layers_geojson(path, std::slice::from_ref(layer))
-    }
 }

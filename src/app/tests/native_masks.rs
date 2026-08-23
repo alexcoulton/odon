@@ -121,3 +121,21 @@ fn native_mask_draw_selection_and_delete_submit_actor_commands_before_local_muta
     assert_eq!(intents[0].params["expected_generation"], 2);
     assert_eq!(intents[0].params["sync_project"], true);
 }
+
+#[test]
+fn native_mask_export_submits_the_actor_io_command_without_writing_on_the_ui_thread() {
+    let mut app = fixture_app();
+    app.apply_control_actor_masks_projection(&mask_projection(2, 0.0))
+        .unwrap();
+    let output = PathBuf::from("native-mask-export.geojson");
+
+    app.request_mask_export(&output, Some(1));
+
+    let intents = app.take_native_control_intents();
+    assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].method, "viewer.masks.export_geojson");
+    assert_eq!(intents[0].params["path"], "native-mask-export.geojson");
+    assert_eq!(intents[0].params["id"], 1);
+    assert_eq!(intents[0].params["overwrite"], true);
+    odon::control::ControlCommand::decode(intents[0].method, intents[0].params.clone()).unwrap();
+}

@@ -231,7 +231,7 @@ impl ObjectsLayer {
         _local_to_world_offset: egui::Vec2,
         _spatial_root: Option<&Path>,
         _spatial_tables: &[SpatialDataElement],
-    ) {
+    ) -> Option<ObjectUiAction> {
         // Analysis always operates on the currently active object snapshot: either the full loaded
         // set or the materialized filtered subset from `ensure_filter_cache`.
         self.ensure_filter_cache();
@@ -239,7 +239,7 @@ impl ObjectsLayer {
         ui.heading("Analysis");
         if !self.has_data() {
             ui.label("Load segmentation objects to run per-cell analysis.");
-            return;
+            return None;
         }
         let all_count = self.object_count();
         let filtered_count = self.filtered_count();
@@ -255,7 +255,7 @@ impl ObjectsLayer {
                 self.analysis_warm_completed_columns, self.analysis_warm_total_columns
             ));
         }
-        self.ui_selection_elements_editor(ui);
+        let action = self.ui_selection_elements_editor(ui);
         self.normalize_threshold_call_elements();
         ui.label("Source: Object columns");
         self.ui_threshold_set_editor(ui, _channels, selected_channel);
@@ -265,6 +265,7 @@ impl ObjectsLayer {
             selected_channel,
             suspend_live_selection_sync,
         );
+        action
     }
 
     fn ui_object_properties_analysis(

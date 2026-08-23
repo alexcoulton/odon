@@ -30,6 +30,7 @@ pub(in crate::objects) fn point_in_polygon(p: egui::Pos2, poly: &[egui::Pos2]) -
     inside
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn object_intersects_rect_for_selection(
     object: &ObjectFeature,
     rect: egui::Rect,
@@ -57,6 +58,7 @@ pub(in crate::objects) fn object_intersects_rect_for_selection(
     rect_contains_point_inclusive(rect, point)
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn polygon_intersects_rect(poly: &[egui::Pos2], rect: egui::Rect) -> bool {
     if poly
         .iter()
@@ -84,6 +86,7 @@ pub(in crate::objects) fn polygon_intersects_rect(poly: &[egui::Pos2], rect: egu
     false
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn polygon_edges(poly: &[egui::Pos2]) -> Vec<(egui::Pos2, egui::Pos2)> {
     if poly.len() < 2 {
         return Vec::new();
@@ -98,6 +101,7 @@ pub(in crate::objects) fn polygon_edges(poly: &[egui::Pos2]) -> Vec<(egui::Pos2,
     edges
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn point_in_polygon_or_on_edge(
     point: egui::Pos2,
     poly: &[egui::Pos2],
@@ -108,6 +112,7 @@ pub(in crate::objects) fn point_in_polygon_or_on_edge(
         || point_in_polygon(point, poly)
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn rect_corners(rect: egui::Rect) -> [egui::Pos2; 4] {
     [
         rect.left_top(),
@@ -117,15 +122,18 @@ pub(in crate::objects) fn rect_corners(rect: egui::Rect) -> [egui::Pos2; 4] {
     ]
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn rect_edges(rect: egui::Rect) -> [(egui::Pos2, egui::Pos2); 4] {
     let [lt, rt, rb, lb] = rect_corners(rect);
     [(lt, rt), (rt, rb), (rb, lb), (lb, lt)]
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn rects_intersect_inclusive(a: egui::Rect, b: egui::Rect) -> bool {
     a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn segments_intersect_inclusive(
     a: egui::Pos2,
     b: egui::Pos2,
@@ -154,6 +162,7 @@ pub(in crate::objects) fn segments_intersect_inclusive(
         && ((o3 > 0.0 && o4 < 0.0) || (o3 < 0.0 && o4 > 0.0))
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn point_on_segment_inclusive(
     point: egui::Pos2,
     a: egui::Pos2,
@@ -166,10 +175,12 @@ pub(in crate::objects) fn point_on_segment_inclusive(
         && point.y <= a.y.max(b.y) + 1e-5
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn orient(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }
 
+#[cfg(test)]
 pub(in crate::objects) fn rect_contains_point_inclusive(
     rect: egui::Rect,
     point: egui::Pos2,

@@ -204,7 +204,7 @@ impl eframe::App for OmeZarrViewerApp {
             });
         });
         if let Some(action) = self.seg_objects.ui_load_dialog(ctx) {
-            self.queue_object_source_action(action);
+            self.queue_object_ui_action(action);
         }
 
         if self.show_left_panel {
@@ -312,9 +312,8 @@ impl eframe::App for OmeZarrViewerApp {
                         let suspend_live_selection_sync =
                             matches!(self.tool_mode, ToolMode::Select | ToolMode::LassoSelect);
                         if self.seg_objects.object_count() > 0 {
-                            let analysis_before = (self.control_actor_analysis_generation > 0)
-                                .then(|| self.seg_objects.project_analysis_state());
-                            self.seg_objects.ui_analysis(
+                            let analysis_before = self.seg_objects.project_analysis_state();
+                            let object_action = self.seg_objects.ui_analysis(
                                 ui,
                                 &self.dataset,
                                 self.store.clone(),
@@ -325,26 +324,46 @@ impl eframe::App for OmeZarrViewerApp {
                                 self.spatial_root.as_deref(),
                                 self.spatial_layers.table_elements(),
                             );
-                            if let Some(before) = analysis_before {
-                                let after = self.seg_objects.project_analysis_state();
-                                if before != after {
-                                    self.native_control_intents.push(NativeControlIntent {
-                                        method: "viewer.analysis.set",
-                                        params: serde_json::json!({"state":after}),
-                                    });
-                                }
+                            let analysis_after = self.seg_objects.project_analysis_state();
+                            if analysis_before != analysis_after {
+                                let active_channel = self
+                                    .channels
+                                    .get(self.selected_channel)
+                                    .map(|channel| channel.name.clone());
+                                self.seg_objects.apply_project_analysis_state(
+                                    &analysis_before,
+                                    active_channel.as_deref(),
+                                );
+                                self.native_control_intents.push(NativeControlIntent {
+                                    method: "viewer.analysis.set",
+                                    params: serde_json::json!({
+                                        "target":"segmentation_objects",
+                                        "state":analysis_after,
+                                    }),
+                                });
+                            }
+                            if let Some(action) = object_action {
+                                self.queue_object_ui_action(action);
                             }
                             if let Some(idx) = self.seg_objects.take_pending_zoom_object_index() {
                                 self.fit_to_seg_object_index(idx);
                             }
                         } else if let LayerId::SpatialShape(id) = self.active_layer {
                             let spatial_tables = self.spatial_layers.table_elements().to_vec();
+                            let active_channel = self
+                                .channels
+                                .get(self.selected_channel)
+                                .map(|channel| channel.name.clone());
+                            let mut object_action = None;
+                            let mut analysis_after = None;
+                            let mut fit_world = None;
                             if let Some(layer) =
                                 self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
                             {
                                 let offset_world = layer.offset_world;
                                 if let Some(objects) = layer.object_layer_mut() {
-                                    objects.ui_analysis(
+                                    let before = objects.project_analysis_state();
+                                    object_action = objects.ui_analysis(
                                         ui,
                                         &self.dataset,
                                         self.store.clone(),
@@ -355,12 +374,20 @@ impl eframe::App for OmeZarrViewerApp {
                                         self.spatial_root.as_deref(),
                                         &spatial_tables,
                                     );
+                                    let after = objects.project_analysis_state();
+                                    if before != after {
+                                        objects.apply_project_analysis_state(
+                                            &before,
+                                            active_channel.as_deref(),
+                                        );
+                                        analysis_after = Some(after);
+                                    }
                                     if let Some(idx) = objects.take_pending_zoom_object_index() {
                                         if let Some(viewport) = self.last_canvas_rect
                                             && let Some(world) =
                                                 objects.fit_object_bounds_world(idx, offset_world)
                                         {
-                                            self.fit_camera_to_world_rect(viewport, world);
+                                            fit_world = Some((viewport, world));
                                         }
                                     }
                                 } else {
@@ -372,6 +399,22 @@ impl eframe::App for OmeZarrViewerApp {
                             } else {
                                 ui.heading("Analysis");
                                 ui.label("SpatialData shape layer not found.");
+                            }
+                            if let Some(after) = analysis_after {
+                                self.native_control_intents.push(NativeControlIntent {
+                                    method: "viewer.analysis.set",
+                                    params: serde_json::json!({
+                                        "target":"spatial_shape",
+                                        "layer_id":id,
+                                        "state":after,
+                                    }),
+                                });
+                            }
+                            if let Some(action) = object_action {
+                                self.queue_object_ui_action(action);
+                            }
+                            if let Some((viewport, world)) = fit_world {
+                                self.fit_camera_to_world_rect(viewport, world);
                             }
                         } else {
                             ui.heading("Analysis");

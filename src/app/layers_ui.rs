@@ -387,15 +387,7 @@ impl OmeZarrViewerApp {
                                         .set_title("Export Mask Layer GeoJSON")
                                         .save_file()
                                     {
-                                        match self.export_mask_layer_geojson(mask_id, &path) {
-                                            Ok(()) => self.set_status(format!(
-                                                "Exported mask layer -> {}",
-                                                path.to_string_lossy()
-                                            )),
-                                            Err(err) => self.set_status(format!(
-                                                "Export mask layer failed: {err}"
-                                            )),
-                                        }
+                                        self.request_mask_export(&path, Some(mask_id));
                                     }
                                     ui.close();
                                 }

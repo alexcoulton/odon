@@ -101,7 +101,7 @@ impl OmeZarrViewerApp {
         additive: bool,
     ) -> usize {
         let target = self.spatial_selection_target_layer();
-        if self.actor_owns_object_selection_target(target) {
+        if target.is_some() {
             let offset = self.object_selection_target_offset(target);
             let local = world_rect.translate(-offset);
             let mut params = self.object_selection_target_params(target);
@@ -119,28 +119,7 @@ impl OmeZarrViewerApp {
             });
             return 0;
         }
-        match target {
-            Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_rect(
-                world_rect,
-                self.seg_objects_offset_world,
-                additive,
-            ),
-            Some(LayerId::SpatialShape(id)) => {
-                let Some(layer) = self
-                    .spatial_layers
-                    .shapes
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                else {
-                    return 0;
-                };
-                let offset_world = layer.offset_world;
-                layer.object_layer_mut().map_or(0, |objects| {
-                    objects.select_in_world_rect(world_rect, offset_world, additive)
-                })
-            }
-            _ => 0,
-        }
+        0
     }
 
     pub(super) fn commit_lasso_selection_to_active_layer(
@@ -149,7 +128,7 @@ impl OmeZarrViewerApp {
         additive: bool,
     ) -> usize {
         let target = self.spatial_selection_target_layer();
-        if self.actor_owns_object_selection_target(target) {
+        if target.is_some() {
             let offset = self.object_selection_target_offset(target);
             let points = world_points
                 .iter()
@@ -167,39 +146,7 @@ impl OmeZarrViewerApp {
             });
             return 0;
         }
-        match target {
-            Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_lasso(
-                world_points,
-                self.seg_objects_offset_world,
-                additive,
-            ),
-            Some(LayerId::SpatialShape(id)) => {
-                let Some(layer) = self
-                    .spatial_layers
-                    .shapes
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                else {
-                    return 0;
-                };
-                let offset_world = layer.offset_world;
-                layer.object_layer_mut().map_or(0, |objects| {
-                    objects.select_in_world_lasso(world_points, offset_world, additive)
-                })
-            }
-            _ => 0,
-        }
-    }
-
-    pub(super) fn actor_owns_object_selection_target(&self, target: Option<LayerId>) -> bool {
-        match target {
-            Some(LayerId::SegmentationObjects) => self.control_actor_object_generation > 0,
-            Some(LayerId::SpatialShape(id)) => self
-                .control_actor_secondary_object_generations
-                .get(&id)
-                .is_some_and(|generation| *generation > 0),
-            _ => false,
-        }
+        0
     }
 
     fn object_selection_target_generation(&self, target: LayerId) -> u64 {
@@ -262,71 +209,47 @@ impl OmeZarrViewerApp {
         additive: bool,
         toggle: bool,
     ) -> bool {
-        if self.actor_owns_object_selection_target(Some(target)) {
-            let state = match target {
-                LayerId::SegmentationObjects => {
-                    self.seg_objects.control_selection_state_after_click(
-                        world,
-                        self.seg_objects_offset_world,
-                        &self.camera,
-                        additive,
-                        toggle,
-                    )
-                }
-                LayerId::SpatialShape(id) => {
-                    let Some(layer) = self
-                        .spatial_layers
-                        .shapes
-                        .iter()
-                        .find(|layer| layer.id == id)
-                    else {
-                        return false;
-                    };
-                    let Some(objects) = layer.object_layer() else {
-                        return false;
-                    };
-                    objects.control_selection_state_after_click(
-                        world,
-                        layer.offset_world,
-                        &self.camera,
-                        additive,
-                        toggle,
-                    )
-                }
-                _ => return false,
-            };
-            let mut params = self.object_selection_target_params(Some(target));
-            params.insert(
-                "expected_generation".to_string(),
-                serde_json::json!(self.object_selection_target_generation(target)),
-            );
-            params.insert("state".to_string(), state);
-            self.native_control_intents.push(NativeControlIntent {
-                method: "viewer.objects.selection.state.replace",
-                params: serde_json::Value::Object(params),
-            });
-            return true;
-        }
-
-        match target {
-            LayerId::SegmentationObjects => {
-                self.seg_objects.select_at(
+        let state = match target {
+            LayerId::SegmentationObjects => self.seg_objects.control_selection_state_after_click(
+                world,
+                self.seg_objects_offset_world,
+                &self.camera,
+                additive,
+                toggle,
+            ),
+            LayerId::SpatialShape(id) => {
+                let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter()
+                    .find(|layer| layer.id == id)
+                else {
+                    return false;
+                };
+                let Some(objects) = layer.object_layer() else {
+                    return false;
+                };
+                objects.control_selection_state_after_click(
                     world,
-                    self.seg_objects_offset_world,
+                    layer.offset_world,
                     &self.camera,
                     additive,
                     toggle,
-                );
-                true
+                )
             }
-            LayerId::SpatialShape(id) => self
-                .spatial_layers
-                .shapes
-                .iter_mut()
-                .find(|layer| layer.id == id)
-                .is_some_and(|layer| layer.select_at(world, additive, toggle, &self.camera)),
-            _ => false,
-        }
+            _ => return false,
+        };
+        let mut params = self.object_selection_target_params(Some(target));
+        params.insert(
+            "expected_generation".to_string(),
+            serde_json::json!(self.object_selection_target_generation(target)),
+        );
+        params.insert("state".to_string(), state);
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.objects.selection.state.replace",
+            params: serde_json::Value::Object(params),
+        });
+        true
     }
 
     pub(super) fn commit_id_selection_to_layer(
@@ -350,57 +273,21 @@ impl OmeZarrViewerApp {
             _ => None,
         }?;
 
-        if self.actor_owns_object_selection_target(Some(target)) {
-            let mut params = self.object_selection_target_params(Some(target));
-            params.insert("ids".to_string(), serde_json::json!(ids));
-            params.insert("mode".to_string(), serde_json::json!("replace"));
-            self.native_control_intents.push(NativeControlIntent {
-                method: "viewer.objects.selection.select_ids",
-                params: serde_json::Value::Object(params),
-            });
-        } else {
-            match target {
-                LayerId::SegmentationObjects => {
-                    self.seg_objects.select_objects_by_ids(id_set);
-                }
-                LayerId::SpatialShape(id) => {
-                    self.spatial_layers
-                        .shapes
-                        .iter_mut()
-                        .find(|layer| layer.id == id)
-                        .expect("selection target was validated above")
-                        .select_objects_by_ids(id_set);
-                }
-                _ => unreachable!("selection target was validated above"),
-            }
-        }
+        let mut params = self.object_selection_target_params(Some(target));
+        params.insert("ids".to_string(), serde_json::json!(ids));
+        params.insert("mode".to_string(), serde_json::json!("replace"));
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.objects.selection.select_ids",
+            params: serde_json::Value::Object(params),
+        });
         Some(matched)
     }
 
     pub(super) fn commit_clear_object_selection(&mut self, target: LayerId) {
-        if self.actor_owns_object_selection_target(Some(target)) {
-            self.native_control_intents.push(NativeControlIntent {
-                method: "viewer.objects.clear_selection",
-                params: serde_json::Value::Object(
-                    self.object_selection_target_params(Some(target)),
-                ),
-            });
-            return;
-        }
-        match target {
-            LayerId::SegmentationObjects => self.seg_objects.clear_selection(),
-            LayerId::SpatialShape(id) => {
-                if let Some(layer) = self
-                    .spatial_layers
-                    .shapes
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                {
-                    layer.clear_selection();
-                }
-            }
-            _ => {}
-        }
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.objects.clear_selection",
+            params: serde_json::Value::Object(self.object_selection_target_params(Some(target))),
+        });
     }
 
     pub(super) fn active_or_spatial_selection_layer(&self) -> LayerId {
@@ -472,51 +359,6 @@ impl OmeZarrViewerApp {
                 .unwrap_or(0),
             _ => 0,
         }
-    }
-
-    pub(super) fn selected_channel_visible_data_rect_lvl0(
-        &self,
-        viewport: egui::Rect,
-        ch_idx: usize,
-    ) -> egui::Rect {
-        let visible_world = self.visible_world_rect(viewport);
-        let corners = [
-            visible_world.left_top(),
-            egui::pos2(visible_world.right(), visible_world.top()),
-            visible_world.right_bottom(),
-            egui::pos2(visible_world.left(), visible_world.bottom()),
-        ];
-        let pivot = self.image_world_rect_lvl0().center();
-        let off = self
-            .channel_offsets_world
-            .get(ch_idx)
-            .copied()
-            .unwrap_or_default();
-        let scale = self
-            .channel_scales
-            .get(ch_idx)
-            .copied()
-            .unwrap_or(egui::Vec2::splat(1.0));
-        let rot = self
-            .channel_rotations_rad
-            .get(ch_idx)
-            .copied()
-            .unwrap_or(0.0);
-
-        let mut min_x = f32::INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-        for &corner in &corners {
-            let local = inv_xform_world_point(corner, pivot, off, scale, rot);
-            min_x = min_x.min(local.x);
-            min_y = min_y.min(local.y);
-            max_x = max_x.max(local.x);
-            max_y = max_y.max(local.y);
-        }
-
-        egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y))
-            .intersect(self.image_local_rect_lvl0())
     }
 
     pub(super) fn selected_channel_local_to_world(

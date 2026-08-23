@@ -1,7 +1,11 @@
+#[cfg(test)]
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
 use anyhow::Context;
 use eframe::egui;
 
@@ -82,6 +86,7 @@ impl MaskLayer {
         self.raster_display = None;
     }
 
+    #[cfg(test)]
     pub fn add_closed_polygon(&mut self, mut vertices_world: Vec<egui::Pos2>) {
         if vertices_world.len() < 3 {
             return;
@@ -149,6 +154,7 @@ impl MaskLayer {
     }
 }
 
+#[cfg(test)]
 pub fn export_mask_layers_geojson_value(layers: &[MaskLayer]) -> serde_json::Value {
     let features = layers
         .iter()
@@ -201,6 +207,7 @@ pub fn export_mask_layers_geojson_value(layers: &[MaskLayer]) -> serde_json::Val
     })
 }
 
+#[cfg(test)]
 pub fn save_mask_layers_geojson(path: &Path, layers: &[MaskLayer]) -> anyhow::Result<()> {
     if layers.iter().all(|l| l.polygons_world.is_empty()) {
         anyhow::bail!("no mask shapes to save");

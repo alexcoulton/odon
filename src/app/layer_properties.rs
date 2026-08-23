@@ -5,11 +5,13 @@ impl OmeZarrViewerApp {
         let actor_transaction = (
             self.control_native_layer_snapshot_list(),
             self.seg_objects.viewport_filter_state(),
+            self.seg_objects.project_analysis_state(),
             self.active_viewport_command_scope(),
         );
         self.ui_layer_properties_inner(ui, ctx);
-        let (before_native, before_filter, actor_scope) = actor_transaction;
+        let (before_native, before_filter, before_analysis, actor_scope) = actor_transaction;
         let after_filter = self.seg_objects.viewport_filter_state();
+        let after_analysis = self.seg_objects.project_analysis_state();
         let mut after_native = self.control_native_layer_snapshot_list();
         if after_filter != before_filter {
             for layer in after_native.as_array_mut().into_iter().flatten() {
@@ -21,10 +23,19 @@ impl OmeZarrViewerApp {
             }
         }
         let presentation_changed = after_native != before_native;
-        if !presentation_changed && after_filter == before_filter {
+        let analysis_changed = after_analysis != before_analysis;
+        if !presentation_changed && after_filter == before_filter && !analysis_changed {
             return;
         }
         let _ = self.apply_control_actor_native_layers_projection(&before_native);
+        if analysis_changed {
+            let active_channel = self
+                .channels
+                .get(self.selected_channel)
+                .map(|channel| channel.name.clone());
+            self.seg_objects
+                .apply_project_analysis_state(&before_analysis, active_channel.as_deref());
+        }
         if presentation_changed {
             self.submit_native_layer_state_replace(after_native);
         }
@@ -36,6 +47,15 @@ impl OmeZarrViewerApp {
                 revision + u64::from(presentation_changed),
                 &after_filter,
             );
+        }
+        if analysis_changed {
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.analysis.set",
+                params: serde_json::json!({
+                    "target":"segmentation_objects",
+                    "state":after_analysis,
+                }),
+            });
         }
     }
 
@@ -502,7 +522,7 @@ impl OmeZarrViewerApp {
                     .and_then(|p| p.parent())
                     .unwrap_or_else(|| Path::new("."));
                 if let Some(action) = self.seg_objects.ui_properties(ui, default_dir) {
-                    self.queue_object_source_action(action);
+                    self.queue_object_ui_action(action);
                 }
             }
             LayerId::SpatialShape(id) => {
@@ -714,99 +734,47 @@ impl OmeZarrViewerApp {
                 }
 
                 if reload_from_roi_clicked {
-                    let actor_owned = self.mask_actor_owned();
-                    if !actor_owned {
-                        self.push_mask_undo_snapshot();
-                    }
                     match self.request_exclusion_masks_reload() {
-                        Ok(_) => changed |= !actor_owned,
+                        Ok(_) => {}
                         Err(err) => {
-                            if !actor_owned {
-                                self.undo_stack.pop();
-                            }
                             self.roi_selector
                                 .set_status(format!("Reload masks failed: {err}"));
                         }
                     }
                 } else if let Some(path) = reload_from_file {
-                    if self.mask_actor_owned() {
-                        let mut params = serde_json::Map::new();
-                        params.insert(
-                            "path".to_string(),
-                            serde_json::json!(path.to_string_lossy()),
-                        );
-                        params.insert("name".to_string(), serde_json::json!(layer_draft.name));
-                        params.insert(
-                            "editable".to_string(),
-                            serde_json::json!(layer_draft.editable),
-                        );
-                        params.insert("replace_layer_id".to_string(), serde_json::json!(id));
-                        self.submit_native_mask_command("viewer.masks.import_geojson", params);
-                    } else {
-                        match load_geojson_polylines_world(&path, 1.0, PolygonRingMode::AllRings) {
-                            Ok(polys) => {
-                                self.push_mask_undo_snapshot();
-                                if let Some(layer) = self.mask_layers.get_mut(idx) {
-                                    layer.polygons_world = polys;
-                                    layer.raster_display = None;
-                                    changed = true;
-                                }
-                            }
-                            Err(err) => self
-                                .roi_selector
-                                .set_status(format!("Reload masks failed: {err}")),
-                        }
-                    }
+                    let mut params = serde_json::Map::new();
+                    params.insert(
+                        "path".to_string(),
+                        serde_json::json!(path.to_string_lossy()),
+                    );
+                    params.insert("name".to_string(), serde_json::json!(layer_draft.name));
+                    params.insert(
+                        "editable".to_string(),
+                        serde_json::json!(layer_draft.editable),
+                    );
+                    params.insert("replace_layer_id".to_string(), serde_json::json!(id));
+                    self.submit_native_mask_command("viewer.masks.import_geojson", params);
                 }
 
                 if new_layer_clicked {
-                    if !self.mask_actor_owned() {
-                        self.push_mask_undo_snapshot();
-                    }
-                    if let Some(new_id) = self.request_create_editable_mask_layer(None) {
-                        self.set_active_layer(LayerId::Mask(new_id));
-                        changed = true;
-                    }
+                    self.request_create_editable_mask_layer(None);
                 }
                 if draw_tool_clicked {
                     self.tool_mode = ToolMode::DrawMaskPolygon;
                     self.drawing_mask_layer = Some(id);
                 }
                 if clear_clicked {
-                    if self.mask_actor_owned() {
-                        let mut layers = self.mask_layers.clone();
-                        layers[idx].clear();
-                        let selection = if self
-                            .selected_mask_polygon
-                            .is_some_and(|selection| selection.layer_id == id)
-                        {
-                            serde_json::Value::Null
-                        } else {
-                            self.mask_selection_value()
-                        };
-                        self.submit_native_mask_state_replace(&layers, selection);
+                    let mut layers = self.mask_layers.clone();
+                    layers[idx].clear();
+                    let selection = if self
+                        .selected_mask_polygon
+                        .is_some_and(|selection| selection.layer_id == id)
+                    {
+                        serde_json::Value::Null
                     } else {
-                        let should_record_undo = self
-                            .mask_layers
-                            .get(idx)
-                            .is_some_and(|layer| !layer.polygons_world.is_empty());
-                        if should_record_undo {
-                            self.push_mask_undo_snapshot();
-                        }
-                        if let Some(layer) = self.mask_layers.get_mut(idx) {
-                            layer.clear();
-                            changed = true;
-                        }
-                        if self
-                            .selected_mask_polygon
-                            .is_some_and(|selection| selection.layer_id == id)
-                        {
-                            self.clear_mask_polygon_selection();
-                        }
-                        if self.drawing_mask_layer == Some(id) {
-                            self.drawing_mask_polygon.clear();
-                        }
-                    }
+                        self.mask_selection_value()
+                    };
+                    self.submit_native_mask_state_replace(&layers, selection);
                 }
                 if delete_selected_polygon_clicked && self.delete_selected_mask_polygon() {
                     changed = true;
@@ -817,16 +785,10 @@ impl OmeZarrViewerApp {
                 }
 
                 if layer_changed {
-                    if self.mask_actor_owned() {
-                        self.submit_native_mask_layer_update(&layer_draft);
-                    } else {
-                        self.mask_layers[idx] = layer_draft;
-                        changed = true;
-                    }
+                    self.submit_native_mask_layer_update(&layer_draft);
                 }
 
                 if changed {
-                    self.mark_mask_layers_project_dirty();
                     self.bump_render_id();
                 }
             }

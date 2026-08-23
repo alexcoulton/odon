@@ -11,19 +11,19 @@ impl ObjectsLayer {
         &mut self,
         ui: &mut egui::Ui,
         default_dir: &Path,
-    ) -> Option<ObjectSourceUiAction> {
+    ) -> Option<ObjectUiAction> {
         self.ensure_filter_cache();
         self.ensure_color_groups();
 
-        let mut source_action = None;
+        let mut action = None;
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.visible, "Visible");
-            source_action =
-                self.ui_topbar(ui, default_dir)
-                    .map(|path| ObjectSourceUiAction::Load {
-                        path,
-                        options: None,
-                    });
+            action = self
+                .ui_topbar(ui, default_dir)
+                .map(|path| ObjectUiAction::Load {
+                    path,
+                    options: None,
+                });
         });
         ui.add(
             egui::Slider::new(&mut self.opacity, 0.0..=1.0)
@@ -118,13 +118,13 @@ impl ObjectsLayer {
                 .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Reload"))
                 .clicked()
             {
-                source_action = Some(ObjectSourceUiAction::Reload);
+                action = Some(ObjectUiAction::Reload);
             }
             if ui
                 .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Clear"))
                 .clicked()
             {
-                source_action = Some(ObjectSourceUiAction::Clear);
+                action = Some(ObjectUiAction::Clear);
             }
         });
         ui.label(format!("Objects: {}", self.object_count()));
@@ -364,7 +364,7 @@ impl ObjectsLayer {
             ui.label(format!("Selected area mean: {:.2}", mean_area));
             ui.horizontal(|ui| {
                 if ui.button("Clear selection").clicked() {
-                    self.clear_selection();
+                    action = Some(ObjectUiAction::ClearSelection);
                 }
             });
         }
@@ -376,7 +376,7 @@ impl ObjectsLayer {
                 )
                 .clicked()
             {
-                self.select_filtered_objects();
+                action = Some(ObjectUiAction::SelectFiltered);
             }
             if ui
                 .add_enabled(
@@ -399,7 +399,7 @@ impl ObjectsLayer {
         });
 
         ui.separator();
-        self.ui_selection_elements_editor(ui);
+        action = action.or_else(|| self.ui_selection_elements_editor(ui));
         ui.separator();
         ui.label("Primary object");
         if let Some(idx) = self.selected_object_index {
@@ -428,7 +428,7 @@ impl ObjectsLayer {
                 ui.horizontal(|ui| {
                     ui.label(format!("id: {}", obj_id));
                     if ui.button("Clear").clicked() {
-                        self.clear_selection();
+                        action = Some(ObjectUiAction::ClearSelection);
                     }
                 });
                 ui.label(format!("area_px: {:.2}", obj_area_px));
@@ -489,6 +489,6 @@ impl ObjectsLayer {
                     }
                 });
         }
-        source_action
+        action
     }
 }

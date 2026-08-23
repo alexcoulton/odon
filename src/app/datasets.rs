@@ -203,26 +203,11 @@ impl OmeZarrViewerApp {
                     return;
                 }
 
-                // Legacy "Save Masks" appends editable (non-file-backed) mask polygons to the
-                // napari-style masks file path inferred from the Project config.
-                let mut polys: Vec<Vec<egui::Pos2>> = Vec::new();
-                for l in &self.mask_layers {
-                    if !l.editable || l.source_geojson.is_some() {
-                        continue;
-                    }
-                    for poly in &l.polygons_world {
-                        if poly.len() < 3 {
-                            continue;
-                        }
-                        polys.push(
-                            poly.iter()
-                                .copied()
-                                .map(|p| p + l.offset_world)
-                                .collect::<Vec<_>>(),
-                        );
-                    }
-                }
-                if polys.is_empty() {
+                if !self.mask_layers.iter().any(|layer| {
+                    layer.editable
+                        && layer.source_geojson.is_none()
+                        && !layer.polygons_world.is_empty()
+                }) {
                     self.roi_selector
                         .set_status("No drawn masks to save.".to_string());
                     return;
@@ -238,116 +223,28 @@ impl OmeZarrViewerApp {
 
                 match resolve_masks_geojson_path_and_downsample(local_root, &cfg, entry.as_ref()) {
                     Ok(resolved) => {
-                        if self.mask_actor_owned() {
-                            let mut params = serde_json::Map::new();
-                            params.insert(
-                                "path".to_string(),
-                                serde_json::json!(resolved.geojson_path.to_string_lossy()),
-                            );
-                            params.insert("name".to_string(), serde_json::json!("Exclusion masks"));
-                            params.insert(
-                                "downsample_factor".to_string(),
-                                serde_json::json!(resolved.downsample_factor),
-                            );
-                            params.insert(
-                                "roi_root".to_string(),
-                                serde_json::json!(local_root.to_string_lossy()),
-                            );
-                            self.submit_native_mask_command(
-                                "viewer.masks.persistence.append_geojson",
-                                params,
-                            );
-                            self.roi_selector.set_status(format!(
-                                "Saving drawn masks -> {}",
-                                resolved.geojson_path.to_string_lossy()
-                            ));
-                            return;
-                        }
-                        let result: anyhow::Result<()> = (|| {
-                            let ds = resolved.downsample_factor.max(1e-6);
-                            let path = &resolved.geojson_path;
-                            if let Some(parent) = path.parent() {
-                                fs::create_dir_all(parent).with_context(|| {
-                                    format!("failed to create {}", parent.to_string_lossy())
-                                })?;
-                            }
-
-                            let mut root: serde_json::Value = if path.exists() {
-                                let text = fs::read_to_string(path).with_context(|| {
-                                    format!("failed to read {}", path.to_string_lossy())
-                                })?;
-                                serde_json::from_str(&text)
-                                    .context("failed to parse existing GeoJSON")?
-                            } else {
-                                serde_json::json!({"type":"FeatureCollection","features":[]})
-                            };
-
-                            let feats = root
-                                .get_mut("features")
-                                .and_then(|v| v.as_array_mut())
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!("GeoJSON missing 'features' array")
-                                })?;
-
-                            for (idx, poly) in polys.iter().enumerate() {
-                                if poly.len() < 3 {
-                                    continue;
-                                }
-                                let mut ring: Vec<Vec<f64>> = Vec::with_capacity(poly.len() + 1);
-                                for &p in poly {
-                                    ring.push(vec![
-                                        (p.x as f64) / (ds as f64),
-                                        (p.y as f64) / (ds as f64),
-                                    ]);
-                                }
-                                if ring.first() != ring.last() {
-                                    if let Some(first) = ring.first().cloned() {
-                                        ring.push(first);
-                                    }
-                                }
-
-                                feats.push(serde_json::json!({
-                                    "type": "Feature",
-                                    "geometry": { "type": "Polygon", "coordinates": [ ring ] },
-                                    "properties": {
-                                        "layer": "odon_masks",
-                                        "shape_index": idx as i64,
-                                        "roi_root": local_root.to_string_lossy(),
-                                    }
-                                }));
-                            }
-
-                            let text = serde_json::to_string_pretty(&root)
-                                .context("failed to encode GeoJSON")?;
-                            fs::write(path, text).with_context(|| {
-                                format!("failed to write {}", path.to_string_lossy())
-                            })?;
-                            Ok(())
-                        })();
-                        if let Err(err) = result {
-                            self.roi_selector
-                                .set_status(format!("Save Masks failed: {err}"));
-                            return;
-                        }
-
-                        // Clear saved (editable, non-file-backed) layers.
-                        for l in &mut self.mask_layers {
-                            if l.editable && l.source_geojson.is_none() {
-                                l.clear();
-                            }
-                        }
-                        self.mark_mask_layers_project_dirty();
-
-                        // Refresh the read-only layer from disk so appended shapes show up there too.
-                        if let Err(err) = self.ensure_exclusion_masks_loaded() {
-                            self.roi_selector
-                                .set_status(format!("Saved masks, but reload failed: {err}"));
-                        } else {
-                            self.roi_selector.set_status(format!(
-                                "Saved masks (appended) -> {}",
-                                resolved.geojson_path.to_string_lossy()
-                            ));
-                        }
+                        let mut params = serde_json::Map::new();
+                        params.insert(
+                            "path".to_string(),
+                            serde_json::json!(resolved.geojson_path.to_string_lossy()),
+                        );
+                        params.insert("name".to_string(), serde_json::json!("Exclusion masks"));
+                        params.insert(
+                            "downsample_factor".to_string(),
+                            serde_json::json!(resolved.downsample_factor),
+                        );
+                        params.insert(
+                            "roi_root".to_string(),
+                            serde_json::json!(local_root.to_string_lossy()),
+                        );
+                        self.submit_native_mask_command(
+                            "viewer.masks.persistence.append_geojson",
+                            params,
+                        );
+                        self.roi_selector.set_status(format!(
+                            "Saving drawn masks -> {}",
+                            resolved.geojson_path.to_string_lossy()
+                        ));
                     }
                     Err(err) => {
                         self.roi_selector
@@ -402,11 +299,6 @@ impl OmeZarrViewerApp {
             0.5
         };
         let old_zoom = self.camera.zoom_screen_per_lvl0_px;
-        let reload_exclusion_masks = self
-            .mask_layers
-            .iter()
-            .any(|l| l.name == "Exclusion masks" && !l.editable && l.visible);
-
         let mut new_channels = dataset.channels.clone();
         apply_preserved_channel_settings(&prev_channels, &mut new_channels);
         for ch in &mut new_channels {
@@ -502,7 +394,6 @@ impl OmeZarrViewerApp {
         self.points_offset_world = egui::Vec2::ZERO;
         self.spatial_points_offset_world = egui::Vec2::ZERO;
         self.mask_layers.clear();
-        self.next_mask_layer_id = 1;
         self.drawing_mask_layer = None;
         self.seg_labels_offset_world = egui::Vec2::ZERO;
         self.seg_geojson_offset_world = egui::Vec2::ZERO;
@@ -577,7 +468,6 @@ impl OmeZarrViewerApp {
         self.previous_displayed_view_selection = None;
         self.active_render_id = self.compute_render_id();
         self.last_render_view_selection = self.committed_view_selection();
-        self.restore_mask_layers_from_project_space();
         self.restore_loaded_layer_offsets_from_current_project_view_or_capture();
 
         self.hist = None;
@@ -606,18 +496,6 @@ impl OmeZarrViewerApp {
         self.auto_load_project_roi_segmentation();
         self.drawing_mask_polygon.clear();
         self.clear_mask_polygon_selection();
-        self.undo_stack.clear();
-        if reload_exclusion_masks {
-            if self.dataset.source.local_path().is_some() {
-                if let Err(err) = self.ensure_exclusion_masks_loaded() {
-                    self.roi_selector
-                        .set_status(format!("Load Masks failed: {err}"));
-                }
-            } else {
-                self.roi_selector
-                    .set_status("Masks are supported for local datasets only.".to_string());
-            }
-        }
 
         // Best-effort fit if the new ROI is wildly different in size.
         if let Some(viewport) = ctx.input(|i| i.viewport().inner_rect) {
@@ -635,79 +513,7 @@ impl OmeZarrViewerApp {
         Ok(())
     }
 
-    pub(super) fn ensure_exclusion_masks_loaded(&mut self) -> anyhow::Result<usize> {
-        let Some(local_root) = self.dataset.source.local_path() else {
-            anyhow::bail!("exclusion masks are supported for local datasets only");
-        };
-        let Some(cfg) = self.roi_selector.masks_config_for_roi(local_root) else {
-            anyhow::bail!("no matching dataset entry in Project config");
-        };
-        let entry = self.roi_selector.roi_entry_for_path(local_root);
-
-        let resolved = resolve_masks_geojson_path_and_downsample(local_root, &cfg, entry.as_ref())?;
-        let polylines = load_geojson_polylines_world(
-            &resolved.geojson_path,
-            resolved.downsample_factor,
-            PolygonRingMode::AllRings,
-        )
-        .with_context(|| {
-            format!(
-                "failed to load masks: {}",
-                resolved.geojson_path.to_string_lossy()
-            )
-        })?;
-
-        let existing_idx = self.mask_layers.iter().position(|l| {
-            !l.editable
-                && l.source_geojson
-                    .as_ref()
-                    .is_some_and(|p| p == &resolved.geojson_path)
-        });
-
-        let idx = match existing_idx {
-            Some(i) => i,
-            None => {
-                let id = self.next_mask_layer_id.max(1);
-                self.next_mask_layer_id = id.saturating_add(1);
-                self.mask_layers.push(MaskLayer {
-                    id,
-                    name: "Exclusion masks".to_string(),
-                    visible: true,
-                    opacity: 0.85,
-                    width_screen_px: 1.5,
-                    display_mode: MaskDisplayMode::default_new_layer(),
-                    color_rgb: [50, 220, 255],
-                    offset_world: egui::Vec2::ZERO,
-                    editable: false,
-                    polygons_world: Vec::new(),
-                    raster_display: None,
-                    source_geojson: Some(resolved.geojson_path.clone()),
-                });
-                self.mark_mask_layers_project_dirty();
-                self.mask_layers.len().saturating_sub(1)
-            }
-        };
-
-        if let Some(l) = self.mask_layers.get_mut(idx) {
-            l.polygons_world = polylines;
-            l.raster_display = None;
-            l.source_geojson = Some(resolved.geojson_path);
-            l.visible = true;
-            l.editable = false;
-            self.mark_mask_layers_project_dirty();
-        }
-
-        Ok(self
-            .mask_layers
-            .get(idx)
-            .map(|l| l.polygons_world.len())
-            .unwrap_or(0))
-    }
-
     pub(super) fn request_exclusion_masks_reload(&mut self) -> anyhow::Result<usize> {
-        if !self.mask_actor_owned() {
-            return self.ensure_exclusion_masks_loaded();
-        }
         let Some(local_root) = self.dataset.source.local_path() else {
             anyhow::bail!("exclusion masks are supported for local datasets only");
         };

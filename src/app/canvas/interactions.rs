@@ -196,10 +196,6 @@ impl OmeZarrViewerApp {
                 };
                 if let Some(vertex_idx) = hit.vertex_idx {
                     self.begin_mask_vertex_drag(selection, vertex_idx);
-                } else if !self.mask_actor_owned() {
-                    self.selected_mask_polygon = Some(selection);
-                    self.selected_mask_vertex = None;
-                    self.dragging_mask_vertex = None;
                 }
             }
         }
@@ -225,9 +221,6 @@ impl OmeZarrViewerApp {
             let selection = drag.selection;
             let vertex_idx = drag.vertex_idx;
             if !drag.undo_recorded {
-                if !self.mask_actor_owned() {
-                    self.push_mask_undo_snapshot();
-                }
                 drag.undo_recorded = true;
                 self.dragging_mask_vertex = Some(drag);
             }
@@ -352,7 +345,6 @@ impl OmeZarrViewerApp {
                     self.set_status("No visible movable layers selected.");
                 } else {
                     self.ensure_loaded_layer_offset_baselines_for(&targets);
-                    self.push_layer_offsets_undo_snapshot(&targets);
                     self.layer_move = Some(LayerMoveState {
                         actor_scope: self.active_viewport_command_scope(),
                         targets: targets

@@ -1407,6 +1407,82 @@ fn renderer_has_no_semantic_command_emulators() {
 }
 
 #[test]
+fn native_object_selection_and_analysis_have_no_renderer_commit_fallback() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let selection = source(root.join("src/app/selection.rs"));
+    assert!(!selection.contains("actor_owns_object_selection_target"));
+    for forbidden in [
+        ".select_in_world_rect(",
+        ".select_in_world_lasso(",
+        ".select_at(",
+        ".clear_selection()",
+        ".select_objects_by_ids(",
+    ] {
+        assert!(
+            !selection.contains(forbidden),
+            "native object selection must submit an actor command before renderer mutation: {forbidden}"
+        );
+    }
+
+    let properties = source(root.join("src/objects/core/properties_ui.rs"));
+    assert!(!properties.contains("self.clear_selection()"));
+    assert!(!properties.contains("self.select_filtered_objects()"));
+    assert!(properties.contains("ObjectUiAction::ClearSelection"));
+    assert!(properties.contains("ObjectUiAction::SelectFiltered"));
+
+    let update = source(root.join("src/app/update.rs"));
+    assert!(update.contains("objects.apply_project_analysis_state("));
+    assert!(update.contains("method: \"viewer.analysis.set\""));
+}
+
+#[test]
+fn native_mask_semantics_and_io_have_no_renderer_commit_fallback() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let masks = source(root.join("src/app/mask_interaction.rs"));
+    for forbidden in [
+        "mask_actor_owned",
+        "next_mask_layer_id",
+        "mask_layers_project_dirty",
+        "undo_stack",
+        "push_mask_undo_snapshot",
+        "push_layer_offsets_undo_snapshot",
+        "mark_mask_layers_project_dirty",
+        "fn create_editable_mask_layer",
+        "sync_mask_layers_into_project_space",
+    ] {
+        assert!(
+            !masks.contains(forbidden),
+            "native mask semantics must not retain a renderer fallback: {forbidden}"
+        );
+    }
+    for method in [
+        "viewer.masks.layers.create",
+        "viewer.masks.layers.delete",
+        "viewer.masks.polygons.add",
+        "viewer.masks.polygons.remove",
+        "viewer.masks.selection.set",
+        "viewer.masks.selection.clear",
+        "viewer.masks.state.replace",
+        "viewer.masks.undo",
+        "viewer.masks.export_geojson",
+    ] {
+        assert!(
+            masks.contains(method),
+            "native mask operation must enter its typed actor command: {method}"
+        );
+    }
+
+    let screenshots = source(root.join("src/app/screenshots.rs"));
+    assert!(!screenshots.contains("save_mask_layers_geojson"));
+    assert!(!screenshots.contains("export_masks_geojson"));
+    assert!(!screenshots.contains("export_mask_layer_geojson"));
+
+    let datasets = source(root.join("src/app/datasets.rs"));
+    assert!(!datasets.contains("ensure_exclusion_masks_loaded"));
+    assert!(!datasets.contains("fs::write"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1698,7 +1774,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 314,
+        total_fields, 310,
         "review the ownership ledger when host fields change"
     );
 }

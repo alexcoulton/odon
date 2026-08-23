@@ -7,13 +7,18 @@ use super::*;
 pub struct NativeObjectControlService;
 
 #[derive(Debug, Clone)]
-pub enum ObjectSourceUiAction {
+pub enum ObjectUiAction {
     Load {
         path: PathBuf,
         options: Option<serde_json::Value>,
     },
     Reload,
     Clear,
+    ClearSelection,
+    SelectFiltered,
+    SelectIds {
+        ids: Vec<String>,
+    },
 }
 
 impl ObjectResourceLoader for NativeObjectControlService {

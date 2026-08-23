@@ -13,9 +13,9 @@ use crate::data::dataset_kind::{
     LocalDatasetKind, can_open_in_mosaic, classify_local_dataset_path, normalize_local_dataset_path,
 };
 use crate::data::dataset_source::DatasetSource;
-use crate::data::project_config::{
-    ProjectConfig, ProjectLayerGroups, ProjectMaskLayer, ProjectRoi,
-};
+#[cfg(test)]
+use crate::data::project_config::ProjectMaskLayer;
+use crate::data::project_config::{ProjectConfig, ProjectLayerGroups, ProjectRoi};
 use crate::data::samplesheet::{
     SampleRow, SampleSheet, load_samplesheet_csv, write_samplesheet_csv,
 };

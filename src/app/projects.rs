@@ -248,7 +248,6 @@ impl OmeZarrViewerApp {
 
     pub(super) fn sync_current_view_state_into_project_space(&mut self) {
         self.sync_runtime_to_active_viewport();
-        self.sync_mask_layers_into_project_space();
         self.ensure_loaded_layer_offset_baselines();
         let layer_groups = Some(self.current_layer_groups());
         let overlay_order = self

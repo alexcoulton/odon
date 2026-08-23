@@ -243,39 +243,6 @@ impl ObjectsLayer {
         self.selection_cpu_overlay_dirty = false;
     }
 
-    pub fn select_filtered_objects(&mut self) {
-        if let Some(filtered) = self.filtered_ordered_indices.as_ref() {
-            self.selected_object_indices = filtered.iter().copied().collect();
-            self.selected_object_index = filtered.first().copied();
-        } else if let Some(objects) = self.objects.as_ref() {
-            self.selected_object_indices = (0..objects.len()).collect();
-            self.selected_object_index = if objects.is_empty() { None } else { Some(0) };
-        }
-        self.rebuild_selection_render_lods();
-        self.invalidate_table_cache();
-    }
-
-    pub fn select_in_world_rect(
-        &mut self,
-        world_rect: egui::Rect,
-        local_to_world_offset: egui::Vec2,
-        additive: bool,
-    ) -> usize {
-        let indices = self.query_indices_in_world_rect(world_rect, local_to_world_offset);
-        self.apply_selection_indices(&indices, additive);
-        let id_preview = self.selection_id_preview(&indices);
-        self.status = if id_preview.is_empty() {
-            format!("Selected {} object(s) by rectangle.", indices.len())
-        } else {
-            format!(
-                "Selected {} object(s) by rectangle: {}",
-                indices.len(),
-                id_preview
-            )
-        };
-        indices.len()
-    }
-
     #[cfg(test)]
     pub fn query_world_rect_snapshot_json(
         &self,
@@ -303,18 +270,6 @@ impl ObjectsLayer {
         )
     }
 
-    pub fn select_in_world_lasso(
-        &mut self,
-        world_points: &[egui::Pos2],
-        local_to_world_offset: egui::Vec2,
-        additive: bool,
-    ) -> usize {
-        let indices = self.query_indices_in_world_lasso(world_points, local_to_world_offset);
-        self.apply_selection_indices(&indices, additive);
-        self.status = format!("Selected {} object(s) by lasso.", indices.len());
-        indices.len()
-    }
-
     #[cfg(test)]
     pub fn select_in_world_rect_snapshot_json_mode(
         &mut self,
@@ -340,26 +295,19 @@ impl ObjectsLayer {
         })
     }
 
-    pub(super) fn selection_id_preview(&self, indices: &[usize]) -> String {
-        let Some(objects) = self.objects.as_ref() else {
-            return String::new();
-        };
-        let labels = indices
-            .iter()
-            .take(8)
-            .filter_map(|idx| objects.get(*idx).map(|obj| obj.id.as_str()))
-            .collect::<Vec<_>>();
-        if labels.is_empty() {
-            return String::new();
-        }
-        let extra = indices.len().saturating_sub(labels.len());
-        let mut out = labels.join(", ");
-        if extra > 0 {
-            out.push_str(&format!(" +{extra}"));
-        }
-        out
+    #[cfg(test)]
+    pub fn select_in_world_lasso(
+        &mut self,
+        world_points: &[egui::Pos2],
+        local_to_world_offset: egui::Vec2,
+        additive: bool,
+    ) -> usize {
+        let indices = self.query_indices_in_world_lasso(world_points, local_to_world_offset);
+        self.apply_selection_indices(&indices, additive);
+        indices.len()
     }
 
+    #[cfg(test)]
     pub(super) fn query_indices_in_world_rect(
         &self,
         world_rect: egui::Rect,
@@ -454,6 +402,7 @@ impl ObjectsLayer {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn query_indices_in_world_lasso(
         &self,
         world_points: &[egui::Pos2],

@@ -15,12 +15,12 @@ impl OmeZarrViewerApp {
         self.add_annotation_layer();
     }
 
-    pub(in crate::app) fn queue_object_source_action(
+    pub(in crate::app) fn queue_object_ui_action(
         &mut self,
-        action: crate::objects::ObjectSourceUiAction,
+        action: crate::objects::ObjectUiAction,
     ) {
         let (method, params) = match action {
-            crate::objects::ObjectSourceUiAction::Load { path, options } => {
+            crate::objects::ObjectUiAction::Load { path, options } => {
                 let path = if options.is_some() {
                     path
                 } else {
@@ -41,11 +41,37 @@ impl OmeZarrViewerApp {
                 }
                 ("viewer.objects.source.load", params)
             }
-            crate::objects::ObjectSourceUiAction::Reload => {
+            crate::objects::ObjectUiAction::Reload => {
                 ("viewer.objects.source.reload", serde_json::json!({}))
             }
-            crate::objects::ObjectSourceUiAction::Clear => {
+            crate::objects::ObjectUiAction::Clear => {
                 ("viewer.objects.source.clear", serde_json::json!({}))
+            }
+            crate::objects::ObjectUiAction::ClearSelection => {
+                let target = self.active_or_spatial_selection_layer();
+                (
+                    "viewer.objects.clear_selection",
+                    serde_json::Value::Object(self.object_selection_target_params(Some(target))),
+                )
+            }
+            crate::objects::ObjectUiAction::SelectFiltered => {
+                let target = self.active_or_spatial_selection_layer();
+                let mut params = self.object_selection_target_params(Some(target));
+                params.insert("mode".to_string(), serde_json::json!("replace"));
+                (
+                    "viewer.objects.selection.select_filtered",
+                    serde_json::Value::Object(params),
+                )
+            }
+            crate::objects::ObjectUiAction::SelectIds { ids } => {
+                let target = self.active_or_spatial_selection_layer();
+                let mut params = self.object_selection_target_params(Some(target));
+                params.insert("ids".to_string(), serde_json::json!(ids));
+                params.insert("mode".to_string(), serde_json::json!("replace"));
+                (
+                    "viewer.objects.selection.select_ids",
+                    serde_json::Value::Object(params),
+                )
             }
         };
         self.native_control_intents
@@ -72,7 +98,7 @@ impl OmeZarrViewerApp {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         if let Some(path) = self.seg_objects.choose_source_dialog(&default_dir) {
-            self.queue_object_source_action(crate::objects::ObjectSourceUiAction::Load {
+            self.queue_object_ui_action(crate::objects::ObjectUiAction::Load {
                 path,
                 options: None,
             });

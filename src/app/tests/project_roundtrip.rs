@@ -23,8 +23,15 @@ fn layer_transforms_order_masks_and_ui_roundtrip_through_project_state() {
         egui::pos2(11.0, 12.0),
     ]);
     app.mask_layers.push(mask);
-    app.next_mask_layer_id = 18;
-    app.mask_layers_project_dirty = true;
+    let persisted_masks = app.mask_layers.iter().map(MaskLayer::to_project).collect();
+    let roi_path = app
+        .dataset
+        .source
+        .local_path()
+        .expect("fixture dataset is local")
+        .to_path_buf();
+    app.project_space
+        .set_roi_mask_layers(&roi_path, persisted_masks);
     app.rebuild_layer_orders();
 
     app.channel_offsets_world[1] = egui::vec2(3.0, 5.0);
@@ -39,14 +46,6 @@ fn layer_transforms_order_masks_and_ui_roundtrip_through_project_state() {
     app.show_left_panel = false;
     app.show_right_panel = true;
     app.smooth_pixels = false;
-
-    app.push_layer_offsets_undo_snapshot(&[LayerId::Channel(1), LayerId::Mask(17)]);
-    app.channel_offsets_world[1] = egui::vec2(30.0, 50.0);
-    app.mask_layers[0].offset_world = egui::vec2(80.0, -40.0);
-    assert!(app.undo_last_edit());
-    assert_eq!(app.channel_offsets_world[1], egui::vec2(3.0, 5.0));
-    assert_eq!(app.mask_layers[0].offset_world, egui::vec2(8.0, -4.0));
-    assert!(!app.undo_last_edit(), "undo stack is exhausted");
 
     sync_complete_state_to_active_viewport_for_test(&mut app);
     let source = app.dataset.source.clone();

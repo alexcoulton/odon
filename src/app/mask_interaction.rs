@@ -1,10 +1,6 @@
 use super::*;
 
 impl OmeZarrViewerApp {
-    pub(super) fn mask_actor_owned(&self) -> bool {
-        self.control_actor_mask_generation > 0
-    }
-
     pub(super) fn mask_polygon_gesture_active(&self) -> bool {
         self.dragging_mask_vertex.is_some() || self.moving_mask_polygon.is_some()
     }
@@ -62,6 +58,24 @@ impl OmeZarrViewerApp {
             method,
             params: serde_json::Value::Object(params),
         });
+    }
+
+    pub fn request_mask_export(&mut self, path: &Path, layer_id: Option<u64>) {
+        let mut params = serde_json::Map::from_iter([
+            (
+                "path".to_string(),
+                serde_json::json!(path.to_string_lossy()),
+            ),
+            ("overwrite".to_string(), serde_json::json!(true)),
+        ]);
+        if let Some(layer_id) = layer_id {
+            params.insert("id".to_string(), serde_json::json!(layer_id));
+        }
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.masks.export_geojson",
+            params: serde_json::Value::Object(params),
+        });
+        self.set_status(format!("Exporting masks -> {}", path.to_string_lossy()));
     }
 
     pub(super) fn submit_native_mask_layer_update(&mut self, layer: &MaskLayer) {
@@ -132,84 +146,30 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn delete_mask_layer(&mut self, layer_id: u64) -> bool {
-        let Some(idx) = self.mask_layers.iter().position(|l| l.id == layer_id) else {
+        if !self.mask_layers.iter().any(|layer| layer.id == layer_id) {
             return false;
-        };
-        if self.mask_actor_owned() {
-            self.submit_native_mask_command(
-                "viewer.masks.layers.delete",
-                serde_json::Map::from_iter([("id".to_string(), serde_json::json!(layer_id))]),
-            );
-            return true;
         }
-
-        self.push_mask_undo_snapshot();
-        self.mask_layers.remove(idx);
-        self.mark_mask_layers_project_dirty();
-        if self
-            .selected_mask_polygon
-            .is_some_and(|selection| selection.layer_id == layer_id)
-        {
-            self.clear_mask_polygon_selection();
-        }
-        if self.drawing_mask_layer == Some(layer_id) {
-            self.drawing_mask_layer = None;
-            self.drawing_mask_polygon.clear();
-        }
-        self.layer_drag = None;
-        if self.active_layer == LayerId::Mask(layer_id) {
-            self.active_layer = if !self.channels.is_empty() {
-                LayerId::Channel(self.selected_channel.min(self.channels.len() - 1))
-            } else {
-                LayerId::Points
-            };
-        }
-        self.rebuild_layer_orders();
-        self.bump_render_id();
+        self.submit_native_mask_command(
+            "viewer.masks.layers.delete",
+            serde_json::Map::from_iter([("id".to_string(), serde_json::json!(layer_id))]),
+        );
         true
     }
 
-    pub(super) fn sync_mask_layers_into_project_space(&mut self) {
-        if self.mask_actor_owned() {
-            return;
-        }
-        if !self.mask_layers_project_dirty {
-            return;
-        }
-        let Some(local_root) = self.dataset.source.local_path() else {
-            return;
-        };
-        let layers = self.mask_layers.iter().map(|l| l.to_project()).collect();
-        self.project_space.set_roi_mask_layers(local_root, layers);
-        self.mask_layers_project_dirty = false;
-    }
-
+    #[cfg(test)]
     pub(super) fn restore_mask_layers_from_project_space(&mut self) {
-        self.undo_stack.clear();
         let Some(local_root) = self.dataset.source.local_path() else {
             self.mask_layers.clear();
-            self.next_mask_layer_id = 1;
             self.clear_mask_polygon_selection();
-            self.mask_layers_project_dirty = false;
             return;
         };
         let Some(layers) = self.project_space.roi_mask_layers(local_root) else {
             self.mask_layers.clear();
-            self.next_mask_layer_id = 1;
             self.clear_mask_polygon_selection();
-            self.mask_layers_project_dirty = false;
             return;
         };
 
         self.mask_layers = layers.iter().map(MaskLayer::from_project).collect();
-        self.next_mask_layer_id = self
-            .mask_layers
-            .iter()
-            .map(|l| l.id)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1)
-            .max(1);
 
         // Reset any in-progress drawing if it no longer targets a valid layer.
         if let Some(id) = self.drawing_mask_layer {
@@ -221,7 +181,6 @@ impl OmeZarrViewerApp {
 
         self.rebuild_layer_orders();
         self.bump_render_id();
-        self.mask_layers_project_dirty = false;
     }
 
     pub(super) fn ensure_editable_mask_layer(&mut self) -> Option<u64> {
@@ -244,63 +203,18 @@ impl OmeZarrViewerApp {
         &mut self,
         name: Option<String>,
     ) -> Option<u64> {
-        if self.mask_actor_owned() {
-            if !self
-                .native_control_intents
-                .iter()
-                .any(|intent| intent.method == "viewer.masks.layers.create")
-            {
-                let mut params = serde_json::Map::new();
-                if let Some(name) = name {
-                    params.insert("name".to_string(), serde_json::json!(name));
-                }
-                self.submit_native_mask_command("viewer.masks.layers.create", params);
-            }
-            None
-        } else {
-            Some(self.create_editable_mask_layer(name))
-        }
-    }
-
-    pub(super) fn push_undo_action(&mut self, action: UndoAction) {
-        self.undo_stack.push(action);
-        if self.undo_stack.len() > MAX_UNDO_ACTIONS {
-            self.undo_stack.remove(0);
-        }
-    }
-
-    pub(super) fn mark_mask_layers_project_dirty(&mut self) {
-        self.mask_layers_project_dirty = true;
-    }
-
-    pub(super) fn push_mask_undo_snapshot(&mut self) {
-        self.push_undo_action(UndoAction::Mask(MaskUndoSnapshot {
-            layers: self.mask_layers.clone(),
-            next_layer_id: self.next_mask_layer_id,
-            active_layer: self.active_layer,
-            selection: self.selected_mask_polygon,
-            selected_vertex: self.selected_mask_vertex,
-            drawing_layer: self.drawing_mask_layer,
-            drawing_polygon: self.drawing_mask_polygon.clone(),
-        }));
-    }
-
-    pub(super) fn push_layer_offsets_undo_snapshot(&mut self, layers: &[LayerId]) {
-        let offsets = layers
+        if !self
+            .native_control_intents
             .iter()
-            .copied()
-            .filter(|layer| !(self.mask_actor_owned() && matches!(layer, LayerId::Mask(_))))
-            .filter(|&layer| self.layer_has_offset_world(layer))
-            .map(|layer| LayerOffsetEntry {
-                layer,
-                offset_world: self.layer_offset_world(layer),
-            })
-            .collect::<Vec<_>>();
-        if !offsets.is_empty() {
-            self.push_undo_action(UndoAction::LayerOffsets(LayerOffsetUndoSnapshot {
-                offsets,
-            }));
+            .any(|intent| intent.method == "viewer.masks.layers.create")
+        {
+            let mut params = serde_json::Map::new();
+            if let Some(name) = name {
+                params.insert("name".to_string(), serde_json::json!(name));
+            }
+            self.submit_native_mask_command("viewer.masks.layers.create", params);
         }
+        None
     }
 
     pub(super) fn finish_native_layer_move(&mut self, state: &LayerMoveState) {
@@ -345,55 +259,17 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub(super) fn undo_last_edit(&mut self) -> bool {
-        let Some(action) = self.undo_stack.pop() else {
+    pub(super) fn request_native_mask_undo(&mut self) -> bool {
+        if !matches!(self.active_layer, LayerId::Mask(_)) || !self.control_actor_mask_undo_available
+        {
             return false;
-        };
-        match action {
-            UndoAction::Mask(snapshot) => {
-                self.mask_layers = snapshot.layers;
-                self.next_mask_layer_id = snapshot.next_layer_id;
-                self.active_layer = snapshot.active_layer;
-                self.selected_mask_polygon = snapshot.selection;
-                self.selected_mask_vertex = snapshot.selected_vertex;
-                self.dragging_mask_vertex = None;
-                self.moving_mask_polygon = None;
-                self.drawing_mask_layer = snapshot.drawing_layer;
-                self.drawing_mask_polygon = snapshot.drawing_polygon;
-                self.validate_mask_polygon_selection();
-                self.rebuild_layer_orders();
-                self.mark_mask_layers_project_dirty();
-            }
-            UndoAction::LayerOffsets(snapshot) => {
-                for entry in snapshot.offsets {
-                    if let Some(offset) = self.layer_offset_world_mut(entry.layer) {
-                        *offset = entry.offset_world;
-                    }
-                }
-                self.hist_dirty = true;
-                self.mark_mask_layers_project_dirty();
-            }
         }
+        self.submit_native_mask_command("viewer.masks.undo", serde_json::Map::new());
         true
     }
 
-    pub(super) fn request_native_mask_undo(&mut self) -> bool {
-        if self.control_actor_mask_generation > 0 && matches!(self.active_layer, LayerId::Mask(_)) {
-            if !self.control_actor_mask_undo_available {
-                return false;
-            }
-            self.submit_native_mask_command("viewer.masks.undo", serde_json::Map::new());
-            return true;
-        }
-        self.undo_last_edit()
-    }
-
     pub(super) fn mask_undo_available(&self) -> bool {
-        if self.control_actor_mask_generation > 0 && matches!(self.active_layer, LayerId::Mask(_)) {
-            self.control_actor_mask_undo_available
-        } else {
-            !self.undo_stack.is_empty()
-        }
+        matches!(self.active_layer, LayerId::Mask(_)) && self.control_actor_mask_undo_available
     }
 
     pub(super) fn finish_drawing_mask_polygon(&mut self) -> bool {
@@ -410,40 +286,29 @@ impl OmeZarrViewerApp {
             return false;
         };
         self.drawing_mask_layer = Some(id);
-        if self.mask_actor_owned() {
-            let Some(_layer) = self
-                .mask_layers
-                .iter()
-                .find(|layer| layer.id == id && layer.editable)
-            else {
-                self.drawing_mask_polygon = vertices;
-                return false;
-            };
-            let mut params = serde_json::Map::new();
-            params.insert("id".to_string(), serde_json::json!(id));
-            params.insert("coordinate_space".to_string(), serde_json::json!("local"));
-            params.insert(
-                "vertices".to_string(),
-                serde_json::json!(
-                    vertices
-                        .iter()
-                        .map(|point| [point.x, point.y])
-                        .collect::<Vec<_>>()
-                ),
-            );
-            self.submit_native_mask_command("viewer.masks.polygons.add", params);
-            self.drawing_mask_layer = Some(id);
-            return true;
-        }
-        self.push_mask_undo_snapshot();
-        if let Some(layer) = self.mask_layers.iter_mut().find(|l| l.id == id) {
-            layer.add_closed_polygon(vertices);
-            layer.visible = true;
-            self.mark_mask_layers_project_dirty();
-            true
-        } else {
-            false
-        }
+        let Some(_layer) = self
+            .mask_layers
+            .iter()
+            .find(|layer| layer.id == id && layer.editable)
+        else {
+            self.drawing_mask_polygon = vertices;
+            return false;
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("id".to_string(), serde_json::json!(id));
+        params.insert("coordinate_space".to_string(), serde_json::json!("local"));
+        params.insert(
+            "vertices".to_string(),
+            serde_json::json!(
+                vertices
+                    .iter()
+                    .map(|point| [point.x, point.y])
+                    .collect::<Vec<_>>()
+            ),
+        );
+        self.submit_native_mask_command("viewer.masks.polygons.add", params);
+        self.drawing_mask_layer = Some(id);
+        true
     }
 
     pub(super) fn clear_mask_polygon_selection(&mut self) {
@@ -553,23 +418,15 @@ impl OmeZarrViewerApp {
         rect: egui::Rect,
     ) -> bool {
         if let Some(hit) = self.hit_mask_polygon_at(layer_id, pointer_world, pointer_screen, rect) {
-            if self.mask_actor_owned() {
-                let mut params = serde_json::Map::new();
-                params.insert("id".to_string(), serde_json::json!(layer_id));
-                params.insert("index".to_string(), serde_json::json!(hit.polygon_idx));
-                params.insert(
-                    "vertex_index".to_string(),
-                    hit.vertex_idx
-                        .map_or(serde_json::Value::Null, |index| serde_json::json!(index)),
-                );
-                self.submit_native_mask_command("viewer.masks.selection.set", params);
-                return true;
-            }
-            self.selected_mask_polygon = Some(MaskPolygonSelection {
-                layer_id,
-                polygon_idx: hit.polygon_idx,
-            });
-            self.selected_mask_vertex = hit.vertex_idx;
+            let mut params = serde_json::Map::new();
+            params.insert("id".to_string(), serde_json::json!(layer_id));
+            params.insert("index".to_string(), serde_json::json!(hit.polygon_idx));
+            params.insert(
+                "vertex_index".to_string(),
+                hit.vertex_idx
+                    .map_or(serde_json::Value::Null, |index| serde_json::json!(index)),
+            );
+            self.submit_native_mask_command("viewer.masks.selection.set", params);
             true
         } else {
             self.commit_clear_mask_polygon_selection();
@@ -578,11 +435,7 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn commit_clear_mask_polygon_selection(&mut self) {
-        if self.mask_actor_owned() {
-            self.submit_native_mask_command("viewer.masks.selection.clear", serde_json::Map::new());
-        } else {
-            self.clear_mask_polygon_selection();
-        }
+        self.submit_native_mask_command("viewer.masks.selection.clear", serde_json::Map::new());
     }
 
     pub(super) fn delete_selected_mask_polygon(&mut self) -> bool {
@@ -599,29 +452,13 @@ impl OmeZarrViewerApp {
             self.clear_mask_polygon_selection();
             return false;
         }
-        if self.mask_actor_owned() {
-            let mut params = serde_json::Map::new();
-            params.insert("id".to_string(), serde_json::json!(selection.layer_id));
-            params.insert(
-                "index".to_string(),
-                serde_json::json!(selection.polygon_idx),
-            );
-            self.submit_native_mask_command("viewer.masks.polygons.remove", params);
-            return true;
-        }
-        self.push_mask_undo_snapshot();
-        let Some(layer) = self
-            .mask_layers
-            .iter_mut()
-            .find(|layer| layer.id == selection.layer_id)
-        else {
-            self.clear_mask_polygon_selection();
-            return false;
-        };
-        layer.polygons_world.remove(selection.polygon_idx);
-        layer.raster_display = None;
-        self.clear_mask_polygon_selection();
-        self.mark_mask_layers_project_dirty();
+        let mut params = serde_json::Map::new();
+        params.insert("id".to_string(), serde_json::json!(selection.layer_id));
+        params.insert(
+            "index".to_string(),
+            serde_json::json!(selection.polygon_idx),
+        );
+        self.submit_native_mask_command("viewer.masks.polygons.remove", params);
         true
     }
 
@@ -656,9 +493,6 @@ impl OmeZarrViewerApp {
             poly[last_idx] = local;
         }
         layer.raster_display = None;
-        if !self.mask_actor_owned() {
-            self.mark_mask_layers_project_dirty();
-        }
         true
     }
 
@@ -717,9 +551,6 @@ impl OmeZarrViewerApp {
 
         let start_selection = self.selected_mask_polygon;
         let start_selected_vertex = self.selected_mask_vertex;
-        if !self.mask_actor_owned() {
-            self.push_mask_undo_snapshot();
-        }
         self.selected_mask_polygon = Some(selection);
         self.selected_mask_vertex = None;
         self.dragging_mask_vertex = None;
@@ -760,9 +591,6 @@ impl OmeZarrViewerApp {
             .map(|p| p + delta)
             .collect();
         layer.raster_display = None;
-        if !self.mask_actor_owned() {
-            self.mark_mask_layers_project_dirty();
-        }
         true
     }
 
@@ -792,24 +620,17 @@ impl OmeZarrViewerApp {
             return false;
         };
 
-        if actor_generation > 0 {
-            let state = self.mask_semantic_state();
-            self.native_control_intents.push(NativeControlIntent {
-                method: "viewer.masks.state.replace",
-                params: serde_json::json!({
-                    "expected_generation": actor_generation,
-                    "sync_project": true,
-                    "state": state,
-                }),
-            });
-            self.restore_mask_gesture_baseline(
-                selection,
-                start_polygon,
-                start_selection,
-                start_vertex,
-            );
-            self.apply_pending_mask_projection_after_gesture();
-        }
+        let state = self.mask_semantic_state();
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.masks.state.replace",
+            params: serde_json::json!({
+                "expected_generation": actor_generation.max(1),
+                "sync_project": true,
+                "state": state,
+            }),
+        });
+        self.restore_mask_gesture_baseline(selection, start_polygon, start_selection, start_vertex);
+        self.apply_pending_mask_projection_after_gesture();
         true
     }
 
@@ -866,48 +687,5 @@ impl OmeZarrViewerApp {
         if let Some(projection) = self.pending_control_actor_mask_projection.take() {
             let _ = self.apply_control_actor_masks_projection(&projection);
         }
-    }
-
-    pub(super) fn create_editable_mask_layer(&mut self, name: Option<String>) -> u64 {
-        let base = "Masks";
-        let mut name = name.unwrap_or_else(|| base.to_string());
-        if self
-            .mask_layers
-            .iter()
-            .any(|l| l.name.eq_ignore_ascii_case(&name))
-        {
-            let mut i = 2;
-            loop {
-                let candidate = format!("{base} {i}");
-                if !self
-                    .mask_layers
-                    .iter()
-                    .any(|l| l.name.eq_ignore_ascii_case(&candidate))
-                {
-                    name = candidate;
-                    break;
-                }
-                i += 1;
-            }
-        }
-
-        let id = self.next_mask_layer_id.max(1);
-        self.next_mask_layer_id = id.saturating_add(1);
-        self.mask_layers.push(MaskLayer {
-            id,
-            name,
-            visible: true,
-            opacity: 0.9,
-            width_screen_px: 2.0,
-            display_mode: MaskDisplayMode::default_new_layer(),
-            color_rgb: [255, 210, 60],
-            offset_world: egui::Vec2::ZERO,
-            editable: true,
-            polygons_world: Vec::new(),
-            raster_display: None,
-            source_geojson: None,
-        });
-        self.mark_mask_layers_project_dirty();
-        id
     }
 }

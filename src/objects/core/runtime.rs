@@ -809,7 +809,7 @@ impl ObjectsLayer {
         }
     }
 
-    pub fn ui_load_dialog(&mut self, ctx: &egui::Context) -> Option<ObjectSourceUiAction> {
+    pub fn ui_load_dialog(&mut self, ctx: &egui::Context) -> Option<ObjectUiAction> {
         let Some(mut dialog) = self.object_load_dialog.clone() else {
             return None;
         };
@@ -1056,7 +1056,7 @@ impl ObjectsLayer {
                 }
             };
             if let Some(options) = loader_options {
-                source_action = Some(ObjectSourceUiAction::Load {
+                source_action = Some(ObjectUiAction::Load {
                     path: dialog.path.clone(),
                     options: Some(options),
                 });

@@ -1,5 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
 use eframe::egui;
 use ndarray::Array2;
 
@@ -50,6 +53,7 @@ pub fn extract_threshold_region_mask(
     }
 }
 
+#[cfg(test)]
 pub fn threshold_region_mask_to_polygons(mask: &ThresholdRegionMask) -> Vec<Vec<egui::Pos2>> {
     if mask.width == 0 || mask.height == 0 || mask.included.is_empty() {
         return Vec::new();
@@ -117,9 +121,12 @@ fn component_pixels(
     pixels
 }
 
+#[cfg(test)]
 type GridPoint = (i32, i32);
+#[cfg(test)]
 type GridEdge = (GridPoint, GridPoint);
 
+#[cfg(test)]
 fn component_to_polygons(width: usize, pixels: &[usize]) -> Vec<Vec<egui::Pos2>> {
     let pixel_set = pixels.iter().copied().collect::<HashSet<_>>();
     let mut edges = HashSet::<GridEdge>::new();
@@ -186,6 +193,7 @@ fn component_to_polygons(width: usize, pixels: &[usize]) -> Vec<Vec<egui::Pos2>>
     polygons
 }
 
+#[cfg(test)]
 fn insert_boundary_edge(
     edges: &mut HashSet<GridEdge>,
     outgoing: &mut HashMap<GridPoint, Vec<GridPoint>>,
@@ -197,6 +205,7 @@ fn insert_boundary_edge(
     }
 }
 
+#[cfg(test)]
 fn choose_next_boundary_edge(
     previous: GridPoint,
     cursor: GridPoint,
@@ -215,6 +224,7 @@ fn choose_next_boundary_edge(
         })
 }
 
+#[cfg(test)]
 fn edge_direction(from: GridPoint, to: GridPoint) -> Option<u8> {
     match (to.0 - from.0, to.1 - from.1) {
         (1, 0) => Some(0),
@@ -225,6 +235,7 @@ fn edge_direction(from: GridPoint, to: GridPoint) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
 fn turn_priority(incoming_dir: u8, outgoing_dir: u8) -> u8 {
     match (outgoing_dir + 4 - incoming_dir) % 4 {
         3 => 0, // left turn: separates contours that touch at a single grid vertex.
@@ -234,6 +245,7 @@ fn turn_priority(incoming_dir: u8, outgoing_dir: u8) -> u8 {
     }
 }
 
+#[cfg(test)]
 fn simplify_collinear_vertices(vertices: &[egui::Pos2]) -> Vec<egui::Pos2> {
     if vertices.len() < 3 {
         return vertices.to_vec();

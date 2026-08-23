@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::fs;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +12,7 @@ use lyon_path::math::point as lyon_point;
 use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
 use ndarray::Array2;
 use rfd::FileDialog;
+#[cfg(test)]
 use zarrs::array::{Array, ArraySubset};
 
 use crate::annotations::{
@@ -33,6 +33,7 @@ use crate::camera::Camera;
 use crate::custom::cell_thresholds::CellThresholdsPanel;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
 use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
+#[cfg(test)]
 use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
 use crate::data::project_config::{
@@ -42,16 +43,12 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
-use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
-use crate::geometry::threshold_regions::{
-    ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
-};
+use crate::geometry::threshold_regions::{ThresholdRegionMask, extract_threshold_region_mask};
 use crate::imaging::channel_max::{
     ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader,
 };
 use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
 use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
-use crate::imaging::plane_selection::{image_subset_ranges, plane_selection_for_z};
 use crate::imaging::tiling::{
     TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
 };
@@ -63,7 +60,6 @@ use crate::imaging::view_plane::{
     slice_extent_level0, supported_modes,
 };
 use crate::masks::resolve_masks_geojson_path_and_downsample;
-use crate::masks::save_mask_layers_geojson;
 use crate::masks::{MaskDisplayMode, MaskLayer, MaskRasterDisplayCache};
 use crate::objects::GeoJsonSegmentationLayer;
 #[cfg(test)]
@@ -187,7 +183,6 @@ where
 const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
 const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
-const MAX_UNDO_ACTIONS: usize = 64;
 const HISTOGRAM_NAVIGATION_DEBOUNCE: Duration = Duration::from_millis(300);
 const HISTOGRAM_REQUEST_THROTTLE: Duration = Duration::from_millis(200);
 
@@ -522,31 +517,9 @@ struct MaskDrawDebugStats {
 }
 
 #[derive(Debug, Clone)]
-struct MaskUndoSnapshot {
-    layers: Vec<MaskLayer>,
-    next_layer_id: u64,
-    active_layer: LayerId,
-    selection: Option<MaskPolygonSelection>,
-    selected_vertex: Option<usize>,
-    drawing_layer: Option<u64>,
-    drawing_polygon: Vec<egui::Pos2>,
-}
-
-#[derive(Debug, Clone)]
 struct LayerOffsetEntry {
     layer: LayerId,
     offset_world: egui::Vec2,
-}
-
-#[derive(Debug, Clone)]
-struct LayerOffsetUndoSnapshot {
-    offsets: Vec<LayerOffsetEntry>,
-}
-
-#[derive(Debug, Clone)]
-enum UndoAction {
-    Mask(MaskUndoSnapshot),
-    LayerOffsets(LayerOffsetUndoSnapshot),
 }
 
 fn distance_to_screen_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
@@ -634,26 +607,9 @@ impl ThresholdRegionScope {
             Self::EntireImage => "entire image",
         }
     }
-
-    fn layer_label(self) -> &'static str {
-        match self {
-            Self::VisibleRegion => "visible",
-            Self::EntireImage => "full",
-        }
-    }
 }
 
 const THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS: u64 = 10_000_000;
-
-#[derive(Debug, Clone, Copy)]
-struct ThresholdRegionExtent {
-    scope: ThresholdRegionScope,
-    level_index: usize,
-    x0: u64,
-    y0: u64,
-    x1: u64,
-    y1: u64,
-}
 
 fn threshold_level_size(
     level: &crate::data::ome::LevelInfo,
@@ -1979,8 +1935,6 @@ pub struct OmeZarrViewerApp {
     annotation_layers: Vec<AnnotationPointsLayer>,
     next_annotation_layer_id: u64,
     mask_layers: Vec<MaskLayer>,
-    next_mask_layer_id: u64,
-    mask_layers_project_dirty: bool,
     tool_mode: ToolMode,
     drawing_mask_layer: Option<u64>,
     drawing_mask_polygon: Vec<egui::Pos2>,
@@ -1988,7 +1942,6 @@ pub struct OmeZarrViewerApp {
     selected_mask_vertex: Option<usize>,
     dragging_mask_vertex: Option<MaskVertexDrag>,
     moving_mask_polygon: Option<MaskPolygonMoveState>,
-    undo_stack: Vec<UndoAction>,
     selection_rect_start_world: Option<egui::Pos2>,
     selection_rect_current_world: Option<egui::Pos2>,
     selection_lasso_world: Vec<egui::Pos2>,
@@ -2005,8 +1958,6 @@ pub struct OmeZarrViewerApp {
     threshold_preview_gl: Option<ThresholdPreviewGlRenderer>,
     tiles_gl: Option<TilesGl>,
     labels_gl: Option<LabelsGl>,
-    threshold_region_preview_generation: u64,
-
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
     remote_http_url: String,
