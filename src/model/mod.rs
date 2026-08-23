@@ -23,9 +23,9 @@ pub(crate) use analysis::AnalysisModel;
 pub(crate) use annotations::{AnnotationLoadResult, AnnotationLoadSpec, AnnotationModel};
 pub use annotations::{ControlAnnotationLayerProjection, ControlAnnotationResource};
 pub(crate) use app::{
-    AnalysisResourceSpec, DeepLinkApplyGuard, DeepLinkCurrentResources, MeasurementSpec,
-    MemoryPinSpec, ObjectTarget, ProjectViewApplySpec, ThresholdPreviewApplySpec,
-    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec,
+    AnalysisResourceSpec, AutoContrastChannelResult, AutoContrastSpec, DeepLinkApplyGuard,
+    DeepLinkCurrentResources, MeasurementSpec, MemoryPinSpec, ObjectTarget, ProjectViewApplySpec,
+    ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec,
 };
 pub use app::{
     AppModel, ChannelIntensitySpec, ControlSecondaryObjectProjection, ModelDispatch, ModelMode,

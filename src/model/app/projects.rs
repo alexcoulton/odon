@@ -137,7 +137,13 @@ impl AppModel {
         dataset: &OmeZarrDataset,
         params: &Value,
     ) -> Result<ChannelIntensitySpec, ControlError> {
-        let viewport = &self.dataset()?.workspace.active().state;
+        let viewport_id = self.channel_compute_viewport_id(params)?;
+        let viewport = &self
+            .dataset()?
+            .workspace
+            .get(&viewport_id)
+            .ok_or_else(|| not_found(&viewport_id))?
+            .state;
         let channel_index = if params.as_object().is_some_and(|object| !object.is_empty())
             && channel_selector_from_params(params).is_ok()
         {
@@ -187,6 +193,31 @@ impl AppModel {
         if vertical >= level.shape.len() || horizontal >= level.shape.len() {
             return Err(invalid("display axes are outside image shape"));
         }
+        let height = level.shape[vertical];
+        let width = level.shape[horizontal];
+        let y0 = params
+            .get("y0")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(height);
+        let y1 = params
+            .get("y1")
+            .and_then(Value::as_u64)
+            .unwrap_or(height)
+            .min(height);
+        let x0 = params
+            .get("x0")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(width);
+        let x1 = params
+            .get("x1")
+            .and_then(Value::as_u64)
+            .unwrap_or(width)
+            .min(width);
+        if y1 <= y0 || x1 <= x0 {
+            return Err(invalid("channel intensity bounds must have positive area"));
+        }
         let slice_level0 = current_plane_slice(viewport);
         let mapped_slice = slice_dimension
             .and_then(|dimension| map_level0_axis_index(level0, level, dimension, slice_level0));
@@ -199,8 +230,10 @@ impl AppModel {
             } else if Some(dimension) == slice_dimension {
                 let selected = mapped_slice.unwrap_or(0).min(length.saturating_sub(1));
                 ranges.push(selected..selected.saturating_add(1));
-            } else if dimension == vertical || dimension == horizontal {
-                ranges.push(0..length);
+            } else if dimension == vertical {
+                ranges.push(y0..y1);
+            } else if dimension == horizontal {
+                ranges.push(x0..x1);
             } else {
                 ranges.push(0..length.min(1));
             }
@@ -213,6 +246,15 @@ impl AppModel {
             zarr_path: format!("/{}", level.path.trim_start_matches('/')),
             dtype: level.dtype.clone(),
             ranges,
+            bins: params
+                .get("bins")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .map(|value| value.clamp(8, 4096)),
+            abs_max: dataset.abs_max.max(1.0),
+            client_request_id: params.get("request_id").and_then(Value::as_u64),
+            source_channel: channel.index,
+            region: [y0, y1, x0, x1],
         })
     }
 

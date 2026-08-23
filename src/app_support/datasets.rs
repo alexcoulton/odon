@@ -2,7 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use odon::data::document::{
-    AlternateDatasetBackend, AlternateDocumentResource, DatasetElementInspection,
+    AlternateDatasetBackend, AlternateDocumentResource, AlternateIntensityData,
+    AlternateIntensityReader, AlternateIntensityRequest, DatasetElementInspection,
     DatasetElementTransform, DatasetInspection, DatasetInspectionKind, DatasetInspectionMetadata,
     DatasetInspector, DocumentDescriptor, DocumentKind, DocumentObjectLayerResource,
     OmeTiffChannelInspection, OmeTiffInspection, OpenedDocument, SpatialDataOpenIdentity,
@@ -40,6 +41,26 @@ pub(crate) struct PreparedSpatialDataDocument {
 pub(crate) enum PreparedXeniumImagery {
     OmeZarr,
     Tiff(Arc<TiffPyramid>),
+}
+
+impl AlternateIntensityReader for TiffPyramid {
+    fn read_channel_region(
+        &self,
+        request: &AlternateIntensityRequest,
+    ) -> anyhow::Result<AlternateIntensityData> {
+        let (values, width, height) = self.read_channel_region_u16(
+            request.level,
+            request.channel,
+            request.y0,
+            request.y1,
+            request.x0,
+            request.x1,
+        )?;
+        Ok(AlternateIntensityData {
+            values,
+            shape: vec![height, width],
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -94,7 +115,8 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
         let descriptor = DocumentDescriptor::from_alternate(&dataset, DocumentKind::Tiff);
         Ok(OpenedDocument {
             descriptor,
-            resource: AlternateDocumentResource::new(dataset, store, pyramid),
+            resource: AlternateDocumentResource::new(dataset, store, Arc::clone(&pyramid))
+                .with_intensity_reader(pyramid),
         })
     }
 
@@ -331,10 +353,20 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
             transcripts: prepared_transcripts,
             pixel_size_um: discovery.pixel_size_um,
         };
+        let intensity_reader = match &payload.imagery {
+            PreparedXeniumImagery::Tiff(pyramid) => {
+                Some(Arc::clone(pyramid) as Arc<dyn AlternateIntensityReader>)
+            }
+            PreparedXeniumImagery::OmeZarr => None,
+        };
+        let mut resource = AlternateDocumentResource::new(dataset, store, Arc::new(payload));
+        if let Some(reader) = intensity_reader {
+            resource = resource.with_intensity_reader(reader);
+        }
         Ok((
             OpenedDocument {
                 descriptor,
-                resource: AlternateDocumentResource::new(dataset, store, Arc::new(payload)),
+                resource,
             },
             identity,
         ))

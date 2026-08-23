@@ -89,6 +89,30 @@ pub struct AlternateDocumentResource {
     pub store: Arc<dyn ReadableStorageTraits>,
     payload: Arc<dyn Any + Send + Sync>,
     object_layers: Arc<Vec<DocumentObjectLayerResource>>,
+    intensity_reader: Option<Arc<dyn AlternateIntensityReader>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlternateIntensityRequest {
+    pub level: usize,
+    pub channel: usize,
+    pub y0: u64,
+    pub y1: u64,
+    pub x0: u64,
+    pub x1: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlternateIntensityData {
+    pub values: Vec<u16>,
+    pub shape: Vec<usize>,
+}
+
+pub trait AlternateIntensityReader: Send + Sync {
+    fn read_channel_region(
+        &self,
+        request: &AlternateIntensityRequest,
+    ) -> anyhow::Result<AlternateIntensityData>;
 }
 
 /// An immutable object layer prepared alongside an alternate document.
@@ -120,12 +144,22 @@ impl AlternateDocumentResource {
             store,
             payload,
             object_layers: Arc::new(Vec::new()),
+            intensity_reader: None,
         }
     }
 
     pub fn with_object_layers(mut self, layers: Vec<DocumentObjectLayerResource>) -> Self {
         self.object_layers = Arc::new(layers);
         self
+    }
+
+    pub fn with_intensity_reader(mut self, reader: Arc<dyn AlternateIntensityReader>) -> Self {
+        self.intensity_reader = Some(reader);
+        self
+    }
+
+    pub fn intensity_reader(&self) -> Option<&Arc<dyn AlternateIntensityReader>> {
+        self.intensity_reader.as_ref()
     }
 
     pub fn object_layers(&self) -> &[DocumentObjectLayerResource] {

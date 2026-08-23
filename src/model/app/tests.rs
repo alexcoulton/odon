@@ -6,6 +6,77 @@ fn fixture() -> PathBuf {
 }
 
 #[test]
+fn late_auto_contrast_does_not_replace_a_newer_manual_window() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let viewport_id = model.dataset().unwrap().workspace.active_id().clone();
+    let spec = model
+        .prepare_auto_contrast(
+            &dataset,
+            &json!({"viewport_id":viewport_id.as_str(),"channels":[0]}),
+        )
+        .unwrap();
+    assert!(model.mark_auto_contrast_started(&spec));
+    model
+        .set_channel_contrast(&json!({
+            "viewport_id":viewport_id.as_str(),
+            "channel":0,
+            "min":1000.0,
+            "max":2000.0,
+        }))
+        .unwrap();
+    let result = model
+        .install_auto_contrast(
+            &spec,
+            &[AutoContrastChannelResult {
+                channel_index: 0,
+                channel_name: spec.channels[0].intensity.channel_name.clone(),
+                min: 0,
+                max: 500,
+                sample_count: 10,
+            }],
+        )
+        .unwrap();
+    assert!(result["result"]["applied"].as_array().unwrap().is_empty());
+    assert_eq!(
+        result["result"]["skipped"][0]["reason"],
+        "contrast_changed_after_request"
+    );
+    let contrast = model
+        .get_channel_contrast_global(&json!({"channel":0}))
+        .unwrap();
+    assert_eq!(contrast["contrast"]["min"], 1000.0);
+    assert_eq!(contrast["contrast"]["max"], 2000.0);
+}
+
+#[test]
+fn stale_auto_contrast_cannot_replace_a_newer_document_generation() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.bootstrap_dataset(&dataset).unwrap();
+    let spec = model
+        .prepare_auto_contrast(&dataset, &json!({"channels":[0]}))
+        .unwrap();
+    assert!(model.mark_auto_contrast_started(&spec));
+    model.bootstrap_dataset(&dataset).unwrap();
+    assert!(
+        model
+            .install_auto_contrast(
+                &spec,
+                &[AutoContrastChannelResult {
+                    channel_index: 0,
+                    channel_name: spec.channels[0].intensity.channel_name.clone(),
+                    min: 0,
+                    max: 500,
+                    sample_count: 10,
+                }],
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn comparison_commands_advance_without_a_renderer() {
     let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
     let mut model = AppModel::project();

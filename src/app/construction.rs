@@ -5,7 +5,6 @@ impl OmeZarrViewerApp {
         cc: &eframe::CreationContext<'_>,
         dataset: OmeZarrDataset,
         store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
-        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         apply_napari_like_dark(&cc.egui_ctx);
 
@@ -45,15 +44,6 @@ impl OmeZarrViewerApp {
             (None, None, None, None)
         };
 
-        let hist_loader =
-            spawn_histogram_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
-                .expect("failed to spawn histogram loader");
-
-        let chanmax_level = update::choose_default_max_level(&dataset);
-        let chanmax_loader =
-            spawn_channel_max_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
-                .expect("failed to spawn channel max loader");
-
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
         camera.zoom_screen_per_lvl0_px = 0.1;
@@ -74,12 +64,6 @@ impl OmeZarrViewerApp {
             seg_label_prompt_open,
             seg_label_prompt_always: false,
             seg_label_prompt_preference: LabelPromptSessionPreference::Ask,
-            hist_loader,
-            chanmax_loader,
-            chanmax_request_id: 1,
-            chanmax_level,
-            chanmax_pending: vec![true; dataset.channels.len()],
-            chanmax_snapshot: dataset.channels.iter().map(|c| c.window).collect(),
             cache: TileCache::new(256),
             pending: Vec::new(),
             hist: None,
@@ -90,6 +74,7 @@ impl OmeZarrViewerApp {
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
+            control_actor_channel_compute_generation: 0,
             camera,
             active_render_id: 1,
             previous_render_id: None,
@@ -116,7 +101,6 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
-            auto_contrast_settings,
             fast_object_rendering: true,
             channel_list_search: String::new(),
 
@@ -275,7 +259,6 @@ impl OmeZarrViewerApp {
 
         app.rebuild_layer_orders();
         app.capture_loaded_layer_offsets();
-        app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
@@ -293,7 +276,6 @@ impl OmeZarrViewerApp {
         gpu_available: bool,
         dataset: OmeZarrDataset,
         store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
-        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         apply_napari_like_dark(ctx);
 
@@ -333,15 +315,6 @@ impl OmeZarrViewerApp {
             (None, None, None, None)
         };
 
-        let hist_loader =
-            spawn_histogram_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
-                .expect("failed to spawn histogram loader");
-
-        let chanmax_level = update::choose_default_max_level(&dataset);
-        let chanmax_loader =
-            spawn_channel_max_loader(store.clone(), dataset.levels.clone(), dataset.dims.clone())
-                .expect("failed to spawn channel max loader");
-
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
         camera.zoom_screen_per_lvl0_px = 0.1;
@@ -362,12 +335,6 @@ impl OmeZarrViewerApp {
             seg_label_prompt_open,
             seg_label_prompt_always: false,
             seg_label_prompt_preference: LabelPromptSessionPreference::Ask,
-            hist_loader,
-            chanmax_loader,
-            chanmax_request_id: 1,
-            chanmax_level,
-            chanmax_pending: vec![true; dataset.channels.len()],
-            chanmax_snapshot: dataset.channels.iter().map(|c| c.window).collect(),
             cache: TileCache::new(256),
             pending: Vec::new(),
             hist: None,
@@ -378,6 +345,7 @@ impl OmeZarrViewerApp {
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
+            control_actor_channel_compute_generation: 0,
             camera,
             active_render_id: 1,
             previous_render_id: None,
@@ -404,7 +372,6 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
-            auto_contrast_settings,
             fast_object_rendering: true,
             channel_list_search: String::new(),
 
@@ -560,7 +527,6 @@ impl OmeZarrViewerApp {
 
         app.rebuild_layer_orders();
         app.capture_loaded_layer_offsets();
-        app.maybe_apply_auto_contrast_on_open();
         app.active_render_id = app.compute_render_id();
 
         // Initial fit (best effort).
@@ -579,7 +545,6 @@ impl OmeZarrViewerApp {
         ctx: &egui::Context,
         gpu_available: bool,
         resource: &crate::data::document::AlternateDocumentResource,
-        auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         apply_napari_like_dark(ctx);
         let assets = build_tiff_runtime_assets_from_resource(gpu_available, resource)?;
@@ -592,10 +557,6 @@ impl OmeZarrViewerApp {
             assets.loader,
             assets.raw_loader,
             tiles_gl,
-            assets.hist_loader,
-            assets.chanmax_loader,
-            assets.chanmax_level,
-            auto_contrast_settings,
         );
         app.tiff_plane_draft = assets
             .tiff_plane_state
@@ -610,7 +571,6 @@ impl OmeZarrViewerApp {
         gpu_available: bool,
         resource: &crate::data::document::AlternateDocumentResource,
         pyramid: Arc<crate::xenium::TiffPyramid>,
-        auto_contrast_settings: AutoContrastSettings,
     ) -> anyhow::Result<Self> {
         apply_napari_like_dark(ctx);
         let assets =
@@ -624,10 +584,6 @@ impl OmeZarrViewerApp {
             assets.loader,
             assets.raw_loader,
             tiles_gl,
-            assets.hist_loader,
-            assets.chanmax_loader,
-            assets.chanmax_level,
-            auto_contrast_settings,
         );
         app.tiff_plane_draft = assets
             .tiff_plane_state
@@ -645,10 +601,6 @@ impl OmeZarrViewerApp {
         loader: crate::render::tiles::TileLoaderHandle,
         raw_loader: Option<RawTileLoaderHandle>,
         tiles_gl: Option<TilesGl>,
-        hist_loader: HistogramLoaderHandle,
-        chanmax_loader: ChannelMaxLoaderHandle,
-        chanmax_level: usize,
-        auto_contrast_settings: AutoContrastSettings,
     ) -> Self {
         let mut camera = Camera::default();
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
@@ -682,12 +634,6 @@ impl OmeZarrViewerApp {
             seg_label_prompt_open,
             seg_label_prompt_always: false,
             seg_label_prompt_preference: LabelPromptSessionPreference::Ask,
-            hist_loader,
-            chanmax_loader,
-            chanmax_request_id: 1,
-            chanmax_level,
-            chanmax_pending: vec![false; dataset.channels.len()],
-            chanmax_snapshot: dataset.channels.iter().map(|c| c.window).collect(),
             cache: TileCache::new(256),
             pending: Vec::new(),
             hist: None,
@@ -698,6 +644,7 @@ impl OmeZarrViewerApp {
             hist_last_sent: Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(Instant::now),
+            control_actor_channel_compute_generation: 0,
             camera,
             active_render_id: 1,
             previous_render_id: None,
@@ -724,7 +671,6 @@ impl OmeZarrViewerApp {
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             channel_window_overrides: HashMap::new(),
-            auto_contrast_settings,
             fast_object_rendering: true,
             channel_list_search: String::new(),
             active_layer: if dataset.channels.is_empty() {

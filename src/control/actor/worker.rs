@@ -288,6 +288,7 @@ pub(super) fn spawn_resource_workers(
                         }
                         LoadJob::ChannelIntensity {
                             generation,
+                            operation_generation,
                             request,
                             document,
                             spec,
@@ -296,6 +297,24 @@ pub(super) fn spawn_resource_workers(
                             if completions
                                 .send(LoadCompletion::ChannelIntensity {
                                     generation,
+                                    operation_generation,
+                                    request,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        LoadJob::AutoContrast {
+                            spec,
+                            request,
+                            document,
+                        } => {
+                            let result = read_auto_contrast(&document, &spec);
+                            if completions
+                                .send(LoadCompletion::AutoContrast {
+                                    spec,
                                     request,
                                     result,
                                 })

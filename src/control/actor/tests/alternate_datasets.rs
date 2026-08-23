@@ -1,11 +1,51 @@
 use super::*;
 use crate::data::document::{
-    AlternateDocumentResource, DocumentDescriptor, DocumentKind, DocumentObjectLayerResource,
+    AlternateDocumentResource, AlternateIntensityData, AlternateIntensityReader,
+    AlternateIntensityRequest, DocumentDescriptor, DocumentKind, DocumentObjectLayerResource,
     OpenedDocument, SpatialDataOpenIdentity, SpatialDataOpenOptions, XeniumOpenIdentity,
     XeniumOpenOptions,
 };
 
 struct FixtureTiffBackend;
+
+struct FixtureIntensityReader {
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AlternateIntensityReader for FixtureIntensityReader {
+    fn read_channel_region(
+        &self,
+        _request: &AlternateIntensityRequest,
+    ) -> anyhow::Result<AlternateIntensityData> {
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(AlternateIntensityData {
+            values: vec![3, 7, 11],
+            shape: vec![1, 3],
+        })
+    }
+}
+
+struct IntensityTiffBackend {
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AlternateDatasetBackend for IntensityTiffBackend {
+    fn open_tiff(
+        &self,
+        path: &std::path::Path,
+        _z: usize,
+        _t: usize,
+    ) -> anyhow::Result<OpenedDocument<AlternateDocumentResource>> {
+        let mut opened = fixture_document(path, DocumentKind::Tiff)?;
+        opened.resource = opened
+            .resource
+            .with_intensity_reader(Arc::new(FixtureIntensityReader {
+                reads: Arc::clone(&self.reads),
+            }));
+        Ok(opened)
+    }
+}
 
 fn fixture_document(
     path: &std::path::Path,
@@ -174,6 +214,49 @@ fn tiff_open_reaches_resource_readiness_without_a_ui_frame() {
         .expect("state succeeds");
     assert_eq!(state["mode"], "single");
     assert_eq!(state["loading"]["resources_ready"], true);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn alternate_intensity_reader_runs_on_actor_worker_without_a_ui_frame() {
+    let path = temporary_tiff_path("intensity-reader");
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let channels = spawn_test_actor_with_alternate(Arc::new(IntensityTiffBackend {
+        reads: Arc::clone(&reads),
+    }));
+    let mut settings = AppSettings::default();
+    settings.auto_contrast.enabled_on_open = false;
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapSettings {
+            settings,
+            path: None,
+            recent_project_exists: Vec::new(),
+        })
+        .unwrap();
+
+    let (open, open_rx) = request("datasets.open_tiff", json!({"path":path}));
+    channels.request_tx.send(open).unwrap();
+    open_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("TIFF open does not need a frame")
+        .expect("TIFF fixture opens");
+
+    let (stats, stats_rx) = request(
+        "viewer.channels.intensity_stats",
+        json!({"channel":0,"level":0,"bins":8,"request_id":44}),
+    );
+    channels.request_tx.send(stats).unwrap();
+    let stats = stats_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("alternate intensity read does not need a frame")
+        .expect("alternate intensity read succeeds");
+    assert_eq!(stats["request_id"], 44);
+    assert_eq!(stats["n"], 3);
+    assert_eq!(stats["min"], 3);
+    assert_eq!(stats["max"], 11);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1);
 
     let _ = std::fs::remove_file(path);
 }

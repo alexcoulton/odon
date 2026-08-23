@@ -1981,6 +1981,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "viewer.channels.auto_contrast",
+            "Compute and apply automatic contrast to one or more channels.",
+            "viewer.channels.write",
+            true,
+            true,
+            Some("viewer.channels.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
             "viewer.channels.set_order",
             "Set channel ordering.",
             "viewer.channels.write",

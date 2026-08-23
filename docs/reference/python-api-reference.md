@@ -249,6 +249,7 @@ Access: `app.channels` or `app.viewer.channels`. Channel visibility, presentatio
 | `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. |
 | `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; event: viewer.channels.changed) |
 | `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; event: viewer.channels.changed) |
 
 ### Planes
 
@@ -1028,6 +1029,7 @@ Access: `app.channels`. Async channel resource.
 | `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. |
 | `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; event: viewer.channels.changed) |
 | `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; event: viewer.channels.changed) |
 
 ### Async planes
 

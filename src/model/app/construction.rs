@@ -34,6 +34,7 @@ impl AppModel {
             object_selection_filter_operation_generation: 0,
             pending_object_selection_filters: HashMap::new(),
             mask_io_operation_generation: 0,
+            channel_compute: ChannelComputeModel::default(),
             settings: AppSettings::default(),
             recent_project_exists: HashMap::new(),
             settings_path: None,

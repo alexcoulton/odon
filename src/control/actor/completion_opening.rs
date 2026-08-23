@@ -917,6 +917,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         }
         LoadCompletion::ChannelIntensity {
             generation,
+            operation_generation,
             request,
             result,
         } => {
@@ -926,6 +927,21 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 .and_then(|task_id| request.task_registry.get(task_id).ok())
                 .is_some_and(|task| task.state == TaskState::Cancelled);
             if cancelled {
+                let changed = model.fail_channel_intensity_operation(
+                    generation,
+                    operation_generation,
+                    "channel intensity statistics were cancelled",
+                );
+                if changed {
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                }
                 diagnostics.record_reply_time(request.command.queue_age());
                 let _ = request.reply.send(Err(ControlError::new(
                     ControlErrorKind::Cancelled,
@@ -945,8 +961,38 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 return;
             }
             match result {
-                Ok(value) => finish_request(request, value, diagnostics),
+                Ok(value) => {
+                    if model.finish_channel_intensity_operation(
+                        generation,
+                        operation_generation,
+                        &value,
+                    ) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                    }
+                    finish_request(request, value, diagnostics)
+                }
                 Err(error) => {
+                    if model.fail_channel_intensity_operation(
+                        generation,
+                        operation_generation,
+                        format!("failed to read channel intensity statistics: {error}"),
+                    ) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                    }
                     diagnostics
                         .rejected_requests
                         .fetch_add(1, Ordering::Relaxed);
@@ -955,6 +1001,102 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         ControlErrorKind::Application,
                         format!("failed to read channel intensity statistics: {error}"),
                     )));
+                }
+            }
+        }
+        LoadCompletion::AutoContrast {
+            spec,
+            request,
+            result,
+        } => {
+            let cancelled = request.as_ref().is_some_and(request_is_cancelled);
+            if cancelled {
+                if model.fail_auto_contrast(&spec, "automatic contrast was cancelled") {
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                }
+                if let Some(request) = request {
+                    reject_cancelled_request(request, diagnostics, "automatic contrast");
+                }
+                return;
+            }
+            if spec.document_generation != model.document_generation() {
+                diagnostics
+                    .stale_worker_completions
+                    .fetch_add(1, Ordering::Relaxed);
+                if let Some(request) = request {
+                    reject_actor_request(
+                        request,
+                        diagnostics,
+                        ControlError::new(
+                            ControlErrorKind::Conflict,
+                            "automatic contrast was superseded by a newer document",
+                        ),
+                    );
+                }
+                return;
+            }
+            match result {
+                Ok(results) => {
+                    let response = model.install_auto_contrast(&spec, &results);
+                    if response.is_some() {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if let Some(request) = request {
+                        match response {
+                            Some(response) => finish_request(request, response, diagnostics),
+                            None => reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "automatic contrast was superseded by a newer operation",
+                                ),
+                            ),
+                        }
+                    }
+                }
+                Err(error) => {
+                    if model.fail_auto_contrast(
+                        &spec,
+                        format!("failed to compute automatic contrast: {error}"),
+                    ) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                    }
+                    if let Some(request) = request {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Application,
+                                format!("failed to compute automatic contrast: {error}"),
+                            ),
+                        );
+                    }
                 }
             }
         }

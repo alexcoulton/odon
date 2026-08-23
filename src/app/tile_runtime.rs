@@ -20,7 +20,6 @@ impl OmeZarrViewerApp {
             && (self.hist_dirty
                 || self.hist_request_pending
                 || self.hist_navigation_dirty_since.is_some()))
-            || self.chanmax_pending.iter().any(|pending| *pending)
             || !self.screenshot_in_flight.is_empty()
     }
 
@@ -367,16 +366,6 @@ impl OmeZarrViewerApp {
         hasher.finish()
     }
 
-    pub(super) fn drain_histogram(&mut self) {
-        while let Ok(msg) = self.hist_loader.rx.try_recv() {
-            if msg.request_id != self.hist_request_id {
-                continue;
-            }
-            self.hist_request_pending = false;
-            self.hist = Some(msg);
-        }
-    }
-
     pub(super) fn maybe_request_histogram(&mut self, ctx: &egui::Context) {
         if !self.hist_dirty {
             return;
@@ -462,19 +451,27 @@ impl OmeZarrViewerApp {
         }
 
         self.hist_request_id = self.hist_request_id.wrapping_add(1);
-        let req = crate::imaging::histogram::HistogramRequest {
-            request_id: self.hist_request_id,
-            view: self.active_view_selection(),
-            level,
-            channel: self.selected_channel as u64,
-            y0,
-            y1,
-            x0,
-            x1,
-            bins: 256,
-            abs_max: self.dataset.abs_max.max(1.0),
+        let Some(viewport_id) = self
+            .viewport_workspace
+            .as_ref()
+            .map(|workspace| workspace.active_id().to_string())
+        else {
+            return;
         };
-        let _ = self.hist_loader.tx.send(req);
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.channels.intensity_stats",
+            params: serde_json::json!({
+                "request_id":self.hist_request_id,
+                "viewport_id":viewport_id,
+                "channel":self.selected_channel,
+                "level":level,
+                "y0":y0,
+                "y1":y1,
+                "x0":x0,
+                "x1":x1,
+                "bins":256,
+            }),
+        });
         self.hist_last_sent = Instant::now();
         self.hist_request_pending = true;
         self.hist_dirty = false;

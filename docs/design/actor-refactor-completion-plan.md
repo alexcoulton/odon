@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 4 complete; Milestone 5 project/resource ownership next
+Status: in progress — Milestones 0 through 4 complete; Milestone 5 has four ownership rows remaining
 
 Date: 2026-08-23
 
@@ -45,9 +45,30 @@ The remaining gap is architectural rather than method-count based. `OmeZarrViewe
 and renderer adapters still contain compatibility mirrors, snapshot assemblers, test-only command
 emulators, and mixed renderer/transient state that must be narrowed or deleted.
 
-The stabilized migration base, executable ownership ledger, and renderer-emulator retirement are
-now separately checkpointed milestones. The next work is removal of viewport and presentation
-mirrors, starting with workspace topology and navigation state.
+The stabilized migration base, executable ownership ledger, renderer-emulator retirement,
+viewport/presentation migration, and object/mask/annotation migration are separately checkpointed
+milestones. Milestone 5 has already removed renderer-owned settings persistence, redundant project
+preload fields, renderer-local remote dataset I/O, renderer-side label discovery and loading, local
+TIFF-plane and tile-policy mutation, threshold projection/draft overlap, and renderer-owned image
+histogram and automatic-contrast workers.
+
+### Current measured checkpoint
+
+The executable ledger currently covers 288 concrete host fields. It has 246 retained fields and 42
+fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
+command emulators.
+
+| Milestone | Open rows | Open fields | Remaining ownership domains |
+| --- | ---: | ---: | --- |
+| 5 | 4 | 17 | single-view memory, project UI, external spatial adapters, mosaic memory |
+| 6 | 9 | 12 | host requests, native command outboxes, root mode/deep-link/projection relays, mosaic shell state |
+| 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
+| **Total** | **15** | **42** | |
+
+`Retain` means the field has a valid final role as a renderer resource/observation, transient UI
+draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
+state. A row closes only when its fields have been split into those precise roles and the ledger and
+source guards describe the resulting boundary.
 
 ## Completion gates
 
@@ -322,6 +343,11 @@ Exit criteria:
 
 Purpose: finish the less frame-sensitive but persistence-critical ownership domains.
 
+Status: in progress. The histogram/automatic-contrast slice is implemented in the current
+checkpoint. Earlier slices checkpointed settings and mosaic project
+projections, project object preload, remote datasets, labels, TIFF planes/tile policy, and threshold
+analysis. Four executable-ledger rows remain, containing 17 fields.
+
 Work:
 
 - narrow project, ROI, saved-view, recent-project, settings, and lifecycle UI models to drafts and
@@ -342,6 +368,98 @@ Exit criteria:
 - project save/load and settings restart tests reproduce actor state;
 - all I/O and compute continues without frames on bounded workers; and
 - UI structs retain only drafts, status presentation, shared handles, and renderer resources.
+
+### Remaining Milestone 5 slices
+
+Complete these slices in order. Each slice is a separate reviewable commit and closes its ledger
+row before the next begins.
+
+#### 5A — image histogram and automatic contrast — complete
+
+Closed row: `viewer.histogram_compute` (12 fields removed or narrowed into the retained
+`viewer.histogram_plot_cache` renderer observation row).
+
+- replace the renderer-owned histogram and channel-maximum worker handles with bounded actor work;
+- tag every request and result with document, channel, level, region, and operation generations;
+- publish immutable intensity/histogram results for plotting without making the plot cache
+  authoritative;
+- apply automatic contrast in the actor transaction, including automatic contrast requested during
+  document opening, so it does not require renderer construction or a future frame;
+- make native histogram refresh and automatic-contrast controls submit the same typed command used
+  by Python and MCP;
+- delete frame-polled histogram/channel-max queues and their local filesystem workers; and
+- prove with a no-frame test that a document open followed by automatic contrast reaches its final
+  model and projection state while the renderer is paused.
+
+Commit gate: no `hist_loader`, `chanmax_loader`, `spawn_histogram_loader`, or
+`spawn_channel_max_loader` remains in the application host; stale intensity results cannot change a
+newer document/channel; actor, renderer-projection, and source-organization tests pass.
+
+Checkpoint evidence: on 2026-08-23 the no-frame histogram, explicit automatic-contrast,
+on-open automatic-contrast, stale manual-window, stale document-generation, alternate-reader, and
+source-organization tests passed. The cumulative Rust library (180), binary (202 passed, 4 ignored
+extended fixtures), data-contract (10), and Python SDK (96) suites also passed, as did formatting,
+all-target compilation, generated-reference, JSON, application-surface, registry, and ownership
+ledger checks.
+
+#### 5B — memory and pinned-level operations
+
+Open rows: `viewer.memory` (7 fields) and `mosaic.memory` (3 fields).
+
+- make pin/unpin/load policy and retained-task status actor-authoritative in both modes;
+- retain selected-channel and confirmation-dialog values only as transient UI drafts;
+- retain OS memory sampling only as a renderer observation unless a public query requires an actor
+  snapshot, and name it accordingly;
+- consume pinned levels and tile-policy preferences only from actor projections/shared resources;
+- delete readiness-dependent local pin/load fallbacks; and
+- test cancellation, supersession, queue bounds, stale completion, and completion with no frames.
+
+Commit gate: no renderer code can start semantic memory loading directly; viewer and mosaic expose
+equivalent task state and policy behavior through the actor; both ledger rows are closed.
+
+#### 5C — project and legacy analysis UI
+
+Open row: `viewer.project_ui` (4 fields).
+
+- split `project_space` into an immutable actor projection plus renderer-only panel/draft state, or
+  remove the viewer copy where `RootApp` can provide the projection directly;
+- classify `project_cfg_seen` as a renderer generation observation rather than configuration state;
+- replace `roi_selector` semantic behavior with typed project/ROI commands while retaining only its
+  selection and validation drafts;
+- remove or narrow the legacy `cell_thresholds` panel so shared point data and threshold semantics
+  come from actor resources; and
+- retire production-unreachable project restore/auto-load helpers once characterization tests have
+  been moved to the actor model.
+
+Commit gate: project save/open/ROI workflows never reconstruct state from a viewer panel; persistence
+round trips use a known actor revision; the project UI row is closed.
+
+#### 5D — SpatialData and Xenium renderer adapters
+
+Open row: `viewer.external_spatial_layer_adapters` (3 fields).
+
+- audit all production construction, tick, retry, and load entry points for image, shape, point,
+  cell, and transcript adapters;
+- move any remaining metadata/data decoding and retry lifecycle to bounded actor workers;
+- cross the boundary using immutable generation-tagged resources and leave only GPU caches, spatial
+  indexes, hit testing, tables, and paint adapters in the renderer;
+- delete unreachable legacy adapter loaders instead of wrapping them in smaller modules; and
+- verify a superseded document or layer generation cannot install a late spatial result.
+
+Commit gate: renderer adapter `tick` methods perform presentation/resource consumption only and no
+filesystem/network/decoder work; no-frame SpatialData and Xenium resource tests pass; the final
+Milestone 5 row is closed.
+
+#### 5E — Milestone 5 cumulative gate
+
+- run formatting, all-target compilation, Rust library/bin/data-contract suites, Python SDK tests,
+  registry/application-surface audits, generated-reference checks, and the ownership-ledger guard;
+- add restart/persistence coverage for any durable state changed in 5A–5D;
+- update the ownership inventory counts and milestone narrative to the exact tested commit; and
+- record task-queue and projection-allocation regressions before declaring Milestone 5 complete.
+
+Milestone 6 may begin only when all four current Milestone 5 rows are closed and this cumulative
+gate passes.
 
 ## Milestone 6 — narrow the application shell and platform boundary
 
@@ -367,6 +485,44 @@ Exit criteria:
 - no semantic command is represented as a platform request; and
 - application source guards enforce the final boundary.
 
+### Milestone 6 execution slices
+
+#### 6A — classify and narrow host effects
+
+Open rows: `viewer.host_requests`, `mosaic.status_host`, and `root.deep_link_input`.
+
+- enumerate every remaining host request and classify it as a typed semantic command, transient
+  dialog action, or unavoidable platform effect;
+- move any semantic variant to the command registry and delete its renderer/root relay;
+- retain focus, close, quit, native file/folder dialogs, clipboard, URL receipt, and rendered-pixel
+  capture behind narrow effect types; and
+- make status values either actor task/projection state or explicitly local presentation status.
+
+#### 6B — remove shell projection and mode authority
+
+Open rows: `root.mode`, `root.deferred_projection`, and `mosaic.actor_projection_state`.
+
+- reduce root mode to renderer composition and resource attachment selected by the latest actor
+  projection;
+- replace deferred semantic projection assembly with latest-generation projection coalescing;
+- ensure switching single/project/mosaic presentation cannot create or overwrite actor state; and
+- retain only renderer-consumed generation observations in mosaic mode.
+
+#### 6C — narrow native command transport
+
+Open rows: `viewer.native_command_outbox`, `root.native_command_outbox`, and
+`mosaic.native_command_outbox`.
+
+- choose one bounded native command ingress owned by the application shell;
+- remove per-renderer relays where native controls can submit directly to that ingress;
+- preserve ordering and explicit backpressure without making `RootApp::update` responsible for
+  semantic execution; and
+- test equivalence of native, Python, MCP, menu, startup, and deep-link entry points.
+
+Commit gate for Milestone 6: all nine current rows are closed, source guards reject semantic host
+requests and renderer outboxes, and pausing `RootApp::update` cannot block any non-presentation
+method.
+
 ## Milestone 7 — close completion and presentation semantics
 
 Purpose: make Python waiting behavior precise for both background and pixel-dependent operations.
@@ -390,6 +546,33 @@ Exit criteria:
 - unrelated commands complete while that screenshot waits;
 - returning to Odon completes the generation-matched capture; and
 - Python sync and async tests cover these distinctions.
+
+### Milestone 7 execution slices
+
+#### 7A — one actor-owned presentation-task model
+
+Open rows: `viewer.screenshots` and `mosaic.screenshots` (13 fields total).
+
+- move screenshot settings, task identity, output lifecycle, cancellation, and error state into a
+  shared actor presentation-task model;
+- retain only the renderer capture adapter and a generation-specific in-flight acknowledgement at
+  the UI boundary;
+- use one bounded encoder/writer service for single and mosaic modes;
+- clean partial outputs on failure/cancellation and reject stale capture acknowledgements; and
+- publish `waiting_for_presentation` with the exact model revision and resource generations when no
+  eligible frame exists.
+
+#### 7B — public completion-contract audit
+
+- classify every registered method as immediate semantic, resource-ready, retained background task,
+  or presentation-dependent;
+- verify its response/task completion point matches that classification;
+- add table-driven sync/async Python tests for success, timeout, cancellation, and unrelated-command
+  responsiveness; and
+- regenerate protocol/Python documentation from the audited registry.
+
+Commit gate for Milestone 7: both screenshot rows are closed, the ledger has no open field, and the
+completion contract is generated, tested, and identical across Python and MCP transports.
 
 ## Milestone 8 — final verification and sign-off
 
@@ -460,18 +643,48 @@ advance this plan.
 
 From the present checkpoint, work proceeds in this order:
 
-1. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
-   settings, and application state behind immutable actor snapshots and bounded workers.
-2. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
-   projection consumption, renderer orchestration, and explicit platform effects only.
-3. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
-   completion point and proving cancellation, responsiveness, and generation-specific waiting.
-4. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
-   generated contracts and documentation, close the ownership ledger, and record final sign-off.
+1. **5A histogram/auto-contrast — complete:** image analysis and on-open contrast are actor-driven,
+   and the two local worker services are deleted.
+2. **5B memory — next:** close viewer and mosaic memory together so policy and task semantics cannot
+   diverge between modes.
+3. **5C project UI:** narrow the remaining project/ROI/legacy-analysis panels after their resource
+   dependencies are actor-owned.
+4. **5D external spatial adapters:** move the last decoder/load lifecycles behind shared resources;
+   then run the **5E cumulative gate** and checkpoint Milestone 5.
+5. **6A–6C application shell:** classify platform effects, remove shell semantic authority, and
+   consolidate native command ingress; then checkpoint Milestone 6.
+6. **7A presentation tasks:** unify screenshot state and generation-specific acknowledgement.
+7. **7B completion audit:** test and document every method's exact sync/async completion contract;
+   then checkpoint Milestone 7 with zero open ledger fields.
+8. **Milestone 8 automation:** run all Rust, Python, generated-contract, performance, allocation,
+   queue-bound, and frame-planning checks on the exact release candidate.
+9. **Milestone 8 native acceptance:** run and archive visible, covered, minimized, and separate-Space
+   evidence on macOS; run supported Windows/Linux covered/minimized checks or record reviewed
+   exclusions; restore the window and visually confirm the latest projection.
+10. Synchronize all architecture/status documents, record exact counts/build identifiers/results,
+    and make the final sign-off commit with no unexplained tracked or untracked output.
 
 No later step may be used to declare an earlier ownership gate complete. In particular, passing
 the no-frame API suite does not prove that renderer semantic mirrors have been removed, and a clean
 ownership audit does not replace real covered/minimized window evidence.
+
+### Definition of done for each implementation commit
+
+Every slice commit must:
+
+- remove or narrow the superseded path in the same change as its replacement;
+- update the executable ledger and add a structural guard where regression is mechanically
+  detectable;
+- include actor-model behavior tests, stale-generation tests for worker work, and renderer tests
+  only for projection/resource consumption or transient UI behavior;
+- pass formatting, all-target compilation, and the focused Rust tests for the touched domains;
+- leave unrelated user files and local acceptance artifacts untouched; and
+- state which ownership rows and field count were closed.
+
+At milestone boundaries, run the cumulative suites instead of relying on the focused commit checks.
+Do not use lower line count, a smaller `actor.rs`, or a smaller `app.rs` as completion evidence; the
+relevant evidence is ownership, frame independence, bounded work, completion semantics, and the
+recorded release matrix.
 
 ## Progress reporting
 

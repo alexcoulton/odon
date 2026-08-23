@@ -7,11 +7,7 @@ use helpers::*;
 fn fixture_app() -> OmeZarrViewerApp {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
     let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open OME-Zarr fixture");
-    let settings = AutoContrastSettings {
-        enabled_on_open: false,
-        ..AutoContrastSettings::default()
-    };
-    OmeZarrViewerApp::new_runtime(&egui::Context::default(), false, dataset, store, settings)
+    OmeZarrViewerApp::new_runtime(&egui::Context::default(), false, dataset, store)
 }
 
 fn fixture_actor_app() -> ActorAppFixture {
@@ -40,7 +36,6 @@ mod camera_fit;
 mod canvas_union;
 mod channel_controls;
 mod channel_groups;
-mod channel_intensity;
 mod comparison;
 mod comparison_workflow;
 mod deep_link_apply;

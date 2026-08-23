@@ -308,7 +308,6 @@ impl RootApp {
 
     fn configure_single_app(&self, app: &mut OmeZarrViewerApp) {
         app.set_label_prompt_preference(self.label_prompt_preference);
-        app.set_auto_contrast_settings(self.app_settings.auto_contrast);
         app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
 
@@ -319,7 +318,6 @@ impl RootApp {
     fn apply_app_settings_to_mode(&mut self) {
         match &mut self.mode {
             Mode::Single(app) => {
-                app.set_auto_contrast_settings(self.app_settings.auto_contrast);
                 app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
             }
             Mode::Mosaic { mosaic, .. } => {
@@ -502,6 +500,10 @@ impl RootApp {
                 log_warn!("could not realize actor tile-loading policy: {error}");
             }
             app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            app.apply_control_actor_channel_compute(
+                projection.channel_compute_generation,
+                &projection.channel_compute_state,
+            );
             if let Err(error) = app.apply_control_actor_threshold_preview(
                 ctx,
                 projection.threshold_preview_generation,
@@ -682,7 +684,6 @@ impl RootApp {
                         self.gpu_available,
                         document.dataset().clone(),
                         Arc::clone(document.store()),
-                        self.app_settings.auto_contrast,
                     ))
                 }
                 odon::data::document::DocumentResource::Alternate(resource)
@@ -693,7 +694,6 @@ impl RootApp {
                         ctx,
                         self.gpu_available,
                         resource,
-                        self.app_settings.auto_contrast,
                     )
                 }
                 odon::data::document::DocumentResource::Alternate(resource)
@@ -711,7 +711,6 @@ impl RootApp {
                             self.gpu_available,
                             resource.dataset.clone(),
                             Arc::clone(&resource.store),
-                            self.app_settings.auto_contrast,
                         );
                         app.attach_prepared_spatialdata_layers(
                             payload.root.clone(),
@@ -742,7 +741,6 @@ impl RootApp {
                                     self.gpu_available,
                                     resource.dataset.clone(),
                                     Arc::clone(&resource.store),
-                                    self.app_settings.auto_contrast,
                                 )
                             }
                             crate::app_support::datasets::PreparedXeniumImagery::Tiff(pyramid) => {
@@ -751,7 +749,6 @@ impl RootApp {
                                     self.gpu_available,
                                     resource,
                                     Arc::clone(pyramid),
-                                    self.app_settings.auto_contrast,
                                 )?
                             }
                         };
@@ -796,6 +793,10 @@ impl RootApp {
                 log_warn!("could not realize actor tile-loading policy: {error}");
             }
             app.apply_control_actor_pinned_levels(&projection.pinned_levels);
+            app.apply_control_actor_channel_compute(
+                projection.channel_compute_generation,
+                &projection.channel_compute_state,
+            );
             if let Err(error) = app.apply_control_actor_threshold_preview(
                 ctx,
                 projection.threshold_preview_generation,
@@ -1224,14 +1225,21 @@ impl RootApp {
                         .add_enabled(can_apply_now, egui::Button::new("Apply To Current Viewer"))
                         .clicked()
                     {
-                        if let Mode::Single(app) = &mut self.mode {
-                            app.set_auto_contrast_settings(self.settings_draft.auto_contrast);
-                            app.apply_auto_contrast_now();
-                            self.settings_status = format!(
-                                "Applied {} to the current viewer.",
-                                self.settings_draft.auto_contrast.method.label()
-                            );
-                        }
+                        let settings = self.settings_draft.auto_contrast;
+                        self.pending_native_control_intents
+                            .push_back(NativeControlIntent {
+                                method: "viewer.channels.auto_contrast",
+                                params: serde_json::json!({
+                                    "overwrite_manual":true,
+                                    "method":settings.method,
+                                    "lower_percentile":settings.lower_percentile,
+                                    "upper_percentile":settings.upper_percentile,
+                                }),
+                            });
+                        self.settings_status = format!(
+                            "Applying {} to the current viewer...",
+                            settings.method.label()
+                        );
                     }
                     settings_help_button(
                         ui,
@@ -1394,7 +1402,7 @@ impl RootApp {
     ) -> anyhow::Result<Self> {
         let (app_settings, mut settings_status) = Self::load_app_settings();
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
-        let mut app = OmeZarrViewerApp::new(cc, dataset, store, app_settings.auto_contrast);
+        let mut app = OmeZarrViewerApp::new(cc, dataset, store);
         app.set_fast_object_rendering(app_settings.fast_object_rendering);
         if let Some(path) = project_path.as_deref() {
             let mut ps = ProjectSpace::default();
@@ -1667,13 +1675,8 @@ impl RootApp {
 
         match OmeZarrDataset::open_local(&root) {
             Ok((dataset, store)) => {
-                let mut app = OmeZarrViewerApp::new_runtime(
-                    ctx,
-                    self.gpu_available,
-                    dataset,
-                    store,
-                    self.app_settings.auto_contrast,
-                );
+                let mut app =
+                    OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
                 self.configure_single_app(&mut app);
                 app.set_project_space_from_actor(project_space);
                 self.mode = Mode::Single(app);

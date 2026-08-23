@@ -86,6 +86,11 @@ fn opens_generated_grayscale_tiff_and_decodes_pixels() {
         decode_channel(&path, &pyramid, 0),
         pixels.iter().map(|&value| value as u16).collect::<Vec<_>>()
     );
+    let (region, width, height) = pyramid
+        .read_channel_region_u16(0, 0, 1, 3, 1, 4)
+        .expect("read actor intensity region");
+    assert_eq!((width, height), (3, 2));
+    assert_eq!(region, vec![9, 10, 11, 17, 18, 19]);
 }
 
 #[test]

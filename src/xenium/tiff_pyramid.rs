@@ -13,11 +13,6 @@ use tiff::decoder::{ChunkType, Decoder, DecodingResult};
 use tiff::tags::{IfdPointer, Tag};
 
 use crate::data::ome::{ChannelInfo, Dims, LevelInfo};
-use crate::imaging::channel_max::auto_contrast_window_from_histogram;
-use crate::imaging::channel_max::{ChannelMaxLoaderHandle, ChannelMaxRequest, ChannelMaxResponse};
-use crate::imaging::histogram::{
-    HistogramLoaderHandle, HistogramRequest, HistogramResponse, HistogramStats,
-};
 use crate::render::tiles::{
     CpuDecodedTileCache, DecodedTile, DecodedTileKey, RenderChannel, TileKey, TileLoaderHandle,
     TileRequest, TileResponse, TileWorkerResponse,
@@ -36,10 +31,7 @@ mod tests;
 use inspection::*;
 #[cfg(test)]
 use loaders::decode_tiff_channel_chunk;
-pub use loaders::{
-    spawn_tiff_channel_max_loader, spawn_tiff_histogram_loader, spawn_tiff_raw_tile_loader,
-    spawn_tiff_tile_loader,
-};
+pub use loaders::{spawn_tiff_raw_tile_loader, spawn_tiff_tile_loader};
 use metadata::*;
 
 // This file adapts TIFF and OME-TIFF pyramids into the viewer's shared tile/level

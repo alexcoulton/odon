@@ -69,9 +69,6 @@ impl OmeZarrViewerApp {
         if properties_hist_active && self.hist_navigation_dirty_since.is_some() {
             reasons.push("hist_nav_debounce");
         }
-        if self.chanmax_pending.iter().any(|pending| *pending) {
-            reasons.push("channel_max_pending");
-        }
         if !self.screenshot_in_flight.is_empty() {
             reasons.push("screenshot");
         }

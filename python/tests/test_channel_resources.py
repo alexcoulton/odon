@@ -10,21 +10,33 @@ from odon.resources import Channels
 class RecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.tasks = self
 
     def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
         recorded = (method, dict(params or {}))
         self.calls.append(recorded)
         return recorded
 
+    def start(
+        self, method: str, params: Mapping[str, Any] | None = None, **_: Any
+    ) -> Any:
+        return self.call(method, params)
+
 
 class AsyncRecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.tasks = self
 
     async def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
         recorded = (method, dict(params or {}))
         self.calls.append(recorded)
         return recorded
+
+    async def start(
+        self, method: str, params: Mapping[str, Any] | None = None, **_: Any
+    ) -> Any:
+        return await self.call(method, params)
 
 
 class ChannelResourceTests(unittest.TestCase):
@@ -68,6 +80,19 @@ class ChannelResourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             channels.set_presentation()
 
+        channels.auto_contrast(channels=["DAPI", 2], viewport_id="right")
+        self.assertEqual(
+            client.calls[-1],
+            (
+                "viewer.channels.auto_contrast",
+                {
+                    "overwrite_manual": True,
+                    "channels": ["DAPI", 2],
+                    "viewport_id": "right",
+                },
+            ),
+        )
+
 
 class AsyncChannelResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_channel_property_wrappers(self) -> None:
@@ -78,6 +103,7 @@ class AsyncChannelResourceTests(unittest.IsolatedAsyncioTestCase):
         await channels.set_note("DAPI", "nuclear", if_revision=4)
         await channels.set_transform("DAPI", scale=[2, 2])
         await channels.set_presentation(sort="name_asc")
+        await channels.auto_contrast(channels=[0], overwrite_manual=False)
 
         self.assertEqual(
             client.calls[0],
@@ -86,6 +112,13 @@ class AsyncChannelResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[1][1]["if_revision"], 4)
         self.assertEqual(client.calls[2][1]["scale"], [2.0, 2.0])
         self.assertEqual(client.calls[3][0], "viewer.channels.presentation.set")
+        self.assertEqual(
+            client.calls[4],
+            (
+                "viewer.channels.auto_contrast",
+                {"overwrite_manual": False, "channels": [0]},
+            ),
+        )
 
 
 if __name__ == "__main__":

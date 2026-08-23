@@ -1492,6 +1492,24 @@ class AsyncChannels:
             label="Compute channel intensity statistics",
         )
 
+    async def auto_contrast(
+        self,
+        *,
+        channels: Sequence[str | int] | None = None,
+        viewport_id: str | None = None,
+        overwrite_manual: bool = True,
+    ) -> Any:
+        params: dict[str, Any] = {"overwrite_manual": overwrite_manual}
+        if channels is not None:
+            params["channels"] = list(channels)
+        if viewport_id is not None:
+            params["viewport_id"] = viewport_id
+        return await self._client.tasks.start(
+            "viewer.channels.auto_contrast",
+            params,
+            label="Apply automatic channel contrast",
+        )
+
 
 class AsyncPlanes:
     """Orientation and slice navigation for multidimensional datasets."""

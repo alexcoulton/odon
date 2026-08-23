@@ -17,7 +17,7 @@ use crate::deep_link::{
     DeepLinkObjectFilterClause, DeepLinkObjectFilterLogic, DeepLinkRequest, object_filter_model,
     object_segmentation_requested, requested_bundled_label,
 };
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, AutoContrastMethod, AutoContrastSettings};
 use crate::viewports::{ViewportId, ViewportLayout, ViewportLinks, ViewportWorkspace};
 
 use super::layers::NativeLayersModel;
@@ -40,6 +40,7 @@ use super::{
 
 mod analysis;
 mod annotations;
+mod channel_compute;
 mod construction;
 mod dispatch;
 mod masks;
@@ -57,6 +58,8 @@ mod segmentation_geojson;
 mod settings_deep_links;
 mod thresholds;
 mod viewport_commands;
+
+use channel_compute::ChannelComputeModel;
 
 const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
 const DEFAULT_LEFT_PANEL_WIDTH: f32 = 360.0;
@@ -96,6 +99,7 @@ struct ModelChannel {
     visible: bool,
     color_rgb: [u8; 3],
     window: Option<(f32, f32)>,
+    contrast_manual: bool,
     note: String,
     offset_world: [f32; 2],
     scale: [f32; 2],
@@ -110,6 +114,7 @@ impl From<&ChannelInfo> for ModelChannel {
             visible: channel.visible,
             color_rgb: channel.color_rgb,
             window: channel.window,
+            contrast_manual: false,
             note: channel.note.clone(),
             offset_world: [0.0, 0.0],
             scale: [1.0, 1.0],
@@ -399,6 +404,7 @@ pub struct AppModel {
     object_selection_filter_operation_generation: u64,
     pending_object_selection_filters: HashMap<ObjectTarget, u64>,
     mask_io_operation_generation: u64,
+    channel_compute: ChannelComputeModel,
     settings: AppSettings,
     recent_project_exists: HashMap<PathBuf, bool>,
     settings_path: Option<PathBuf>,
@@ -451,6 +457,35 @@ pub struct ChannelIntensitySpec {
     pub zarr_path: String,
     pub dtype: String,
     pub ranges: Vec<Range<u64>>,
+    pub bins: Option<usize>,
+    pub abs_max: f32,
+    pub client_request_id: Option<u64>,
+    pub source_channel: usize,
+    pub region: [u64; 4],
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AutoContrastSpec {
+    pub(crate) document_generation: u64,
+    pub(crate) operation_generation: u64,
+    pub(crate) viewport_id: ViewportId,
+    pub(crate) settings: AutoContrastSettings,
+    pub(crate) channels: Vec<AutoContrastChannelSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AutoContrastChannelSpec {
+    pub(crate) intensity: ChannelIntensitySpec,
+    pub(crate) baseline_window: Option<(f32, f32)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AutoContrastChannelResult {
+    pub(crate) channel_index: usize,
+    pub(crate) channel_name: String,
+    pub(crate) min: u16,
+    pub(crate) max: u16,
+    pub(crate) sample_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -898,6 +933,7 @@ fn apply_workspace_viewport(state: &mut ViewportModel, value: &Value) -> Result<
                     window.get("max")?.as_f64()? as f32,
                 ))
             });
+            channel.contrast_manual = channel.window.is_some();
             if let Some(offset) = projected
                 .get("offset_world")
                 .and_then(Value::as_array)
@@ -2361,6 +2397,7 @@ fn apply_deep_link_viewport(
             let max = request.contrast_max.unwrap_or(old_max).clamp(0.0, abs_max);
             if min.is_finite() && max.is_finite() && max > min {
                 channel.window = Some((min, max));
+                channel.contrast_manual = true;
             } else {
                 notes.push(format!(
                     "contrast limits for channel '{}' were invalid",
@@ -2377,6 +2414,7 @@ fn apply_deep_link_viewport(
             let max = contrast.max.clamp(0.0, abs_max);
             if min.is_finite() && max.is_finite() && max > min {
                 viewport.channels[index].window = Some((min, max));
+                viewport.channels[index].contrast_manual = true;
             } else {
                 notes.push(format!(
                     "contrast limits for channel '{}' were invalid",

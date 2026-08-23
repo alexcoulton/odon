@@ -1712,6 +1712,43 @@ fn label_discovery_and_loading_are_actor_owned() {
 }
 
 #[test]
+fn channel_histogram_and_auto_contrast_are_actor_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let construction = source(root.join("src/app/construction.rs"));
+    let lifecycle = source(root.join("src/app/lifecycle.rs"));
+    let tile_runtime = source(root.join("src/app/tile_runtime.rs"));
+    let update = source(root.join("src/app/update.rs"));
+    let projection = source(root.join("src/app/actor_projection.rs"));
+    let channels = source(root.join("src/control/actor/channels.rs"));
+    let runtime = source(root.join("src/control/actor/runtime.rs"));
+    let worker = source(root.join("src/control/actor/worker.rs"));
+
+    for renderer in [&construction, &lifecycle, &tile_runtime, &update] {
+        for forbidden in [
+            "hist_loader",
+            "chanmax_loader",
+            "spawn_histogram_loader",
+            "spawn_channel_max_loader",
+            "spawn_tiff_histogram_loader",
+            "spawn_tiff_channel_max_loader",
+            "drain_channel_maxes",
+            "request_auto_contrast",
+        ] {
+            assert!(
+                !renderer.contains(forbidden),
+                "channel compute must not return to a renderer worker path: {forbidden}"
+            );
+        }
+    }
+    assert!(tile_runtime.contains("viewer.channels.intensity_stats"));
+    assert!(projection.contains("apply_control_actor_channel_compute"));
+    assert!(channels.contains("LoadJob::AutoContrast"));
+    assert!(runtime.contains("enqueue_auto_contrast_on_open"));
+    assert!(worker.contains("LoadJob::ChannelIntensity"));
+    assert!(worker.contains("LoadJob::AutoContrast"));
+}
+
+#[test]
 fn document_tiff_plane_and_tile_policy_commits_are_actor_only() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let datasets = source(root.join("src/app/datasets.rs"));
@@ -2073,7 +2110,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 294,
+        total_fields, 288,
         "review the ownership ledger when host fields change"
     );
 }

@@ -1,77 +1,6 @@
 use super::super::*;
 
 impl OmeZarrViewerApp {
-    #[cfg(test)]
-    pub fn control_get_channel_intensity_stats(
-        &self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let idx = if params.is_object() && !params.as_object().is_some_and(|obj| obj.is_empty()) {
-            match self.control_channel_index_from_params(params) {
-                Ok(idx) => idx,
-                Err(error) => return serde_json::json!({"error": error}),
-            }
-        } else {
-            self.selected_channel
-        };
-        let Some(ch) = self.channels.get(idx) else {
-            return serde_json::json!({"error": format!("channel index {idx} is out of range")});
-        };
-        let Some(level0) = self.dataset.levels.first() else {
-            return serde_json::json!({"error": "dataset has no pyramid levels"});
-        };
-        let requested_level = params
-            .get("level")
-            .and_then(serde_json::Value::as_u64)
-            .map(|value| value as usize);
-        let level_idx = requested_level
-            .unwrap_or_else(|| self.dataset.levels.len().saturating_sub(1))
-            .min(self.dataset.levels.len().saturating_sub(1));
-        let Some(level_info) = self.dataset.levels.get(level_idx) else {
-            return serde_json::json!({"error": format!("level {level_idx} is out of range")});
-        };
-        let Some(axes) = display_axes_for_mode(&self.dataset.dims, self.view_plane_mode) else {
-            return serde_json::json!({"error": "current view plane has no display axes"});
-        };
-        if axes.vertical >= level_info.shape.len() || axes.horizontal >= level_info.shape.len() {
-            return serde_json::json!({"error": "display axes are outside image shape"});
-        }
-        let row_range = 0..level_info.shape[axes.vertical];
-        let col_range = 0..level_info.shape[axes.horizontal];
-        let Some(ranges) = image_subset_ranges_for_view(
-            &self.dataset.dims,
-            level0,
-            level_info,
-            Some(ch.index as u64),
-            row_range,
-            col_range,
-            self.active_view_selection(),
-        ) else {
-            return serde_json::json!({"error": "failed to build image subset ranges"});
-        };
-        let zarr_path = format!("/{}", level_info.path.trim_start_matches('/'));
-        let array = match Array::open(self.store.clone(), &zarr_path) {
-            Ok(array) => array,
-            Err(err) => {
-                return serde_json::json!({"error": format!("failed to open level {level_idx}: {err}")});
-            }
-        };
-        let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = match retrieve_image_subset_u16(&array, &subset, &level_info.dtype) {
-            Ok(data) => data,
-            Err(err) => {
-                return serde_json::json!({"error": format!("failed to read level {level_idx}: {err}")});
-            }
-        };
-        channel_intensity_stats_json(
-            idx,
-            &ch.name,
-            level_info.index,
-            level_info.downsample,
-            &data,
-        )
-    }
-
     pub fn control_channel_presentation_json(&self) -> serde_json::Value {
         serde_json::json!({
             "search": self.channel_list_search,
@@ -118,43 +47,6 @@ impl OmeZarrViewerApp {
             "zoom_screen_per_lvl0_px": self.camera.zoom_screen_per_lvl0_px,
             "viewport": viewport,
         })
-    }
-
-    #[cfg(test)]
-    pub(in crate::app) fn control_channel_index_from_params(
-        &self,
-        params: &serde_json::Value,
-    ) -> Result<usize, String> {
-        if let Some(value) = params.get("index").or_else(|| params.get("channel_index")) {
-            return self.control_channel_index_from_value(value);
-        }
-        if let Some(value) = params
-            .get("name")
-            .or_else(|| params.get("channel"))
-            .or_else(|| params.get("marker"))
-        {
-            return self.control_channel_index_from_value(value);
-        }
-        Err("provide index, name, channel, or marker".to_string())
-    }
-
-    #[cfg(test)]
-    pub(in crate::app) fn control_channel_index_from_value(
-        &self,
-        value: &serde_json::Value,
-    ) -> Result<usize, String> {
-        if let Some(idx) = value.as_u64() {
-            let idx = idx as usize;
-            if idx < self.channels.len() {
-                return Ok(idx);
-            }
-            return Err(format!("channel index {idx} is out of range"));
-        }
-        let Some(name) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
-            return Err(format!("invalid channel selector: {value}"));
-        };
-        self.find_channel_index_for_link(name)
-            .ok_or_else(|| format!("no channel matches '{name}'"))
     }
 
     pub fn control_view_snapshot(&self) -> serde_json::Value {

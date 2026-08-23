@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 189 | 120 | 45 | 24 | 0 |
-| `RootApp` | 42 | 16 | 18 | 8 | 0 |
-| `MosaicViewerApp` | 78 | 47 | 27 | 4 | 0 |
-| **Total** | **309** | **183** | **90** | **36** | **0** |
+| `OmeZarrViewerApp` | 175 | 152 | 16 | 7 | 0 |
+| `RootApp` | 36 | 32 | 4 | 0 | 0 |
+| `MosaicViewerApp` | 77 | 62 | 12 | 3 | 0 |
+| **Total** | **288** | **246** | **26** | **16** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -62,11 +62,11 @@ not necessarily the owner in the current compatibility implementation.
 | Image loaders | `loader`, `raw_loader` | CPU/GPU tile worker handles | Renderer |
 | NGFF labels | `label_cells`, `label_loader`, `label_cells_xform` | Shared label metadata and renderer loader/mapping | Actor label resource handle plus renderer loader; remove duplicate metadata in Wave 7 |
 | Label dialog | `seg_label_names`, `seg_label_selected`, `seg_label_input`, `seg_label_status`, `seg_label_prompt_open`, `seg_label_prompt_always`, `seg_label_prompt_preference` | Mixed discovered data, preference, and dialog draft | Actor resource/preferences for names and policy; transient UI for open/input/status; Wave 2E/6 |
-| Histogram/channel maxima | `hist_loader`, `chanmax_loader`, `chanmax_request_id`, `chanmax_level`, `chanmax_pending`, `chanmax_snapshot`, `hist`, `hist_request_id`, `hist_request_pending`, `hist_dirty`, `hist_navigation_dirty_since`, `hist_last_sent` | Async analysis scheduling and cached results | Retained actor compute operations and shared results; renderer-only plot cache; Wave 3 |
+| Histogram plotting | `hist`, `hist_request_id`, `hist_request_pending`, `hist_dirty`, `hist_navigation_dirty_since`, `hist_last_sent`, `control_actor_channel_compute_generation` | Renderer request debounce and plot cache populated from a generation-tagged actor projection | Renderer-only observation/cache; image reads, histogram computation, and automatic-contrast transactions are actor-owned; Milestone 5A complete |
 | Tile cache | `cache`, `pending` | Decoded texture cache and upload queue | Renderer |
 | Camera/render revision | `camera`, `active_render_id`, `previous_render_id`, `active_render_smooth_pixels`, `previous_render_smooth_pixels` | Actor projection mirror and renderer invalidation | Actor owns camera/smoothing; render IDs remain renderer observations; Wave 7 deletes semantic mirror writes |
 | Plane/render history | `previous_view_selection`, `previous_displayed_view_selection`, `last_render_view_selection`, `last_canvas_rect`, `last_target_level`, `fallback_ceiling_level`, `last_visible_world_tiles`, `zoom_out_floor_level`, `zoom_out_floor_until`, `zoom_out_floor_visible_world_tiles` | Rendering heuristics and measured geometry | Renderer |
-| Channel and plane semantics | `selected_channel`, `view_plane_mode`, `draft_view_slice_level0`, `current_x_level0`, `current_y_level0`, `current_z_level0`, `channels`, `channel_window_overrides`, `auto_contrast_settings`, `fast_object_rendering`, `channel_list_search` | Actor-owned values with compatibility mirrors plus a transient slice draft | Actor semantic except `draft_view_slice_level0`; renderer consumes projection; Wave 7 mirror removal |
+| Channel and plane semantics | `selected_channel`, `view_plane_mode`, `draft_view_slice_level0`, `current_x_level0`, `current_y_level0`, `current_z_level0`, `channels`, `channel_window_overrides`, `fast_object_rendering`, `channel_list_search` | Actor-owned values with compatibility mirrors plus a transient slice draft | Actor semantic except `draft_view_slice_level0`; renderer consumes projection; Wave 7 mirror removal |
 | Active layer/selection UI | `active_layer`, `selected_channel_layers`, `channel_select_anchor_idx`, `selected_channel_group_id`, `quick_contrast_target`, `selected_overlay_layers`, `overlay_select_anchor_pos` | Mixed semantic active target and UI multi-selection | Actor owns active layer/group where externally visible; anchors and multi-select are transient UI; Wave 6/7 |
 | Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab` | Projectable UI settings and platform dialog state | Actor settings for visible panels/tabs; close dialog remains transient platform UI; Wave 6/7 |
 | Memory/pinning | `memory_selected_channels`, `pinned_levels`, `pending_memory_load`, `memory_status`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Legacy memory operation, resources, and UI status | Actor retained task and resource generations; system snapshot may remain UI cache; Wave 3 |

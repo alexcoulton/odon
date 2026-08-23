@@ -45,20 +45,20 @@ use crate::deep_link::{
     requested_bundled_label, resolve_example_project_path, resolve_roi_target,
 };
 use crate::model::{
-    AnalysisResourceSpec, AnnotationLoadResult, AnnotationLoadSpec, AppModel, ChannelIntensitySpec,
-    ControlLabelResource, ControlMosaicItemResource, ControlMosaicResource,
-    ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
-    ControlSegmentationGeoJsonResource, ControlThresholdPreviewResource, DeepLinkApplyGuard,
-    DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec,
-    ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult,
-    MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult, ObjectExportSpec,
-    ObjectResourceLoader, ObjectTarget, ProjectModelSnapshot, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ProjectViewApplySpec,
-    ScreenshotPreferences, SegmentationGeoJsonLoadSpec, SettingsMutationOutcome,
-    SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
-    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
-    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
-    write_object_export,
+    AnalysisResourceSpec, AnnotationLoadResult, AnnotationLoadSpec, AppModel,
+    AutoContrastChannelResult, AutoContrastSpec, ChannelIntensitySpec, ControlLabelResource,
+    ControlMosaicItemResource, ControlMosaicResource, ControlObjectFilterResult,
+    ControlObjectResource, ControlPinnedLevelResource, ControlSegmentationGeoJsonResource,
+    ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
+    LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
+    MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult, MosaicObjectLoadSpec,
+    ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader, ObjectTarget,
+    ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
+    ProjectObjectPreloadSource, ProjectViewApplySpec, ScreenshotPreferences,
+    SegmentationGeoJsonLoadSpec, SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask,
+    ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec,
+    TileLoadingPolicy, discover_label_names_local, extract_threshold_mask,
+    project_roi_segmentation_path, threshold_mask_polygons, write_object_export,
 };
 use crate::settings::AppSettings;
 
@@ -111,8 +111,9 @@ use annotations::begin_annotation_load;
 use application::{
     begin_lifecycle_request, begin_settings_mutation, enqueue_recent_project_persistence,
 };
+use channel_io::read_auto_contrast;
 pub use channel_io::read_channel_intensity_stats;
-use channels::begin_channel_intensity;
+use channels::{begin_auto_contrast, begin_channel_intensity, enqueue_auto_contrast_on_open};
 use completion::{finish_load, reject_actor_request};
 use datasets::{
     begin_dataset_inspection, begin_ome_zarr_load, begin_spatialdata_load, begin_tiff_load,

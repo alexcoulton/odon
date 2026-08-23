@@ -74,6 +74,41 @@ impl AutoContrastSettings {
     }
 }
 
+pub fn auto_contrast_window_from_histogram(
+    settings: AutoContrastSettings,
+    histogram: &[u64],
+    sample_count: u64,
+    observed_max: u16,
+) -> (u16, u16) {
+    let settings = settings.normalized();
+    match settings.method {
+        AutoContrastMethod::ZeroToP97 => (
+            0,
+            percentile_from_histogram(histogram, sample_count, settings.upper_percentile as u64),
+        ),
+        AutoContrastMethod::P1ToP99 => (
+            percentile_from_histogram(histogram, sample_count, settings.lower_percentile as u64),
+            percentile_from_histogram(histogram, sample_count, settings.upper_percentile as u64),
+        ),
+        AutoContrastMethod::ZeroToMax => (0, observed_max),
+    }
+}
+
+fn percentile_from_histogram(histogram: &[u64], sample_count: u64, percentile: u64) -> u16 {
+    if sample_count == 0 || histogram.is_empty() {
+        return 0;
+    }
+    let target = (sample_count.saturating_mul(percentile).saturating_add(99)) / 100;
+    let mut accumulated = 0_u64;
+    for (index, count) in histogram.iter().enumerate() {
+        accumulated = accumulated.saturating_add(*count);
+        if accumulated >= target {
+            return index.min(u16::MAX as usize) as u16;
+        }
+    }
+    histogram.len().saturating_sub(1).min(u16::MAX as usize) as u16
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {

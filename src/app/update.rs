@@ -64,8 +64,6 @@ impl eframe::App for OmeZarrViewerApp {
         self.drain_raw_tiles();
         self.drain_label_tiles();
         self.drain_screenshots();
-        self.drain_histogram();
-        self.drain_channel_maxes();
         let seg_objects_was_loading = self.seg_objects.is_loading();
         self.seg_objects.tick();
         if seg_objects_was_loading
@@ -532,21 +530,4 @@ impl eframe::App for OmeZarrViewerApp {
 
         self.schedule_repaint(ctx);
     }
-}
-
-const DEFAULT_MAX_SCAN_PIXELS: u64 = 2_000_000;
-
-pub(super) fn choose_default_max_level(dataset: &OmeZarrDataset) -> usize {
-    let y_dim = dataset.dims.y;
-    let x_dim = dataset.dims.x;
-    let mut chosen = dataset.levels.len().saturating_sub(1);
-    for (i, level) in dataset.levels.iter().enumerate().rev() {
-        let y = *level.shape.get(y_dim).unwrap_or(&0);
-        let x = *level.shape.get(x_dim).unwrap_or(&0);
-        let pixels = y.saturating_mul(x);
-        if pixels > 0 && pixels <= DEFAULT_MAX_SCAN_PIXELS {
-            chosen = i;
-        }
-    }
-    chosen
 }

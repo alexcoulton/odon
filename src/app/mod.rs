@@ -12,8 +12,6 @@ use lyon_path::math::point as lyon_point;
 use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
 use ndarray::Array2;
 use rfd::FileDialog;
-#[cfg(test)]
-use zarrs::array::{Array, ArraySubset};
 
 use crate::annotations::{
     AnnotationCategoryStyle, AnnotationLayerStyle, AnnotationPointsLayer, AnnotationShape,
@@ -28,28 +26,20 @@ use crate::app_support::screenshot::{
     ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
     next_numbered_screenshot_path,
 };
-use crate::app_support::settings::AutoContrastSettings;
 use crate::camera::Camera;
 use crate::custom::cell_thresholds::CellThresholdsPanel;
 use crate::custom::roi_selector::{RoiSelectorAction, RoiSelectorPanel};
 use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
-#[cfg(test)]
-use crate::data::ome::retrieve_image_subset_u16;
 use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
 use crate::data::project_config::{
     ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups, ProjectRoi,
 };
 use crate::geometry::threshold_regions::{ThresholdRegionMask, extract_threshold_region_mask};
-use crate::imaging::channel_max::{
-    ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader,
-};
-use crate::imaging::histogram::{HistogramLoaderHandle, HistogramResponse, spawn_histogram_loader};
+use crate::imaging::histogram::HistogramResponse;
 use crate::imaging::pinned_levels::{PinnedLevelStatus, PinnedLevels};
 use crate::imaging::tiling::{
     TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
 };
-#[cfg(test)]
-use crate::imaging::view_plane::image_subset_ranges_for_view;
 use crate::imaging::view_plane::{
     ViewPlaneMode, ViewPlaneSelection, clamp_selection as clamp_view_selection,
     display_axes as display_axes_for_mode, display_downsample, local_to_world_scale,
@@ -1852,12 +1842,6 @@ pub struct OmeZarrViewerApp {
     seg_label_prompt_open: bool,
     seg_label_prompt_always: bool,
     seg_label_prompt_preference: LabelPromptSessionPreference,
-    hist_loader: HistogramLoaderHandle,
-    chanmax_loader: ChannelMaxLoaderHandle,
-    chanmax_request_id: u64,
-    chanmax_level: usize,
-    chanmax_pending: Vec<bool>,
-    chanmax_snapshot: Vec<Option<(f32, f32)>>,
     cache: TileCache<egui::TextureHandle>,
     pending: Vec<TileResponse>,
     hist: Option<HistogramResponse>,
@@ -1866,6 +1850,7 @@ pub struct OmeZarrViewerApp {
     hist_dirty: bool,
     hist_navigation_dirty_since: Option<Instant>,
     hist_last_sent: Instant,
+    control_actor_channel_compute_generation: u64,
 
     camera: Camera,
     active_render_id: u64,
@@ -1891,7 +1876,6 @@ pub struct OmeZarrViewerApp {
     current_z_level0: u64,
     channels: Vec<ChannelInfo>,
     channel_window_overrides: HashMap<String, (f32, f32)>,
-    auto_contrast_settings: AutoContrastSettings,
     fast_object_rendering: bool,
     channel_list_search: String,
 
@@ -2124,9 +2108,6 @@ struct TiffRuntimeAssets {
     store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
     loader: crate::render::tiles::TileLoaderHandle,
     raw_loader: Option<RawTileLoaderHandle>,
-    hist_loader: HistogramLoaderHandle,
-    chanmax_loader: ChannelMaxLoaderHandle,
-    chanmax_level: usize,
     tiff_plane_state: Option<TiffPlaneState>,
 }
 
@@ -2296,64 +2277,6 @@ fn push_unique_term(dst: &mut Vec<String>, value: &str) {
     }
 }
 
-#[cfg(test)]
-fn channel_intensity_stats_json(
-    idx: usize,
-    name: &str,
-    level: usize,
-    downsample: f32,
-    data: &ndarray::ArrayD<u16>,
-) -> serde_json::Value {
-    let mut values = data.iter().copied().collect::<Vec<_>>();
-    if values.is_empty() {
-        return serde_json::json!({
-            "index": idx,
-            "name": name,
-            "level": level,
-            "downsample": downsample,
-            "n": 0,
-            "error": "empty image subset",
-        });
-    }
-    values.sort_unstable();
-    let n = values.len();
-    let mut sum = 0u64;
-    let mut nonzero = 0usize;
-    for &value in &values {
-        sum = sum.saturating_add(value as u64);
-        if value != 0 {
-            nonzero += 1;
-        }
-    }
-    serde_json::json!({
-        "index": idx,
-        "name": name,
-        "level": level,
-        "downsample": downsample,
-        "shape": data.shape(),
-        "n": n,
-        "nonzero": nonzero,
-        "nonzero_fraction": nonzero as f64 / n as f64,
-        "min": values[0],
-        "q1": percentile_sorted_u16(&values, 0.25),
-        "median": percentile_sorted_u16(&values, 0.50),
-        "q3": percentile_sorted_u16(&values, 0.75),
-        "p95": percentile_sorted_u16(&values, 0.95),
-        "p99": percentile_sorted_u16(&values, 0.99),
-        "max": values[n - 1],
-        "mean": sum as f64 / n as f64,
-    })
-}
-
-#[cfg(test)]
-fn percentile_sorted_u16(values: &[u16], q: f64) -> u16 {
-    if values.is_empty() {
-        return 0;
-    }
-    let idx = ((values.len().saturating_sub(1)) as f64 * q.clamp(0.0, 1.0)).round() as usize;
-    values[idx.min(values.len() - 1)]
-}
-
 fn channel_groups_snapshot(
     groups: &ProjectLayerGroups,
     channels: &[ChannelInfo],
@@ -2513,8 +2436,6 @@ fn build_tiff_runtime_assets_from_parts(
     } else {
         None
     };
-    let hist_loader = crate::xenium::spawn_tiff_histogram_loader(pyramid.clone())?;
-    let chanmax_loader = crate::xenium::spawn_tiff_channel_max_loader(pyramid.clone())?;
     let tiff_plane_state = pyramid.has_plane_selection().then(|| TiffPlaneState {
         image_path,
         size_z: pyramid.size_z,
@@ -2523,66 +2444,12 @@ fn build_tiff_runtime_assets_from_parts(
         current_t: pyramid.plane_selection.t,
     });
     Ok(TiffRuntimeAssets {
-        chanmax_level: update::choose_default_max_level(&dataset),
         dataset,
         store,
         loader,
         raw_loader,
-        hist_loader,
-        chanmax_loader,
         tiff_plane_state,
     })
-}
-
-impl OmeZarrViewerApp {
-    fn drain_channel_maxes(&mut self) {
-        let mut any_changed = false;
-        let abs_max = self.dataset.abs_max.max(1.0);
-        while let Ok(msg) = self.chanmax_loader.rx.try_recv() {
-            if msg.request_id != self.chanmax_request_id {
-                continue;
-            }
-            let idx = msg.channel as usize;
-            if idx >= self.channels.len() {
-                continue;
-            }
-            if !self.chanmax_pending.get(idx).copied().unwrap_or(false) {
-                continue;
-            }
-
-            // Don't override if the user changed this channel's window since we requested.
-            if self.chanmax_snapshot.get(idx).copied().unwrap_or(None) != self.channels[idx].window
-            {
-                if let Some(p) = self.chanmax_pending.get_mut(idx) {
-                    *p = false;
-                }
-                continue;
-            }
-
-            let mut lo = (msg.lo as f32).clamp(0.0, abs_max);
-            let mut hi = (msg.hi as f32).clamp(0.0, abs_max);
-            if !lo.is_finite() || lo < 0.0 {
-                lo = 0.0;
-            }
-            if lo >= abs_max {
-                lo = (abs_max - 1.0).max(0.0);
-            }
-            if !hi.is_finite() || hi <= lo {
-                hi = (lo + 1.0).min(abs_max);
-            }
-            self.channels[idx].window = Some((lo, hi));
-            if let Some(p) = self.chanmax_pending.get_mut(idx) {
-                *p = false;
-            }
-            if idx == self.selected_channel {
-                self.hist_dirty = true;
-            }
-            any_changed = true;
-        }
-        if any_changed {
-            self.bump_render_id();
-        }
-    }
 }
 
 fn compute_label_to_world_xforms(

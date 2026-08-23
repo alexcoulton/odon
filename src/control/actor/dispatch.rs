@@ -260,7 +260,30 @@ pub(super) fn dispatch_request(
     }
     if request.command.method() == "viewer.channels.intensity_stats" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
-        begin_channel_intensity(model, request, load_job_tx, render_document, diagnostics);
+        if begin_channel_intensity(model, request, load_job_tx, render_document, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
+    if request.command.method() == "viewer.channels.auto_contrast" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_auto_contrast(model, request, load_job_tx, render_document, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
         return;
     }
     if request.command.method() == "viewer.screenshot.settings.set" {

@@ -76,15 +76,15 @@
         "milestone": 5
       },
       {
-        "id": "viewer.histogram_compute",
-        "fields": ["hist_loader", "chanmax_loader", "chanmax_request_id", "chanmax_level", "chanmax_pending", "chanmax_snapshot", "hist", "hist_request_id", "hist_request_pending", "hist_dirty", "hist_navigation_dirty_since", "hist_last_sent"],
-        "current_class": "mixed_compatibility",
-        "disposition": "replace",
-        "canonical_writer": "ControlActor retained analysis tasks and worker completions",
-        "projection_source": "analysis resource generations",
-        "renderer_consumers": "contrast and histogram UI caches",
-        "persistence_consumers": "channel contrast state only",
-        "native_commit_point": "typed contrast/analysis command",
+        "id": "viewer.histogram_plot_cache",
+        "fields": ["hist", "hist_request_id", "hist_request_pending", "hist_dirty", "hist_navigation_dirty_since", "hist_last_sent", "control_actor_channel_compute_generation"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "renderer request debounce and ControlActor channel-compute projection consumer",
+        "projection_source": "generation-tagged channel_compute_state projection",
+        "renderer_consumers": "contrast histogram plot and loading indicator",
+        "persistence_consumers": "none; channel contrast is actor-owned",
+        "native_commit_point": "typed viewer.channels.intensity_stats command",
         "milestone": 5
       },
       {
@@ -137,7 +137,7 @@
       },
       {
         "id": "viewer.channel_plane_semantics",
-        "fields": ["selected_channel", "view_plane_mode", "current_x_level0", "current_y_level0", "current_z_level0", "channels", "channel_window_overrides", "auto_contrast_settings", "fast_object_rendering", "channel_list_search"],
+        "fields": ["selected_channel", "view_plane_mode", "current_x_level0", "current_y_level0", "current_z_level0", "channels", "channel_window_overrides", "fast_object_rendering", "channel_list_search"],
         "current_class": "actor_projection",
         "disposition": "retain",
         "canonical_writer": "ControlActor viewport plane and channel presentation model",

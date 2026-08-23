@@ -491,6 +491,7 @@ impl AppModel {
             .insert(ObjectTarget::Primary, AnalysisModel::default());
         self.measurement.reset();
         self.object_export.reset();
+        self.reset_channel_compute_for_document();
         self.measured_viewports
             .retain(|id| id.as_str() == "viewport-1");
         self.mode = ModelMode::Single;

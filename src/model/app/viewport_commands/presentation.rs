@@ -161,6 +161,7 @@ impl AppModel {
         let target = workspace.get_mut(&id).ok_or_else(|| not_found(&id))?;
         let index = resolve_channel(&target.state.channels, &selector)?;
         target.state.channels[index].window = Some((min, max));
+        target.state.channels[index].contrast_manual = true;
         let channel = &target.state.channels[index];
         let result = json!({
             "index": index,

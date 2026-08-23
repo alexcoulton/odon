@@ -284,11 +284,11 @@
       "phase": "A",
       "status": "covered",
       "native_entry_points": ["top-bar contrast", "channel properties histogram"],
-      "methods": ["viewer.channels.get_contrast", "viewer.channels.set_contrast", "viewer.channels.intensity_stats"],
+      "methods": ["viewer.channels.get_contrast", "viewer.channels.set_contrast", "viewer.channels.intensity_stats", "viewer.channels.auto_contrast"],
       "events": ["viewer.channels.changed"],
       "permissions": ["viewer.channels.read", "viewer.channels.write", "viewer.analysis.read"],
-      "python_sync": ["odon.resources:Channels.get_contrast", "odon.resources:Channels.set_contrast", "odon.resources:Channels.intensity_stats"],
-      "python_async": ["odon.async_resources:AsyncChannels.get_contrast", "odon.async_resources:AsyncChannels.set_contrast", "odon.async_resources:AsyncChannels.intensity_stats"],
+      "python_sync": ["odon.resources:Channels.get_contrast", "odon.resources:Channels.set_contrast", "odon.resources:Channels.intensity_stats", "odon.resources:Channels.auto_contrast"],
+      "python_async": ["odon.async_resources:AsyncChannels.get_contrast", "odon.async_resources:AsyncChannels.set_contrast", "odon.async_resources:AsyncChannels.intensity_stats", "odon.async_resources:AsyncChannels.auto_contrast"],
       "tests": ["rust:channel_contrast_and_stats"]
     },
     {

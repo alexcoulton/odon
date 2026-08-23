@@ -179,8 +179,14 @@ pub(super) enum LoadCompletion {
     },
     ChannelIntensity {
         generation: u64,
+        operation_generation: u64,
         request: OdonControlRequest,
         result: anyhow::Result<Value>,
+    },
+    AutoContrast {
+        spec: AutoContrastSpec,
+        request: Option<OdonControlRequest>,
+        result: anyhow::Result<Vec<AutoContrastChannelResult>>,
     },
     ProjectOpen {
         generation: u64,
@@ -430,7 +436,8 @@ impl LoadCompletion {
             | Self::ProjectRoiOpen { .. }
             | Self::RemoteList { .. }
             | Self::RemoteOpen { .. }
-            | Self::ChannelIntensity { .. } => CompletionDomain::Opening,
+            | Self::ChannelIntensity { .. }
+            | Self::AutoContrast { .. } => CompletionDomain::Opening,
             Self::ProjectOpen { .. }
             | Self::ProjectSave { .. }
             | Self::SettingsSave { .. }
@@ -536,9 +543,15 @@ pub(super) enum LoadJob {
     },
     ChannelIntensity {
         generation: u64,
+        operation_generation: u64,
         request: OdonControlRequest,
         document: Arc<RenderDocument>,
         spec: ChannelIntensitySpec,
+    },
+    AutoContrast {
+        spec: AutoContrastSpec,
+        request: Option<OdonControlRequest>,
+        document: Arc<RenderDocument>,
     },
     ProjectOpen {
         generation: u64,

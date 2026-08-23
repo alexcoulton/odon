@@ -79,6 +79,7 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "viewer.channels.set_visible",
     "viewer.channels.get_contrast",
     "viewer.channels.intensity_stats",
+    "viewer.channels.auto_contrast",
     "viewer.channels.set_contrast",
     "viewer.channels.set_color",
     "viewer.channels.set_note",

@@ -233,6 +233,7 @@ impl AppModel {
                     ));
                 }
                 channel.window = Some((min as f32, max as f32));
+                channel.contrast_manual = true;
             }
             changed |= *channel != before;
         } else if layer_id == "segmentation_objects" {

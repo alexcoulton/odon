@@ -18,10 +18,6 @@ impl OmeZarrViewerApp {
         self.screenshot_settings_open = true;
     }
 
-    pub fn set_auto_contrast_settings(&mut self, settings: AutoContrastSettings) {
-        self.auto_contrast_settings = settings.normalized();
-    }
-
     pub fn set_fast_object_rendering(&mut self, enabled: bool) {
         self.fast_object_rendering = enabled;
         let mut changed = self.seg_objects.fast_rendering != enabled;
@@ -35,14 +31,6 @@ impl OmeZarrViewerApp {
         if changed {
             self.bump_render_id();
         }
-    }
-
-    pub fn apply_auto_contrast_now(&mut self) {
-        self.request_auto_contrast(true);
-        self.set_status(format!(
-            "Applying auto contrast ({}) to all channels...",
-            self.auto_contrast_settings.method.label()
-        ));
     }
 
     pub fn open_roi_info_window(&mut self) {

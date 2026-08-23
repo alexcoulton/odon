@@ -207,6 +207,23 @@ pub fn spawn_control_actor_with_services(
                                 &wake_ui,
                             );
                         }
+                        if !presentation_captures.barrier_active()
+                            && enqueue_auto_contrast_on_open(
+                                &mut model,
+                                &render_document,
+                                &load_job_tx,
+                                &diagnostics,
+                            )
+                        {
+                            publish_projection(
+                                &mut model,
+                                render_document.clone(),
+                                &presentation_tx,
+                                &presentation_coalesce_rx,
+                                &wake_ui,
+                                &diagnostics,
+                            );
+                        }
                         crossbeam_channel::select! {
                             recv(task_service_rx) -> task_request => {
                                 let Ok(task_request) = task_request else { break; };

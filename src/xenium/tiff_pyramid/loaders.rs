@@ -21,39 +21,6 @@ pub(super) fn decode_result_u16(decoded: DecodingResult) -> Option<Vec<u16>> {
     }
 }
 
-pub(super) fn compute_hist_u16(values: &[u16], bins: usize, abs_max: f32) -> Vec<u32> {
-    let bins = bins.max(8);
-    let mut out = vec![0u32; bins];
-    if values.is_empty() {
-        return out;
-    }
-    let inv = (bins as f32 - 1.0) / abs_max.max(1.0);
-    for &v in values {
-        let vf = (v as f32).clamp(0.0, abs_max);
-        let idx = (vf * inv).floor() as usize;
-        let idx = idx.min(bins - 1);
-        out[idx] = out[idx].saturating_add(1);
-    }
-    out
-}
-
-pub(super) fn compute_stats_u16(values: &[u16]) -> Option<HistogramStats> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let n = sorted.len();
-    Some(HistogramStats {
-        min: sorted[0] as f32,
-        q1: sorted[(n * 25) / 100] as f32,
-        median: sorted[(n * 50) / 100] as f32,
-        q3: sorted[(n * 75) / 100] as f32,
-        max: sorted[n - 1] as f32,
-        n,
-    })
-}
-
 pub(super) fn decode_tiff_channel_chunk(
     dec: &mut Decoder<BufReader<File>>,
     current_ifd: &mut Option<IfdPointer>,
@@ -123,6 +90,61 @@ pub(super) fn decode_tiff_channel_chunk(
     };
 
     Ok((width, height, data_u16))
+}
+
+impl TiffPyramid {
+    pub(crate) fn read_channel_region_u16(
+        &self,
+        level: usize,
+        channel: usize,
+        y0: u64,
+        y1: u64,
+        x0: u64,
+        x1: u64,
+    ) -> anyhow::Result<(Vec<u16>, usize, usize)> {
+        let lvl = self
+            .levels
+            .get(level)
+            .ok_or_else(|| anyhow::anyhow!("TIFF level {level} is out of range"))?;
+        let y0 = y0.min(lvl.height as u64);
+        let y1 = y1.min(lvl.height as u64);
+        let x0 = x0.min(lvl.width as u64);
+        let x1 = x1.min(lvl.width as u64);
+        anyhow::ensure!(y1 > y0 && x1 > x0, "TIFF intensity region is empty");
+        let tile_y0 = (y0 / lvl.chunk_h.max(1) as u64) as u32;
+        let tile_y1 = ((y1 - 1) / lvl.chunk_h.max(1) as u64) as u32;
+        let tile_x0 = (x0 / lvl.chunk_w.max(1) as u64) as u32;
+        let tile_x1 = ((x1 - 1) / lvl.chunk_w.max(1) as u64) as u32;
+        let file = File::open(&self.path)?;
+        let mut decoder = Decoder::new(BufReader::new(file))?;
+        let mut current_ifd = None;
+        let mut values =
+            Vec::with_capacity(usize::try_from((y1 - y0).saturating_mul(x1 - x0)).unwrap_or(0));
+        for tile_y in tile_y0..=tile_y1 {
+            for tile_x in tile_x0..=tile_x1 {
+                let (width, height, data) = decode_tiff_channel_chunk(
+                    &mut decoder,
+                    &mut current_ifd,
+                    lvl,
+                    tile_y as u64,
+                    tile_x as u64,
+                    channel,
+                )?;
+                let origin_y = tile_y as u64 * lvl.chunk_h as u64;
+                let origin_x = tile_x as u64 * lvl.chunk_w as u64;
+                let local_y0 = y0.saturating_sub(origin_y).min(height as u64) as usize;
+                let local_y1 = y1.saturating_sub(origin_y).min(height as u64) as usize;
+                let local_x0 = x0.saturating_sub(origin_x).min(width as u64) as usize;
+                let local_x1 = x1.saturating_sub(origin_x).min(width as u64) as usize;
+                for row in local_y0..local_y1 {
+                    let start = row.saturating_mul(width).saturating_add(local_x0);
+                    let end = row.saturating_mul(width).saturating_add(local_x1);
+                    values.extend_from_slice(&data[start..end]);
+                }
+            }
+        }
+        Ok((values, (x1 - x0) as usize, (y1 - y0) as usize))
+    }
 }
 
 pub fn spawn_tiff_raw_tile_loader(
@@ -468,181 +490,6 @@ pub(super) fn tiff_tile_loader_thread(
             height,
             rgba,
         }));
-    }
-
-    Ok(())
-}
-
-pub fn spawn_tiff_histogram_loader(
-    pyramid: Arc<TiffPyramid>,
-) -> anyhow::Result<HistogramLoaderHandle> {
-    let (tx_req, rx_req) = crossbeam_channel::unbounded::<HistogramRequest>();
-    let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<HistogramResponse>();
-
-    std::thread::Builder::new()
-        .name("tiff-hist-loader".to_string())
-        .spawn(move || {
-            if let Err(err) = tiff_histogram_loader_thread(pyramid, rx_req, tx_rsp) {
-                eprintln!("tiff histogram loader exited: {err:?}");
-            }
-        })
-        .context("spawn tiff histogram loader")?;
-
-    Ok(HistogramLoaderHandle {
-        tx: tx_req,
-        rx: rx_rsp,
-    })
-}
-
-pub(super) fn tiff_histogram_loader_thread(
-    pyramid: Arc<TiffPyramid>,
-    rx_req: Receiver<HistogramRequest>,
-    tx_rsp: Sender<HistogramResponse>,
-) -> anyhow::Result<()> {
-    let f = File::open(&pyramid.path)?;
-    let mut dec = Decoder::new(BufReader::new(f))?;
-    let mut current_ifd: Option<IfdPointer> = None;
-
-    for req in rx_req.iter() {
-        let Some(lvl) = pyramid.levels.get(req.level) else {
-            continue;
-        };
-        let bins = req.bins.clamp(8, 4096);
-        let abs_max = if req.abs_max.is_finite() && req.abs_max > 0.0 {
-            req.abs_max
-        } else {
-            pyramid.abs_max.max(1.0)
-        };
-
-        let y0 = req.y0.min(lvl.height as u64);
-        let y1 = req.y1.min(lvl.height as u64).max(y0);
-        let x0 = req.x0.min(lvl.width as u64);
-        let x1 = req.x1.min(lvl.width as u64).max(x0);
-        if y1 <= y0 || x1 <= x0 {
-            let _ = tx_rsp.send(HistogramResponse {
-                request_id: req.request_id,
-                bins: vec![0u32; bins],
-                stats: None,
-            });
-            continue;
-        }
-
-        let tile_y0 = (y0 / lvl.chunk_h.max(1) as u64) as u32;
-        let tile_y1 = ((y1 - 1) / lvl.chunk_h.max(1) as u64) as u32;
-        let tile_x0 = (x0 / lvl.chunk_w.max(1) as u64) as u32;
-        let tile_x1 = ((x1 - 1) / lvl.chunk_w.max(1) as u64) as u32;
-
-        let mut values = Vec::<u16>::new();
-        for tile_y in tile_y0..=tile_y1 {
-            for tile_x in tile_x0..=tile_x1 {
-                let Ok((width, height, data_u16)) = decode_tiff_channel_chunk(
-                    &mut dec,
-                    &mut current_ifd,
-                    lvl,
-                    tile_y as u64,
-                    tile_x as u64,
-                    req.channel as usize,
-                ) else {
-                    continue;
-                };
-                let tile_origin_y = tile_y as u64 * lvl.chunk_h as u64;
-                let tile_origin_x = tile_x as u64 * lvl.chunk_w as u64;
-                let local_y0 = y0.saturating_sub(tile_origin_y).min(height as u64) as usize;
-                let local_y1 = y1
-                    .saturating_sub(tile_origin_y)
-                    .min(height as u64)
-                    .max(local_y0 as u64) as usize;
-                let local_x0 = x0.saturating_sub(tile_origin_x).min(width as u64) as usize;
-                let local_x1 = x1
-                    .saturating_sub(tile_origin_x)
-                    .min(width as u64)
-                    .max(local_x0 as u64) as usize;
-                for row in local_y0..local_y1 {
-                    let start = row.saturating_mul(width).saturating_add(local_x0);
-                    let end = row.saturating_mul(width).saturating_add(local_x1);
-                    values.extend_from_slice(&data_u16[start..end]);
-                }
-            }
-        }
-
-        let _ = tx_rsp.send(HistogramResponse {
-            request_id: req.request_id,
-            bins: compute_hist_u16(&values, bins, abs_max),
-            stats: compute_stats_u16(&values),
-        });
-    }
-
-    Ok(())
-}
-
-pub fn spawn_tiff_channel_max_loader(
-    pyramid: Arc<TiffPyramid>,
-) -> anyhow::Result<ChannelMaxLoaderHandle> {
-    let (tx_req, rx_req) = crossbeam_channel::unbounded::<ChannelMaxRequest>();
-    let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<ChannelMaxResponse>();
-
-    std::thread::Builder::new()
-        .name("tiff-chan-max-loader".to_string())
-        .spawn(move || {
-            if let Err(err) = tiff_channel_max_loader_thread(pyramid, rx_req, tx_rsp) {
-                eprintln!("tiff channel max loader exited: {err:?}");
-            }
-        })
-        .context("spawn tiff channel max loader")?;
-
-    Ok(ChannelMaxLoaderHandle {
-        tx: tx_req,
-        rx: rx_rsp,
-    })
-}
-
-pub(super) fn tiff_channel_max_loader_thread(
-    pyramid: Arc<TiffPyramid>,
-    rx_req: Receiver<ChannelMaxRequest>,
-    tx_rsp: Sender<ChannelMaxResponse>,
-) -> anyhow::Result<()> {
-    let f = File::open(&pyramid.path)?;
-    let mut dec = Decoder::new(BufReader::new(f))?;
-    let mut current_ifd: Option<IfdPointer> = None;
-
-    for req in rx_req.iter() {
-        let Some(lvl) = pyramid.levels.get(req.level) else {
-            continue;
-        };
-
-        let mut hist = vec![0u64; 65536];
-        let mut n: u64 = 0;
-        let mut max_v: u16 = 0;
-        for tile_y in 0..lvl.tiles_y {
-            for tile_x in 0..lvl.tiles_x {
-                let Ok((_width, _height, data_u16)) = decode_tiff_channel_chunk(
-                    &mut dec,
-                    &mut current_ifd,
-                    lvl,
-                    tile_y as u64,
-                    tile_x as u64,
-                    req.channel as usize,
-                ) else {
-                    continue;
-                };
-                for v in data_u16 {
-                    hist[v as usize] = hist[v as usize].saturating_add(1);
-                    n = n.saturating_add(1);
-                    if v > max_v {
-                        max_v = v;
-                    }
-                }
-            }
-        }
-
-        let (lo, hi) = auto_contrast_window_from_histogram(req.settings, &hist, n, max_v);
-
-        let _ = tx_rsp.send(ChannelMaxResponse {
-            request_id: req.request_id,
-            channel: req.channel,
-            lo,
-            hi,
-        });
     }
 
     Ok(())

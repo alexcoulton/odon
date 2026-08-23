@@ -23,10 +23,26 @@ fn request(
     )
 }
 
+fn configure_test_actor(channels: ControlActorChannels) -> ControlActorChannels {
+    // Generic actor tests should not acquire an unrelated background operation merely because
+    // they open an image. Tests for on-open contrast opt in explicitly.
+    let mut settings = AppSettings::default();
+    settings.auto_contrast.enabled_on_open = false;
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapSettings {
+            settings,
+            path: None,
+            recent_project_exists: Vec::new(),
+        })
+        .unwrap();
+    channels
+}
+
 fn spawn_test_actor() -> ControlActorChannels {
     let events = EventHub::shared();
     let resources = ResourceRegistry::shared(events);
-    spawn_control_actor(Arc::new(|| {}), resources).unwrap()
+    configure_test_actor(spawn_control_actor(Arc::new(|| {}), resources).unwrap())
 }
 
 fn spawn_test_actor_with_objects() -> ControlActorChannels {
@@ -122,22 +138,26 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
         }
     }
     let loader: Arc<dyn ObjectResourceLoader> = Arc::new(TestObjectLoader);
-    spawn_control_actor_with_object_loader(Arc::new(|| {}), resources, Some(loader)).unwrap()
+    configure_test_actor(
+        spawn_control_actor_with_object_loader(Arc::new(|| {}), resources, Some(loader)).unwrap(),
+    )
 }
 
 fn spawn_test_actor_with_remote(backend: Arc<dyn RemoteDatasetBackend>) -> ControlActorChannels {
     let events = EventHub::shared();
     let resources = ResourceRegistry::shared(events);
-    spawn_control_actor_with_services(
-        Arc::new(|| {}),
-        resources,
-        None,
-        None,
-        None,
-        Some(backend),
-        None,
+    configure_test_actor(
+        spawn_control_actor_with_services(
+            Arc::new(|| {}),
+            resources,
+            None,
+            None,
+            None,
+            Some(backend),
+            None,
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 
 fn spawn_test_actor_with_alternate(
@@ -145,22 +165,25 @@ fn spawn_test_actor_with_alternate(
 ) -> ControlActorChannels {
     let events = EventHub::shared();
     let resources = ResourceRegistry::shared(events);
-    spawn_control_actor_with_services(
-        Arc::new(|| {}),
-        resources,
-        None,
-        None,
-        None,
-        None,
-        Some(backend),
+    configure_test_actor(
+        spawn_control_actor_with_services(
+            Arc::new(|| {}),
+            resources,
+            None,
+            None,
+            None,
+            None,
+            Some(backend),
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 
 mod alternate_datasets;
 mod analysis;
 mod annotations;
 mod backpressure;
+mod channels;
 mod dataset_inspection;
 mod deep_link_apply;
 mod deep_link_resolution;

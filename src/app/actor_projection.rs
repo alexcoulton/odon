@@ -1,6 +1,60 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn apply_control_actor_channel_compute(
+        &mut self,
+        generation: u64,
+        state: &serde_json::Value,
+    ) {
+        if generation <= self.control_actor_channel_compute_generation {
+            return;
+        }
+        let histogram = state.get("histogram").unwrap_or(state);
+        let request_id = histogram
+            .get("request_id")
+            .and_then(serde_json::Value::as_u64);
+        self.hist_request_pending = histogram
+            .get("pending")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && request_id.is_none_or(|request_id| request_id == self.hist_request_id);
+        if let (Some(request_id), Some(projected)) = (request_id, histogram.get("histogram")) {
+            let bins = projected
+                .get("bins")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_u64)
+                .map(|count| count.min(u64::from(u32::MAX)) as u32)
+                .collect::<Vec<_>>();
+            let stats = projected.get("stats").and_then(|stats| {
+                Some(crate::imaging::histogram::HistogramStats {
+                    min: stats.get("min")?.as_f64()? as f32,
+                    q1: stats.get("q1")?.as_f64()? as f32,
+                    median: stats.get("median")?.as_f64()? as f32,
+                    q3: stats.get("q3")?.as_f64()? as f32,
+                    max: stats.get("max")?.as_f64()? as f32,
+                    n: stats
+                        .get("n")?
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())?,
+                })
+            });
+            if request_id == self.hist_request_id && !bins.is_empty() {
+                self.hist = Some(crate::imaging::histogram::HistogramResponse {
+                    request_id,
+                    bins,
+                    stats,
+                });
+                self.hist_request_pending = false;
+            }
+        }
+        if histogram.get("error").is_some() {
+            self.hist_request_pending = false;
+        }
+        self.control_actor_channel_compute_generation = generation;
+    }
+
     pub fn install_control_actor_segmentation_geojson_resource(
         &mut self,
         state: &serde_json::Value,
