@@ -169,14 +169,18 @@ impl OmeZarrViewerApp {
                 );
             }
             RoiSelectorAction::LoadLabels => {
-                if let Err(err) = self.ensure_segmentation_labels_loaded() {
-                    self.roi_selector
-                        .set_status(format!("Load Labels failed: {err}"));
+                let name = self.seg_label_selected.trim().to_string();
+                if name.is_empty() {
+                    self.roi_selector.set_status(
+                        "Load Labels failed: the actor has no selected label group.".to_string(),
+                    );
                 } else {
-                    self.roi_selector.set_status(format!(
-                        "Loaded labels/{}.",
-                        self.seg_label_selected.as_str()
-                    ));
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.labels.load",
+                        params: serde_json::json!({"name":name}),
+                    });
+                    self.roi_selector
+                        .set_status(format!("Loading labels/{name}..."));
                 }
             }
             RoiSelectorAction::LoadMasks => match self.request_exclusion_masks_reload() {
@@ -290,99 +294,6 @@ impl OmeZarrViewerApp {
         Ok(current_count)
     }
 
-    pub(super) fn refresh_seg_label_names_for_current_roi(&mut self) {
-        if self.dataset.is_root_label_mask() {
-            self.seg_label_names.clear();
-            self.seg_label_selected = LabelZarrDataset::root_label_name(&self.dataset);
-            self.seg_label_input = self.seg_label_selected.clone();
-            self.seg_label_prompt_open = false;
-            return;
-        }
-
-        self.seg_label_names = self
-            .spatial_root
-            .as_deref()
-            .or_else(|| self.dataset.source.local_path())
-            .map(discover_label_names_local)
-            .unwrap_or_default();
-        if self.seg_label_selected.trim().is_empty() {
-            self.seg_label_selected = if self.seg_label_names.iter().any(|n| n == "cells") {
-                "cells".to_string()
-            } else if let Some(first) = self.seg_label_names.first() {
-                first.clone()
-            } else {
-                "cells".to_string()
-            };
-        }
-        if !self.seg_label_names.is_empty()
-            && !self
-                .seg_label_names
-                .iter()
-                .any(|n| n == &self.seg_label_selected)
-        {
-            self.seg_label_selected = if self.seg_label_names.iter().any(|n| n == "cells") {
-                "cells".to_string()
-            } else {
-                self.seg_label_names[0].clone()
-            };
-        }
-        if self.seg_label_input.trim().is_empty() || self.seg_label_input == self.seg_label_selected
-        {
-            self.seg_label_input = self.seg_label_selected.clone();
-        }
-    }
-
-    pub(super) fn ensure_segmentation_labels_loaded(&mut self) -> anyhow::Result<()> {
-        let name = self.seg_label_selected.trim().to_string();
-        if name.is_empty() {
-            anyhow::bail!("label name is empty");
-        }
-        self.load_segmentation_labels(name.as_str())
-    }
-
-    pub(super) fn load_segmentation_labels(&mut self, label_name: &str) -> anyhow::Result<()> {
-        if self.dataset.is_root_label_mask() {
-            return self.load_root_segmentation_labels();
-        }
-        if self.tiles_gl.is_none() {
-            anyhow::bail!("segmentation overlay requires the GPU path");
-        }
-        self.labels_gl
-            .get_or_insert_with(|| LabelsGl::new(1024))
-            .reset();
-
-        let label_store = self
-            .spatial_label_store
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| self.store.clone());
-        match LabelZarrDataset::try_open(label_store.clone(), label_name)? {
-            Some(lbl) => {
-                self.spatial_label_transform = self.spatial_label_transform_for_name(label_name);
-                self.label_loader =
-                    spawn_label_tile_loader(label_store, lbl.levels.clone(), lbl.dims.clone()).ok();
-                self.label_cells_xform = Some(compute_label_to_world_xforms(
-                    &self.dataset,
-                    &lbl,
-                    self.spatial_label_transform,
-                ));
-                self.label_cells = Some(lbl);
-                self.cells_outlines_visible = true;
-                self.seg_label_selected = label_name.to_string();
-                self.seg_label_input = self.seg_label_selected.clone();
-                self.seg_label_prompt_open = false;
-                self.rebuild_layer_orders();
-                Ok(())
-            }
-            None => {
-                self.label_cells = None;
-                self.label_loader = None;
-                self.label_cells_xform = None;
-                anyhow::bail!("no labels/{label_name} found in this ROI")
-            }
-        }
-    }
-
     pub(super) fn ui_seg_label_prompt(&mut self, ctx: &egui::Context) {
         if !self.seg_label_prompt_open {
             return;
@@ -408,20 +319,13 @@ impl OmeZarrViewerApp {
                     self.seg_label_prompt_preference = LabelPromptSessionPreference::Ask;
                     self.seg_label_prompt_always = false;
                 } else {
-                    match self.load_segmentation_labels(name.as_str()) {
-                        Ok(()) => {
-                            self.seg_label_status.clear();
-                            self.set_active_layer(LayerId::SegmentationLabels);
-                            self.bump_render_id();
-                            self.seg_label_prompt_open = false;
-                            return;
-                        }
-                        Err(err) => {
-                            self.seg_label_status = format!("Load labels/{name} failed: {err}");
-                            self.seg_label_prompt_preference = LabelPromptSessionPreference::Ask;
-                            self.seg_label_prompt_always = false;
-                        }
-                    }
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.labels.load",
+                        params: serde_json::json!({"name":name}),
+                    });
+                    self.seg_label_status = format!("Loading labels/{name}...");
+                    self.seg_label_prompt_open = false;
+                    return;
                 }
             }
             LabelPromptSessionPreference::Ask => {}
@@ -480,24 +384,17 @@ impl OmeZarrViewerApp {
                         if name.is_empty() {
                             self.seg_label_status = "Label name is empty.".to_string();
                         } else {
-                            match self.load_segmentation_labels(name.as_str()) {
-                                Ok(()) => {
-                                    self.seg_label_prompt_preference =
-                                        if self.seg_label_prompt_always {
-                                            LabelPromptSessionPreference::AlwaysLoad
-                                        } else {
-                                            LabelPromptSessionPreference::Ask
-                                        };
-                                    self.seg_label_status.clear();
-                                    self.set_active_layer(LayerId::SegmentationLabels);
-                                    self.bump_render_id();
-                                    request_close = true;
-                                }
-                                Err(err) => {
-                                    self.seg_label_status =
-                                        format!("Load labels/{name} failed: {err}");
-                                }
-                            }
+                            self.seg_label_prompt_preference = if self.seg_label_prompt_always {
+                                LabelPromptSessionPreference::AlwaysLoad
+                            } else {
+                                LabelPromptSessionPreference::Ask
+                            };
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "viewer.labels.load",
+                                params: serde_json::json!({"name":name}),
+                            });
+                            self.seg_label_status = format!("Loading labels/{name}...");
+                            request_close = true;
                         }
                     }
                 });

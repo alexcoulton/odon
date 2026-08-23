@@ -209,13 +209,11 @@ impl OmeZarrViewerApp {
                 self.seg_label_selected = label_name.to_string();
                 self.seg_label_input = self.seg_label_selected.clone();
                 if self.tiles_gl.is_some() {
-                    match self.load_segmentation_labels(label_name) {
-                        Ok(()) => {
-                            self.seg_label_prompt_open = false;
-                            self.bump_render_id();
-                        }
-                        Err(err) => notes.push(format!("labels/{label_name} failed: {err}")),
-                    }
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.labels.load",
+                        params: serde_json::json!({"name":label_name}),
+                    });
+                    self.seg_label_prompt_open = false;
                 }
             } else {
                 notes.push(format!("labels/{label_name} was not found"));

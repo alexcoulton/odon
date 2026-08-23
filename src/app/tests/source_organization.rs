@@ -1681,6 +1681,37 @@ fn remote_dataset_io_is_actor_backed_and_not_renderer_local() {
 }
 
 #[test]
+fn label_discovery_and_loading_are_actor_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let construction = source(root.join("src/app/construction.rs"));
+    let datasets = source(root.join("src/app/datasets.rs"));
+    let lifecycle = source(root.join("src/app/lifecycle.rs"));
+    let project = source(root.join("src/app/project_integration.rs"));
+    let properties = source(root.join("src/app/layer_properties.rs"));
+    let projection = source(root.join("src/app/actor_projection.rs"));
+    let worker = source(root.join("src/control/actor/worker.rs"));
+
+    for renderer in [&construction, &datasets, &lifecycle, &project, &properties] {
+        for forbidden in [
+            "discover_label_names_local",
+            "LabelZarrDataset::try_open",
+            "fn load_segmentation_labels(",
+            "fn load_root_segmentation_labels(",
+        ] {
+            assert!(
+                !renderer.contains(forbidden),
+                "label discovery/loading must not return to a renderer path: {forbidden}"
+            );
+        }
+    }
+    assert!(datasets.contains("\"viewer.labels.load\""));
+    assert!(properties.contains("\"viewer.labels.load\""));
+    assert!(properties.contains("\"viewer.labels.set_visibility\""));
+    assert!(projection.contains("projection.get(\"labels\")"));
+    assert!(worker.contains("LoadJob::Labels"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1972,7 +2003,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 291,
+        total_fields, 292,
         "review the ownership ledger when host fields change"
     );
 }

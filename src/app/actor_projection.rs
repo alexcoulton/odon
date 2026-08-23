@@ -492,6 +492,57 @@ impl OmeZarrViewerApp {
         &mut self,
         projection: &serde_json::Value,
     ) -> Result<(), String> {
+        if let Some(labels) = projection.get("labels") {
+            let generation = labels
+                .get("generation")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if self.control_actor_label_state_generation != Some(generation) {
+                self.seg_label_names = labels
+                    .get("available")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect();
+                self.seg_label_selected = labels
+                    .get("selected")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.seg_label_input = self.seg_label_selected.clone();
+                self.seg_label_status = labels
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let loaded = labels.get("loaded").is_some_and(|value| !value.is_null());
+                let actor_owned = labels
+                    .get("actor_owned")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                self.seg_label_prompt_open = false;
+                if !loaded && !actor_owned && !self.seg_label_names.is_empty() {
+                    match self.seg_label_prompt_preference {
+                        LabelPromptSessionPreference::Ask => {
+                            self.seg_label_prompt_open = self.tiles_gl.is_some();
+                        }
+                        LabelPromptSessionPreference::AlwaysLoad
+                            if !self.seg_label_selected.is_empty() =>
+                        {
+                            self.native_control_intents.push(NativeControlIntent {
+                                method: "viewer.labels.load",
+                                params: serde_json::json!({"name":self.seg_label_selected}),
+                            });
+                        }
+                        LabelPromptSessionPreference::AlwaysSkip
+                        | LabelPromptSessionPreference::AlwaysLoad => {}
+                    }
+                }
+                self.control_actor_label_state_generation = Some(generation);
+            }
+        }
         if let Some(left_tab) = projection
             .get("ui")
             .and_then(|ui| ui.get("left_tab"))

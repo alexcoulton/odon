@@ -141,7 +141,7 @@ mod viewport_runtime;
 mod viewport_ui;
 use crate::xenium::XeniumLayers;
 use odon::control::{DataResourceSnapshot, LayerSnapshot};
-use odon::model::{LabelZarrDataset, discover_label_names_local};
+use odon::model::LabelZarrDataset;
 
 // Single-dataset viewer shell.
 //
@@ -1943,6 +1943,7 @@ pub struct OmeZarrViewerApp {
     control_actor_secondary_object_selection_generations: HashMap<u64, u64>,
     control_actor_secondary_object_analysis_generations: HashMap<u64, u64>,
     control_actor_label_generation: u64,
+    control_actor_label_state_generation: Option<u64>,
     control_actor_object_selection_generation: u64,
     control_actor_mask_generation: u64,
     control_actor_workspace_revision: u64,

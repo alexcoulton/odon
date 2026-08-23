@@ -446,34 +446,25 @@ impl OmeZarrViewerApp {
                     if self.dataset.is_root_label_mask() {
                         ui.label(self.seg_label_selected.clone());
                     } else if !self.seg_label_names.is_empty() {
-                        let before = self.seg_label_selected.clone();
+                        let mut selected = self.seg_label_selected.clone();
                         egui::ComboBox::from_id_salt("seg_label_select")
-                            .selected_text(self.seg_label_selected.clone())
+                            .selected_text(selected.clone())
                             .show_ui(ui, |ui| {
                                 for name in self.seg_label_names.clone() {
-                                    ui.selectable_value(
-                                        &mut self.seg_label_selected,
-                                        name.clone(),
-                                        name,
-                                    );
+                                    ui.selectable_value(&mut selected, name.clone(), name);
                                 }
                             });
 
-                        if ui.button("Reload").clicked() || self.seg_label_selected != before {
-                            let name = self.seg_label_selected.trim().to_string();
+                        if ui.button("Reload").clicked() || selected != self.seg_label_selected {
+                            let name = selected.trim().to_string();
                             if name.is_empty() {
                                 self.seg_label_status = "Label name is empty.".to_string();
                             } else {
-                                match self.load_segmentation_labels(name.as_str()) {
-                                    Ok(()) => {
-                                        self.seg_label_status =
-                                            format!("Loaded labels/{}.", name.as_str());
-                                    }
-                                    Err(err) => {
-                                        self.seg_label_status =
-                                            format!("Load labels/{} failed: {err}", name.as_str());
-                                    }
-                                }
+                                self.native_control_intents.push(NativeControlIntent {
+                                    method: "viewer.labels.load",
+                                    params: serde_json::json!({"name":name}),
+                                });
+                                self.seg_label_status = format!("Loading labels/{name}...");
                             }
                         }
                     } else {
@@ -483,23 +474,13 @@ impl OmeZarrViewerApp {
                             if name.is_empty() {
                                 self.seg_label_status = "Label name is empty.".to_string();
                             } else {
-                                self.seg_label_selected = name.clone();
-                                match self.load_segmentation_labels(name.as_str()) {
-                                    Ok(()) => {
-                                        self.seg_label_status =
-                                            format!("Loaded labels/{}.", name.as_str());
-                                    }
-                                    Err(err) => {
-                                        self.seg_label_status =
-                                            format!("Load labels/{} failed: {err}", name.as_str());
-                                    }
-                                }
+                                self.native_control_intents.push(NativeControlIntent {
+                                    method: "viewer.labels.load",
+                                    params: serde_json::json!({"name":name}),
+                                });
+                                self.seg_label_status = format!("Loading labels/{name}...");
                             }
                         }
-                    }
-
-                    if !self.dataset.is_root_label_mask() && ui.button("Refresh").clicked() {
-                        self.refresh_seg_label_names_for_current_roi();
                     }
                 });
 
@@ -513,7 +494,13 @@ impl OmeZarrViewerApp {
                 }
 
                 ui.separator();
-                ui.checkbox(&mut self.cells_outlines_visible, "Visible");
+                let mut visible = self.cells_outlines_visible;
+                if ui.checkbox(&mut visible, "Visible").changed() {
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.labels.set_visibility",
+                        params: serde_json::json!({"visible":visible}),
+                    });
+                }
                 ui.add(
                     egui::Slider::new(&mut self.cells_outlines_opacity, 0.0..=1.0)
                         .text("Opacity")

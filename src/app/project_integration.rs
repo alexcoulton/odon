@@ -157,12 +157,8 @@ impl OmeZarrViewerApp {
         self.label_cells = None;
         self.label_loader = None;
         self.label_cells_xform = None;
-        self.seg_label_names = discover_label_names_local(&spatial_root);
-        self.seg_label_selected = labels
-            .as_ref()
-            .map(|l| l.name.clone())
-            .or_else(|| self.seg_label_names.first().cloned())
-            .unwrap_or_default();
+        self.seg_label_names.clear();
+        self.seg_label_selected.clear();
         self.seg_label_input = self.seg_label_selected.clone();
         self.seg_label_prompt_open = false;
 
@@ -214,14 +210,6 @@ impl OmeZarrViewerApp {
             self.spatial_layers
                 .load_points_with_image_size(&pt, *max_points, image_size);
         }
-        if labels.is_some() && self.tiles_gl.is_some() && !self.seg_label_selected.is_empty() {
-            let selected_label = self.seg_label_selected.clone();
-            if let Err(err) = self.load_segmentation_labels(selected_label.as_str()) {
-                self.seg_label_status =
-                    format!("Load labels/{} failed: {err}", self.seg_label_selected);
-            }
-        }
-
         self.rebuild_layer_orders();
         self.bump_render_id();
     }

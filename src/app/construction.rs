@@ -32,21 +32,11 @@ impl OmeZarrViewerApp {
             (None, None)
         };
 
-        let seg_label_names = dataset
-            .source
-            .local_path()
-            .map(discover_label_names_local)
-            .unwrap_or_default();
-        let seg_label_selected = if seg_label_names.iter().any(|n| n == "cells") {
-            "cells".to_string()
-        } else if let Some(first) = seg_label_names.first() {
-            first.clone()
-        } else {
-            "cells".to_string()
-        };
-        let seg_label_input = seg_label_selected.clone();
+        let seg_label_names = Vec::new();
+        let seg_label_selected = String::new();
+        let seg_label_input = String::new();
         let seg_label_status = String::new();
-        let seg_label_prompt_open = cc.gl.is_some() && !seg_label_names.is_empty();
+        let seg_label_prompt_open = false;
 
         let (label_cells, label_loader, label_cells_xform, labels_gl) = if cc.gl.is_some() {
             // Labels are not auto-loaded; we prompt on open if any are present.
@@ -203,6 +193,7 @@ impl OmeZarrViewerApp {
             control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_secondary_object_analysis_generations: HashMap::new(),
             control_actor_label_generation: 0,
+            control_actor_label_state_generation: None,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
             control_actor_workspace_revision: 0,
@@ -276,7 +267,6 @@ impl OmeZarrViewerApp {
             viewport_frame_plan_samples: 0,
         };
 
-        app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
         app.capture_loaded_layer_offsets();
         app.maybe_apply_auto_contrast_on_open();
@@ -324,21 +314,11 @@ impl OmeZarrViewerApp {
             (None, None)
         };
 
-        let seg_label_names = dataset
-            .source
-            .local_path()
-            .map(discover_label_names_local)
-            .unwrap_or_default();
-        let seg_label_selected = if seg_label_names.iter().any(|n| n == "cells") {
-            "cells".to_string()
-        } else if let Some(first) = seg_label_names.first() {
-            first.clone()
-        } else {
-            "cells".to_string()
-        };
-        let seg_label_input = seg_label_selected.clone();
+        let seg_label_names = Vec::new();
+        let seg_label_selected = String::new();
+        let seg_label_input = String::new();
         let seg_label_status = String::new();
-        let seg_label_prompt_open = gpu_available && !seg_label_names.is_empty();
+        let seg_label_prompt_open = false;
 
         let (label_cells, label_loader, label_cells_xform, labels_gl) = if gpu_available {
             // Labels are not auto-loaded; we prompt on open if any are present.
@@ -492,6 +472,7 @@ impl OmeZarrViewerApp {
             control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_secondary_object_analysis_generations: HashMap::new(),
             control_actor_label_generation: 0,
+            control_actor_label_state_generation: None,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
             control_actor_workspace_revision: 0,
@@ -565,7 +546,6 @@ impl OmeZarrViewerApp {
             viewport_frame_plan_samples: 0,
         };
 
-        app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
         app.capture_loaded_layer_offsets();
         app.maybe_apply_auto_contrast_on_open();
@@ -654,21 +634,11 @@ impl OmeZarrViewerApp {
         camera.center_world_lvl0 = egui::pos2(0.0, 0.0);
         camera.zoom_screen_per_lvl0_px = 0.1;
 
-        let seg_label_names = dataset
-            .source
-            .local_path()
-            .map(discover_label_names_local)
-            .unwrap_or_default();
-        let seg_label_selected = if seg_label_names.iter().any(|n| n == "cells") {
-            "cells".to_string()
-        } else if let Some(first) = seg_label_names.first() {
-            first.clone()
-        } else {
-            "cells".to_string()
-        };
-        let seg_label_input = seg_label_selected.clone();
+        let seg_label_names = Vec::new();
+        let seg_label_selected = String::new();
+        let seg_label_input = String::new();
         let seg_label_status = String::new();
-        let seg_label_prompt_open = gpu_available && !seg_label_names.is_empty();
+        let seg_label_prompt_open = false;
 
         let (label_cells, label_loader, label_cells_xform, labels_gl) = if gpu_available {
             (None, None, None, Some(LabelsGl::new(1024)))
@@ -806,6 +776,7 @@ impl OmeZarrViewerApp {
             control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_secondary_object_analysis_generations: HashMap::new(),
             control_actor_label_generation: 0,
+            control_actor_label_state_generation: None,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
             control_actor_workspace_revision: 0,
@@ -876,7 +847,6 @@ impl OmeZarrViewerApp {
             viewport_frame_plan_samples: 0,
         };
 
-        app.configure_root_label_dataset_if_needed();
         app.rebuild_layer_orders();
         app.capture_loaded_layer_offsets();
         app.active_render_id = app.compute_render_id();
