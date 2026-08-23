@@ -478,7 +478,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor viewport workspace model",
         "projection_source": "workspace projection",
-        "renderer_consumers": "read-only projected topology plus per-frame viewport swapping and paint planning; native topology mutation fallbacks and renderer-to-actor dataset bootstrap removed",
+        "renderer_consumers": "read-only projected topology plus per-frame viewport swapping and paint planning; native topology mutation fallbacks, renderer-to-actor dataset bootstrap, and production in-process project restoration removed",
         "persistence_consumers": "project workspace and saved views",
         "native_commit_point": "typed workspace command",
         "milestone": 3

@@ -56,6 +56,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn apply_project_camera_state(&mut self, state: &ProjectCameraState) {
         self.camera.center_world_lvl0 =
             egui::pos2(state.center_world_lvl0[0], state.center_world_lvl0[1]);
@@ -89,6 +90,7 @@ impl OmeZarrViewerApp {
         path.to_string_lossy().to_string()
     }
 
+    #[cfg(test)]
     pub(super) fn resolve_project_path(&self, path: &str) -> PathBuf {
         let path_buf = PathBuf::from(path);
         if path_buf.is_absolute() {
@@ -144,6 +146,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn restore_annotation_layers(&mut self, layers: &[ProjectAnnotationLayerState]) {
         self.annotation_layers.clear();
         self.next_annotation_layer_id = 1;
@@ -201,6 +204,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn apply_project_ui_state(&mut self, state: &ProjectUiState) {
         if let Some(show_left_panel) = state.show_left_panel {
             self.show_left_panel = show_left_panel;

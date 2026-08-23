@@ -542,6 +542,15 @@ impl AppModel {
         self.document_generation = self.document_generation.wrapping_add(1).max(1);
         let source_key = dataset.source.source_key();
         self.install_dataset(dataset);
+        if let Some(masks) = self
+            .project
+            .mask_layers_for_source_key(&source_key)
+            .map(|layers| layers.to_vec())
+        {
+            let dataset = self.dataset_mut()?;
+            dataset.masks.replace(masks, None);
+            Self::sync_mask_native_layers(dataset);
+        }
         if let Some(view) = self.project.roi_view_state_json(&source_key).cloned() {
             self.restore_project_roi_view(&view)?;
         }

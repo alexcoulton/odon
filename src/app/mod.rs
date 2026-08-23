@@ -1799,6 +1799,7 @@ impl ViewerViewportState {
         }
     }
 
+    #[cfg(test)]
     fn set_layer_visible(&mut self, id: LayerId, visible: bool) {
         match id {
             LayerId::Channel(index) => {

@@ -20,6 +20,17 @@ impl ProjectModel {
             .and_then(|views| views.get(source_key))
     }
 
+    pub(crate) fn mask_layers_for_source_key(
+        &self,
+        source_key: &str,
+    ) -> Option<&[crate::data::project_config::ProjectMaskLayer]> {
+        self.snapshot
+            .rois
+            .iter()
+            .find(|roi| roi.source_key().as_deref() == Some(source_key))
+            .map(|roi| roi.mask_layers.as_slice())
+    }
+
     pub(crate) fn activate_roi(&mut self, roi: &ProjectRoi) -> Result<(), ControlError> {
         let index = self.roi_index_by_id(&roi.id)?;
         let key = required_source_key(&self.snapshot.rois[index])?;

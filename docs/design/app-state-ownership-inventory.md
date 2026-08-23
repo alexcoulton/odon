@@ -340,9 +340,11 @@ renderer-to-actor report no longer sends a workspace snapshot: its dedicated obs
 contains only shared-resource/cache telemetry, frame and tile-loading observations, and missing
 native-layer resource descriptors. Dataset bootstrap no longer serializes renderer workspace state
 into the actor: the project snapshot is installed first and the actor restores its matching ROI
-view before producing the initial projection. Remaining in-process project compatibility
-restoration and mutation of the combined per-frame viewport container stay open in the
-`viewer.workspace_projection` ledger row.
+view and persisted masks before producing the initial projection. Production project attachment
+and renderer-side dataset switching no longer invoke the in-process semantic restorer; it remains
+test-only while its persistence characterizations are converted. Mutation of the combined
+per-frame viewport container stays open in the `viewer.workspace_projection` ledger row, while
+heavyweight project resource materialization is tracked in the resource milestones.
 Frame capture may retain an optimistic camera or slice preview for painting, but it no longer
 increments actor-owned navigation/presentation revisions or copies linked navigation to sibling
 viewports. Camera fit and committed plane changes always queue typed actor commands; query-only
@@ -357,8 +359,8 @@ longer branch on whether the first projection has arrived. Gesture fields retain
 preview and starting revision; the committed state is a typed actor command. Panel visibility,
 left- and right-tab selection, rendering preferences, and the native scale-bar action likewise wait
 for projection instead of changing actor-owned renderer fields directly. The single-view panel
-settings ledger row is therefore actor-owned; the remaining in-process project restoration paths
-are the open workspace boundary.
+settings ledger row is therefore actor-owned; the combined renderer projection/frame-state
+container is the remaining Milestone 3 workspace boundary.
 
 ## Native cutover status
 

@@ -89,6 +89,7 @@ impl OmeZarrViewerApp {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn restore_project_workspace(
         &mut self,
         saved: &ProjectWorkspaceViewState,
@@ -387,6 +388,7 @@ impl OmeZarrViewerApp {
             .set_roi_view_state(&self.dataset.source, view);
     }
 
+    #[cfg(test)]
     pub(super) fn apply_view_state_from_project_space(&mut self) {
         let saved_view = self
             .project_space

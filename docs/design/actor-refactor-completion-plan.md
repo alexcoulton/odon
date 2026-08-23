@@ -200,8 +200,11 @@ semantic fallback. Project compatibility restoration and the mutable per-frame v
 container remain to be narrowed before the first ownership slice is closed. Production dataset
 bootstrap no longer accepts a renderer workspace: the project snapshot is installed first, and the
 actor restores the matching persisted ROI view into its canonical workspace before projecting it.
-Legacy in-process `set_project_space` restoration paths still need to cross that same boundary.
-Native channel
+Persisted project masks are installed in the same actor transaction. Production single-view
+project attachment and renderer-side dataset switching no longer call the legacy in-process view
+restorer; that routine is now compiled only for persistence characterization tests. Remaining
+annotation and other heavyweight project resources belong to the shared-resource work in
+Milestone 5. Native channel
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
 the renderer only as the current paint/UI input.

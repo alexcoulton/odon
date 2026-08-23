@@ -104,6 +104,7 @@ impl OmeZarrViewerApp {
         });
     }
 
+    #[cfg(test)]
     pub fn set_project_space(&mut self, project_space: ProjectSpace) {
         self.project_space = project_space;
         self.apply_view_state_from_project_space();

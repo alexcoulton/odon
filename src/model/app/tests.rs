@@ -727,11 +727,31 @@ fn dataset_bootstrap_restores_actor_project_workspace_and_supersedes_workers() {
         .unwrap();
     let saved_workspace = project_workspace_view_json(&source.dataset().unwrap().workspace);
     let source_key = dataset.source.source_key();
+    let mut roi = ProjectRoi {
+        id: "fixture-roi".to_string(),
+        display_name: Some("Fixture ROI".to_string()),
+        mask_layers: vec![ProjectMaskLayer {
+            id: 17,
+            name: "Persisted mask".to_string(),
+            visible: true,
+            opacity: 0.4,
+            width_screen_px: 2.0,
+            display_mode: Some("translucent_fill".to_string()),
+            color_rgb: [12, 34, 56],
+            offset_world: [0.0, 0.0],
+            editable: true,
+            polygons_world: vec![vec![[1.0, 1.0], [4.0, 1.0], [1.0, 4.0], [1.0, 1.0]]],
+            source_geojson: None,
+        }],
+        ..ProjectRoi::default()
+    };
+    roi.set_dataset_source(dataset.source.clone());
 
     let mut target = AppModel::project();
     assert!(
         target.bootstrap_project_from_renderer(ProjectModelSnapshot {
             state: json!({"roi_views": {source_key: {"workspace": saved_workspace}}}),
+            rois: vec![roi],
             ..ProjectModelSnapshot::default()
         })
     );
@@ -740,11 +760,20 @@ fn dataset_bootstrap_restores_actor_project_workspace_and_supersedes_workers() {
         .bootstrap_dataset(&dataset)
         .expect("actor project state bootstraps atomically");
     assert!(!target.install_dataset_for_generation(stale_generation, &dataset, Vec::new(), None));
-    let mut restored = target.render_workspace_snapshot().unwrap();
-    let mut expected = source.render_workspace_snapshot().unwrap();
-    restored.as_object_mut().unwrap().remove("revision");
-    expected.as_object_mut().unwrap().remove("revision");
-    assert_eq!(restored, expected);
+    let restored = target.render_workspace_snapshot().unwrap();
+    let expected = source.render_workspace_snapshot().unwrap();
+    for field in ["layout", "ratio", "active_viewport_id", "links"] {
+        assert_eq!(restored[field], expected[field], "workspace field {field}");
+    }
+    assert_eq!(restored["viewports"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        restored["viewports"][0]["channels"],
+        expected["viewports"][0]["channels"]
+    );
+    assert_eq!(
+        target.workspace_snapshot().unwrap()["masks"]["layers"][0]["id"],
+        17
+    );
 }
 
 #[test]

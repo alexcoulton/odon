@@ -108,6 +108,7 @@ impl SpatialImageLayers {
         }
     }
 
+    #[cfg(test)]
     pub fn set_smooth_pixels(&mut self, smooth_pixels: bool) {
         for layer in &mut self.images {
             layer.set_smooth_pixels(smooth_pixels);
@@ -213,6 +214,7 @@ impl SpatialImageLayer {
         })
     }
 
+    #[cfg(test)]
     pub fn set_smooth_pixels(&mut self, smooth_pixels: bool) {
         if let Some(tiles_gl) = self.tiles_gl.as_ref() {
             tiles_gl.set_smooth_pixels(smooth_pixels);

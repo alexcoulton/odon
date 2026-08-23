@@ -1240,6 +1240,12 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(!root.contains("app.set_show_scale_bar(visible)"));
     assert!(root.contains("runtime.bootstrap_project_model(snapshot)"));
     assert!(
+        !root.contains("app.set_project_space(")
+            && !root.contains("single.set_project_space(")
+            && !root.contains("restored.set_project_space("),
+        "RootApp must attach projected project state without asking the renderer to restore semantic workspace state"
+    );
+    assert!(
         !root.contains("app.control_viewport_workspace_snapshot(),"),
         "dataset bootstrap must restore actor-owned project state instead of importing a renderer workspace"
     );
@@ -1254,6 +1260,11 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(
         !bootstrap_variant.contains("workspace"),
         "renderer workspace data must not cross the production dataset-bootstrap boundary"
+    );
+    let datasets = source(app_dir.join("datasets.rs"));
+    assert!(
+        !datasets.contains("self.apply_view_state_from_project_space()"),
+        "renderer-side dataset switching must wait for the actor's persisted-view projection"
     );
 }
 

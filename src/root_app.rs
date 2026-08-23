@@ -1598,7 +1598,7 @@ impl RootApp {
             Mode::Single(app) => {
                 let mut ps = app.take_project_space();
                 ps.handle_dropped_paths(paths);
-                app.set_project_space(ps);
+                app.set_project_space_from_actor(ps);
             }
             Mode::Mosaic { mosaic, .. } => mosaic.project_space_mut().handle_dropped_paths(paths),
             Mode::Transition => {}
@@ -1648,7 +1648,7 @@ impl RootApp {
                 let mut single = single;
                 let mut ps = project_space;
                 ps.set_status(format!("Open mosaic failed: {err}"));
-                single.set_project_space(ps);
+                single.set_project_space_from_actor(ps);
                 self.mode = Mode::Single(single);
             }
         }
@@ -1680,7 +1680,7 @@ impl RootApp {
                     self.app_settings.auto_contrast,
                 );
                 self.configure_single_app(&mut app);
-                app.set_project_space(project_space);
+                app.set_project_space_from_actor(project_space);
                 self.mode = Mode::Single(app);
             }
             Err(err) => {
@@ -2380,7 +2380,7 @@ impl eframe::App for RootApp {
                     project_space
                         .set_status(format!("Added {count} remote ROI(s) to the project."));
                     if let Some(mut app) = single_restore {
-                        app.set_project_space(project_space);
+                        app.set_project_space_from_actor(project_space);
                         self.mode = Mode::Single(app);
                     } else if let Some((mut mosaic, ret)) = mosaic_restore {
                         mosaic.set_project_space(project_space);

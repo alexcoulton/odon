@@ -564,7 +564,8 @@ impl OmeZarrViewerApp {
             .unwrap_or(0.0);
         self.camera.center_world_lvl0 = egui::pos2(new_world_w * fx, new_world_h * fy);
         self.camera.zoom_screen_per_lvl0_px = old_zoom;
-        self.apply_view_state_from_project_space();
+        // Persisted presentation is restored by the control actor after RootApp observes the new
+        // dataset signature. Do not make the renderer a second project-workspace authority here.
         self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
         self.chanmax_pending = vec![false; self.channels.len()];
         self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
