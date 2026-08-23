@@ -17,6 +17,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             resource_generation,
             operation_generation,
             viewport_id,
+            target,
             expected_presentation_revision,
             request,
             result,
@@ -24,6 +25,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             if request_is_cancelled(&request) {
                 model.cancel_object_filter_for_generation(
                     &viewport_id,
+                    target,
                     operation_generation,
                     "Object filter evaluation cancelled",
                 );
@@ -37,6 +39,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         resource_generation,
                         operation_generation,
                         &viewport_id,
+                        target,
                         expected_presentation_revision,
                         result,
                     ) {
@@ -44,10 +47,17 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                             request.command.method(),
                             "viewer.objects.set_filter" | "viewer.objects.filters.set_model"
                         ) {
-                            json!({
-                                "target":"segmentation_objects",
-                                "filter":response["result"].clone(),
-                            })
+                            match target {
+                                ObjectTarget::Primary => json!({
+                                    "target":"segmentation_objects",
+                                    "filter":response["result"].clone(),
+                                }),
+                                ObjectTarget::SpatialShape(layer_id) => json!({
+                                    "target":"spatial_shape",
+                                    "layer_id":layer_id,
+                                    "filter":response["result"].clone(),
+                                }),
+                            }
                         } else {
                             response
                         };
@@ -74,6 +84,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 Err(error) => {
                     let current = model.fail_object_filter_for_generation(
                         &viewport_id,
+                        target,
                         operation_generation,
                         format!("Invalid object filter: {error}"),
                     );
@@ -104,6 +115,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             resource_generation,
             selection_generation,
             operation_generation,
+            target,
             request,
             mode,
             limit,
@@ -111,6 +123,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         } => {
             if request_is_cancelled(&request) {
                 model.cancel_object_selection_filter_for_generation(
+                    target,
                     operation_generation,
                     "Object selection filter cancelled",
                 );
@@ -124,6 +137,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         resource_generation,
                         selection_generation,
                         operation_generation,
+                        target,
                         result,
                         &mode,
                         limit,
@@ -150,6 +164,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
                 Err(error) => {
                     model.fail_object_selection_filter_for_generation(
+                        target,
                         operation_generation,
                         format!("Invalid standalone object filter: {error}"),
                     );

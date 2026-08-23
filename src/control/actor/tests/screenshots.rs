@@ -99,7 +99,6 @@ fn screenshot_preferences_set_and_get_complete_without_a_ui_frame() {
         Some(output_dir.as_path())
     );
     assert!(!projection.screenshot_preferences.include_scale_bar());
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -139,7 +138,6 @@ fn invalid_screenshot_output_directory_does_not_replace_existing_preferences() {
         .unwrap();
     assert_eq!(current["output_dir"], Value::Null);
     assert_eq!(current["include_legend"], false);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -228,7 +226,6 @@ fn viewer_capture_waits_for_presentation_but_does_not_block_the_actor() {
         .recv_timeout(Duration::from_secs(2))
         .expect("deferred mutation settles after pixel readback")
         .unwrap();
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let image = image::open(&path).expect("open actor-written PNG");
     assert_eq!(image.dimensions(), (2, 2));
@@ -271,7 +268,6 @@ fn cancelled_capture_is_removed_while_waiting_for_presentation() {
     assert_eq!(error.kind, ControlErrorKind::Cancelled);
     assert!(!path.exists());
     assert!(channels.presentation_capture_rx.try_recv().is_err());
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 fn receive_capture_effect(
@@ -337,7 +333,6 @@ fn workspace_window_and_project_capture_scopes_are_actor_owned() {
     assert_eq!(effect.mode, ModelMode::Single);
     assert_eq!(effect.scope, PresentationCaptureScope::Workspace);
     reject_test_capture(&workspace_actor, effect, response);
-    assert_eq!(workspace_actor.legacy_rx.len(), 0);
 
     let window_actor = spawn_test_actor();
     let (effect, response, projection) = receive_capture_effect(
@@ -349,7 +344,6 @@ fn workspace_window_and_project_capture_scopes_are_actor_owned() {
     assert_eq!(effect.mode, ModelMode::Project);
     assert_eq!(effect.scope, PresentationCaptureScope::Window);
     reject_test_capture(&window_actor, effect, response);
-    assert_eq!(window_actor.legacy_rx.len(), 0);
 
     let project_actor = spawn_test_actor();
     open_fixture(&project_actor);
@@ -363,7 +357,6 @@ fn workspace_window_and_project_capture_scopes_are_actor_owned() {
     assert_eq!(effect.mode, ModelMode::Project);
     assert_eq!(effect.scope, PresentationCaptureScope::Project);
     reject_test_capture(&project_actor, effect, response);
-    assert_eq!(project_actor.legacy_rx.len(), 0);
 }
 
 #[test]

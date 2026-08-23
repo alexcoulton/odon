@@ -79,7 +79,6 @@ fn project_object_preload_completes_and_projects_shared_resources_without_a_fram
     assert_eq!(completed["completed"], true);
     assert_eq!(completed["preload"]["cached"], 1);
     assert_eq!(completed["preload"]["loading"], false);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.project_object_preload.state["cached"], 1);
@@ -167,7 +166,6 @@ fn clearing_project_object_preload_rejects_its_late_worker_completion() {
         .unwrap()
         .unwrap_err();
     assert_eq!(error.kind, ControlErrorKind::Conflict);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let _ = std::fs::remove_file(project_path);
     let _ = std::fs::remove_file(source_path);

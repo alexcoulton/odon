@@ -22,14 +22,28 @@ fn label_control_state_and_channel_presentation_are_bounded() {
         dataset: actor_labels,
         store: Arc::clone(&app.store),
     };
+    app.seg_label_prompt_open = true;
+    app.seg_label_prompt_always = true;
     assert!(
         app.install_control_actor_label_resource(7, &actor_resource)
             .unwrap()
     );
+    assert!(!app.seg_label_prompt_open);
+    assert!(!app.seg_label_prompt_always);
     assert_eq!(app.control_labels_json()["loaded"], "cells");
     assert_eq!(app.control_labels_json()["actor_owned"], true);
+    app.seg_label_prompt_open = true;
+    app.seg_label_prompt_always = true;
     assert!(app.unload_control_actor_label_resource(8));
+    assert!(!app.seg_label_prompt_open);
+    assert!(!app.seg_label_prompt_always);
     assert!(app.control_labels_json()["loaded"].is_null());
+
+    // Replayed/coalesced projections must also dismiss a prompt that opened while the actor
+    // resource was being prepared, even when the semantic generation is unchanged.
+    app.seg_label_prompt_open = true;
+    assert!(!app.unload_control_actor_label_resource(8));
+    assert!(!app.seg_label_prompt_open);
 
     let presentation = app.control_set_channel_presentation(
         &serde_json::json!({"search": "nuc", "sort": "visible_first"}),

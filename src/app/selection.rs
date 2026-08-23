@@ -8,12 +8,10 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn cancel_viewport_transient_gestures(&mut self) {
+        self.cancel_mask_polygon_gesture();
+        self.cancel_native_layer_gestures();
         self.clear_spatial_selection_drag();
-        self.dragging_mask_vertex = None;
-        self.moving_mask_polygon = None;
         self.layer_drag = None;
-        self.layer_move = None;
-        self.layer_transform = None;
         self.drawing_mask_layer = None;
         self.drawing_mask_polygon.clear();
     }
@@ -97,98 +95,31 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub(super) fn control_world_rect_from_params(
-        &self,
-        params: &serde_json::Value,
-    ) -> Result<egui::Rect, String> {
-        if let Some(values) = params
-            .get("world_rect")
-            .and_then(serde_json::Value::as_array)
-        {
-            return control_rect_from_array(values, "world_rect");
-        }
-        if let Some(values) = params
-            .get("screen_rect")
-            .and_then(serde_json::Value::as_array)
-        {
-            let screen_rect = control_rect_from_array(values, "screen_rect")?;
-            let Some(viewport) = self.last_canvas_rect else {
-                return Err("screen_rect requires an active canvas viewport".to_string());
-            };
-            let world_min = self.camera.screen_to_world(screen_rect.min, viewport);
-            let world_max = self.camera.screen_to_world(screen_rect.max, viewport);
-            return Ok(normalized_rect(world_min, world_max));
-        }
-
-        let x0 = params
-            .get("min_x")
-            .or_else(|| params.get("x0"))
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32);
-        let y0 = params
-            .get("min_y")
-            .or_else(|| params.get("y0"))
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32);
-        let x1 = params
-            .get("max_x")
-            .or_else(|| params.get("x1"))
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32);
-        let y1 = params
-            .get("max_y")
-            .or_else(|| params.get("y1"))
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32);
-        match (x0, y0, x1, y1) {
-            (Some(x0), Some(y0), Some(x1), Some(y1)) => {
-                Ok(normalized_rect(egui::pos2(x0, y0), egui::pos2(x1, y1)))
-            }
-            _ => Err("provide world_rect, screen_rect, or min_x/min_y/max_x/max_y".to_string()),
-        }
-    }
-
-    pub(super) fn control_world_points_from_params(
-        &self,
-        params: &serde_json::Value,
-    ) -> Result<Vec<egui::Pos2>, String> {
-        let values = params
-            .get("world_points")
-            .or_else(|| params.get("points"))
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| "world_points is required".to_string())?;
-        if values.len() < 3 {
-            return Err("world_points must contain at least three points".to_string());
-        }
-        values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                let point = value
-                    .as_array()
-                    .ok_or_else(|| format!("world_points[{index}] must be [x, y]"))?;
-                if point.len() != 2 {
-                    return Err(format!("world_points[{index}] must be [x, y]"));
-                }
-                let x = point[0]
-                    .as_f64()
-                    .filter(|value| value.is_finite())
-                    .ok_or_else(|| format!("world_points[{index}][0] must be finite"))?;
-                let y = point[1]
-                    .as_f64()
-                    .filter(|value| value.is_finite())
-                    .ok_or_else(|| format!("world_points[{index}][1] must be finite"))?;
-                Ok(egui::pos2(x as f32, y as f32))
-            })
-            .collect()
-    }
-
-    pub(super) fn apply_rect_selection_to_active_layer(
+    pub(super) fn commit_rect_selection_to_active_layer(
         &mut self,
         world_rect: egui::Rect,
         additive: bool,
     ) -> usize {
-        match self.spatial_selection_target_layer() {
+        let target = self.spatial_selection_target_layer();
+        if self.actor_owns_object_selection_target(target) {
+            let offset = self.object_selection_target_offset(target);
+            let local = world_rect.translate(-offset);
+            let mut params = self.object_selection_target_params(target);
+            params.insert(
+                "world_rect".to_string(),
+                serde_json::json!([local.min.x, local.min.y, local.max.x, local.max.y]),
+            );
+            params.insert(
+                "mode".to_string(),
+                serde_json::json!(if additive { "add" } else { "replace" }),
+            );
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.objects.select_rect",
+                params: serde_json::Value::Object(params),
+            });
+            return 0;
+        }
+        match target {
             Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_rect(
                 world_rect,
                 self.seg_objects_offset_world,
@@ -212,12 +143,31 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub(super) fn apply_lasso_selection_to_active_layer(
+    pub(super) fn commit_lasso_selection_to_active_layer(
         &mut self,
         world_points: &[egui::Pos2],
         additive: bool,
     ) -> usize {
-        match self.spatial_selection_target_layer() {
+        let target = self.spatial_selection_target_layer();
+        if self.actor_owns_object_selection_target(target) {
+            let offset = self.object_selection_target_offset(target);
+            let points = world_points
+                .iter()
+                .map(|point| [point.x - offset.x, point.y - offset.y])
+                .collect::<Vec<_>>();
+            let mut params = self.object_selection_target_params(target);
+            params.insert("points".to_string(), serde_json::json!(points));
+            params.insert(
+                "mode".to_string(),
+                serde_json::json!(if additive { "add" } else { "replace" }),
+            );
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.objects.select_lasso",
+                params: serde_json::Value::Object(params),
+            });
+            return 0;
+        }
+        match target {
             Some(LayerId::SegmentationObjects) => self.seg_objects.select_in_world_lasso(
                 world_points,
                 self.seg_objects_offset_world,
@@ -238,6 +188,218 @@ impl OmeZarrViewerApp {
                 })
             }
             _ => 0,
+        }
+    }
+
+    pub(super) fn actor_owns_object_selection_target(&self, target: Option<LayerId>) -> bool {
+        match target {
+            Some(LayerId::SegmentationObjects) => self.control_actor_object_generation > 0,
+            Some(LayerId::SpatialShape(id)) => self
+                .control_actor_secondary_object_generations
+                .get(&id)
+                .is_some_and(|generation| *generation > 0),
+            _ => false,
+        }
+    }
+
+    fn object_selection_target_generation(&self, target: LayerId) -> u64 {
+        match target {
+            LayerId::SegmentationObjects => self.control_actor_object_selection_generation,
+            LayerId::SpatialShape(id) => self
+                .control_actor_secondary_object_selection_generations
+                .get(&id)
+                .copied()
+                .unwrap_or(0),
+            _ => 0,
+        }
+        .max(1)
+    }
+
+    fn object_selection_target_offset(&self, target: Option<LayerId>) -> egui::Vec2 {
+        match target {
+            Some(LayerId::SegmentationObjects) => self.seg_objects_offset_world,
+            Some(LayerId::SpatialShape(id)) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .map(|layer| layer.offset_world)
+                .unwrap_or_default(),
+            _ => egui::Vec2::ZERO,
+        }
+    }
+
+    pub(super) fn object_selection_target_params(
+        &self,
+        target: Option<LayerId>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut params = serde_json::Map::new();
+        match target {
+            Some(LayerId::SpatialShape(id)) => {
+                params.insert("target".to_string(), serde_json::json!("spatial_shape"));
+                params.insert("layer_id".to_string(), serde_json::json!(id));
+            }
+            _ => {
+                params.insert(
+                    "target".to_string(),
+                    serde_json::json!("segmentation_objects"),
+                );
+            }
+        }
+        if let Some(workspace) = self.viewport_workspace.as_ref() {
+            params.insert(
+                "viewport_id".to_string(),
+                serde_json::json!(workspace.active_id().as_str()),
+            );
+        }
+        params
+    }
+
+    pub(super) fn commit_point_selection_to_layer(
+        &mut self,
+        target: LayerId,
+        world: egui::Pos2,
+        additive: bool,
+        toggle: bool,
+    ) -> bool {
+        if self.actor_owns_object_selection_target(Some(target)) {
+            let state = match target {
+                LayerId::SegmentationObjects => {
+                    self.seg_objects.control_selection_state_after_click(
+                        world,
+                        self.seg_objects_offset_world,
+                        &self.camera,
+                        additive,
+                        toggle,
+                    )
+                }
+                LayerId::SpatialShape(id) => {
+                    let Some(layer) = self
+                        .spatial_layers
+                        .shapes
+                        .iter()
+                        .find(|layer| layer.id == id)
+                    else {
+                        return false;
+                    };
+                    let Some(objects) = layer.object_layer() else {
+                        return false;
+                    };
+                    objects.control_selection_state_after_click(
+                        world,
+                        layer.offset_world,
+                        &self.camera,
+                        additive,
+                        toggle,
+                    )
+                }
+                _ => return false,
+            };
+            let mut params = self.object_selection_target_params(Some(target));
+            params.insert(
+                "expected_generation".to_string(),
+                serde_json::json!(self.object_selection_target_generation(target)),
+            );
+            params.insert("state".to_string(), state);
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.objects.selection.state.replace",
+                params: serde_json::Value::Object(params),
+            });
+            return true;
+        }
+
+        match target {
+            LayerId::SegmentationObjects => {
+                self.seg_objects.select_at(
+                    world,
+                    self.seg_objects_offset_world,
+                    &self.camera,
+                    additive,
+                    toggle,
+                );
+                true
+            }
+            LayerId::SpatialShape(id) => self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == id)
+                .is_some_and(|layer| layer.select_at(world, additive, toggle, &self.camera)),
+            _ => false,
+        }
+    }
+
+    pub(super) fn commit_id_selection_to_layer(
+        &mut self,
+        target: LayerId,
+        ids: &[String],
+        id_set: &HashSet<String>,
+    ) -> Option<usize> {
+        let matched = match target {
+            LayerId::SegmentationObjects => self
+                .seg_objects
+                .has_data()
+                .then(|| self.seg_objects.object_indices_matching_ids(id_set).len()),
+            LayerId::SpatialShape(id) => self
+                .spatial_layers
+                .shapes
+                .iter()
+                .find(|layer| layer.id == id)
+                .and_then(|layer| layer.object_layer())
+                .map(|objects| objects.object_indices_matching_ids(id_set).len()),
+            _ => None,
+        }?;
+
+        if self.actor_owns_object_selection_target(Some(target)) {
+            let mut params = self.object_selection_target_params(Some(target));
+            params.insert("ids".to_string(), serde_json::json!(ids));
+            params.insert("mode".to_string(), serde_json::json!("replace"));
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.objects.selection.select_ids",
+                params: serde_json::Value::Object(params),
+            });
+        } else {
+            match target {
+                LayerId::SegmentationObjects => {
+                    self.seg_objects.select_objects_by_ids(id_set);
+                }
+                LayerId::SpatialShape(id) => {
+                    self.spatial_layers
+                        .shapes
+                        .iter_mut()
+                        .find(|layer| layer.id == id)
+                        .expect("selection target was validated above")
+                        .select_objects_by_ids(id_set);
+                }
+                _ => unreachable!("selection target was validated above"),
+            }
+        }
+        Some(matched)
+    }
+
+    pub(super) fn commit_clear_object_selection(&mut self, target: LayerId) {
+        if self.actor_owns_object_selection_target(Some(target)) {
+            self.native_control_intents.push(NativeControlIntent {
+                method: "viewer.objects.clear_selection",
+                params: serde_json::Value::Object(
+                    self.object_selection_target_params(Some(target)),
+                ),
+            });
+            return;
+        }
+        match target {
+            LayerId::SegmentationObjects => self.seg_objects.clear_selection(),
+            LayerId::SpatialShape(id) => {
+                if let Some(layer) = self
+                    .spatial_layers
+                    .shapes
+                    .iter_mut()
+                    .find(|layer| layer.id == id)
+                {
+                    layer.clear_selection();
+                }
+            }
+            _ => {}
         }
     }
 

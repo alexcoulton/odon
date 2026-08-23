@@ -21,7 +21,6 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(loaded["object_count"], 2);
     assert_eq!(loaded["resources_ready"], true);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (state, state_rx) = request("viewer.objects.get_state", json!({}));
     channels.request_tx.send(state).unwrap();
@@ -94,7 +93,6 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(global_filter["filter"]["visible_count"], 1);
     assert_eq!(global_filter["target"], "segmentation_objects");
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (properties, properties_rx) = request(
         "viewer.objects.properties.list",
@@ -135,7 +133,6 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
     assert_eq!(filtered["result"]["active"], true);
     assert_eq!(filtered["result"]["total_count"], 2);
     assert_eq!(filtered["result"]["visible_count"], 1);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (get_filter, get_filter_rx) = request(
         "viewer.viewports.objects.filter.get",
@@ -246,8 +243,10 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap()
         .unwrap();
     assert_eq!(screen_query["objects"]["query"]["match_count"], 1);
-    assert_eq!(screen_query["objects"]["query"]["matches"][0]["id"], "cell-a");
-    assert_eq!(channels.legacy_rx.len(), 0);
+    assert_eq!(
+        screen_query["objects"]["query"]["matches"][0]["id"],
+        "cell-a"
+    );
 
     let (focus, focus_rx) = request(
         "viewer.objects.focus.set",
@@ -270,7 +269,6 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(selection["objects"]["selection"]["selection_count"], 2);
     assert_eq!(selection["objects"]["selection"]["primary"]["id"], "cell-b");
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (clear_filter, clear_filter_rx) = request(
         "viewer.viewports.objects.filter.clear",
@@ -315,5 +313,4 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(cleared["cleared"], true);
     assert_eq!(cleared["previous_count"], 2);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

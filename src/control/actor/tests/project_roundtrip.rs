@@ -39,7 +39,6 @@ fn project_open_edit_and_save_roundtrip_without_a_ui_frame() {
         .unwrap();
     assert_eq!(opened["project"]["roi_count"], 1);
     assert_eq!(opened["project"]["view_count"], 1);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (update, update_rx) = request(
         "project.rois.update",
@@ -90,7 +89,6 @@ fn project_open_edit_and_save_roundtrip_without_a_ui_frame() {
         .expect("project save completes without UI drain")
         .unwrap();
     assert_eq!(saved["saved"], true);
-    assert_eq!(channels.legacy_rx.len(), 0);
     let (recent, recent_rx) = request("app.recent_projects.list", json!({}));
     channels.request_tx.send(recent).unwrap();
     let recent = recent_rx

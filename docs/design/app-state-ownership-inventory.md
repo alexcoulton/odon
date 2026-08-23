@@ -1,6 +1,6 @@
 # Odon Application State Ownership Inventory
 
-Status: active migration guide
+Status: Wave 7 ownership and release audit
 
 Date: 2026-08-22
 
@@ -44,7 +44,7 @@ not necessarily the owner in the current compatibility implementation.
 | Project/ROI panels | `project_space`, `project_cfg_seen`, `roi_selector`, `cell_thresholds` | Actor project mirror plus legacy panel models | Actor project/analysis models; UI keeps only drafts; Waves 2E and 3, mirror removal Wave 7 |
 | Point/annotation data | `cell_points`, `annotation_layers`, `next_annotation_layer_id` | Legacy semantic resources and IDs | Actor resource registry/shared payloads; Wave 2E/6 |
 | Masks | `mask_layers`, `next_mask_layer_id`, `mask_layers_project_dirty`, `control_actor_mask_generation`, `control_actor_mask_undo_available` | Actor-owned mask projection with compatibility bookkeeping | Actor semantic/resource state; renderer keeps generation only; Wave 7 |
-| Mask gestures | `tool_mode`, `drawing_mask_layer`, `drawing_mask_polygon`, `selected_mask_polygon`, `selected_mask_vertex`, `dragging_mask_vertex`, `moving_mask_polygon`, `undo_stack`, `native_mask_actor_intent_emitted` | Frame-local edit previews plus legacy undo copy | Gestures stay transient; committed polygons and undo history stay actor-owned; Wave 7 removes duplicate undo stack |
+| Mask gestures | `tool_mode`, `drawing_mask_layer`, `drawing_mask_polygon`, `selected_mask_polygon`, `selected_mask_vertex`, `dragging_mask_vertex`, `moving_mask_polygon`, `undo_stack` | Frame-local edit previews plus fallback-only undo storage before an actor projection is installed | Gestures stay transient; committed polygons and undo history are actor-owned |
 | Object selection gestures | `selection_rect_start_world`, `selection_rect_current_world`, `selection_lasso_world` | Frame-local rectangle/lasso previews | Transient UI; completed selection commits to actor |
 | Threshold analysis | `threshold_region_min_pixels`, `threshold_region_scope`, `threshold_region_full_level`, `threshold_region_status`, `threshold_region_preview`, `threshold_region_preview_generation` | Legacy compute parameters/result and render generation | Actor retained compute task plus shared result; renderer generation only; Wave 3 |
 | Cell outline presentation | `cells_outlines_visible`, `cells_outlines_color_rgb`, `cells_outlines_opacity`, `cells_outlines_width_px` | Viewport presentation compatibility state | Actor per-viewport presentation; Wave 6/7 |
@@ -52,7 +52,7 @@ not necessarily the owner in the current compatibility implementation.
 | Remote dialog/session | `remote_dialog_open`, `remote_mode`, `remote_http_url`, `remote_s3_endpoint`, `remote_s3_region`, `remote_s3_bucket`, `remote_s3_prefix`, `remote_s3_access_key`, `remote_s3_secret_key`, `remote_status`, `remote_s3_browser` | Dialog drafts mixed with credentials/session/listing | UI owns drafts/open/status; actor-side secret service owns credentials; shared listing result; Wave 2C |
 | Platform requests | `pending_request` | Frame-to-root compatibility message | Replace semantic variants with actor commands; retain only platform effects; Wave 6 |
 | Native command bridge | `native_control_intents` | Buffered native UI commands | Narrow per-frame command outbox; retain until direct actor handle is available |
-| Projection generations | `control_actor_object_generation`, `control_actor_label_generation`, `control_actor_object_selection_generation` | Last actor generation consumed by renderer | Renderer observation |
+| Projection generations | `control_actor_object_generation`, `control_actor_secondary_object_generations`, `control_actor_object_selection_generation`, `control_actor_secondary_object_selection_generations`, `control_actor_label_generation` | Last actor resource/selection generation consumed by renderer | Renderer observation |
 | Dialog/help state | `group_layers_dialog`, `hover_tooltip_state`, `active_help_topic`, `roi_info_open` | Dialog drafts and hover/help presentation | Transient UI |
 | Render preferences/debug | `smooth_pixels`, `show_tile_debug`, `mask_draw_debug_stats`, `show_scale_bar`, `show_hud` | Actor projection mirrors plus renderer diagnostics | Actor owns user-visible settings; debug statistics remain renderer; Wave 7 |
 | Tile scheduling settings | `tile_loader_threads`, `tile_prefetch_mode`, `tile_prefetch_aggressiveness`, `tile_loading_status` | Renderer configuration/status | Renderer, with actor-owned persisted preference only if exposed remotely |
@@ -80,14 +80,206 @@ Production behavior is organized as follows:
 | `selection.rs`, `thresholds.rs`, `mask_interaction.rs` | Spatial selection, threshold preview, transient mask gestures |
 | `projects.rs`, `project_integration.rs`, `deep_links.rs` | Project state, project resources, deep-link compatibility |
 | `memory_ui.rs`, `screenshots.rs` | Memory/pinning UI and screenshot presentation work |
-| `legacy_control/` | Explicitly temporary frame-driven control handlers, split by domain |
+| `renderer_bridge/` | Renderer observations and actor projection adapters; old direct helpers are test-only |
 | `tests/` | Characterization and structural regression tests, split by behavior |
+
+The canvas boundary is split by frame phase. `app/canvas.rs` owns allocation, the hard viewport
+clip, tile/overlay paint order, and screenshot capture. `app/canvas/interactions.rs` owns transient
+camera, selection, mask, move, and transform gestures and submits actor-owned commits through the
+existing interaction helpers. Neither file introduces canonical state; both operate on the same
+renderer projection for one frame.
+
+The native-layer runtime is split by responsibility while retaining one renderer projection.
+`app/layer_runtime.rs` is a module façade; its child modules own actor-command submission and
+gesture cancellation, quick-contrast calculations/widgets, layer metadata and visibility access,
+offset baselines/commits, transformed visible-region geometry, and deterministic layer-order
+rebuilding. Methods remain visible only within `crate::app`, and semantic commits still enter the
+typed actor-command outbox.
+
+The annotation renderer adapter keeps its data/presentation model in `annotations/mod.rs`, while
+hit testing, category/color LUT construction, parquet schema/data decoding, and OpenGL drawing live
+in `annotations/selection.rs`, `colors.rs`, `parquet.rs`, and `gl.rs`. CPU and GL rendering consume
+the same immutable ROI payloads and category styles. These modules do not own durable annotation
+commands; actor resources and generations remain authoritative.
+
+The raw-tile OpenGL renderer is split below the same renderer-only boundary.
+`render/tiles_gl.rs` retains the public draw DTOs and `TilesGl` resource façade;
+`tiles_gl/orchestration.rs` owns cache-facing operations and paint sequencing;
+`backend.rs` owns raw-tile cache entries, GPU objects, framebuffer targets, and resource lifecycle;
+`geometry.rs` owns uniforms, NDC construction, affine transforms, and bounds; `upload.rs` owns R16
+texture upload and filtering; and `shaders.rs` owns versioned GLSL sources and program compilation.
+These modules consume actor-projected render inputs but do not own application semantics.
+
+The line-bin OpenGL surface has a matching public façade. `render/line_bins_gl/bins.rs` owns the
+generic line-segment bin renderer and its shader pair; `objects.rs` owns object-indexed bins,
+selection-state textures, and selection-aware shaders; and `program.rs` owns shared shader compile
+and link mechanics. The façade re-exports both existing draw APIs unchanged, and all cache, GPU,
+and selection-texture state remains renderer-only.
+
+The outer application shell follows the same boundary. `src/root_app.rs` retains construction,
+mode transitions, and frame orchestration; `root_app/actor_projection.rs` applies projections and
+reports renderer observations; `root_app/remote.rs` owns the native remote-dataset dialog backed
+by actor commands; and `root_app/tests.rs` contains boundary tests, including a source guard that
+prevents restoration of a native snapshot translator. Structural tests cap the root façade and
+production submodules so these responsibilities cannot silently collapse back into a single file.
+
+The control shell is split at the same ownership boundary. `src/control/request.rs` owns the
+transport-independent actor request envelope. `src/mcp/runtime.rs` owns the required actor handle,
+registries, renderer projections, and optional server-publication status. `src/mcp/bridge.rs` is
+the connection-state façade. Its child modules separately own TCP listener/framing and worker
+queues (`transport.rs`), JSON-RPC and actor-mailbox dispatch (`dispatch.rs`), batch and retained-task
+orchestration (`tasks.rs`), background readiness monitors (`waits.rs`), and task/UI/event protocol
+registries (`services.rs`); tests remain in `tests.rs`. A structural regression test prevents the
+runtime, façade, or production bridge modules from absorbing one another's responsibilities.
+
+The declarative extension UI remains one `UiRegistry` but no longer one implementation file.
+`control/ui.rs` owns extension/contribution lifecycle and action queues; `ui/render.rs` owns native
+placement; `ui/render/components.rs` owns recursive widget/event-policy rendering; and
+`ui/validation.rs` owns validation, capability authorization, value patching, and native binding
+synchronization. Tests are isolated under `control/ui/tests.rs`. This is a source boundary inside
+the control service, not a second UI registry or semantic owner.
+
+The actor's bounded resource-worker pool also has an explicit source boundary.
+`src/control/actor/worker.rs` owns thread creation and `LoadJob` dispatch, while worker-side memory,
+threshold, analysis, measurement, project/ROI, screenshot, and label computations live under
+`control/actor/worker/`. They still consume the same bounded queue and return the same typed
+completions to the actor; no new ordering authority is introduced.
+
+The transport-independent command registry is also split by responsibility while retaining a
+single authoritative surface. `src/control/registry.rs` owns descriptor types and public
+lookup/introspection behavior; application descriptors, protocol services and aliases, request
+schemas, actor-capability metadata, and tests live in dedicated `control/registry/` modules. This
+changes source ownership only—the actor and all clients continue to consume the same registry.
+
+The typed command decoder is organized around that registry rather than mixed into it.
+`src/control/command.rs` owns the public command envelope and descriptor/revision resolution;
+request DTOs and serde defaults, method-specific validation, and tests live under
+`control/command/`. The registry remains the single method catalog and every decoded command still
+enters the same actor mailbox.
+
+The native TIFF resource provider is organized separately from actor state ownership.
+`src/xenium/tiff_pyramid.rs` defines the shared TIFF/OME-TIFF resource types and public pyramid
+API; IFD inspection and level construction, OME metadata parsing, asynchronous decoding/loaders,
+and tests live under `xenium/tiff_pyramid/`. Actor workers and renderer setup continue to consume
+the same public provider API and shared resource values.
+
+SpatialData layer adapters have a matching renderer-side boundary. `src/spatialdata/layers.rs`
+retains collection lifecycle and public selection targets, while shape loading/rendering, point
+interaction/rendering, and point payload normalization/cache construction live under
+`spatialdata/layers/`. These modules do not own dataset lifecycle or canonical commands; they adapt
+actor-prepared SpatialData resources into native renderer overlays.
+
+The parquet-shape source adapter is split below that renderer boundary. `parquet_shapes.rs` owns
+schema inspection, projected batch reads, cancellation, and construction of public loaded-object
+DTOs; `parquet_shapes/geometry.rs` owns WKB decoding, geometry classification/transforms, centroid
+summaries, and Arrow scalar extraction; and its characterization test lives in `tests.rs`. The WKB
+parser is private to the adapter and the public SpatialData exports remain unchanged.
+
+The canonical semantic model is also organized by domain rather than by call order. The
+`src/model/app.rs` façade defines the shared model types and pure projection/validation helpers;
+`model/app/construction.rs`, `runtime.rs`, and `dispatch.rs` own lifecycle boundaries; and the
+remaining modules own projects, settings/deep links, compute tasks, resources, objects, masks,
+native layers, saved views, and viewport commands. All modules provide inherent implementations
+for the same `AppModel`; this is not state sharding and does not create multiple semantic owners.
+Tests are isolated in `model/app/tests.rs`, and structural guards cap both the façade and each
+production domain module.
+
+Within that model, viewport commands are divided by semantic revision domain. The
+`viewport_commands.rs` façade owns shared dataset/revision helpers and active-viewport compatibility
+methods; child modules own workspace topology/linking, navigation/plane state, and scoped
+presentation respectively. They all mutate the same `DatasetModel.workspace` through the same
+actor mailbox; the split introduces no secondary workspace owner.
+
+`MosaicViewerApp` uses the same source-boundary pattern. `src/mosaic/mod.rs` retains shared mosaic
+state and small host traits; the `control.rs` façade separates native actor-intent submission,
+project serialization/restoration, control snapshots and test-only compatibility queries,
+screenshot lifecycle, and host/platform effects beneath `mosaic/control/`; `construction.rs`
+prepares renderer resources; `update.rs` owns the frame lifecycle; and memory/navigation,
+layers/dialogs, panels, and canvas/tile work live in dedicated modules. Layout characterization
+tests are in `mosaic/tests.rs`. The split does not make the mosaic renderer a semantic owner:
+actor projections remain authoritative and native mutations still enter the typed command outbox.
+
+Mosaic construction is itself source-adapter based. The `construction.rs` façade selects CLI or
+samplesheet entry paths, while actor-resource, local, remote, project, project-config, and
+samplesheet preparation live in child modules. All adapters converge on the typed assembly in
+`construction/assembly.rs`, the sole initializer for shared renderer defaults. The adapters prepare
+resources; they do not create additional semantic state owners.
+
+The corresponding actor-owned `MosaicModel` keeps one semantic state value but no longer one large
+implementation file. `src/model/mosaic.rs` owns shared types, installation, snapshot/projection,
+and dispatch; memory pinning, object-resource loading, layout/selection/focus navigation, channel
+and native-layer presentation, and tests live under `model/mosaic/`. This is source organization,
+not state sharding: every command still executes through the same actor ordering authority.
+
+The actor-owned `MaskModel` is likewise one state value behind a compact `model/masks.rs` façade.
+Its child modules separate projection/import state transitions, typed CRUD dispatch, parameter and
+geometry validation, GeoJSON file decoding, and characterization tests. Cross-module helpers stay
+private to `model::masks`; the existing crate-visible model and GeoJSON loader contracts are
+unchanged, and all mutations still run under the actor's ordering and generation checks.
+
+The public deep-link surface is source-separated from actor execution as well. `deep_link.rs`
+retains the serialized request DTOs, defaults, and stable re-exports; `deep_link/canonical.rs`
+owns canonical URL production; `resolution.rs` owns example and project-ROI resolution;
+`parsing.rs` owns URL recognition, decoding, aliases, and typed value parsing; `semantics.rs`
+derives actor-facing segmentation and filter intent; and tests live separately. This preserves one
+public deep-link contract while keeping parsing and resolution independent of renderer state.
+
+The actor-owned `ProjectModel` retains its snapshot and model types in the compact
+`model/project.rs` façade. `project/state.rs` owns project installation, persistence payloads,
+manifest/sample-sheet/discovery updates, and normalized worker results; `commands.rs` owns typed
+project, ROI, saved-view, selection, and focus dispatch; and `validation.rs` owns pure snapshot,
+ROI, and parameter normalization. All modules mutate the same private snapshot under the actor's
+ordering authority, and the normalized-load helper remains available at its original module path.
+
+The renderer-side object implementation is separated by responsibility as well.
+`src/objects/mod.rs` retains shared object-layer state and DTO/types; native actor-service filter
+evaluation, typed property-column storage, default construction, and tests live in dedicated
+`objects/` modules. `src/objects/core.rs` retains shared object types and small accessors, with runtime/loading,
+properties UI, selection, export, and tests under `objects/core/`. `src/objects/analysis.rs` owns
+analysis UI and threshold-set orchestration; `objects/analysis/data_selection.rs` owns derived
+property caches and live-selection bookkeeping; and `objects/analysis/algorithms.rs` owns pure
+histogram, threshold, polygon, fuzzy-name, and scatter helpers. These modules still operate on one
+`ObjectsLayer` renderer projection and do not bypass actor ownership.
+
+The object draw path is similarly bounded: `objects/render.rs` retains drawing and presentation,
+while hover/query/selection behavior, fill-mesh/cache construction, pure selection geometry, LOD
+and color-group construction, and tests live in dedicated `objects/render/` modules. Public and
+crate-visible `ObjectsLayer` methods retain their prior API; the split does not change command
+routing or introduce renderer-owned semantic commits.
+
+The renderer-side `ObjectsLayer` is similarly split beneath `src/objects/core/`: `runtime.rs`
+drains bounded loaders and installs prepared resources, `loading.rs` owns source-format parsing,
+`properties_ui.rs` owns transient property/presentation controls, `selection.rs` owns renderer
+selection/filter caches, and `export.rs` owns native export presentation and encoding orchestration.
+`core.rs` is a small shared-type/helper façade, and characterization tests live in
+`core/tests.rs`. Canonical selections, filters, resources, and export task state remain actor-owned;
+these modules consume projections or prepare renderer-native data.
+
+The properties boundary is subdivided by state domain rather than widget order:
+`core/properties_ui.rs` renders the panel, while child modules own style projection, filter/query
+state, and color/legend plus project-display persistence. These are renderer projection helpers on
+the same `ObjectsLayer`; actor commands and revisions remain authoritative.
+
+The custom cell-threshold panel also has an explicit I/O boundary. `custom/cell_thresholds.rs`
+owns panel state, interactions, and projection into the renderer points layer;
+`cell_thresholds/data.rs` owns dataset-path inference, parquet schema inspection, and the bounded
+point loader; and `cell_thresholds/threshold_files.rs` owns CSV/JSON threshold configuration
+parsing. The split does not promote the panel to a semantic owner: it remains renderer-side
+compatibility UI over the actor-owned analysis/resource surface.
+
+`ProjectSpace` is now a small DTO/helper façade plus responsibility modules under
+`src/project/space/`. `control_persistence.rs` owns actor projection consumption and the typed
+command outbox, `rois_views.rs` owns the renderer-side project projection and UI drafts,
+`browser_ui.rs` and `views_ui.rs` own transient presentation, and `imports.rs` owns native
+samplesheet/discovery preparation. Characterization tests live in `space/tests.rs`. The actor
+remains the durable project owner; this split does not authorize the UI projection to commit
+semantic state directly.
 
 ## Dependency rules
 
 1. `update.rs` may orchestrate domain modules but must not contain domain command handlers.
 2. New remotely visible semantics are added to `src/model` and `src/control/actor`, never to
-   `legacy_control`.
+   `renderer_bridge`; production code there may observe or project state but may not own command semantics.
 3. A sibling app module may expose an internal helper with `pub(super)`; public methods are kept
    only where `RootApp` or another crate-facing integration requires them.
 4. UI modules do not perform blocking I/O. They submit actor work or consume already completed
@@ -101,12 +293,53 @@ Production behavior is organized as follows:
 
 After each actor wave passes its paused-frame and native/remote parity tests:
 
-1. remove that domain's methods from `legacy_control`;
+1. remove or test-gate that domain's direct mutation helpers in `renderer_bridge`;
 2. remove semantic fields listed above from `OmeZarrViewerApp` or replace them with a consumed
    generation/resource handle;
 3. route native UI commits through the typed command;
 4. retain only renderer and transient UI fields in the corresponding app module; and
 5. update this inventory in the same change.
 
-`legacy_control` disappears in Wave 6. The remaining actor-owned compatibility mirrors disappear
-in Wave 7; source modularization alone is not the completion condition.
+The production `legacy_control` boundary disappeared in Wave 6. `renderer_bridge` remains as the
+narrow renderer integration boundary; test-only characterization helpers are retired as their
+actor-plus-projection replacements reach equivalent coverage.
+
+## Native cutover status
+
+The remote application surface has no legacy execution route, and native project, single-viewer,
+and mosaic controls emit typed actor commands at their interaction points. The final native mosaic
+before/after snapshot translator has been removed. Camera drag remains a deliberately optimistic,
+revision-reconciled renderer preview and submits the final camera state directly. Source guards,
+typed-command decoding tests, semantic non-mutation tests, and projection no-feedback tests protect
+this boundary.
+
+Native-layer projection is now isolated in `app/actor_layer_projection.rs`. It decodes canonical
+actor state directly and cannot call the former renderer-side `control_set_*` command emulators;
+those characterization mutators are compiled only in tests. First-projection active-layer replay is
+also command-silent, and an explicit actor `window: null` clears a stale renderer contrast window
+instead of being discarded by command-validation compatibility logic.
+
+Top-level `ProjectSpaceAction` values now enter a shared typed-command outbox in `ProjectSpace`
+before the single-viewer, mosaic, or root project-page hosts can translate them. This includes ROI
+and saved-view opens, project open/save, TIFF open, recent-project changes, selected-ROI mosaic
+open, and object-preload actions; the single-view ROI selector uses the same path. The semantic
+semantic variants of `ViewerRequest` and `MosaicRequest` have been deleted. `RootApp` stores the
+actor runtime as a required value, local actor construction happens before optional TCP
+publication, an unavailable Python/MCP listener leaves the actor operational, and failure to
+construct the canonical actor aborts application construction instead of selecting a frame-driven
+semantic mode. The old root direct-open and direct deep-link chains are gone; startup dataset opens
+also enter the typed actor outbox. Platform/transient actions such as opening a dialog, help,
+close, and back remain host requests by design.
+
+Viewport workspace/presentation, object selection, masks, and native-layer presentation are no
+longer in this ledger. Rectangle,
+lasso, clear, click, and native
+ID-selection interactions submit target-aware actor commands before renderer selection changes.
+Click commits preserve renderer hit-testing and modifier behavior through a generation-checked
+selection transaction; actor projection is the only operation that installs the committed
+selection into primary or spatial-shape renderers. Native-layer activation, visibility, bulk
+visibility, ordering, property transactions, offsets, and channel transforms submit directly at
+their interaction points; revision-tagged drag previews are restored before actor reconciliation.
+Mask CRUD, selection, undo, gesture commits,
+property edits, reloads, and project-GeoJSON append/save all submit generation-checked actor
+commands; gesture previews are restored or reconciled when the corresponding projection arrives.

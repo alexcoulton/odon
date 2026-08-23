@@ -976,7 +976,8 @@ fn commit_alternate_document(
     wake_ui: &UiWake,
     diagnostics: &ActorDiagnostics,
 ) {
-    if !model.install_document_for_generation(
+    let mut candidate = model.clone();
+    if !candidate.install_document_for_generation(
         generation,
         opened.descriptor.clone(),
         Vec::new(),
@@ -992,6 +993,11 @@ fn commit_alternate_document(
         );
         return;
     }
+    if let Err(error) = candidate.install_document_object_layers(opened.resource.object_layers()) {
+        reject_actor_request(request, diagnostics, error);
+        return;
+    }
+    *model = candidate;
     *render_document = Some(Arc::new(RenderDocument {
         generation,
         opened: opened.into_control(),

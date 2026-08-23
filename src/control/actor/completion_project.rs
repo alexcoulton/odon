@@ -404,10 +404,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             result,
         } => {
             if request_is_cancelled(&request) {
-                model.cancel_project_view_apply(
-                    &spec,
-                    "Saved-view application was cancelled",
-                );
+                model.cancel_project_view_apply(&spec, "Saved-view application was cancelled");
                 reject_cancelled_request(request, diagnostics, "saved-view application");
                 return;
             }

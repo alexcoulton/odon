@@ -18,26 +18,6 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub fn control_project_view_spec_for_viewport(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> Result<ProjectViewSpec, String> {
-        self.sync_runtime_to_active_viewport();
-        let viewport_id = Self::parse_viewport_id(params)?;
-        let Some(workspace) = self.viewport_workspace.take() else {
-            return Err("viewer workspace is not initialized".to_string());
-        };
-        let Some(target) = workspace.get(&viewport_id) else {
-            self.viewport_workspace = Some(workspace);
-            return Err(format!("viewport '{viewport_id}' was not found"));
-        };
-        target.state.apply(self);
-        let spec = self.control_current_project_view_spec();
-        workspace.active().state.apply(self);
-        self.viewport_workspace = Some(workspace);
-        Ok(spec)
-    }
-
     pub fn control_current_project_view_spec(&mut self) -> ProjectViewSpec {
         let display = self.seg_objects.project_display_state();
         let analysis = self.seg_objects.project_analysis_state();
@@ -91,65 +71,23 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn handle_project_space_action(&mut self, action: ProjectSpaceAction) {
+        if self.project_space.submit_action_control_intent(&action) {
+            return;
+        }
         match action {
-            ProjectSpaceAction::Open(roi) => {
-                self.project_space
-                    .set_status(format!("Opening: {}", roi.source_display()));
-                self.pending_request = Some(ViewerRequest::OpenProjectRoi(roi));
-            }
-            ProjectSpaceAction::OpenView(roi, spec) => {
-                self.project_space
-                    .set_status(format!("Opening view: {}", roi.source_display()));
-                self.pending_request = Some(ViewerRequest::OpenProjectRoiView(roi, spec));
-            }
-            ProjectSpaceAction::OpenProject(path) => {
-                self.pending_request = Some(ViewerRequest::OpenProject(path));
-            }
-            ProjectSpaceAction::SaveProject(path) => {
-                self.pending_request = Some(ViewerRequest::SaveProject(path));
-            }
-            ProjectSpaceAction::OpenLocalPath(path) => {
-                self.project_space
-                    .set_status(format!("Opening: {}", path.to_string_lossy()));
-                self.pending_request = Some(ViewerRequest::OpenLocalPath(path));
-            }
-            ProjectSpaceAction::ForgetRecentProject(path) => {
-                self.pending_request = Some(ViewerRequest::ForgetRecentProject(path));
-            }
-            ProjectSpaceAction::ClearRecentProjects => {
-                self.pending_request = Some(ViewerRequest::ClearRecentProjects);
-            }
             ProjectSpaceAction::CaptureCurrentView => {
                 let spec = self.control_current_project_view_spec();
                 self.project_space.set_view_preset_draft(spec);
-            }
-            ProjectSpaceAction::OpenMosaic(rois) => {
-                self.project_space
-                    .set_status(format!("Opening mosaic ({} items)...", rois.len()));
-                self.pending_request = Some(ViewerRequest::OpenProjectMosaic(rois));
             }
             ProjectSpaceAction::OpenRemoteDialog => {
                 self.remote_dialog_open = true;
                 self.remote_status.clear();
             }
-            ProjectSpaceAction::PreloadObjectSegmentations(mode) => {
-                self.sync_current_view_state_into_project_space();
-                self.pending_request = Some(ViewerRequest::PreloadObjectSegmentations(
-                    self.project_space.clone(),
-                    mode,
-                ));
-            }
-            ProjectSpaceAction::ClearObjectCache => {
-                self.pending_request = Some(ViewerRequest::ClearObjectCache);
-            }
             ProjectSpaceAction::ShowHelp(topic) => {
                 self.active_help_topic = Some(topic);
             }
+            _ => unreachable!("actor-owned project action was not accepted by its command outbox"),
         }
-    }
-
-    pub fn control_apply_project_view_spec(&mut self, spec: &ProjectViewSpec) {
-        self.apply_deep_link_request(&spec.to_deep_link_request(None));
     }
 
     pub(super) fn ui_help_heading(
@@ -607,21 +545,6 @@ impl OmeZarrViewerApp {
             }
         }
         self.rebuild_layer_orders();
-    }
-
-    pub fn attach_xenium_layers(
-        &mut self,
-        dataset_root: PathBuf,
-        cells_zip: Option<PathBuf>,
-        transcripts_zip: Option<PathBuf>,
-        pixel_size_um: f32,
-    ) {
-        self.xenium_layers.clear();
-        self.xenium_layers
-            .attach(dataset_root, cells_zip, transcripts_zip, pixel_size_um);
-        self.xenium_cells_offset_world = egui::Vec2::ZERO;
-        self.xenium_transcripts_offset_world = egui::Vec2::ZERO;
-        self.bump_render_id();
     }
 
     pub fn attach_prepared_xenium_layers(

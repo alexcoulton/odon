@@ -122,7 +122,6 @@ fn deep_link_apply_commits_project_resources_channels_objects_and_camera_without
         Some(dataset_path.as_path())
     );
     assert_eq!(projection.object_resource.unwrap().features.len(), 2);
-    assert_eq!(channels.legacy_rx.len(), 0);
     let _ = std::fs::remove_file(object_path);
 }
 
@@ -167,7 +166,6 @@ fn failed_external_deep_link_retains_the_previous_usable_document() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -222,7 +220,6 @@ fn external_project_deep_link_replaces_project_and_document_atomically() {
         Some(dataset_path.as_path())
     );
     assert_eq!(projection.project.saved_path, Some(project_path));
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -296,7 +293,6 @@ fn same_roi_deep_link_reuses_the_document_and_preserves_the_workspace() {
         .unwrap()
         .unwrap();
     assert_eq!(workspace["viewports"].as_array().unwrap().len(), 2);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -346,7 +342,6 @@ fn deep_link_application_loads_requested_bundled_labels_in_the_same_transaction(
     assert_eq!(labels["loaded"], "cells");
     assert_eq!(labels["selected"], "cells");
     assert_eq!(labels["visible"], true);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 struct BlockingDeepLinkObjectLoader {
@@ -453,7 +448,6 @@ fn cancelled_deep_link_cannot_replace_the_previous_document() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -499,5 +493,4 @@ fn project_edit_supersedes_a_late_deep_link_without_losing_the_edit() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

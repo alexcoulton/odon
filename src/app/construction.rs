@@ -215,16 +215,19 @@ impl OmeZarrViewerApp {
             pending_request: None,
             native_control_intents: Vec::new(),
             control_actor_object_generation: 0,
+            control_actor_secondary_object_generations: HashMap::new(),
+            control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_label_generation: 0,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
+            control_actor_workspace_revision: 0,
+            pending_control_actor_mask_projection: None,
             control_actor_threshold_generation: 0,
             control_actor_analysis_generation: 0,
             control_actor_measurement_generation: 0,
             control_actor_object_export_generation: 0,
             control_actor_mask_undo_available: false,
             control_actor_tile_policy_generation: 0,
-            native_mask_actor_intent_emitted: false,
             group_layers_dialog: None,
             hover_tooltip_state: None,
             active_help_topic: None,
@@ -278,6 +281,7 @@ impl OmeZarrViewerApp {
             screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
             viewport_workspace: None,
+            native_viewport_command_scope: None,
             viewport_layer_groups: ProjectLayerGroups::default(),
             viewport_raw_active_keys: None,
             viewport_cpu_active_keys: None,
@@ -516,16 +520,19 @@ impl OmeZarrViewerApp {
             pending_request: None,
             native_control_intents: Vec::new(),
             control_actor_object_generation: 0,
+            control_actor_secondary_object_generations: HashMap::new(),
+            control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_label_generation: 0,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
+            control_actor_workspace_revision: 0,
+            pending_control_actor_mask_projection: None,
             control_actor_threshold_generation: 0,
             control_actor_analysis_generation: 0,
             control_actor_measurement_generation: 0,
             control_actor_object_export_generation: 0,
             control_actor_mask_undo_available: false,
             control_actor_tile_policy_generation: 0,
-            native_mask_actor_intent_emitted: false,
             group_layers_dialog: None,
             hover_tooltip_state: None,
             active_help_topic: None,
@@ -579,6 +586,7 @@ impl OmeZarrViewerApp {
             screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
             viewport_workspace: None,
+            native_viewport_command_scope: None,
             viewport_layer_groups: ProjectLayerGroups::default(),
             viewport_raw_active_keys: None,
             viewport_cpu_active_keys: None,
@@ -603,69 +611,6 @@ impl OmeZarrViewerApp {
         app.viewport_workspace = Some(ViewportWorkspace::new(ViewerViewportState::capture(&app)));
 
         app
-    }
-
-    pub fn new_xenium_runtime(
-        ctx: &egui::Context,
-        gpu_available: bool,
-        dataset_root: PathBuf,
-        morphology_mip_tiff: PathBuf,
-        cells_zarr_zip: Option<PathBuf>,
-        transcripts_zarr_zip: Option<PathBuf>,
-        pixel_size_um: f32,
-        auto_contrast_settings: AutoContrastSettings,
-    ) -> anyhow::Result<Self> {
-        apply_napari_like_dark(ctx);
-
-        let mut app = Self::new_tiff_runtime_named(
-            ctx,
-            gpu_available,
-            dataset_root.clone(),
-            morphology_mip_tiff,
-            "xenium".to_string(),
-            "morphology".to_string(),
-            auto_contrast_settings,
-        )?;
-        app.attach_xenium_layers(
-            dataset_root,
-            cells_zarr_zip,
-            transcripts_zarr_zip,
-            pixel_size_um,
-        );
-        // Xenium default: cells ON, transcripts layer present but OFF until a gene is typed.
-        if let Some(c) = app.xenium_layers.cells.as_mut() {
-            c.visible = true;
-        }
-        if let Some(t) = app.xenium_layers.transcripts.as_mut() {
-            t.visible = false;
-        }
-        Ok(app)
-    }
-
-    pub fn new_tiff_runtime(
-        ctx: &egui::Context,
-        gpu_available: bool,
-        image_path: PathBuf,
-        auto_contrast_settings: AutoContrastSettings,
-    ) -> anyhow::Result<Self> {
-        apply_napari_like_dark(ctx);
-
-        let dataset_name = image_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("tiff")
-            .to_string();
-
-        Self::new_tiff_runtime_named(
-            ctx,
-            gpu_available,
-            image_path.clone(),
-            image_path,
-            dataset_name,
-            "image".to_string(),
-            auto_contrast_settings,
-        )
     }
 
     /// Realize renderer-only TIFF loaders from metadata and an immutable pyramid prepared by the
@@ -707,69 +652,6 @@ impl OmeZarrViewerApp {
         let assets =
             build_tiff_runtime_assets_from_prepared_resource(gpu_available, resource, pyramid)?;
         let tiles_gl = gpu_available.then(|| TilesGl::new(RAW_TILE_CACHE_CAPACITY_TILES));
-        let mut app = Self::new_runtime_with_handles(
-            ctx,
-            gpu_available,
-            assets.dataset,
-            assets.store,
-            assets.loader,
-            assets.raw_loader,
-            tiles_gl,
-            assets.hist_loader,
-            assets.chanmax_loader,
-            assets.chanmax_level,
-            auto_contrast_settings,
-        );
-        app.tiff_plane_state = assets.tiff_plane_state;
-        Ok(app)
-    }
-
-    pub(super) fn new_tiff_runtime_named(
-        ctx: &egui::Context,
-        gpu_available: bool,
-        dataset_root: PathBuf,
-        image_path: PathBuf,
-        dataset_name: String,
-        channel_name: String,
-        auto_contrast_settings: AutoContrastSettings,
-    ) -> anyhow::Result<Self> {
-        Self::new_tiff_runtime_named_with_plane(
-            ctx,
-            gpu_available,
-            dataset_root,
-            image_path,
-            dataset_name,
-            channel_name,
-            crate::xenium::TiffPlaneSelection { z: 0, t: 0 },
-            auto_contrast_settings,
-        )
-    }
-
-    pub(super) fn new_tiff_runtime_named_with_plane(
-        ctx: &egui::Context,
-        gpu_available: bool,
-        dataset_root: PathBuf,
-        image_path: PathBuf,
-        dataset_name: String,
-        channel_name: String,
-        plane_selection: crate::xenium::TiffPlaneSelection,
-        auto_contrast_settings: AutoContrastSettings,
-    ) -> anyhow::Result<Self> {
-        crate::log_info!(
-            "open tiff: root={} image={}",
-            dataset_root.to_string_lossy(),
-            image_path.to_string_lossy()
-        );
-        let assets = build_tiff_runtime_assets(
-            gpu_available,
-            dataset_root,
-            image_path,
-            dataset_name,
-            channel_name,
-            plane_selection,
-        )?;
-        let tiles_gl = gpu_available.then(|| TilesGl::new(RAW_TILE_CACHE_CAPACITY_TILES));
-
         let mut app = Self::new_runtime_with_handles(
             ctx,
             gpu_available,
@@ -967,16 +849,19 @@ impl OmeZarrViewerApp {
             pending_request: None,
             native_control_intents: Vec::new(),
             control_actor_object_generation: 0,
+            control_actor_secondary_object_generations: HashMap::new(),
+            control_actor_secondary_object_selection_generations: HashMap::new(),
             control_actor_label_generation: 0,
             control_actor_object_selection_generation: 0,
             control_actor_mask_generation: 0,
+            control_actor_workspace_revision: 0,
+            pending_control_actor_mask_projection: None,
             control_actor_threshold_generation: 0,
             control_actor_analysis_generation: 0,
             control_actor_measurement_generation: 0,
             control_actor_object_export_generation: 0,
             control_actor_mask_undo_available: false,
             control_actor_tile_policy_generation: 0,
-            native_mask_actor_intent_emitted: false,
             group_layers_dialog: None,
             hover_tooltip_state: None,
             active_help_topic: None,
@@ -1027,6 +912,7 @@ impl OmeZarrViewerApp {
             screenshot_in_flight: HashMap::new(),
             screenshot_output_dir: None,
             viewport_workspace: None,
+            native_viewport_command_scope: None,
             viewport_layer_groups: ProjectLayerGroups::default(),
             viewport_raw_active_keys: None,
             viewport_cpu_active_keys: None,

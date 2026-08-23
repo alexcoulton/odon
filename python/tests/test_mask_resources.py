@@ -48,10 +48,20 @@ class MaskResourceTests(unittest.TestCase):
         masks.clear_selection()
         masks.undo()
         masks.delete_layer(2)
-        masks.import_geojson("masks.geojson", name="Imported")
+        masks.import_geojson(
+            "masks.geojson",
+            name="Imported",
+            replace_layer_id=7,
+            expected_generation=8,
+        )
         masks.export_geojson("result.geojson", layer_id=2, overwrite=True)
         masks.get_persistence()
         masks.sync_to_project()
+        masks.append_to_geojson(
+            "project-masks.geojson",
+            roi_root="fixture.ome.zarr",
+            expected_generation=9,
+        )
 
         self.assertEqual(client.calls[0], ("viewer.masks.layers.list", {}))
         self.assertEqual(client.calls[2][1]["name"], "Review")
@@ -62,8 +72,14 @@ class MaskResourceTests(unittest.TestCase):
         self.assertEqual(client.calls[10][0], "viewer.masks.selection.clear")
         self.assertEqual(client.calls[11], ("viewer.masks.undo", {}))
         self.assertEqual(client.calls[13][1]["name"], "Imported")
+        self.assertEqual(client.calls[13][1]["replace_layer_id"], 7)
+        self.assertEqual(client.calls[13][1]["expected_generation"], 8)
         self.assertEqual(client.calls[14][1]["overwrite"], True)
         self.assertEqual(client.calls[16][0], "viewer.masks.persistence.sync")
+        self.assertEqual(
+            client.calls[17][0], "viewer.masks.persistence.append_geojson"
+        )
+        self.assertEqual(client.calls[17][1]["expected_generation"], 9)
 
 
 class AsyncMaskResourceTests(unittest.IsolatedAsyncioTestCase):
@@ -83,6 +99,7 @@ class AsyncMaskResourceTests(unittest.IsolatedAsyncioTestCase):
         await masks.export_geojson("result.geojson")
         await masks.get_persistence()
         await masks.sync_to_project()
+        await masks.append_to_geojson("project-masks.geojson", if_revision=4)
 
         self.assertEqual(client.calls[0][0], "viewer.masks.layers.create")
         self.assertEqual(client.calls[1][0], "viewer.masks.polygons.add")
@@ -90,6 +107,10 @@ class AsyncMaskResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[6][1]["if_revision"], 3)
         self.assertEqual(client.calls[7][0], "viewer.masks.import_geojson")
         self.assertEqual(client.calls[10][0], "viewer.masks.persistence.sync")
+        self.assertEqual(
+            client.calls[11][0], "viewer.masks.persistence.append_geojson"
+        )
+        self.assertEqual(client.calls[11][1]["if_revision"], 4)
 
 
 if __name__ == "__main__":

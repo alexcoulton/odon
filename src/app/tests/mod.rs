@@ -54,6 +54,7 @@ mod native_viewport;
 mod object_loader;
 mod objects;
 mod overlays;
+mod project_actions;
 mod project_roundtrip;
 mod projection;
 mod rapid_comparison;

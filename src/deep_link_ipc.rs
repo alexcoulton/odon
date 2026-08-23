@@ -3,7 +3,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use crate::deep_link::DeepLinkRequest;
+use odon::deep_link::DeepLinkRequest;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:17871";
 const MESSAGE_PREFIX: &str = "ODON_DEEP_LINK_V1\t";

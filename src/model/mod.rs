@@ -20,12 +20,12 @@ mod threshold;
 pub(crate) use analysis::AnalysisModel;
 pub(crate) use app::{
     AnalysisResourceSpec, DeepLinkApplyGuard, DeepLinkCurrentResources, MeasurementSpec,
-    MemoryPinSpec, ProjectViewApplySpec, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
-    ThresholdPreviewRecomputeSpec,
+    MemoryPinSpec, ObjectTarget, ProjectViewApplySpec, ThresholdPreviewApplySpec,
+    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec,
 };
 pub use app::{
-    AppModel, ChannelIntensitySpec, ModelDispatch, ModelMode, SettingsMutationOutcome,
-    SettingsSaveOperation,
+    AppModel, ChannelIntensitySpec, ControlSecondaryObjectProjection, ModelDispatch, ModelMode,
+    SettingsMutationOutcome, SettingsSaveOperation,
 };
 pub use labels::{ControlLabelResource, LabelZarrDataset, discover_label_names_local};
 pub(crate) use masks::{MaskModel, load_geojson_mask_polylines};

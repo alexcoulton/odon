@@ -96,7 +96,6 @@ fn saved_view_capture_and_apply_complete_without_a_ui_frame() {
         viewport["camera"]["center_world_lvl0"],
         json!([111.0, 222.0])
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (create_resource_view, create_resource_view_rx) = request(
         "project.views.create",
@@ -115,13 +114,12 @@ fn saved_view_capture_and_apply_complete_without_a_ui_frame() {
     channels.request_tx.send(apply_resource_view).unwrap();
     assert_eq!(
         apply_resource_view_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .unwrap_err()
-        .kind,
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .kind,
         ControlErrorKind::ResourceNotFound
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -129,17 +127,17 @@ fn saved_view_resource_load_is_one_actor_worker_transaction() {
     let channels = spawn_test_actor_with_objects();
     let dataset_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
-    let object_path = std::env::temp_dir().join(format!(
-        "odon-saved-view-objects-{}",
-        std::process::id()
-    ));
+    let object_path =
+        std::env::temp_dir().join(format!("odon-saved-view-objects-{}", std::process::id()));
     let mut roi = ProjectRoi {
         id: "roi-a".to_string(),
         display_name: Some("ROI A".to_string()),
         segpath: Some(object_path),
         ..ProjectRoi::default()
     };
-    roi.set_dataset_source(crate::data::dataset_source::DatasetSource::Local(dataset_path));
+    roi.set_dataset_source(crate::data::dataset_source::DatasetSource::Local(
+        dataset_path,
+    ));
     let source_key = roi.source_key().unwrap();
     channels
         .model_tx
@@ -181,8 +179,7 @@ fn saved_view_resource_load_is_one_actor_worker_transaction() {
         .unwrap()
         .unwrap();
 
-    let (apply, apply_response) =
-        request("project.views.apply", json!({"name":"Reload objects"}));
+    let (apply, apply_response) = request("project.views.apply", json!({"name":"Reload objects"}));
     channels.request_tx.send(apply).unwrap();
     assert_eq!(
         apply_response
@@ -200,5 +197,4 @@ fn saved_view_resource_load_is_one_actor_worker_transaction() {
             .unwrap()["state"]["object_count"],
         2
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

@@ -66,7 +66,6 @@ fn samplesheet_and_discovery_transactions_complete_without_a_ui_frame() {
         .unwrap();
     assert_eq!(discovered["added"], 1);
     assert_eq!(discovered["project"]["roi_count"], 2);
-    assert_eq!(channels.legacy_rx.len(), 0);
     assert_eq!(channels.presentation_rx.len(), 1);
     assert_eq!(
         channels

@@ -72,5 +72,4 @@ fn deep_link_resolution_uses_current_or_external_actor_project_without_a_frame()
     assert_eq!(example["resolved"], true);
     assert_eq!(example["request"]["channel"], "DAPI");
     assert_eq!(example["resolution"]["project_source"], "project_file");
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

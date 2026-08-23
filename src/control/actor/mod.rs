@@ -21,7 +21,8 @@ use zarrs::storage::ReadableStorageTraits;
 
 use crate::control::registry::ExecutionOwner;
 use crate::control::{
-    ControlError, ControlErrorKind, ResourceRegistry, TaskRegistry, TaskServiceHandle, TaskState,
+    ControlError, ControlErrorKind, OdonControlRequest, ResourceRegistry, TaskRegistry,
+    TaskServiceHandle, TaskState,
 };
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
@@ -42,7 +43,6 @@ use crate::deep_link::{
     DeepLinkRequest, DeepLinkResolution, apply_example_defaults, object_filter_model,
     requested_bundled_label, resolve_example_project_path, resolve_roi_target,
 };
-use crate::mcp::OdonControlRequest;
 use crate::model::{
     AnalysisResourceSpec, AppModel, ChannelIntensitySpec, ControlLabelResource,
     ControlMosaicItemResource, ControlMosaicResource, ControlObjectFilterResult,
@@ -50,13 +50,13 @@ use crate::model::{
     DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric,
     MeasurementSpec, MemoryPinSpec, ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec,
     MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult,
-    ObjectExportSpec, ObjectResourceLoader, ProjectModelSnapshot, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ProjectViewApplySpec,
-    ScreenshotPreferences,
-    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
-    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
-    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
-    threshold_mask_polygons, write_object_export,
+    ObjectExportSpec, ObjectResourceLoader, ObjectTarget, ProjectModelSnapshot,
+    ProjectObjectPreloadScope, ProjectObjectPreloadSettings, ProjectObjectPreloadSource,
+    ProjectViewApplySpec, ScreenshotPreferences, SettingsMutationOutcome, SystemMemorySnapshot,
+    ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
+    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
+    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
+    write_object_export,
 };
 use crate::settings::AppSettings;
 
@@ -69,8 +69,8 @@ mod completion_masks;
 mod completion_mosaic;
 mod completion_objects;
 mod completion_opening;
-mod completion_project;
 mod completion_presentation;
+mod completion_project;
 mod completion_resources;
 mod datasets;
 mod deep_links;
@@ -84,11 +84,11 @@ mod memory;
 mod mosaics;
 mod object_exports;
 mod objects;
+mod presentation;
 mod project_io;
 mod project_preload;
 mod project_roi;
 mod project_views;
-mod presentation;
 mod projection;
 mod projects;
 mod remote;
@@ -122,13 +122,13 @@ pub use diagnostics::ActorDiagnostics;
 use dispatch::dispatch_request;
 use jobs::{
     AnalysisComputeKind, CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult,
-    DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MemoryPinWorkerOutcome,
-    MemoryPinWorkerResult, MosaicMemoryPinWorkerOutcome, MosaicMemoryPinWorkerResult,
-    MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec,
-    ProjectRoiOpenWorkerResult, ProjectViewApplyWorkerResult,
+    DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MaskAppendWorkerResult,
+    MemoryPinWorkerOutcome, MemoryPinWorkerResult, MosaicMemoryPinWorkerOutcome,
+    MosaicMemoryPinWorkerResult, MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult,
+    ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult, ProjectViewApplyWorkerResult,
 };
-use mask_io::export_mask_layers_geojson;
-use masks::{begin_mask_export, begin_mask_import};
+use mask_io::{append_mask_layers_geojson, export_mask_layers_geojson};
+use masks::{begin_mask_append, begin_mask_export, begin_mask_import};
 use measurements::begin_measurement;
 use memory::begin_memory_pin;
 use mosaics::{
@@ -138,6 +138,11 @@ use mosaics::{
 };
 use object_exports::begin_object_export;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
+pub use presentation::{
+    PresentationCaptureCompletion, PresentationCaptureRequest, PresentationCaptureScope,
+    PresentationPixels,
+};
+use presentation::{PresentationCaptureManager, ScreenshotWriteSpec};
 use project_io::{
     discover_omezarr_roots_under, export_samplesheet_rois, import_samplesheet_rois,
     inspect_samplesheet, read_project_file,
@@ -145,11 +150,6 @@ use project_io::{
 use project_preload::{begin_project_object_preload, begin_project_object_source_scan};
 use project_roi::begin_project_roi_open;
 use project_views::begin_project_view_apply;
-use presentation::{PresentationCaptureManager, ScreenshotWriteSpec};
-pub use presentation::{
-    PresentationCaptureCompletion, PresentationCaptureRequest, PresentationCaptureScope,
-    PresentationPixels,
-};
 use projection::publish_projection;
 pub use projection::{PlatformEffect, RenderDocument, RenderProjection};
 use projects::{

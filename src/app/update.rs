@@ -108,7 +108,9 @@ impl eframe::App for OmeZarrViewerApp {
                     ui.separator();
                     let mut mode = self.view_plane_mode;
                     if top_bar::ui_view_plane_mode(ui, &mut mode, &supported_view_planes) {
-                        self.set_view_plane_mode(mode);
+                        if !self.submit_native_active_viewport_plane(mode, None) {
+                            self.set_view_plane_mode(mode);
+                        }
                     }
                 }
                 if let Some(slice_extent) =
@@ -133,12 +135,21 @@ impl eframe::App for OmeZarrViewerApp {
                     } else if slider.changed {
                         self.previous_displayed_view_selection = None;
                         self.draft_view_slice_level0 = None;
-                        self.set_active_view_slice_level0(slice_level0);
+                        if !self.submit_native_active_viewport_plane(
+                            self.view_plane_mode,
+                            Some(slice_level0),
+                        ) {
+                            self.set_active_view_slice_level0(slice_level0);
+                        }
                     } else if slider.released
                         && let Some(draft) = self.draft_view_slice_level0.take()
                     {
                         self.previous_displayed_view_selection = None;
-                        self.set_active_view_slice_level0(draft);
+                        if !self
+                            .submit_native_active_viewport_plane(self.view_plane_mode, Some(draft))
+                        {
+                            self.set_active_view_slice_level0(draft);
+                        }
                     }
                 }
                 ui.separator();
@@ -173,15 +184,40 @@ impl eframe::App for OmeZarrViewerApp {
                 ui.separator();
                 self.ui_viewport_controls(ui);
 
-                if top_bar::ui_smooth_toggle(ui, &mut self.smooth_pixels) {
+                let rendering_before = (
+                    self.smooth_pixels,
+                    self.show_tile_debug,
+                    self.show_hud,
+                    self.show_scale_bar,
+                );
+                let mut smooth_pixels = self.smooth_pixels;
+                let mut show_tile_debug = self.show_tile_debug;
+                let mut show_hud = self.show_hud;
+                let mut show_scale_bar = self.show_scale_bar;
+                top_bar::ui_smooth_toggle(ui, &mut smooth_pixels);
+                ui.checkbox(&mut show_tile_debug, "Tile Debug");
+                ui.checkbox(&mut show_hud, "HUD");
+                ui.checkbox(&mut show_scale_bar, "Scale Bar");
+                let rendering_after = (smooth_pixels, show_tile_debug, show_hud, show_scale_bar);
+                if rendering_after != rendering_before
+                    && !self.submit_native_active_viewport_rendering(
+                        smooth_pixels,
+                        show_scale_bar,
+                        show_hud,
+                        show_tile_debug,
+                    )
+                {
+                    self.smooth_pixels = smooth_pixels;
+                    self.show_tile_debug = show_tile_debug;
+                    self.show_hud = show_hud;
+                    self.show_scale_bar = show_scale_bar;
                     // Smoothness is presentation-local. The CPU render ID and
                     // each GPU paint callback carry the selected sampling mode,
                     // so changing one view must not clear another view's cache.
-                    self.bump_render_id();
+                    if smooth_pixels != rendering_before.0 {
+                        self.bump_render_id();
+                    }
                 }
-                ui.checkbox(&mut self.show_tile_debug, "Tile Debug");
-                ui.checkbox(&mut self.show_hud, "HUD");
-                ui.checkbox(&mut self.show_scale_bar, "Scale Bar");
 
                 if have_channels {
                     ui.separator();
@@ -340,7 +376,7 @@ impl eframe::App for OmeZarrViewerApp {
                                             && let Some(world) =
                                                 objects.fit_object_bounds_world(idx, offset_world)
                                         {
-                                            self.camera.fit_to_world_rect(viewport, world);
+                                            self.fit_camera_to_world_rect(viewport, world);
                                         }
                                     }
                                 } else {

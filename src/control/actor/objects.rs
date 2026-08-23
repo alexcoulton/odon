@@ -15,6 +15,7 @@ pub(super) fn begin_object_filter_evaluation(
         resource_generation,
         operation_generation,
         viewport_id,
+        target,
         expected_presentation_revision,
         resource,
         filter_model,
@@ -30,6 +31,7 @@ pub(super) fn begin_object_filter_evaluation(
         resource_generation,
         operation_generation,
         viewport_id: viewport_id.clone(),
+        target,
         expected_presentation_revision,
         request,
         resource,
@@ -44,6 +46,7 @@ pub(super) fn begin_object_filter_evaluation(
             };
             model.fail_object_filter_for_generation(
                 &viewport_id,
+                target,
                 operation_generation,
                 "Object filter worker queue is unavailable",
             );
@@ -67,6 +70,7 @@ pub(super) fn begin_object_selection_filter_evaluation(
         resource_generation,
         selection_generation,
         operation_generation,
+        target,
         resource,
         filter_model,
         mode,
@@ -83,6 +87,7 @@ pub(super) fn begin_object_selection_filter_evaluation(
         resource_generation,
         selection_generation,
         operation_generation,
+        target,
         request,
         resource,
         model: filter_model,
@@ -97,6 +102,7 @@ pub(super) fn begin_object_selection_filter_evaluation(
                 unreachable!("object selection-filter submission returns its own job")
             };
             model.fail_object_selection_filter_for_generation(
+                target,
                 operation_generation,
                 "Object selection-filter worker queue is unavailable",
             );

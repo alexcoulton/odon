@@ -76,19 +76,5 @@ fn filter_sensitive_operations_require_and_honor_an_explicit_source() {
     }));
     assert_eq!(right_filter["result"]["query"]["text"], "class == 'immune'");
 
-    let all_histogram = app.control_object_histogram(&serde_json::json!({
-        "target": "objects",
-        "property": "score",
-        "use_all_objects": true,
-    }));
-    assert_eq!(all_histogram["count"], 3);
-    assert_eq!(all_histogram["filtered"], false);
-    let left_histogram = app.control_object_histogram(&serde_json::json!({
-        "target": "objects",
-        "property": "score",
-        "viewport_id": left,
-    }));
-    assert_eq!(left_histogram["result"]["count"], 2);
-
     let _ = std::fs::remove_file(temp);
 }

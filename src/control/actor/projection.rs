@@ -45,6 +45,7 @@ pub struct RenderProjection {
     pub mosaic_pinned_levels: Vec<(usize, Arc<ControlPinnedLevelResource>)>,
     pub workspace: Option<Value>,
     pub object_resource: Option<Arc<ControlObjectResource>>,
+    pub secondary_object_layers: Vec<crate::model::ControlSecondaryObjectProjection>,
     pub label_resource: Option<Arc<ControlLabelResource>>,
 }
 
@@ -92,6 +93,7 @@ pub(super) fn publish_projection(
         mosaic_pinned_levels: model.mosaic_pinned_level_resources(),
         workspace: model.render_workspace_snapshot(),
         object_resource: model.object_resource(),
+        secondary_object_layers: model.secondary_object_projections(),
         label_resource: model.label_resource(),
     };
     let mut coalesced = false;

@@ -449,10 +449,11 @@ Access: `app.masks` or `app.viewer.masks`. Mask layer and polygon editing, selec
 | `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; event: viewer.masks.selection.changed) |
 | `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; event: viewer.masks.selection.changed) |
 | `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; event: viewer.masks.changed) |
-| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
+| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
 | `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. |
 | `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. |
 | `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; event: viewer.masks.changed) |
+| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; event: viewer.masks.changed) |
 
 ### Thresholds
 
@@ -1198,10 +1199,11 @@ Access: `app.masks`. Async mask resource.
 | `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; event: viewer.masks.selection.changed) |
 | `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; event: viewer.masks.selection.changed) |
 | `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; event: viewer.masks.changed) |
-| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
+| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
 | `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. |
 | `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. |
 | `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; event: viewer.masks.changed) |
+| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; event: viewer.masks.changed) |
 
 ### Async thresholds
 

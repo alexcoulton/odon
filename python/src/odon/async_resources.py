@@ -2578,6 +2578,8 @@ class AsyncMasks:
         name: str | None = None,
         editable: bool = True,
         downsample_factor: float = 1.0,
+        replace_layer_id: int | None = None,
+        expected_generation: int | None = None,
         if_revision: int | None = None,
     ) -> Any:
         params: dict[str, Any] = {
@@ -2587,6 +2589,10 @@ class AsyncMasks:
         }
         if name is not None:
             params["name"] = name
+        if replace_layer_id is not None:
+            params["replace_layer_id"] = replace_layer_id
+        if expected_generation is not None:
+            params["expected_generation"] = expected_generation
         return await self._client.call(
             "viewer.masks.import_geojson", _with_revision(params, if_revision)
         )
@@ -2609,6 +2615,30 @@ class AsyncMasks:
     async def sync_to_project(self, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "viewer.masks.persistence.sync", _with_revision({}, if_revision)
+        )
+
+    async def append_to_geojson(
+        self,
+        path: str | Path,
+        *,
+        name: str = "Exclusion masks",
+        downsample_factor: float = 1.0,
+        roi_root: str | Path | None = None,
+        expected_generation: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {
+            "path": str(path),
+            "name": name,
+            "downsample_factor": downsample_factor,
+        }
+        if roi_root is not None:
+            params["roi_root"] = str(roi_root)
+        if expected_generation is not None:
+            params["expected_generation"] = expected_generation
+        return await self._client.call(
+            "viewer.masks.persistence.append_geojson",
+            _with_revision(params, if_revision),
         )
 
 

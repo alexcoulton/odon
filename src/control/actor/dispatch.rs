@@ -3,7 +3,6 @@ use super::*;
 pub(super) fn dispatch_request(
     model: &mut AppModel,
     request: OdonControlRequest,
-    legacy_tx: &Sender<OdonControlRequest>,
     presentation_tx: &Sender<RenderProjection>,
     presentation_coalesce_rx: &Receiver<RenderProjection>,
     platform_effect_tx: &Sender<PlatformEffect>,
@@ -55,7 +54,14 @@ pub(super) fn dispatch_request(
             ) == ExecutionOwner::LegacyUi
         });
     if routes_to_legacy {
-        forward_legacy_request(request, legacy_tx, wake_ui, diagnostics);
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(
+                ControlErrorKind::Application,
+                "registered application method has no actor execution route",
+            ),
+        );
         return;
     }
 
@@ -525,6 +531,11 @@ pub(super) fn dispatch_request(
         begin_mask_export(model, request, load_job_tx, diagnostics);
         return;
     }
+    if request.command.method() == "viewer.masks.persistence.append_geojson" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_mask_append(model, request, load_job_tx, diagnostics);
+        return;
+    }
 
     if is_resource_registry_method(request.command.method()) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
@@ -547,7 +558,14 @@ pub(super) fn dispatch_request(
     let result = model.dispatch(method, &params);
     diagnostics.record_model_time(model_started.elapsed());
     let Some(result) = result else {
-        forward_legacy_request(request, legacy_tx, wake_ui, diagnostics);
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(
+                ControlErrorKind::Application,
+                format!("registered method '{method}' has no actor implementation"),
+            ),
+        );
         return;
     };
     diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
@@ -571,38 +589,6 @@ pub(super) fn dispatch_request(
                 .fetch_add(1, Ordering::Relaxed);
             diagnostics.record_reply_time(request.command.queue_age());
             let _ = request.reply.send(Err(error));
-        }
-    }
-}
-
-fn forward_legacy_request(
-    request: OdonControlRequest,
-    legacy_tx: &Sender<OdonControlRequest>,
-    wake_ui: &UiWake,
-    diagnostics: &ActorDiagnostics,
-) {
-    diagnostics.legacy_requests.fetch_add(1, Ordering::Relaxed);
-    match legacy_tx.try_send(request) {
-        Ok(()) => wake_ui(),
-        Err(crossbeam_channel::TrySendError::Full(request)) => {
-            diagnostics
-                .rejected_requests
-                .fetch_add(1, Ordering::Relaxed);
-            diagnostics.record_reply_time(request.command.queue_age());
-            let _ = request.reply.send(Err(ControlError::new(
-                ControlErrorKind::NotReady,
-                "Odon's legacy UI command queue is full; retry later",
-            )));
-        }
-        Err(crossbeam_channel::TrySendError::Disconnected(request)) => {
-            diagnostics
-                .rejected_requests
-                .fetch_add(1, Ordering::Relaxed);
-            diagnostics.record_reply_time(request.command.queue_age());
-            let _ = request.reply.send(Err(ControlError::new(
-                ControlErrorKind::NotReady,
-                "Odon's legacy UI command dispatcher is unavailable",
-            )));
         }
     }
 }

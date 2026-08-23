@@ -92,5 +92,4 @@ fn lifecycle_decisions_are_actor_owned_and_emit_only_platform_effects() {
         "Saved before close"
     );
     let _ = fs::remove_file(output);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

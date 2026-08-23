@@ -13,5 +13,4 @@ fn actor_owned_commands_never_fall_back_to_the_ui_queue_while_loading() {
         .expect("actor replies without a frame")
         .unwrap_err();
     assert_eq!(error.kind, ControlErrorKind::NotReady);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

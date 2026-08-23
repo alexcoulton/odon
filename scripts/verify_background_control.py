@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,14 +108,6 @@ ACTOR_METHODS = (
     "project.views.capture",
 )
 
-HYBRID_METHODS = (
-    "viewer.objects.selection.select_filtered",
-    "viewer.objects.query_rect",
-    "viewer.objects.get_selection",
-    "project.views.apply",
-)
-
-
 def call(app: Any, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     result = app.call(method, params or {})
     if not isinstance(result, dict):
@@ -140,6 +133,21 @@ def main() -> None:
         type=Path,
         default=Path("fixtures/synthetic_objects.geojson"),
     )
+    parser.add_argument(
+        "--instance",
+        help=(
+            "Target one discovered Odon instance by ID. This is strongly recommended "
+            "for acceptance runs so the evidence cannot attach to an older build."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Write the machine-readable semantic/resource result to this JSON file. "
+            "Visual projection inspection remains a separate manual acceptance step."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=120.0)
     args = parser.parse_args()
 
@@ -151,7 +159,10 @@ def main() -> None:
         raise FileNotFoundError(objects_fixture)
 
     started = time.monotonic()
-    app = odon.connect()
+    app = odon.connect(
+        instance=args.instance,
+        client_name="odon-background-control-verifier",
+    )
     open_task = app.datasets.open_ome_zarr(fixture)
     open_result = open_task.wait(timeout=args.timeout)
 
@@ -184,6 +195,19 @@ def main() -> None:
         app,
         "viewer.viewport_links.set",
         {"camera": True, "plane": True, "selection": True},
+    )
+    # Exercise saved-view capture/apply before installing the intentionally divergent comparison
+    # presentation. Applying a left-view preset to the active right viewport later would correctly
+    # overwrite that divergence and make the acceptance image contradict its own checklist.
+    captured_view = call(
+        app,
+        "project.views.capture",
+        {"name": f"Background acceptance ({args.condition})", "viewport_id": left},
+    )
+    applied_view = call(
+        app,
+        "project.views.apply",
+        {"name": f"Background acceptance ({args.condition})"},
     )
     objects_loaded = call(
         app,
@@ -358,7 +382,9 @@ def main() -> None:
     call(
         app,
         "viewer.viewports.channels.set_group",
-        {"viewport_id": right, "channels": [0, 1], "name": "Acceptance"},
+        # Keep the displayed CD3 channel out of the inherited-color group so the final right
+        # viewport remains visibly pink while still exercising per-viewport grouping.
+        {"viewport_id": right, "channels": [2, 3], "name": "Acceptance"},
     )
     call(app, "viewer.channels.presentation.set", {"search": "", "sort": "manual"})
     call(app, "viewer.panels.set", {"left": False, "right": False})
@@ -395,16 +421,6 @@ def main() -> None:
     unpinned_memory = call(app, "memory.unpin", {"level": pin_level})
     stats = call(app, "viewer.channels.intensity_stats", {"channel": 0, "level": 0})
     fit = call(app, "viewer.viewports.camera.fit", {"viewport_id": left})
-    captured_view = call(
-        app,
-        "project.views.capture",
-        {"name": f"Background acceptance ({args.condition})", "viewport_id": left},
-    )
-    applied_view = call(
-        app,
-        "project.views.apply",
-        {"name": f"Background acceptance ({args.condition})"},
-    )
 
     final_workspace = call(app, "viewer.workspace.get")
     application_state = call(app, "app.get_state")
@@ -412,11 +428,24 @@ def main() -> None:
     loading = call(app, "app.get_loading_state")
     diagnostics = call(app, "system.get_diagnostics")
     routes = diagnostics["dispatch"]["method_routes"]
+    route_matrix = diagnostics["dispatch"]["route_matrix"]
     wrong_routes = {method: routes.get(method) for method in ACTOR_METHODS if routes.get(method) != "actor"}
-    wrong_hybrid_routes = {
-        method: routes.get(method)
-        for method in HYBRID_METHODS
-        if routes.get(method) != "hybrid"
+    non_actor_application_routes = {
+        method: route["summary"]
+        for method, route in route_matrix.items()
+        if route["summary"] != "actor"
+    }
+    legacy_mode_routes = {
+        method: {
+            mode: state["default_owner"]
+            for mode, state in route["by_mode"].items()
+            if state["default_owner"] == "legacy_ui" or state["conditional"]
+        }
+        for method, route in route_matrix.items()
+        if any(
+            state["default_owner"] == "legacy_ui" or state["conditional"]
+            for state in route["by_mode"].values()
+        )
     }
 
     assert stats["n"] > 0, stats
@@ -453,6 +482,36 @@ def main() -> None:
     assert final_workspace["ui"]["right_tab"] == "measurements", final_workspace
     assert final_workspace["layout"] == "horizontal", final_workspace
     assert len(final_workspace["viewports"]) == 2, final_workspace
+    final_by_id = {
+        viewport["viewport_id"]: viewport for viewport in final_workspace["viewports"]
+    }
+    final_left = final_by_id[left]
+    final_right = final_by_id[right]
+    assert [
+        channel["index"] for channel in final_left["channels"] if channel["visible"]
+    ] == [0], final_left
+    assert [
+        channel["index"] for channel in final_right["channels"] if channel["visible"]
+    ] == [1], final_right
+    assert final_left["channels"][0]["color_rgb"] == [80, 140, 255], final_left
+    assert final_right["channels"][1]["color_rgb"] == [255, 90, 120], final_right
+    assert final_left["objects"]["filter"]["query"] == "phenotype == 'tumour'", final_left
+    assert final_right["objects"]["filter"]["query"] == "phenotype == 'immune'", final_right
+    assert final_left["objects"]["fill_opacity"] == 0.25, final_left
+    assert final_right["objects"]["fill_opacity"] == 0.75, final_right
+    left_mask = next(
+        layer for layer in final_left["native_layers"] if layer["layer_id"] == mask_layer_id
+    )
+    right_mask = next(
+        layer for layer in final_right["native_layers"] if layer["layer_id"] == mask_layer_id
+    )
+    assert left_mask["visible"] is True, left_mask
+    assert right_mask["visible"] is False, right_mask
+    assert final_workspace["links"] == {
+        "camera": True,
+        "plane": True,
+        "selection": True,
+    }, final_workspace
     assert application_state["mode"] == "single", application_state
     assert application_state["view"]["channel_count"] == 5, application_state
     assert rendering_state["compositing"] == "additive", rendering_state
@@ -466,11 +525,22 @@ def main() -> None:
     assert loading["loading"]["resources_ready"] is True, loading
     assert loading["loading"]["geometry_ready"] is True, loading
     assert not wrong_routes, wrong_routes
-    assert not wrong_hybrid_routes, wrong_hybrid_routes
+    assert not non_actor_application_routes, non_actor_application_routes
+    assert not legacy_mode_routes, legacy_mode_routes
+    assert diagnostics["dispatch"]["compatibility_fallback"] is None, diagnostics
 
     report = {
+        "schema_version": 1,
+        "recorded_at_utc": datetime.now(UTC).isoformat(),
+        "verification_scope": "semantic_resource_background_completion",
+        "semantic_result": "pass",
+        "projection_inspection": "pending",
         "condition": args.condition,
+        "instance_id": app.hello.instance_id,
+        "app_version": app.hello.app_version,
         "elapsed_seconds": round(time.monotonic() - started, 3),
+        "fixture": str(fixture),
+        "objects_fixture": str(objects_fixture),
         "open_result": open_result,
         "model_ready": loading["loading"]["model_ready"],
         "resources_ready": loading["loading"]["resources_ready"],
@@ -481,10 +551,36 @@ def main() -> None:
             "presented_projection_revision"
         ],
         "viewports": [item["viewport_id"] for item in final_workspace["viewports"]],
+        "final_projection_expectations": {
+            "left": {
+                "viewport_id": left,
+                "visible_channels": [0],
+                "channel_0_color_rgb": [80, 140, 255],
+                "object_filter": "phenotype == 'tumour'",
+                "object_fill_opacity": 0.25,
+                "acceptance_mask_visible": True,
+            },
+            "right": {
+                "viewport_id": right,
+                "visible_channels": [1],
+                "channel_1_color_rgb": [255, 90, 120],
+                "object_filter": "phenotype == 'immune'",
+                "object_fill_opacity": 0.75,
+                "acceptance_mask_visible": False,
+            },
+            "links": final_workspace["links"],
+        },
         "channel_stat_count": stats["n"],
         "actor_methods_checked": len(ACTOR_METHODS),
+        "application_routes_checked": len(route_matrix),
     }
+    if args.output is not None:
+        output = args.output.expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, default=str) + "\n")
     print(json.dumps(report, indent=2, default=str))
+    if args.output is not None:
+        print(f"Recorded semantic/resource evidence in {output}")
     print(
         "PASS: semantic/resource work completed. Switch to Odon now and verify "
         "that the final two-view projection appears without another API call."

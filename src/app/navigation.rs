@@ -8,10 +8,6 @@ impl OmeZarrViewerApp {
         self.fit_to_rect(viewport);
     }
 
-    pub fn fit_to_viewport(&mut self, viewport: egui::Rect) {
-        self.fit_to_rect(viewport);
-    }
-
     pub(super) fn available_object_selection_targets(
         &self,
     ) -> Vec<(crate::spatialdata::PositiveCellSelectionTarget, String)> {
@@ -35,39 +31,40 @@ impl OmeZarrViewerApp {
         if id_set.is_empty() {
             return None;
         }
+        let mut ids = id_set.iter().cloned().collect::<Vec<_>>();
+        ids.sort();
 
         let mut matched_layers = 0usize;
         let mut matched_objects = 0usize;
-        match target {
+        let targets = match target {
             crate::spatialdata::PositiveCellSelectionTarget::SegmentationObjects => {
-                let selected = self.seg_objects.select_objects_by_ids(&id_set);
-                if selected > 0 {
-                    matched_layers += 1;
-                    matched_objects += selected;
-                }
+                vec![LayerId::SegmentationObjects]
             }
             crate::spatialdata::PositiveCellSelectionTarget::AllObjectLayers => {
-                let selected = self.seg_objects.select_objects_by_ids(&id_set);
-                if selected > 0 {
-                    matched_layers += 1;
-                    matched_objects += selected;
+                let mut targets = Vec::with_capacity(self.spatial_layers.shapes.len() + 1);
+                if self.seg_objects.has_data() {
+                    targets.push(LayerId::SegmentationObjects);
                 }
-                if let Some((layers, objects)) = self
-                    .spatial_layers
-                    .select_positive_cells_by_ids(cell_ids, target)
-                {
-                    matched_layers += layers;
-                    matched_objects += objects;
-                }
+                targets.extend(
+                    self.spatial_layers
+                        .shapes
+                        .iter()
+                        .filter(|layer| layer.has_object_layer())
+                        .map(|layer| LayerId::SpatialShape(layer.id)),
+                );
+                targets
             }
-            crate::spatialdata::PositiveCellSelectionTarget::ShapeLayer(_) => {
-                if let Some((layers, objects)) = self
-                    .spatial_layers
-                    .select_positive_cells_by_ids(cell_ids, target)
-                {
-                    matched_layers += layers;
-                    matched_objects += objects;
-                }
+            crate::spatialdata::PositiveCellSelectionTarget::ShapeLayer(id) => {
+                vec![LayerId::SpatialShape(id)]
+            }
+        };
+        for target in targets {
+            let Some(selected) = self.commit_id_selection_to_layer(target, &ids, &id_set) else {
+                continue;
+            };
+            if selected > 0 {
+                matched_layers += 1;
+                matched_objects += selected;
             }
         }
 
@@ -82,8 +79,7 @@ impl OmeZarrViewerApp {
         let Some(world) = self.seg_objects.fit_bounds_world(off) else {
             return false;
         };
-        self.camera.fit_to_world_rect(viewport, world);
-        true
+        self.fit_camera_to_world_rect(viewport, world)
     }
 
     pub(super) fn fit_to_seg_object_index(&mut self, object_index: usize) -> bool {
@@ -94,13 +90,27 @@ impl OmeZarrViewerApp {
         let Some(world) = self.seg_objects.fit_object_bounds_world(object_index, off) else {
             return false;
         };
-        self.camera.fit_to_world_rect(viewport, world);
-        true
+        self.fit_camera_to_world_rect(viewport, world)
     }
 
     pub(super) fn fit_to_rect(&mut self, viewport: egui::Rect) {
         let world = self.image_world_rect_lvl0();
-        self.camera.fit_to_world_rect(viewport, world);
+        self.fit_camera_to_world_rect(viewport, world);
+    }
+
+    pub(super) fn fit_camera_to_world_rect(
+        &mut self,
+        viewport: egui::Rect,
+        world: egui::Rect,
+    ) -> bool {
+        let mut camera = self.camera.clone();
+        camera.fit_to_world_rect(viewport, world);
+        if self.native_viewport_actor_owned() {
+            self.submit_native_camera(&camera)
+        } else {
+            self.camera = camera;
+            true
+        }
     }
 
     pub(super) fn choose_level(&self) -> usize {

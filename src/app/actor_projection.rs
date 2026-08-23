@@ -175,11 +175,87 @@ impl OmeZarrViewerApp {
         true
     }
 
+    pub fn install_control_actor_secondary_object_resources(
+        &mut self,
+        layers: &[odon::model::ControlSecondaryObjectProjection],
+    ) -> Result<(), String> {
+        let wanted = layers
+            .iter()
+            .map(|layer| layer.layer_id)
+            .collect::<HashSet<_>>();
+        self.control_actor_secondary_object_generations
+            .retain(|layer_id, _| wanted.contains(layer_id));
+        self.control_actor_secondary_object_selection_generations
+            .retain(|layer_id, _| wanted.contains(layer_id));
+        for projected in layers {
+            let installed = self
+                .control_actor_secondary_object_generations
+                .get(&projected.layer_id)
+                .copied()
+                .unwrap_or(0);
+            let layer = self
+                .spatial_layers
+                .shapes
+                .iter_mut()
+                .find(|layer| layer.id == projected.layer_id)
+                .ok_or_else(|| {
+                    format!(
+                        "actor spatial shape layer {} ({}) is unavailable in the renderer",
+                        projected.layer_id, projected.name
+                    )
+                })?;
+            let objects = layer.object_layer_mut().ok_or_else(|| {
+                format!(
+                    "actor spatial shape layer {} has no object renderer",
+                    projected.layer_id
+                )
+            })?;
+            if projected.generation > installed {
+                if !objects.install_control_resource(&projected.resource) {
+                    return Err(format!(
+                        "actor spatial shape layer {} rejected its prepared resource",
+                        projected.layer_id
+                    ));
+                }
+                self.control_actor_secondary_object_generations
+                    .insert(projected.layer_id, projected.generation);
+            }
+            let selected_indices = projected
+                .selection
+                .get("selected_indices")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_u64)
+                .filter_map(|value| usize::try_from(value).ok())
+                .collect::<Vec<_>>();
+            let primary_index = projected
+                .selection
+                .get("primary_index")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            objects.install_control_selection(&selected_indices, primary_index)?;
+            let selection_generation = projected
+                .selection
+                .get("generation")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(1)
+                .max(1);
+            self.control_actor_secondary_object_selection_generations
+                .insert(projected.layer_id, selection_generation);
+        }
+        Ok(())
+    }
+
     pub fn install_control_actor_label_resource(
         &mut self,
         generation: u64,
         resource: &odon::model::ControlLabelResource,
     ) -> Result<bool, String> {
+        // Actor-owned label state is already an explicit decision. Never leave the native
+        // discovery prompt open over a remotely controlled or restored label projection.
+        self.seg_label_prompt_open = false;
+        self.seg_label_prompt_always = false;
         if generation <= self.control_actor_label_generation {
             return Ok(false);
         }
@@ -212,6 +288,10 @@ impl OmeZarrViewerApp {
     }
 
     pub fn unload_control_actor_label_resource(&mut self, generation: u64) -> bool {
+        // An actor-owned unload is also explicit; reopening the discovery prompt would turn a
+        // deterministic remote command into an unattended native-modal workflow.
+        self.seg_label_prompt_open = false;
+        self.seg_label_prompt_always = false;
         if generation <= self.control_actor_label_generation {
             return false;
         }
@@ -276,6 +356,18 @@ impl OmeZarrViewerApp {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         if generation <= self.control_actor_mask_generation {
+            return Ok(());
+        }
+        if self.mask_polygon_gesture_active() {
+            let pending_generation = self
+                .pending_control_actor_mask_projection
+                .as_ref()
+                .and_then(|pending| pending.get("generation"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if generation > pending_generation {
+                self.pending_control_actor_mask_projection = Some(projection.clone());
+            }
             return Ok(());
         }
         let layers = projection
@@ -344,8 +436,15 @@ impl OmeZarrViewerApp {
             self.selected_mask_vertex = vertex_index;
         }
         self.undo_stack.clear();
-        self.drawing_mask_layer = None;
-        self.drawing_mask_polygon.clear();
+        if self.drawing_mask_layer.is_some_and(|id| {
+            !self
+                .mask_layers
+                .iter()
+                .any(|layer| layer.id == id && layer.editable)
+        }) {
+            self.drawing_mask_layer = None;
+            self.drawing_mask_polygon.clear();
+        }
         self.dragging_mask_vertex = None;
         self.moving_mask_polygon = None;
         self.mask_layers_project_dirty = projection
@@ -357,123 +456,8 @@ impl OmeZarrViewerApp {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         self.control_actor_mask_generation = generation;
+        self.pending_control_actor_mask_projection = None;
         self.rebuild_layer_orders();
-        Ok(())
-    }
-
-    pub(super) fn apply_control_actor_native_layers_projection(
-        &mut self,
-        projection: &serde_json::Value,
-    ) -> Result<(), String> {
-        let layers = projection
-            .as_array()
-            .ok_or_else(|| "actor native_layers projection is not an array".to_string())?;
-        for layer in layers {
-            if layer.get("available").and_then(serde_json::Value::as_bool) == Some(false) {
-                continue;
-            }
-            let layer_id = layer
-                .get("layer_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "actor native layer has no layer_id".to_string())?;
-            let mut params = serde_json::json!({"layer_id":layer_id});
-            if let Some(presentation) = layer.get("presentation") {
-                let mut presentation = presentation.clone();
-                if presentation
-                    .get("window")
-                    .is_some_and(serde_json::Value::is_null)
-                {
-                    presentation
-                        .as_object_mut()
-                        .expect("native layer presentation is an object")
-                        .remove("window");
-                }
-                params["presentation"] = presentation;
-                let response = self.control_set_native_layer_presentation(&params);
-                if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
-                    return Err(format!(
-                        "actor native layer '{layer_id}' presentation failed: {error}"
-                    ));
-                }
-            } else if let Some(visible) = layer.get("visible") {
-                params["visible"] = visible.clone();
-                let response = self.control_set_native_layer_visibility(&params);
-                if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
-                    return Err(format!(
-                        "actor native layer '{layer_id}' visibility failed: {error}"
-                    ));
-                }
-            }
-            if let Some(offset) = layer.get("offset_world") {
-                params["offset_world"] = offset.clone();
-                let response = self.control_set_native_layer_offset(&params);
-                if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
-                    return Err(format!(
-                        "actor native layer '{layer_id}' offset failed: {error}"
-                    ));
-                }
-            }
-        }
-        for stack in ["channels", "overlays"] {
-            let ordered = layers
-                .iter()
-                .filter(|layer| {
-                    layer.get("stack").and_then(serde_json::Value::as_str) == Some(stack)
-                })
-                .filter_map(|layer| {
-                    Some((
-                        layer.get("order").and_then(serde_json::Value::as_u64)?,
-                        layer
-                            .get("layer_id")
-                            .and_then(serde_json::Value::as_str)?
-                            .to_string(),
-                    ))
-                })
-                .collect::<Vec<_>>();
-            if ordered.is_empty() {
-                continue;
-            }
-            let mut ordered = ordered;
-            ordered.sort_by_key(|(order, _)| *order);
-            let mut ordered = ordered.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
-            // During incremental migration the renderer can discover compatibility-only layers
-            // before the actor has observed their descriptors. Preserve those layers after the
-            // actor-owned order instead of rejecting the whole projection.
-            for layer in self
-                .control_native_layer_snapshot_list()
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|layer| {
-                    layer.get("stack").and_then(serde_json::Value::as_str) == Some(stack)
-                })
-            {
-                if let Some(layer_id) = layer.get("layer_id").and_then(serde_json::Value::as_str)
-                    && !ordered.iter().any(|candidate| candidate == layer_id)
-                {
-                    ordered.push(layer_id.to_string());
-                }
-            }
-            let response = self.control_set_native_layer_order(&serde_json::json!({
-                "stack":stack,
-                "layers":ordered,
-            }));
-            if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
-                return Err(format!("actor native {stack} order failed: {error}"));
-            }
-        }
-        if let Some(active) = layers
-            .iter()
-            .find(|layer| layer.get("active").and_then(serde_json::Value::as_bool) == Some(true))
-            .and_then(|layer| layer.get("layer_id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            let response =
-                self.control_set_active_native_layer(&serde_json::json!({"layer_id":active}));
-            if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
-                return Err(format!("actor active native layer failed: {error}"));
-            }
-        }
         Ok(())
     }
 
@@ -747,6 +731,7 @@ impl OmeZarrViewerApp {
         self.hist_dirty = true;
         self.hist_navigation_dirty_since = Some(Instant::now());
         self.viewport_workspace = Some(workspace);
+        self.control_actor_workspace_revision = revision.max(1);
         Ok(())
     }
 

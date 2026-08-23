@@ -78,6 +78,5 @@ fn settings_and_recent_projects_persist_without_a_ui_frame() {
             .recent_projects
             .is_empty()
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
     let _ = fs::remove_file(settings_path);
 }

@@ -124,7 +124,6 @@ fn project_roi_open_commits_document_resources_and_saved_view_without_a_frame() 
             .unwrap()["state"]["object_count"],
         2
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.mode, ModelMode::Single);
@@ -204,7 +203,6 @@ fn failed_project_roi_open_retains_the_previous_usable_document() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -297,7 +295,6 @@ fn cancelled_project_roi_open_cannot_replace_the_previous_document() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -372,5 +369,4 @@ fn superseding_dataset_open_rejects_a_late_project_roi_completion() {
         projection.document.unwrap().path(),
         Some(dataset_path.as_path())
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

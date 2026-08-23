@@ -94,9 +94,10 @@ impl OmeZarrViewerApp {
                 {
                     self.clear_spatial_selection_drag();
                     self.tool_mode = ToolMode::DrawMaskPolygon;
-                    let id = self.ensure_editable_mask_layer();
-                    self.active_layer = LayerId::Mask(id);
-                    self.drawing_mask_layer = Some(id);
+                    if let Some(id) = self.ensure_editable_mask_layer() {
+                        self.commit_active_layer(LayerId::Mask(id));
+                        self.drawing_mask_layer = Some(id);
+                    }
                 }
             });
             ui.add_enabled_ui(can_object_select, |ui| {
@@ -160,19 +161,26 @@ impl OmeZarrViewerApp {
                             .add(egui::Checkbox::new(&mut all, "All").indeterminate(overlays_mixed))
                             .changed()
                         {
-                            let mut mask_visibility_changed = false;
-                            for id in overlay_ids.into_iter() {
-                                if !self.layer_is_available(id) {
-                                    continue;
+                            if self.native_layers_actor_owned() {
+                                self.submit_native_layer_visibilities(
+                                    overlay_ids.iter().copied(),
+                                    all,
+                                );
+                            } else {
+                                let mut mask_visibility_changed = false;
+                                for id in overlay_ids {
+                                    if !self.layer_is_available(id) {
+                                        continue;
+                                    }
+                                    if let Some(v) = self.layer_visible_mut(id) {
+                                        mask_visibility_changed |=
+                                            matches!(id, LayerId::Mask(_)) && *v != all;
+                                        *v = all;
+                                    }
                                 }
-                                if let Some(v) = self.layer_visible_mut(id) {
-                                    mask_visibility_changed |=
-                                        matches!(id, LayerId::Mask(_)) && *v != all;
-                                    *v = all;
+                                if mask_visibility_changed {
+                                    self.mark_mask_layers_project_dirty();
                                 }
-                            }
-                            if mask_visibility_changed {
-                                self.mark_mask_layers_project_dirty();
                             }
                             self.bump_render_id();
                         }
@@ -242,9 +250,16 @@ impl OmeZarrViewerApp {
                                                     .on_hover_text("Toggle all annotation layers in group")
                                                     .changed()
                                                 {
-                                                    for &mid in members {
-                                                        if let Some(v) = self.layer_visible_mut(LayerId::Annotation(mid)) {
-                                                            *v = set_all;
+                                                    if self.native_layers_actor_owned() {
+                                                        self.submit_native_layer_visibilities(
+                                                            members.iter().copied().map(LayerId::Annotation),
+                                                            set_all,
+                                                        );
+                                                    } else {
+                                                        for &mid in members {
+                                                            if let Some(v) = self.layer_visible_mut(LayerId::Annotation(mid)) {
+                                                                *v = set_all;
+                                                            }
                                                         }
                                                     }
                                                     group.visible = set_all;
@@ -361,23 +376,25 @@ impl OmeZarrViewerApp {
                                 self.selected_overlay_layers.insert(id);
                                 self.overlay_select_anchor_pos = Some(i);
                             }
-                            self.set_active_layer(id);
+                            self.commit_active_layer(id);
                         } else if resp.row_response.secondary_clicked() {
                             // Right-click selects the row (single) if it wasn't already selected.
                             if !self.selected_overlay_layers.contains(&id) {
                                 self.selected_overlay_layers.clear();
                                 self.selected_overlay_layers.insert(id);
                                 self.overlay_select_anchor_pos = Some(i);
-                                self.set_active_layer(id);
+                                self.commit_active_layer(id);
                             }
                         }
                         if let Some(v) = resp.visible_changed {
                             let mut mask_visibility_changed = false;
-                            if let Some(dst) = self.layer_visible_mut(id) {
+                            if self.native_layers_actor_owned() {
+                                self.submit_native_layer_visibility(id, v);
+                            } else if let Some(dst) = self.layer_visible_mut(id) {
                                 mask_visibility_changed = matches!(id, LayerId::Mask(_)) && *dst != v;
                                 *dst = v;
                             }
-                            if mask_visibility_changed {
+                            if mask_visibility_changed && !self.mask_actor_owned() {
                                 self.mark_mask_layers_project_dirty();
                             }
                         }
@@ -479,12 +496,32 @@ impl OmeZarrViewerApp {
             dropped = Some((group, from, to));
         });
         if let Some((group, from, to)) = dropped {
-            match group {
-                LayerGroup::Overlays => {
-                    layer_list::reorder_vec(&mut self.overlay_layer_order, from, to)
+            if self.native_layers_actor_owned() {
+                match group {
+                    LayerGroup::Overlays => {
+                        let mut order = self.overlay_layer_order.clone();
+                        layer_list::reorder_vec(&mut order, from, to);
+                        self.submit_native_layer_order("overlays", order);
+                    }
+                    LayerGroup::Channels => {
+                        let mut order = self
+                            .channel_layer_order
+                            .iter()
+                            .copied()
+                            .map(LayerId::Channel)
+                            .collect::<Vec<_>>();
+                        layer_list::reorder_vec(&mut order, from, to);
+                        self.submit_native_layer_order("channels", order);
+                    }
                 }
-                LayerGroup::Channels => {
-                    layer_list::reorder_vec(&mut self.channel_layer_order, from, to)
+            } else {
+                match group {
+                    LayerGroup::Overlays => {
+                        layer_list::reorder_vec(&mut self.overlay_layer_order, from, to)
+                    }
+                    LayerGroup::Channels => {
+                        layer_list::reorder_vec(&mut self.channel_layer_order, from, to)
+                    }
                 }
             }
             self.bump_render_id();
@@ -618,7 +655,7 @@ impl OmeZarrViewerApp {
                         }
                     }
                 }
-                self.set_current_layer_groups(groups);
+                self.commit_current_channel_groups(groups);
                 self.bump_render_id();
             }
             GroupLayersTarget::Annotations(layer_ids) => {
@@ -656,6 +693,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn group_channel_indices_for_deep_link(
         &mut self,
         name: &str,
@@ -744,6 +782,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn move_channels_to_top_for_deep_link(&mut self, channel_indices: &[usize]) {
         let channel_count = self.channels.len();
         if channel_count == 0 || channel_indices.is_empty() {

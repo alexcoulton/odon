@@ -17,6 +17,5 @@ fn actor_rejects_ready_only_worker_commands_during_transition() {
         .unwrap_err();
     assert_eq!(error.kind, ControlErrorKind::NotReady);
     assert_eq!(error.data.as_ref().unwrap()["mode"], "transition");
-    assert_eq!(channels.legacy_rx.len(), 0);
     assert_eq!(channels.diagnostics.snapshot()["workers"]["started"], 0);
 }

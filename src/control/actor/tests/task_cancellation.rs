@@ -78,5 +78,4 @@ fn actor_owned_task_cancellation_remains_responsive_during_worker_io() {
         channels.task_service.get(&task.task_id).unwrap().state,
         TaskState::Cancelled
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

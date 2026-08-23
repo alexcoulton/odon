@@ -1,7 +1,8 @@
 use super::*;
 use crate::data::document::{
-    AlternateDocumentResource, DocumentDescriptor, DocumentKind, OpenedDocument,
-    SpatialDataOpenIdentity, SpatialDataOpenOptions, XeniumOpenIdentity, XeniumOpenOptions,
+    AlternateDocumentResource, DocumentDescriptor, DocumentKind, DocumentObjectLayerResource,
+    OpenedDocument, SpatialDataOpenIdentity, SpatialDataOpenOptions, XeniumOpenIdentity,
+    XeniumOpenOptions,
 };
 
 struct FixtureTiffBackend;
@@ -17,6 +18,31 @@ fn fixture_document(
     Ok(OpenedDocument {
         descriptor,
         resource: AlternateDocumentResource::new(dataset, store, Arc::new(())),
+    })
+}
+
+fn fixture_spatial_object_resource() -> Arc<ControlObjectResource> {
+    Arc::new(ControlObjectResource {
+        source: PathBuf::from("shapes/cells.parquet"),
+        downsample_factor: 1.0,
+        features: Arc::new(vec![crate::model::ControlObjectFeature {
+            id: "shape-a".to_string(),
+            bbox_world: [0.0, 0.0, 10.0, 10.0],
+            centroid_world: [5.0, 5.0],
+            polygons_world: Arc::new(vec![vec![
+                [0.0, 0.0],
+                [10.0, 0.0],
+                [10.0, 10.0],
+                [0.0, 10.0],
+                [0.0, 0.0],
+            ]]),
+            point_position_world: Some([5.0, 5.0]),
+            area_px: 100.0,
+            perimeter_px: 40.0,
+            properties: json!({"score":0.9}).as_object().unwrap().clone(),
+        }]),
+        property_names: Arc::new(vec!["id".to_string(), "score".to_string()]),
+        renderer_payload: None,
     })
 }
 
@@ -38,8 +64,18 @@ impl AlternateDatasetBackend for FixtureTiffBackend {
         OpenedDocument<AlternateDocumentResource>,
         SpatialDataOpenIdentity,
     )> {
+        let mut opened = fixture_document(path, DocumentKind::SpatialData)?;
+        opened.resource = opened
+            .resource
+            .with_object_layers(vec![DocumentObjectLayerResource {
+                layer_id: "spatial_shape:7".to_string(),
+                name: "Cells".to_string(),
+                kind: "spatial_shape".to_string(),
+                primary: false,
+                resource: fixture_spatial_object_resource(),
+            }]);
         Ok((
-            fixture_document(path, DocumentKind::SpatialData)?,
+            opened,
             SpatialDataOpenIdentity {
                 root: path.to_path_buf(),
                 image: options.image.clone(),
@@ -118,7 +154,6 @@ fn tiff_open_reaches_resource_readiness_without_a_ui_frame() {
     assert_eq!(response["model_ready"], true);
     assert_eq!(response["resources_ready"], true);
     assert_eq!(response["presentation_ready"], false);
-    assert!(channels.legacy_rx.try_recv().is_err());
 
     let projection = channels
         .presentation_rx
@@ -224,6 +259,77 @@ fn spatialdata_and_xenium_open_without_a_ui_frame() {
         projection.document.unwrap().opened.descriptor.kind,
         DocumentKind::SpatialData
     );
+    assert_eq!(projection.secondary_object_layers.len(), 1);
+    assert_eq!(projection.secondary_object_layers[0].layer_id, 7);
+
+    let target = json!({"target":"spatial_shape","layer_id":7});
+    let (properties, properties_rx) = request("viewer.objects.properties.list", target.clone());
+    channels.request_tx.send(properties).unwrap();
+    let properties = properties_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(properties["target"], "spatial_shape");
+    assert_eq!(properties["total"], 2);
+
+    let (select, select_rx) = request(
+        "viewer.objects.selection.select_ids",
+        json!({"target":"spatial_shape","layer_id":7,"ids":["shape-a"]}),
+    );
+    channels.request_tx.send(select).unwrap();
+    let selected = select_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected["target"], "spatial_shape");
+    assert_eq!(selected["selection"]["selection_count"], 1);
+
+    let (style, style_rx) = request(
+        "viewer.objects.style.set",
+        json!({
+            "target":"spatial_shape",
+            "layer_id":7,
+            "fill_cells":true,
+            "color_property":"score",
+        }),
+    );
+    channels.request_tx.send(style).unwrap();
+    let style = style_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(style["style"]["fill_cells"], true);
+
+    for method in [
+        "viewer.analysis.get",
+        "viewer.measurements.get",
+        "exports.objects.columns",
+    ] {
+        let (command, reply) = request(method, target.clone());
+        channels.request_tx.send(command).unwrap();
+        let response = reply.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+        assert_eq!(response["target"], "spatial_shape", "{method}");
+        assert_eq!(response["layer_id"], 7, "{method}");
+    }
+
+    let (activate, activate_rx) = request(
+        "viewer.native_layers.set_active",
+        json!({"layer_id":"spatial_shape:7"}),
+    );
+    channels.request_tx.send(activate).unwrap();
+    activate_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let (active, active_rx) = request("viewer.analysis.get", json!({"target":"active"}));
+    channels.request_tx.send(active).unwrap();
+    assert_eq!(
+        active_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap()["layer_id"],
+        7
+    );
 
     let xenium_root = std::env::temp_dir().join("odon-xenium-fixture");
     let (xenium, xenium_rx) = request(
@@ -253,5 +359,4 @@ fn spatialdata_and_xenium_open_without_a_ui_frame() {
         projection.document.unwrap().opened.descriptor.kind,
         DocumentKind::Xenium
     );
-    assert!(channels.legacy_rx.try_recv().is_err());
 }

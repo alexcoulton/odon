@@ -37,5 +37,4 @@ fn deep_link_parse_filters_and_generation_are_actor_owned() {
             .unwrap()
             .starts_with("odon://open?")
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

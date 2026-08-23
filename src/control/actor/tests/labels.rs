@@ -30,7 +30,6 @@ fn label_resources_load_toggle_and_unload_without_a_ui_frame() {
     assert_eq!(loaded["visible"], true);
     assert_eq!(loaded["busy"], false);
     assert_eq!(loaded["actor_owned"], true);
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(
@@ -78,7 +77,6 @@ fn label_resources_load_toggle_and_unload_without_a_ui_frame() {
     assert_eq!(unloaded["unloaded"], "cells");
     assert!(unloaded["labels"]["loaded"].is_null());
     assert_eq!(unloaded["labels"]["visible"], false);
-    assert_eq!(channels.legacy_rx.len(), 0);
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert!(projection.label_resource.is_none());
     assert_eq!(

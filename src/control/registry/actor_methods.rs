@@ -257,6 +257,7 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "viewer.masks.export_geojson",
     "viewer.masks.persistence.get",
     "viewer.masks.persistence.sync",
+    "viewer.masks.persistence.append_geojson",
     "viewer.viewports.rendering.get",
     "viewer.viewports.rendering.set",
     "mosaic.ui.set_right_tab",

@@ -45,6 +45,12 @@ pub(super) enum MosaicMemoryPinWorkerOutcome {
     Loaded(MosaicMemoryPinResult),
 }
 
+pub(super) struct MaskAppendWorkerResult {
+    pub(super) bytes: u64,
+    pub(super) appended_polygon_count: usize,
+    pub(super) polygons_world: Vec<Vec<[f32; 2]>>,
+}
+
 pub(super) struct MosaicMemoryPinWorkerResult {
     pub(super) system: Option<SystemMemorySnapshot>,
     pub(super) outcome: MosaicMemoryPinWorkerOutcome,
@@ -335,6 +341,7 @@ pub(super) enum LoadCompletion {
         resource_generation: u64,
         operation_generation: u64,
         viewport_id: String,
+        target: ObjectTarget,
         expected_presentation_revision: u64,
         request: OdonControlRequest,
         result: anyhow::Result<ControlObjectFilterResult>,
@@ -344,6 +351,7 @@ pub(super) enum LoadCompletion {
         resource_generation: u64,
         selection_generation: u64,
         operation_generation: u64,
+        target: ObjectTarget,
         request: OdonControlRequest,
         mode: String,
         limit: usize,
@@ -358,6 +366,7 @@ pub(super) enum LoadCompletion {
         path: PathBuf,
         name: String,
         editable: bool,
+        replace_layer_id: Option<u64>,
         result: anyhow::Result<Vec<Vec<[f32; 2]>>>,
     },
     MaskExport {
@@ -369,6 +378,17 @@ pub(super) enum LoadCompletion {
         layer_count: usize,
         polygon_count: usize,
         result: anyhow::Result<u64>,
+    },
+    MaskAppend {
+        document_generation: u64,
+        mask_generation: u64,
+        operation_generation: u64,
+        operation_scope: String,
+        request: OdonControlRequest,
+        path: PathBuf,
+        name: String,
+        saved_layers: Vec<ProjectMaskLayer>,
+        result: anyhow::Result<MaskAppendWorkerResult>,
     },
 }
 
@@ -427,7 +447,9 @@ impl LoadCompletion {
             Self::ObjectFilter { .. } | Self::ObjectSelectionFilter { .. } => {
                 CompletionDomain::Objects
             }
-            Self::MaskImport { .. } | Self::MaskExport { .. } => CompletionDomain::Masks,
+            Self::MaskImport { .. } | Self::MaskExport { .. } | Self::MaskAppend { .. } => {
+                CompletionDomain::Masks
+            }
             Self::MosaicOpen { .. } | Self::MosaicObjects { .. } | Self::MosaicMemoryPin { .. } => {
                 CompletionDomain::Mosaic
             }
@@ -668,6 +690,7 @@ pub(super) enum LoadJob {
         resource_generation: u64,
         operation_generation: u64,
         viewport_id: String,
+        target: ObjectTarget,
         expected_presentation_revision: u64,
         request: OdonControlRequest,
         resource: Arc<ControlObjectResource>,
@@ -678,6 +701,7 @@ pub(super) enum LoadJob {
         resource_generation: u64,
         selection_generation: u64,
         operation_generation: u64,
+        target: ObjectTarget,
         request: OdonControlRequest,
         resource: Arc<ControlObjectResource>,
         model: Value,
@@ -693,6 +717,7 @@ pub(super) enum LoadJob {
         path: PathBuf,
         name: String,
         editable: bool,
+        replace_layer_id: Option<u64>,
         downsample_factor: f32,
     },
     MaskExport {
@@ -703,5 +728,17 @@ pub(super) enum LoadJob {
         layer_id: Option<u64>,
         layers: Vec<ProjectMaskLayer>,
         overwrite: bool,
+    },
+    MaskAppend {
+        document_generation: u64,
+        mask_generation: u64,
+        operation_generation: u64,
+        operation_scope: String,
+        request: OdonControlRequest,
+        path: PathBuf,
+        name: String,
+        downsample_factor: f32,
+        roi_root: String,
+        saved_layers: Vec<ProjectMaskLayer>,
     },
 }

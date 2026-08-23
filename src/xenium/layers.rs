@@ -13,10 +13,8 @@ use crate::render::line_bins::LineSegmentsBins;
 use crate::render::line_bins_gl::{LineBinsGlDrawData, LineBinsGlDrawParams, LineBinsGlRenderer};
 use crate::render::point_bins::PointIndexBins;
 use crate::render::points::PointsStyle;
-use crate::xenium::cells::{XeniumPolygonSet, load_cells_outline_bins};
 use crate::xenium::transcripts::{
     XeniumTranscriptsAllPayload, XeniumTranscriptsMeta, load_transcripts_all_points,
-    load_transcripts_meta,
 };
 
 #[derive(Clone)]
@@ -46,18 +44,6 @@ impl XeniumLayers {
         self.transcripts = None;
     }
 
-    pub fn attach(
-        &mut self,
-        dataset_root: PathBuf,
-        cells_zip: Option<PathBuf>,
-        transcripts_zip: Option<PathBuf>,
-        pixel_size_um: f32,
-    ) {
-        self.dataset_root = Some(dataset_root);
-        self.cells = cells_zip.map(|p| XeniumCellsLayer::new(p, pixel_size_um));
-        self.transcripts = transcripts_zip.map(|p| XeniumTranscriptsLayer::new(p, pixel_size_um));
-    }
-
     pub fn attach_prepared(
         &mut self,
         dataset_root: PathBuf,
@@ -80,9 +66,6 @@ impl XeniumLayers {
     }
 
     pub fn tick(&mut self) {
-        if let Some(c) = self.cells.as_mut() {
-            c.tick();
-        }
         if let Some(t) = self.transcripts.as_mut() {
             t.tick();
         }
@@ -97,29 +80,19 @@ pub struct XeniumCellsLayer {
     pub width_screen_px: f32,
     pub color_rgb: [u8; 3],
 
-    cells_zip: PathBuf,
-    pixel_size_um: f32,
-
     bins: Option<Arc<LineSegmentsBins>>,
     generation: u64,
     gl: LineBinsGlRenderer,
-    load_rx: Option<Receiver<anyhow::Result<Arc<LineSegmentsBins>>>>,
     status: String,
 }
 
 impl XeniumCellsLayer {
-    pub fn new(cells_zip: PathBuf, pixel_size_um: f32) -> Self {
-        let mut s = Self::empty(cells_zip, pixel_size_um);
-        s.request_load();
-        s
-    }
-
     pub fn from_prepared(
-        cells_zip: PathBuf,
-        pixel_size_um: f32,
+        _cells_zip: PathBuf,
+        _pixel_size_um: f32,
         bins: Arc<LineSegmentsBins>,
     ) -> Self {
-        let mut layer = Self::empty(cells_zip, pixel_size_um);
+        let mut layer = Self::empty();
         let segments = bins.segments.len();
         layer.bins = Some(bins);
         layer.generation = layer.generation.wrapping_add(1).max(1);
@@ -127,66 +100,17 @@ impl XeniumCellsLayer {
         layer
     }
 
-    fn empty(cells_zip: PathBuf, pixel_size_um: f32) -> Self {
+    fn empty() -> Self {
         Self {
             name: "Cells (Xenium)".to_string(),
             visible: true,
             opacity: 0.75,
             width_screen_px: 1.0,
             color_rgb: [0, 255, 120],
-            cells_zip,
-            pixel_size_um,
             bins: None,
             generation: 1,
             gl: LineBinsGlRenderer::new(1024),
-            load_rx: None,
             status: String::new(),
-        }
-    }
-
-    fn request_load(&mut self) {
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<Arc<LineSegmentsBins>>>(1);
-        self.load_rx = Some(rx);
-        self.status = "Loading Xenium cells...".to_string();
-
-        let zip = self.cells_zip.clone();
-        let pixel_size_um = self.pixel_size_um;
-        std::thread::Builder::new()
-            .name("xenium-cells-loader".to_string())
-            .spawn(move || {
-                let msg = load_cells_outline_bins(&zip, XeniumPolygonSet::Cell, pixel_size_um);
-                let _ = tx.send(msg);
-            })
-            .ok();
-    }
-
-    pub fn tick(&mut self) {
-        use crossbeam_channel::TryRecvError;
-        let Some(rx) = self.load_rx.as_ref().cloned() else {
-            return;
-        };
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.load_rx = None;
-                    match msg {
-                        Ok(bins) => {
-                            let segs = bins.segments.len();
-                            self.bins = Some(bins);
-                            self.generation = self.generation.wrapping_add(1).max(1);
-                            self.status = format!("Loaded {segs} segments.");
-                        }
-                        Err(err) => {
-                            self.status = format!("Load failed: {err}");
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.load_rx = None;
-                    break;
-                }
-            }
         }
     }
 
@@ -300,13 +224,6 @@ struct XeniumGenePoints {
 }
 
 impl XeniumTranscriptsLayer {
-    pub fn new(zip: PathBuf, pixel_size_um: f32) -> Self {
-        let meta = load_transcripts_meta(&zip).ok().map(Arc::new);
-        let mut layer = Self::empty(zip, pixel_size_um, meta);
-        layer.request_preload_all();
-        layer
-    }
-
     pub fn from_prepared(
         zip: PathBuf,
         pixel_size_um: f32,

@@ -679,12 +679,6 @@ impl MosaicGeoJsonSegmentationOverlay {
         })
     }
 
-    pub fn item_has_segmentation(&self, item_id: usize) -> bool {
-        self.items
-            .get(&item_id)
-            .is_some_and(|state| state.seg_path.is_some())
-    }
-
     pub fn item_load_settled(&self, item_id: usize) -> bool {
         let Some(state) = self.items.get(&item_id) else {
             return true;

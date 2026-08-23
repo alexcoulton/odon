@@ -7,8 +7,6 @@ impl OmeZarrViewerApp {
             .viewport_workspace
             .take()
             .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
-        let native_before = workspace.clone();
-
         let active_id = workspace.active_id().clone();
         if let Some(active) = workspace.get_mut(&active_id) {
             let state = ViewerViewportState::capture(self);
@@ -150,7 +148,6 @@ impl OmeZarrViewerApp {
             self.viewport_frame_plan_ema_ms * 0.9 + self.viewport_frame_plan_ms * 0.1
         };
         self.viewport_frame_plan_samples = self.viewport_frame_plan_samples.saturating_add(1);
-        self.record_native_viewport_intents(&native_before, &workspace);
         self.viewport_workspace = Some(workspace);
     }
 
@@ -221,6 +218,11 @@ impl OmeZarrViewerApp {
         let before = viewport.state.clone();
         let title = viewport.title.clone();
         let is_active = workspace.active_id() == viewport_id;
+        self.native_viewport_command_scope = Some(NativeViewportCommandScope {
+            viewport_id: viewport_id.as_str().to_string(),
+            navigation_revision: viewport.navigation_revision.max(1),
+            presentation_revision: viewport.presentation_revision.max(1),
+        });
 
         before.apply(self);
         self.bump_render_id();
@@ -233,6 +235,7 @@ impl OmeZarrViewerApp {
         let title_width = 120.0;
         let title_edit_id = egui::Id::new(("viewport-title-edit", viewport_id.as_str()));
         let title_focus_id = egui::Id::new(("viewport-title-focus", viewport_id.as_str()));
+        let title_buffer_id = egui::Id::new(("viewport-title-buffer", viewport_id.as_str()));
         let editing_title = ctx.data(|data| data.get_temp::<bool>(title_edit_id).unwrap_or(false));
         let (header_rect, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), header_height),
@@ -255,7 +258,9 @@ impl OmeZarrViewerApp {
             );
         }
         if editing_title {
-            let mut edited = title.clone();
+            let mut edited = ctx
+                .data(|data| data.get_temp::<String>(title_buffer_id))
+                .unwrap_or_else(|| title.clone());
             let response = header_ui.add_sized(
                 [title_width, header_height],
                 egui::TextEdit::singleline(&mut edited).hint_text("Viewport name"),
@@ -266,25 +271,31 @@ impl OmeZarrViewerApp {
                 response.request_focus();
                 ctx.data_mut(|data| data.insert_temp(title_focus_id, false));
             }
-            if response.changed() && !edited.trim().is_empty() {
-                renamed_title = Some(edited);
+            if response.changed() {
+                ctx.data_mut(|data| data.insert_temp(title_buffer_id, edited.clone()));
             }
-            let keyboard_finished = response.has_focus()
-                && header_ui.input(|input| {
-                    input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Escape)
-                });
+            let enter_pressed = response.has_focus()
+                && header_ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let escape_pressed = response.has_focus()
+                && header_ui.input(|input| input.key_pressed(egui::Key::Escape));
             let edit_finished =
                 icon_button(&mut header_ui, Icon::Confirm, false, egui::Sense::click())
                     .on_hover_text("Finish renaming")
                     .clicked();
-            if response.lost_focus() || keyboard_finished || edit_finished {
-                ctx.data_mut(|data| data.insert_temp(title_edit_id, false));
+            if response.lost_focus() || enter_pressed || escape_pressed || edit_finished {
+                if !escape_pressed && !edited.trim().is_empty() && edited.trim() != title {
+                    renamed_title = Some(edited.trim().to_string());
+                }
+                ctx.data_mut(|data| {
+                    data.insert_temp(title_edit_id, false);
+                    data.remove_temp::<String>(title_buffer_id);
+                });
             }
         } else {
             let title_text = if is_active {
-                egui::RichText::new(title).strong()
+                egui::RichText::new(title.clone()).strong()
             } else {
-                egui::RichText::new(title)
+                egui::RichText::new(title.clone())
             };
             let title_response = header_ui
                 .add_sized(
@@ -308,6 +319,7 @@ impl OmeZarrViewerApp {
                 ctx.data_mut(|data| {
                     data.insert_temp(title_edit_id, true);
                     data.insert_temp(title_focus_id, true);
+                    data.insert_temp(title_buffer_id, title.clone());
                 });
                 ctx.request_repaint();
             }
@@ -325,7 +337,20 @@ impl OmeZarrViewerApp {
                 .clicked();
         }
         if let Some(title) = renamed_title {
-            if workspace.rename(viewport_id, title).unwrap_or(false) {
+            let revision = workspace
+                .get(viewport_id)
+                .map(|viewport| viewport.presentation_revision)
+                .unwrap_or(1);
+            if self.native_viewport_actor_owned() {
+                self.submit_native_viewport_intent(
+                    "viewer.viewports.rename",
+                    serde_json::json!({
+                        "viewport_id":viewport_id.as_str(),
+                        "if_presentation_revision":revision,
+                        "title":title,
+                    }),
+                );
+            } else if workspace.rename(viewport_id, title).unwrap_or(false) {
                 let _ = workspace.bump_presentation_revision(viewport_id);
             }
         }
@@ -348,6 +373,7 @@ impl OmeZarrViewerApp {
         self.tool_mode = tool_mode;
 
         let after = ViewerViewportState::capture(self);
+        self.native_viewport_command_scope = None;
         if let Some(viewport) = workspace.get_mut(viewport_id) {
             viewport.state = after.clone();
         }
@@ -377,10 +403,25 @@ impl OmeZarrViewerApp {
         }
 
         if activate {
-            if workspace.set_active(viewport_id).unwrap_or(false) {
+            if self.native_viewport_actor_owned() {
+                if !is_active {
+                    self.submit_native_viewport_intent(
+                        "viewer.viewports.set_active",
+                        serde_json::json!({"viewport_id":viewport_id.as_str()}),
+                    );
+                }
+            } else if workspace.set_active(viewport_id).unwrap_or(false) {
                 self.cancel_viewport_transient_gestures();
             }
         }
-        close_requested
+        if close_requested && self.native_viewport_actor_owned() {
+            self.submit_native_viewport_intent(
+                "viewer.viewports.remove",
+                serde_json::json!({"viewport_id":viewport_id.as_str()}),
+            );
+            false
+        } else {
+            close_requested
+        }
     }
 }

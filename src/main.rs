@@ -6,7 +6,6 @@ mod app_support;
 mod camera;
 mod custom;
 mod debug_log;
-mod deep_link;
 mod deep_link_ipc;
 mod features;
 mod geometry;
@@ -28,7 +27,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::data::ome;
-use crate::deep_link::DeepLinkRequest;
+use odon::deep_link::DeepLinkRequest;
 
 fn print_usage() {
     eprintln!(

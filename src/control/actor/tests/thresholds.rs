@@ -100,7 +100,6 @@ fn threshold_preview_configure_refresh_apply_and_cancel_without_a_frame() {
             .unwrap()["cancelled"],
         true
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert!(projection.threshold_preview.is_none());

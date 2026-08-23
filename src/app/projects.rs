@@ -355,6 +355,31 @@ impl OmeZarrViewerApp {
 
     pub(super) fn set_current_layer_groups(&mut self, groups: ProjectLayerGroups) {
         self.viewport_layer_groups.clone_from(&groups);
+        self.persist_current_layer_groups(groups);
+    }
+
+    pub(super) fn commit_current_channel_groups(&mut self, groups: ProjectLayerGroups) -> bool {
+        if self.native_viewport_actor_owned()
+            && let Some((viewport_id, revision)) = self.active_viewport_command_scope()
+        {
+            self.submit_native_viewport_intent(
+                "viewer.viewports.channels.set_group",
+                serde_json::json!({
+                    "viewport_id":viewport_id,
+                    "if_presentation_revision":revision,
+                    "replace_all":true,
+                    "groups":channel_groups_snapshot(&groups, &self.channels),
+                }),
+            );
+            self.persist_current_layer_groups(groups);
+            true
+        } else {
+            self.set_current_layer_groups(groups);
+            false
+        }
+    }
+
+    pub(super) fn persist_current_layer_groups(&mut self, groups: ProjectLayerGroups) {
         let mut view = self
             .project_space
             .roi_view_state(&self.dataset.source)

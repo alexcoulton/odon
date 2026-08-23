@@ -73,7 +73,6 @@ fn project_roi_transactions_complete_without_draining_the_ui_queue() {
             .unwrap()["roi_count"],
         2
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
     assert_eq!(channels.presentation_rx.len(), 1);
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.mode, ModelMode::Project);

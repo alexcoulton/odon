@@ -164,7 +164,6 @@ fn actor_opens_and_configures_viewports_without_draining_the_ui_queue() {
         rendering["deterministic_capture"]["readiness"]["mode"],
         "single"
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
     assert_eq!(channels.presentation_rx.len(), 1);
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.mode, ModelMode::Single);
@@ -245,7 +244,6 @@ fn actor_opens_and_configures_viewports_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(shown["mode"], "project");
     assert_eq!(shown["changed"], true);
-    assert_eq!(channels.legacy_rx.len(), 0);
     assert_eq!(
         channels
             .presentation_rx
@@ -264,6 +262,10 @@ fn actor_opens_and_configures_viewports_without_draining_the_ui_queue() {
             >= 6
     );
     assert_eq!(diagnostics["metrics"]["requests"]["legacy_ui"], 0);
+    assert_eq!(
+        diagnostics["compatibility_fallback"],
+        serde_json::Value::Null
+    );
     assert!(
         diagnostics["metrics"]["timing_ms"]["queue_wait"]["samples"]
             .as_u64()

@@ -24,7 +24,8 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python" / "src"
-REGISTRY = ROOT / "src" / "control" / "registry.rs"
+REGISTRY_CATALOG = ROOT / "src" / "control" / "registry" / "catalog.rs"
+PROTOCOL_CATALOG = ROOT / "src" / "control" / "registry" / "protocol_catalog.rs"
 SURFACE = ROOT / "api" / "application-surface.json"
 OUTPUT = ROOT / "docs" / "reference" / "python-api-reference.md"
 
@@ -225,7 +226,8 @@ def direct_methods(value: Any) -> tuple[str, ...]:
 
 
 def registry_methods() -> dict[str, dict[str, Any]]:
-    source = REGISTRY.read_text(encoding="utf-8")
+    source = REGISTRY_CATALOG.read_text(encoding="utf-8")
+    protocol_source = PROTOCOL_CATALOG.read_text(encoding="utf-8")
     modes = {
         "ALL_MODES": "project, single, mosaic, transition",
         "READY_MODES": "project, single, mosaic",
@@ -273,7 +275,7 @@ def registry_methods() -> dict[str, dict[str, Any]]:
             "modes": modes.get(match.group("modes"), match.group("modes")),
         }
 
-    protocol_block = source.split("pub static PROTOCOL_METHODS", 1)[1].split("];", 1)[0]
+    protocol_block = protocol_source.split("pub static PROTOCOL_METHODS", 1)[1].split("];", 1)[0]
     protocol_pattern = re.compile(
         r'\(\s*"(?P<name>[^"]+)",\s*"(?P<summary>[^"]+)"'
         r',\s*"(?P<capability>[^"]+)"\s*,\s*(?P<mutates>true|false)'

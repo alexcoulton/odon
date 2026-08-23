@@ -93,7 +93,6 @@ fn measurements_configure_compute_and_publish_properties_without_a_frame() {
             .unwrap()["cancelled"],
         false
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -144,17 +143,17 @@ fn cancelled_measurement_rejects_a_late_result() {
 }
 
 #[test]
-fn spatial_shape_measurement_target_retains_its_explicit_legacy_route() {
+fn spatial_shape_measurement_target_is_resolved_by_the_actor() {
     let channels = spawn_test_actor_with_objects();
     open_measurement_fixture(&channels);
-    let (request, _reply) = request(
+    let (request, reply) = request(
         "viewer.measurements.get",
-        json!({"target":"spatial_shape","shape_id":7}),
+        json!({"target":"spatial_shape","layer_id":7}),
     );
     channels.request_tx.send(request).unwrap();
-    let forwarded = channels
-        .legacy_rx
+    let error = reply
         .recv_timeout(Duration::from_secs(1))
-        .unwrap();
-    assert_eq!(forwarded.command.method(), "viewer.measurements.get");
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::ResourceNotFound);
 }

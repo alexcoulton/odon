@@ -65,6 +65,7 @@ pub(crate) trait ChannelListHost {
     fn channel_name(&self, idx: usize) -> Option<String>;
     fn channel_visible(&self, idx: usize) -> Option<bool>;
     fn set_channel_visible(&mut self, idx: usize, visible: bool);
+    fn set_channels_visible(&mut self, indices: &[usize], visible: bool);
     fn channel_available(&self, idx: usize) -> bool;
     fn is_channel_selected(&self, idx: usize) -> bool;
     fn selected_channel_group_id(&self) -> Option<u64>;
@@ -114,9 +115,8 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
             .add(egui::Checkbox::new(&mut all, "All").indeterminate(chans_mixed))
             .changed()
         {
-            for idx in 0..host.channel_count() {
-                host.set_channel_visible(idx, all);
-            }
+            let indices = (0..host.channel_count()).collect::<Vec<_>>();
+            host.set_channels_visible(&indices, all);
             channels_changed = true;
         }
         create_group_clicked |= ui.button("+ Group").clicked();
@@ -234,9 +234,11 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
                             .on_hover_text("Toggle all channels in group");
                         checkbox_rect = Some(vis_resp.rect);
                         if vis_resp.changed() {
-                            for &(_pos, ch_idx) in members {
-                                host.set_channel_visible(ch_idx, set_all);
-                            }
+                            let indices = members
+                                .iter()
+                                .map(|&(_pos, ch_idx)| ch_idx)
+                                .collect::<Vec<_>>();
+                            host.set_channels_visible(&indices, set_all);
                             channels_changed = true;
                         }
                     });
@@ -764,6 +766,7 @@ mod tests {
         }
 
         fn set_channel_visible(&mut self, _idx: usize, _visible: bool) {}
+        fn set_channels_visible(&mut self, _indices: &[usize], _visible: bool) {}
 
         fn channel_available(&self, _idx: usize) -> bool {
             true

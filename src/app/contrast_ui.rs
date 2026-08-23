@@ -176,7 +176,7 @@ impl OmeZarrViewerApp {
 
         if groups_changed {
             let new_groups = groups_cfg;
-            self.set_current_layer_groups(new_groups);
+            self.commit_current_channel_groups(new_groups);
             self.bump_render_id();
         }
 
@@ -426,7 +426,7 @@ impl OmeZarrViewerApp {
                         if self.control_actor_threshold_generation > 0 {
                             self.native_control_intents.push(NativeControlIntent {
                                 method: "viewer.thresholds.preview.apply",
-                                params: serde_json::json!({}),
+                                params: serde_json::json!({"sync_project":true}),
                             });
                         } else if let Err(err) = self.create_threshold_mask_from_preview() {
                             self.threshold_region_status =

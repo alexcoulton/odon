@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::control::{ControlError, ControlErrorKind};
 
-use super::{ControlObjectFeature, ControlObjectResource};
+use super::{ControlObjectFeature, ControlObjectResource, ObjectTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObjectExportFormat {
@@ -39,6 +39,7 @@ pub(crate) struct ObjectExportSpec {
     pub(crate) document_generation: u64,
     pub(crate) resource_generation: u64,
     pub(crate) operation_generation: u64,
+    pub(crate) target: ObjectTarget,
     pub(crate) path: PathBuf,
     pub(crate) overwrite: bool,
     pub(crate) format: ObjectExportFormat,

@@ -42,7 +42,6 @@ use crate::data::remote_store::{
     S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
     build_s3_store, list_s3_prefix,
 };
-use crate::deep_link::{DeepLinkChannelOrder, DeepLinkObjectFilterLogic, DeepLinkRequest};
 use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::geometry::threshold_regions::{
     ThresholdRegionMask, extract_threshold_region_mask, threshold_region_mask_to_polygons,
@@ -56,20 +55,23 @@ use crate::imaging::plane_selection::{image_subset_ranges, plane_selection_for_z
 use crate::imaging::tiling::{
     TileCoord, choose_level_auto, levels_to_draw, tiles_needed_lvl0_rect_for_axes,
 };
+#[cfg(test)]
+use crate::imaging::view_plane::image_subset_ranges_for_view;
 use crate::imaging::view_plane::{
     ViewPlaneMode, ViewPlaneSelection, clamp_selection as clamp_view_selection,
-    display_axes as display_axes_for_mode, display_downsample, image_subset_ranges_for_view,
-    local_to_world_scale, slice_extent_level0, supported_modes,
+    display_axes as display_axes_for_mode, display_downsample, local_to_world_scale,
+    slice_extent_level0, supported_modes,
 };
 use crate::masks::resolve_masks_geojson_path_and_downsample;
 use crate::masks::save_mask_layers_geojson;
 use crate::masks::{MaskDisplayMode, MaskLayer, MaskRasterDisplayCache};
 use crate::objects::GeoJsonSegmentationLayer;
-use crate::objects::ObjectPreloadSettings;
+#[cfg(test)]
+use crate::objects::ObjectFilterLogic;
 use crate::objects::PreloadedObjectLayer;
 use crate::objects::{
-    ObjectFilterLogic, ObjectProjectDisplayState, ObjectViewportFilterCacheState,
-    ObjectViewportFilterState, ObjectsLayer,
+    ObjectProjectDisplayState, ObjectViewportFilterCacheState, ObjectViewportFilterState,
+    ObjectsLayer,
 };
 use crate::project::groups as layer_groups;
 use crate::project::{
@@ -112,7 +114,10 @@ use crate::ui::top_bar;
 use crate::viewports::{
     ViewportId, ViewportLayout, ViewportLinks, ViewportSlot, ViewportWorkspace,
 };
+#[cfg(test)]
+use odon::deep_link::{DeepLinkChannelOrder, DeepLinkObjectFilterLogic, DeepLinkRequest};
 
+mod actor_layer_projection;
 mod actor_projection;
 mod canvas;
 mod construction;
@@ -123,7 +128,6 @@ mod image_runtime;
 mod layer_properties;
 mod layer_runtime;
 mod layers_ui;
-mod legacy_control;
 mod lifecycle;
 mod loading;
 mod mask_interaction;
@@ -134,6 +138,7 @@ mod project_integration;
 mod project_view;
 mod projects;
 mod remote;
+mod renderer_bridge;
 mod screenshots;
 mod selection;
 mod thresholds;
@@ -179,6 +184,7 @@ where
     aggregate.extend(keys);
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewportControlDomain {
     Read,
@@ -285,7 +291,20 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn set_channel_sort_mode(&mut self, mode: ChannelSortMode) {
-        self.channel_sort_mode = mode;
+        if self.native_viewport_actor_owned() {
+            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+                self.submit_native_viewport_intent(
+                    "viewer.viewports.channels.set_order",
+                    serde_json::json!({
+                        "viewport_id":viewport_id,
+                        "if_presentation_revision":revision,
+                        "sort":mode.storage_key(),
+                    }),
+                );
+            }
+        } else {
+            self.channel_sort_mode = mode;
+        }
     }
 
     fn channel_count(&self) -> usize {
@@ -305,8 +324,42 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn set_channel_visible(&mut self, idx: usize, visible: bool) {
-        if let Some(ch) = self.channels.get_mut(idx) {
+        if self.native_viewport_actor_owned() {
+            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+                self.submit_native_viewport_intent(
+                    "viewer.viewports.channels.set_visible",
+                    serde_json::json!({
+                        "viewport_id":viewport_id,
+                        "if_presentation_revision":revision,
+                        "channels":[idx],
+                        "mode":if visible { "show" } else { "hide" },
+                    }),
+                );
+            }
+        } else if let Some(ch) = self.channels.get_mut(idx) {
             ch.visible = visible;
+        }
+    }
+
+    fn set_channels_visible(&mut self, indices: &[usize], visible: bool) {
+        if self.native_viewport_actor_owned() {
+            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+                self.submit_native_viewport_intent(
+                    "viewer.viewports.channels.set_visible",
+                    serde_json::json!({
+                        "viewport_id":viewport_id,
+                        "if_presentation_revision":revision,
+                        "channels":indices,
+                        "mode":if visible { "show" } else { "hide" },
+                    }),
+                );
+            }
+        } else {
+            for &idx in indices {
+                if let Some(channel) = self.channels.get_mut(idx) {
+                    channel.visible = visible;
+                }
+            }
         }
     }
 
@@ -327,7 +380,7 @@ impl ChannelListHost for OmeZarrViewerApp {
         self.selected_channel_layers.clear();
         if let Some(gid) = group_id {
             if let Some(idx) = self.channel_indices_in_group(gid).into_iter().next() {
-                self.set_active_layer(LayerId::Channel(idx));
+                self.commit_active_layer(LayerId::Channel(idx));
             }
         }
     }
@@ -368,7 +421,7 @@ impl ChannelListHost for OmeZarrViewerApp {
             self.channel_select_anchor_idx = Some(idx);
             self.selected_channel_group_id = None;
         }
-        self.set_active_layer(LayerId::Channel(idx));
+        self.commit_active_layer(LayerId::Channel(idx));
     }
 
     fn handle_channel_secondary_click(&mut self, idx: usize) {
@@ -377,7 +430,7 @@ impl ChannelListHost for OmeZarrViewerApp {
             self.selected_channel_layers.insert(idx);
             self.channel_select_anchor_idx = Some(idx);
             self.selected_channel_group_id = None;
-            self.set_active_layer(LayerId::Channel(idx));
+            self.commit_active_layer(LayerId::Channel(idx));
         }
     }
 
@@ -406,7 +459,7 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn set_layer_groups(&mut self, groups: crate::data::project_config::ProjectLayerGroups) {
-        self.set_current_layer_groups(groups);
+        self.commit_current_channel_groups(groups);
     }
 
     fn channels_changed(&mut self) {
@@ -450,11 +503,15 @@ struct MaskPolygonSelection {
     polygon_idx: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct MaskVertexDrag {
     selection: MaskPolygonSelection,
     vertex_idx: usize,
     undo_recorded: bool,
+    start_polygon: Vec<egui::Pos2>,
+    start_selection: Option<MaskPolygonSelection>,
+    start_selected_vertex: Option<usize>,
+    actor_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +519,9 @@ struct MaskPolygonMoveState {
     selection: MaskPolygonSelection,
     start_polygon: Vec<egui::Pos2>,
     start_pointer_world: egui::Pos2,
+    start_selection: Option<MaskPolygonSelection>,
+    start_selected_vertex: Option<usize>,
+    actor_generation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -924,6 +984,38 @@ impl ViewerViewportState {
         if let Some(display) = value.get("display") {
             presentation.display = serde_json::from_value(display.clone())
                 .map_err(|error| format!("invalid object display presentation: {error}"))?;
+        }
+        if let Some(property) = value.get("color_property") {
+            presentation.display.color_property_key = property
+                .as_str()
+                .map(str::trim)
+                .filter(|property| !property.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(overrides) = value.get("color_level_overrides") {
+            presentation.display.color_level_overrides = serde_json::from_value(overrides.clone())
+                .map_err(|error| format!("invalid object legend presentation: {error}"))?;
+        }
+        if let Some(fill) = value.get("fill_cells").and_then(serde_json::Value::as_bool) {
+            presentation.display.fill_cells = fill;
+        }
+        if let Some(opacity) = value
+            .get("fill_opacity")
+            .and_then(serde_json::Value::as_f64)
+        {
+            presentation.display.fill_opacity = (opacity as f32).clamp(0.0, 1.0);
+        }
+        if let Some(opacity) = value
+            .get("selected_fill_opacity")
+            .and_then(serde_json::Value::as_f64)
+        {
+            presentation.display.selected_fill_opacity = (opacity as f32).clamp(0.0, 1.0);
+        }
+        if let Some(fast) = value
+            .get("fast_rendering")
+            .and_then(serde_json::Value::as_bool)
+        {
+            presentation.display.fast_rendering = fast;
         }
         if let Some(filter) = value.get("filter") {
             presentation.filter = ObjectViewportFilterState::from_project_json(filter)?;
@@ -2026,16 +2118,19 @@ pub struct OmeZarrViewerApp {
     pending_request: Option<ViewerRequest>,
     native_control_intents: Vec<NativeControlIntent>,
     control_actor_object_generation: u64,
+    control_actor_secondary_object_generations: HashMap<u64, u64>,
+    control_actor_secondary_object_selection_generations: HashMap<u64, u64>,
     control_actor_label_generation: u64,
     control_actor_object_selection_generation: u64,
     control_actor_mask_generation: u64,
+    control_actor_workspace_revision: u64,
+    pending_control_actor_mask_projection: Option<serde_json::Value>,
     control_actor_threshold_generation: u64,
     control_actor_analysis_generation: u64,
     control_actor_measurement_generation: u64,
     control_actor_object_export_generation: u64,
     control_actor_mask_undo_available: bool,
     control_actor_tile_policy_generation: u64,
-    native_mask_actor_intent_emitted: bool,
     group_layers_dialog: Option<GroupLayersDialog>,
     hover_tooltip_state: Option<HoverTooltipState>,
     active_help_topic: Option<crate::ui::help::HelpTopic>,
@@ -2089,6 +2184,7 @@ pub struct OmeZarrViewerApp {
     screenshot_in_flight: HashMap<u64, ViewportId>,
     screenshot_output_dir: Option<PathBuf>,
     viewport_workspace: Option<ViewportWorkspace<ViewerViewportState>>,
+    native_viewport_command_scope: Option<NativeViewportCommandScope>,
     viewport_layer_groups: ProjectLayerGroups,
     viewport_raw_active_keys: Option<HashSet<RawTileKey>>,
     viewport_cpu_active_keys: Option<HashSet<TileKey>>,
@@ -2100,8 +2196,16 @@ pub struct OmeZarrViewerApp {
 }
 
 #[derive(Debug, Clone)]
+struct NativeViewportCommandScope {
+    viewport_id: String,
+    navigation_revision: u64,
+    presentation_revision: u64,
+}
+
+#[derive(Debug, Clone)]
 struct LayerMoveState {
     targets: Vec<LayerOffsetEntry>,
+    actor_scope: Option<(String, u64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -2128,21 +2232,12 @@ struct LayerTransformState {
     start_pointer_screen: egui::Pos2,
     start_angle_rad: f32,
     start_len_screen: f32,
+    actor_scope: Option<(String, u64)>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ViewerRequest {
-    OpenProjectRoi(ProjectRoi),
-    OpenProjectRoiView(ProjectRoi, ProjectViewSpec),
-    OpenProject(PathBuf),
-    SaveProject(PathBuf),
-    OpenLocalPath(PathBuf),
-    ForgetRecentProject(PathBuf),
-    ClearRecentProjects,
-    OpenProjectMosaic(Vec<ProjectRoi>),
     OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
-    PreloadObjectSegmentations(ProjectSpace, ObjectPreloadSettings),
-    ClearObjectCache,
 }
 
 #[derive(Debug, Clone)]
@@ -2326,6 +2421,7 @@ fn marker_alias_matches(requested: &str, candidate_marker: &str) -> bool {
     candidate_suffix == requested_suffix
 }
 
+#[cfg(test)]
 fn deep_link_channel_groups(raw: &[String], alternatives: &[Vec<String>]) -> Vec<Vec<String>> {
     let mut groups = alternatives
         .iter()
@@ -2347,6 +2443,7 @@ fn deep_link_channel_groups(raw: &[String], alternatives: &[Vec<String>]) -> Vec
     groups
 }
 
+#[cfg(test)]
 fn push_unique_term(dst: &mut Vec<String>, value: &str) {
     let value = value.trim();
     if !value.is_empty() && !dst.iter().any(|existing| existing == value) {
@@ -2354,6 +2451,7 @@ fn push_unique_term(dst: &mut Vec<String>, value: &str) {
     }
 }
 
+#[cfg(test)]
 fn channel_intensity_stats_json(
     idx: usize,
     name: &str,
@@ -2402,6 +2500,7 @@ fn channel_intensity_stats_json(
     })
 }
 
+#[cfg(test)]
 fn percentile_sorted_u16(values: &[u16], q: f64) -> u16 {
     if values.is_empty() {
         return 0;
@@ -2445,6 +2544,7 @@ fn channel_groups_snapshot(
     )
 }
 
+#[cfg(test)]
 fn ensure_channel_group(
     groups: &mut ProjectLayerGroups,
     requested_group_id: Option<u64>,
@@ -2495,6 +2595,7 @@ fn ensure_channel_group(
     id
 }
 
+#[cfg(test)]
 fn mcp_color_from_params(params: &serde_json::Value) -> Option<[u8; 3]> {
     if let Some(values) = params
         .get("color_rgb")
@@ -2513,6 +2614,7 @@ fn mcp_color_from_params(params: &serde_json::Value) -> Option<[u8; 3]> {
         .and_then(parse_mcp_color_rgb)
 }
 
+#[cfg(test)]
 fn parse_mcp_color_rgb(value: &str) -> Option<[u8; 3]> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2539,6 +2641,7 @@ fn parse_mcp_color_rgb(value: &str) -> Option<[u8; 3]> {
     }
 }
 
+#[cfg(test)]
 fn parse_mcp_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
     let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
     if hex.len() == 6 {
@@ -2812,6 +2915,7 @@ impl OmeZarrViewerApp {
     }
 }
 
+#[cfg(test)]
 fn control_object_debug_limit(params: &serde_json::Value) -> usize {
     params
         .get("limit")
@@ -2819,33 +2923,6 @@ fn control_object_debug_limit(params: &serde_json::Value) -> usize {
         .map(|value| value as usize)
         .unwrap_or(64)
         .clamp(1, 10_000)
-}
-
-fn control_rect_from_array(values: &[serde_json::Value], name: &str) -> Result<egui::Rect, String> {
-    if values.len() != 4 {
-        return Err(format!("{name} must contain exactly four numbers"));
-    }
-    let mut coords = [0.0_f32; 4];
-    for (idx, value) in values.iter().enumerate() {
-        let Some(coord) = value.as_f64().map(|value| value as f32) else {
-            return Err(format!("{name}[{idx}] is not a number"));
-        };
-        if !coord.is_finite() {
-            return Err(format!("{name}[{idx}] is not finite"));
-        }
-        coords[idx] = coord;
-    }
-    Ok(normalized_rect(
-        egui::pos2(coords[0], coords[1]),
-        egui::pos2(coords[2], coords[3]),
-    ))
-}
-
-fn normalized_rect(a: egui::Pos2, b: egui::Pos2) -> egui::Rect {
-    egui::Rect::from_min_max(
-        egui::pos2(a.x.min(b.x), a.y.min(b.y)),
-        egui::pos2(a.x.max(b.x), a.y.max(b.y)),
-    )
 }
 
 fn apply_preserved_channel_settings(prev: &[ChannelInfo], new: &mut [ChannelInfo]) {

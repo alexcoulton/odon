@@ -4,11 +4,11 @@ use std::sync::Arc;
 use odon::data::document::{
     AlternateDatasetBackend, AlternateDocumentResource, DatasetElementInspection,
     DatasetElementTransform, DatasetInspection, DatasetInspectionKind, DatasetInspectionMetadata,
-    DatasetInspector, DocumentDescriptor, DocumentKind, OmeTiffChannelInspection,
-    OmeTiffInspection, OpenedDocument, SpatialDataOpenIdentity, SpatialDataOpenOptions,
-    TiffChannelInspection, TiffInspectionMetadata, TiffLevelInspection, TiffPlaneInspection,
-    TiffPlanesInspection, XeniumInspectionMetadata, XeniumOpenIdentity, XeniumOpenOptions,
-    inspect_core_dataset,
+    DatasetInspector, DocumentDescriptor, DocumentKind, DocumentObjectLayerResource,
+    OmeTiffChannelInspection, OmeTiffInspection, OpenedDocument, SpatialDataOpenIdentity,
+    SpatialDataOpenOptions, TiffChannelInspection, TiffInspectionMetadata, TiffLevelInspection,
+    TiffPlaneInspection, TiffPlanesInspection, XeniumInspectionMetadata, XeniumOpenIdentity,
+    XeniumOpenOptions, inspect_core_dataset,
 };
 
 use crate::data::dataset_kind::{
@@ -159,6 +159,48 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let mut next_shape_layer_id = 1_u64;
+        let mut object_layers = Vec::new();
+        for shape in &shapes {
+            let Some(relative_path) = shape.rel_parquet.as_ref() else {
+                continue;
+            };
+            let parquet_path = discovery.root.join(relative_path);
+            let render_kind = crate::spatialdata::detect_shapes_render_kind(&parquet_path)?;
+            let supports_objects = crate::spatialdata::shapes_support_object_layer(&parquet_path)?;
+            let primary = shape.name == "cell_boundaries";
+            let actor_object_layer = primary
+                || matches!(
+                    render_kind,
+                    crate::spatialdata::ShapesRenderKind::Points
+                        | crate::spatialdata::ShapesRenderKind::Circles
+                )
+                || (render_kind == crate::spatialdata::ShapesRenderKind::Lines && supports_objects);
+            let layer_id = if primary {
+                "segmentation_objects".to_string()
+            } else {
+                let id = next_shape_layer_id;
+                next_shape_layer_id = next_shape_layer_id.wrapping_add(1).max(1);
+                format!("spatial_shape:{id}")
+            };
+            if !actor_object_layer {
+                continue;
+            }
+            let transform = shape.transform.relative_to(image.transform);
+            let resource =
+                crate::objects::load_control_spatialdata_object_resource(parquet_path, transform)?;
+            object_layers.push(DocumentObjectLayerResource {
+                layer_id,
+                name: shape.name.clone(),
+                kind: if primary {
+                    "segmentation_objects".to_string()
+                } else {
+                    "spatial_shape".to_string()
+                },
+                primary,
+                resource: Arc::new(resource),
+            });
+        }
         let payload = PreparedSpatialDataDocument {
             root: discovery.root,
             image_transform: image.transform,
@@ -171,7 +213,8 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
         Ok((
             OpenedDocument {
                 descriptor,
-                resource: AlternateDocumentResource::new(dataset, store, Arc::new(payload)),
+                resource: AlternateDocumentResource::new(dataset, store, Arc::new(payload))
+                    .with_object_layers(object_layers),
             },
             identity,
         ))

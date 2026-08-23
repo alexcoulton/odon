@@ -173,6 +173,7 @@ mod memory;
 mod mosaics;
 mod object_exports;
 mod objects;
+mod performance;
 mod project_preload;
 mod project_roi_open;
 mod project_rois;

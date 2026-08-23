@@ -135,21 +135,39 @@ fn analysis_state_compute_warmup_and_presets_complete_without_a_frame() {
             .len(),
         1
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
-fn spatial_shape_analysis_target_retains_its_explicit_legacy_route() {
+fn analysis_targets_are_resolved_by_the_actor() {
     let channels = spawn_test_actor_with_objects();
     open_objects(&channels);
-    let (request, _reply) = request(
+    let (activate, activate_reply) = request(
+        "viewer.native_layers.set_active",
+        json!({"layer_id":"segmentation_objects"}),
+    );
+    channels.request_tx.send(activate).unwrap();
+    activate_reply
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let (active, active_reply) = request("viewer.analysis.get", json!({"target":"active"}));
+    channels.request_tx.send(active).unwrap();
+    assert_eq!(
+        active_reply
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap()["target"],
+        "segmentation_objects"
+    );
+
+    let (request, reply) = request(
         "viewer.analysis.get",
-        json!({"target":"spatial_shape","shape_id":7}),
+        json!({"target":"spatial_shape","layer_id":7}),
     );
     channels.request_tx.send(request).unwrap();
-    let forwarded = channels
-        .legacy_rx
+    let error = reply
         .recv_timeout(Duration::from_secs(1))
-        .unwrap();
-    assert_eq!(forwarded.command.method(), "viewer.analysis.get");
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::ResourceNotFound);
 }

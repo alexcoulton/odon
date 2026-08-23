@@ -2,7 +2,6 @@ use super::*;
 
 pub struct ControlActorChannels {
     pub request_tx: Sender<OdonControlRequest>,
-    pub legacy_rx: Receiver<OdonControlRequest>,
     pub presentation_rx: Receiver<RenderProjection>,
     pub presentation_capture_rx: Receiver<PresentationCaptureRequest>,
     pub presentation_completion_tx: Sender<PresentationCaptureCompletion>,
@@ -92,7 +91,6 @@ pub fn spawn_control_actor_with_services(
 ) -> anyhow::Result<ControlActorChannels> {
     let (request_tx, request_rx) =
         crossbeam_channel::bounded::<OdonControlRequest>(ACTOR_QUEUE_CAPACITY);
-    let (legacy_tx, legacy_rx) = crossbeam_channel::bounded(ACTOR_QUEUE_CAPACITY);
     // The renderer needs only the newest immutable projection. The actor keeps a receiver clone
     // solely to replace a stale queued projection when the UI is occluded.
     let (presentation_tx, presentation_rx) = crossbeam_channel::bounded(1);
@@ -102,8 +100,7 @@ pub fn spawn_control_actor_with_services(
         crossbeam_channel::bounded(ACTOR_QUEUE_CAPACITY);
     let (load_tx, load_rx) = crossbeam_channel::bounded(WORKER_COMPLETION_CAPACITY);
     let (load_job_tx, load_job_rx) = crossbeam_channel::bounded::<LoadJob>(LOAD_JOB_CAPACITY);
-    let (model_tx, model_rx) =
-        crossbeam_channel::bounded::<ActorModelUpdate>(ACTOR_QUEUE_CAPACITY);
+    let (model_tx, model_rx) = crossbeam_channel::bounded::<ActorModelUpdate>(ACTOR_QUEUE_CAPACITY);
     let (platform_effect_tx, platform_effect_rx) = crossbeam_channel::bounded(8);
     let task_registry =
         task_registry.unwrap_or_else(|| TaskRegistry::shared(crate::control::EventHub::shared()));
@@ -172,7 +169,6 @@ pub fn spawn_control_actor_with_services(
                                 dispatch_request(
                                     &mut model,
                                     request,
-                                    &legacy_tx,
                                     &presentation_tx,
                                     &presentation_coalesce_rx,
                                     &platform_effect_tx,
@@ -233,7 +229,6 @@ pub fn spawn_control_actor_with_services(
                                 dispatch_request(
                                     &mut model,
                                     request,
-                                    &legacy_tx,
                                     &presentation_tx,
                                     &presentation_coalesce_rx,
                                     &platform_effect_tx,
@@ -313,7 +308,6 @@ pub fn spawn_control_actor_with_services(
 
     Ok(ControlActorChannels {
         request_tx,
-        legacy_rx,
         presentation_rx,
         presentation_capture_rx,
         presentation_completion_tx,

@@ -1,8 +1,6 @@
-use super::*;
-use super::completion::{
-    CompletionContext, reject_cancelled_request, request_is_cancelled,
-};
+use super::completion::{CompletionContext, reject_cancelled_request, request_is_cancelled};
 use super::presentation::screenshot_result;
+use super::*;
 
 pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>) {
     let LoadCompletion::ScreenshotWrite {
@@ -16,21 +14,26 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
 
     match result {
         Ok(bytes) => {
-            context.model.finish_presentation_capture(
-                spec.capture_id,
-                "Screenshot capture completed",
+            context
+                .model
+                .finish_presentation_capture(spec.capture_id, "Screenshot capture completed");
+            finish_request(
+                request,
+                screenshot_result(&spec, bytes),
+                context.diagnostics,
             );
-            finish_request(request, screenshot_result(&spec, bytes), context.diagnostics);
         }
         Err(_) if request_is_cancelled(&request) => {
-            context.model.cancel_presentation_capture(
-                spec.capture_id,
-                "Screenshot capture was cancelled",
-            );
+            context
+                .model
+                .cancel_presentation_capture(spec.capture_id, "Screenshot capture was cancelled");
             reject_cancelled_request(request, context.diagnostics, "screenshot capture");
         }
         Err(error) => {
-            let message = format!("failed to write screenshot {}: {error}", spec.path.display());
+            let message = format!(
+                "failed to write screenshot {}: {error}",
+                spec.path.display()
+            );
             context
                 .model
                 .fail_presentation_capture(spec.capture_id, &message);

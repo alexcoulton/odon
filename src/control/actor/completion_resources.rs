@@ -360,7 +360,24 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             }
             match result {
                 Ok(polygons) => {
-                    if let Some(response) = model.install_threshold_mask(&spec, polygons) {
+                    if let Some(mut response) = model.install_threshold_mask(&spec, polygons) {
+                        if request
+                            .command
+                            .params()
+                            .get("sync_project")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                        {
+                            match model.sync_masks_to_project() {
+                                Ok(synced) => {
+                                    response["persistence"] = synced["persistence"].clone()
+                                }
+                                Err(error) => {
+                                    reject_actor_request(request, diagnostics, error);
+                                    return;
+                                }
+                            }
+                        }
                         publish_projection(
                             model,
                             render_document.clone(),

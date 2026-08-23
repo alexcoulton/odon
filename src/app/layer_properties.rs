@@ -2,6 +2,48 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(super) fn ui_layer_properties(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let actor_transaction = self.native_layers_actor_owned().then(|| {
+            (
+                self.control_native_layer_snapshot_list(),
+                self.seg_objects.viewport_filter_state(),
+                self.active_viewport_command_scope(),
+            )
+        });
+        self.ui_layer_properties_inner(ui, ctx);
+        let Some((before_native, before_filter, actor_scope)) = actor_transaction else {
+            return;
+        };
+        let after_filter = self.seg_objects.viewport_filter_state();
+        let mut after_native = self.control_native_layer_snapshot_list();
+        if after_filter != before_filter {
+            for layer in after_native.as_array_mut().into_iter().flatten() {
+                if layer.get("layer_id").and_then(serde_json::Value::as_str)
+                    == Some("segmentation_objects")
+                {
+                    layer["presentation"]["filter"] = before_filter.project_json();
+                }
+            }
+        }
+        let presentation_changed = after_native != before_native;
+        if !presentation_changed && after_filter == before_filter {
+            return;
+        }
+        let _ = self.apply_control_actor_native_layers_projection(&before_native);
+        if presentation_changed {
+            self.submit_native_layer_state_replace(after_native);
+        }
+        if after_filter != before_filter
+            && let Some((viewport_id, revision)) = actor_scope
+        {
+            self.submit_native_object_filter_at(
+                &viewport_id,
+                revision + u64::from(presentation_changed),
+                &after_filter,
+            );
+        }
+    }
+
+    fn ui_layer_properties_inner(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let active_layer_name = self.layer_display_name(self.active_layer);
         ui.horizontal(|ui| {
             ui.heading(active_layer_name);
@@ -36,13 +78,15 @@ impl OmeZarrViewerApp {
         if reset_clicked {
             changed |= self.reset_current_visible_move_targets_to_loaded();
         } else if changed {
-            if let Some(dst) = self.layer_offset_world_mut(active_layer) {
-                *dst = off;
-            }
+            changed = self.commit_layer_offsets(&[LayerOffsetEntry {
+                layer: active_layer,
+                offset_world: off,
+            }]);
         }
 
         if let LayerId::Channel(idx0) = active_layer {
             let idx = idx0.min(self.channels.len().saturating_sub(1));
+            let mut transform_changed = false;
 
             let mut scale = self
                 .channel_scales
@@ -54,7 +98,7 @@ impl OmeZarrViewerApp {
 
             ui.horizontal(|ui| {
                 ui.label("Scale");
-                changed |= ui
+                let x_changed = ui
                     .add(
                         egui::DragValue::new(&mut scale.x)
                             .speed(0.02)
@@ -62,7 +106,7 @@ impl OmeZarrViewerApp {
                             .prefix("x "),
                     )
                     .changed();
-                changed |= ui
+                let y_changed = ui
                     .add(
                         egui::DragValue::new(&mut scale.y)
                             .speed(0.02)
@@ -70,8 +114,11 @@ impl OmeZarrViewerApp {
                             .prefix("y "),
                     )
                     .changed();
+                transform_changed |= x_changed || y_changed;
+                changed |= x_changed || y_changed;
                 if ui.button("1x").clicked() {
                     scale = egui::Vec2::splat(1.0);
+                    transform_changed = true;
                     changed = true;
                 }
             });
@@ -87,20 +134,26 @@ impl OmeZarrViewerApp {
                     )
                     .changed()
                 {
+                    transform_changed = true;
                     changed = true;
                 }
                 if ui.button("0").clicked() {
                     deg = 0.0;
+                    transform_changed = true;
                     changed = true;
                 }
             });
 
             rot = deg.to_radians();
-            if let Some(dst) = self.channel_scales.get_mut(idx) {
-                *dst = scale;
-            }
-            if let Some(dst) = self.channel_rotations_rad.get_mut(idx) {
-                *dst = rot;
+            if transform_changed && self.native_layers_actor_owned() {
+                self.submit_native_channel_transform(idx, None, Some(scale), Some(rot));
+            } else {
+                if let Some(dst) = self.channel_scales.get_mut(idx) {
+                    *dst = scale;
+                }
+                if let Some(dst) = self.channel_rotations_rad.get_mut(idx) {
+                    *dst = rot;
+                }
             }
         }
 
@@ -562,6 +615,8 @@ impl OmeZarrViewerApp {
                     .unwrap_or(0);
 
                 let mut changed = false;
+                let mut layer_changed = false;
+                let mut layer_draft = self.mask_layers[idx].clone();
                 let mut new_layer_clicked = false;
                 let mut draw_tool_clicked = false;
                 let mut clear_clicked = false;
@@ -571,17 +626,17 @@ impl OmeZarrViewerApp {
                 let mut reload_from_file: Option<PathBuf> = None;
 
                 {
-                    let layer = &mut self.mask_layers[idx];
+                    let layer = &mut layer_draft;
 
                     ui.horizontal(|ui| {
                         ui.label("Name");
-                        changed |= ui.text_edit_singleline(&mut layer.name).changed();
+                        layer_changed |= ui.text_edit_singleline(&mut layer.name).changed();
                     });
 
-                    changed |= ui.checkbox(&mut layer.visible, "Visible").changed();
-                    changed |= ui.checkbox(&mut layer.editable, "Editable").changed();
+                    layer_changed |= ui.checkbox(&mut layer.visible, "Visible").changed();
+                    layer_changed |= ui.checkbox(&mut layer.editable, "Editable").changed();
 
-                    changed |= ui
+                    layer_changed |= ui
                         .add(
                             egui::Slider::new(&mut layer.opacity, 0.0..=1.0)
                                 .text("Opacity")
@@ -596,12 +651,12 @@ impl OmeZarrViewerApp {
                             MaskDisplayMode::TranslucentFill,
                             MaskDisplayMode::FilledPreview,
                         ] {
-                            changed |= ui
+                            layer_changed |= ui
                                 .selectable_value(&mut layer.display_mode, mode, mode.label())
                                 .changed();
                         }
                     });
-                    changed |= ui
+                    layer_changed |= ui
                         .add(
                             egui::Slider::new(&mut layer.width_screen_px, 0.25..=6.0)
                                 .text("Width")
@@ -619,7 +674,7 @@ impl OmeZarrViewerApp {
                         );
                         if ui.color_edit_button_srgba(&mut c).changed() {
                             layer.color_rgb = [c.r(), c.g(), c.b()];
-                            changed = true;
+                            layer_changed = true;
                         }
                     });
 
@@ -670,61 +725,98 @@ impl OmeZarrViewerApp {
                 }
 
                 if reload_from_roi_clicked {
-                    self.push_mask_undo_snapshot();
-                    match self.ensure_exclusion_masks_loaded() {
-                        Ok(_) => changed = true,
+                    let actor_owned = self.mask_actor_owned();
+                    if !actor_owned {
+                        self.push_mask_undo_snapshot();
+                    }
+                    match self.request_exclusion_masks_reload() {
+                        Ok(_) => changed |= !actor_owned,
                         Err(err) => {
-                            self.undo_stack.pop();
+                            if !actor_owned {
+                                self.undo_stack.pop();
+                            }
                             self.roi_selector
                                 .set_status(format!("Reload masks failed: {err}"));
                         }
                     }
                 } else if let Some(path) = reload_from_file {
-                    match load_geojson_polylines_world(&path, 1.0, PolygonRingMode::AllRings) {
-                        Ok(polys) => {
-                            self.push_mask_undo_snapshot();
-                            if let Some(layer) = self.mask_layers.get_mut(idx) {
-                                layer.polygons_world = polys;
-                                layer.raster_display = None;
-                                changed = true;
+                    if self.mask_actor_owned() {
+                        let mut params = serde_json::Map::new();
+                        params.insert(
+                            "path".to_string(),
+                            serde_json::json!(path.to_string_lossy()),
+                        );
+                        params.insert("name".to_string(), serde_json::json!(layer_draft.name));
+                        params.insert(
+                            "editable".to_string(),
+                            serde_json::json!(layer_draft.editable),
+                        );
+                        params.insert("replace_layer_id".to_string(), serde_json::json!(id));
+                        self.submit_native_mask_command("viewer.masks.import_geojson", params);
+                    } else {
+                        match load_geojson_polylines_world(&path, 1.0, PolygonRingMode::AllRings) {
+                            Ok(polys) => {
+                                self.push_mask_undo_snapshot();
+                                if let Some(layer) = self.mask_layers.get_mut(idx) {
+                                    layer.polygons_world = polys;
+                                    layer.raster_display = None;
+                                    changed = true;
+                                }
                             }
+                            Err(err) => self
+                                .roi_selector
+                                .set_status(format!("Reload masks failed: {err}")),
                         }
-                        Err(err) => self
-                            .roi_selector
-                            .set_status(format!("Reload masks failed: {err}")),
                     }
                 }
 
                 if new_layer_clicked {
-                    self.push_mask_undo_snapshot();
-                    let new_id = self.create_editable_mask_layer(None);
-                    self.set_active_layer(LayerId::Mask(new_id));
-                    changed = true;
+                    if !self.mask_actor_owned() {
+                        self.push_mask_undo_snapshot();
+                    }
+                    if let Some(new_id) = self.request_create_editable_mask_layer(None) {
+                        self.set_active_layer(LayerId::Mask(new_id));
+                        changed = true;
+                    }
                 }
                 if draw_tool_clicked {
                     self.tool_mode = ToolMode::DrawMaskPolygon;
                     self.drawing_mask_layer = Some(id);
                 }
                 if clear_clicked {
-                    let should_record_undo = self
-                        .mask_layers
-                        .get(idx)
-                        .is_some_and(|layer| !layer.polygons_world.is_empty());
-                    if should_record_undo {
-                        self.push_mask_undo_snapshot();
-                    }
-                    if let Some(layer) = self.mask_layers.get_mut(idx) {
-                        layer.clear();
-                        changed = true;
-                    }
-                    if self
-                        .selected_mask_polygon
-                        .is_some_and(|selection| selection.layer_id == id)
-                    {
-                        self.clear_mask_polygon_selection();
-                    }
-                    if self.drawing_mask_layer == Some(id) {
-                        self.drawing_mask_polygon.clear();
+                    if self.mask_actor_owned() {
+                        let mut layers = self.mask_layers.clone();
+                        layers[idx].clear();
+                        let selection = if self
+                            .selected_mask_polygon
+                            .is_some_and(|selection| selection.layer_id == id)
+                        {
+                            serde_json::Value::Null
+                        } else {
+                            self.mask_selection_value()
+                        };
+                        self.submit_native_mask_state_replace(&layers, selection);
+                    } else {
+                        let should_record_undo = self
+                            .mask_layers
+                            .get(idx)
+                            .is_some_and(|layer| !layer.polygons_world.is_empty());
+                        if should_record_undo {
+                            self.push_mask_undo_snapshot();
+                        }
+                        if let Some(layer) = self.mask_layers.get_mut(idx) {
+                            layer.clear();
+                            changed = true;
+                        }
+                        if self
+                            .selected_mask_polygon
+                            .is_some_and(|selection| selection.layer_id == id)
+                        {
+                            self.clear_mask_polygon_selection();
+                        }
+                        if self.drawing_mask_layer == Some(id) {
+                            self.drawing_mask_polygon.clear();
+                        }
                     }
                 }
                 if delete_selected_polygon_clicked && self.delete_selected_mask_polygon() {
@@ -733,6 +825,15 @@ impl OmeZarrViewerApp {
                 if delete_clicked {
                     self.delete_mask_layer(id);
                     return;
+                }
+
+                if layer_changed {
+                    if self.mask_actor_owned() {
+                        self.submit_native_mask_layer_update(&layer_draft);
+                    } else {
+                        self.mask_layers[idx] = layer_draft;
+                        changed = true;
+                    }
                 }
 
                 if changed {

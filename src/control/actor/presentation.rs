@@ -128,18 +128,15 @@ impl PresentationCaptureManager {
             return;
         }
         let (scope, project_transition) = match method {
-            "viewer.screenshot.capture" => match model.capture_viewport_id(
-                params.get("viewport_id").and_then(Value::as_str),
-            ) {
-                Ok(viewport_id) => (
-                    PresentationCaptureScope::Viewer { viewport_id },
-                    None,
-                ),
-                Err(error) => {
-                    reject_actor_request(request, diagnostics, error);
-                    return;
+            "viewer.screenshot.capture" => {
+                match model.capture_viewport_id(params.get("viewport_id").and_then(Value::as_str)) {
+                    Ok(viewport_id) => (PresentationCaptureScope::Viewer { viewport_id }, None),
+                    Err(error) => {
+                        reject_actor_request(request, diagnostics, error);
+                        return;
+                    }
                 }
-            },
+            }
             "viewer.workspace.screenshot.capture" => {
                 if original_mode != ModelMode::Single {
                     reject_actor_request(
@@ -190,9 +187,7 @@ impl PresentationCaptureManager {
             let _ = request.task_registry.progress(
                 task_id,
                 None,
-                format!(
-                    "waiting_for_presentation:projection:{desired_projection_revision}"
-                ),
+                format!("waiting_for_presentation:projection:{desired_projection_revision}"),
             );
         }
         self.pending.insert(
@@ -217,11 +212,7 @@ impl PresentationCaptureManager {
                 sent_to_renderer: false,
             },
         );
-        self.release_presentable(
-            model.presented_projection_revision(),
-            capture_tx,
-            wake_ui,
-        );
+        self.release_presentable(model.presented_projection_revision(), capture_tx, wake_ui);
     }
 
     pub(super) fn release_presentable(
@@ -314,11 +305,7 @@ impl PresentationCaptureManager {
         }
     }
 
-    pub(super) fn sweep(
-        &mut self,
-        model: &mut AppModel,
-        diagnostics: &ActorDiagnostics,
-    ) {
+    pub(super) fn sweep(&mut self, model: &mut AppModel, diagnostics: &ActorDiagnostics) {
         let expired = self
             .pending
             .iter()
@@ -364,11 +351,7 @@ fn request_cancelled(request: &OdonControlRequest) -> bool {
         .is_some_and(|task| task.state == TaskState::Cancelled)
 }
 
-fn capture_path(
-    model: &AppModel,
-    method: &str,
-    params: &Value,
-) -> Result<PathBuf, ControlError> {
+fn capture_path(model: &AppModel, method: &str, params: &Value) -> Result<PathBuf, ControlError> {
     if let Some(path) = params
         .get("path")
         .and_then(Value::as_str)
@@ -380,15 +363,12 @@ fn capture_path(
     if method != "viewer.screenshot.capture" {
         return Err(ControlError::invalid_params(method, "path is required"));
     }
-    let directory = model
-        .screenshot_preferences()
-        .output_dir()
-        .ok_or_else(|| {
-            ControlError::new(
-                ControlErrorKind::NotReady,
-                "No screenshot folder is configured; provide path or set output_dir",
-            )
-        })?;
+    let directory = model.screenshot_preferences().output_dir().ok_or_else(|| {
+        ControlError::new(
+            ControlErrorKind::NotReady,
+            "No screenshot folder is configured; provide path or set output_dir",
+        )
+    })?;
     if !directory.is_dir() {
         return Err(ControlError::new(
             ControlErrorKind::ResourceNotFound,
@@ -411,7 +391,10 @@ fn capture_path(
         .ok_or_else(|| {
             ControlError::new(
                 ControlErrorKind::Conflict,
-                format!("no free screenshot filename exists in {}", directory.display()),
+                format!(
+                    "no free screenshot filename exists in {}",
+                    directory.display()
+                ),
             )
         })
 }

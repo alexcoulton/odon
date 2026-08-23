@@ -168,24 +168,23 @@ fn object_export_columns_csv_and_geoparquet_complete_without_a_frame() {
         .unwrap();
     assert_eq!(state["running"], false);
     assert_eq!(state["last_output"]["format"], "geoparquet");
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let _ = std::fs::remove_file(csv_path);
     let _ = std::fs::remove_file(parquet_path);
 }
 
 #[test]
-fn spatial_shape_object_export_target_retains_its_explicit_legacy_route() {
+fn spatial_shape_object_export_target_is_resolved_by_the_actor() {
     let channels = spawn_test_actor_with_objects();
     open_export_fixture(&channels);
-    let (request, _reply) = request(
+    let (request, reply) = request(
         "exports.objects.columns",
-        json!({"target":"spatial_shape","shape_id":7}),
+        json!({"target":"spatial_shape","layer_id":7}),
     );
     channels.request_tx.send(request).unwrap();
-    let forwarded = channels
-        .legacy_rx
+    let error = reply
         .recv_timeout(Duration::from_secs(1))
-        .unwrap();
-    assert_eq!(forwarded.command.method(), "exports.objects.columns");
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::ResourceNotFound);
 }

@@ -7,6 +7,7 @@ mod error;
 mod events;
 mod protocol;
 pub mod registry;
+mod request;
 mod resources;
 mod surface;
 mod tasks;
@@ -19,6 +20,7 @@ pub use protocol::{
     ClientInfo, HelloRequest, HelloResponse, HelloServerInfo, JSONRPC_VERSION, JsonRpcRequest,
     PROTOCOL_VERSION, json_rpc_error, json_rpc_result,
 };
+pub use request::OdonControlRequest;
 pub use resources::{
     CoordinateSpace, DataResourceSnapshot, LayerSnapshot, Ownership, ResourceRegistry,
 };

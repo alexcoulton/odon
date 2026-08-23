@@ -285,6 +285,17 @@ impl ReadinessModel {
             .any(|operation| operation.phase == OperationPhase::Pending)
     }
 
+    pub(crate) fn has_pending_scoped_prefix(&self, kind: OperationKind, prefix: &str) -> bool {
+        self.operations.iter().any(|(key, operation)| {
+            key.kind == kind
+                && key
+                    .scope
+                    .as_deref()
+                    .is_some_and(|scope| scope.starts_with(prefix))
+                && operation.phase == OperationPhase::Pending
+        })
+    }
+
     pub(crate) fn status_for(&self, kind: OperationKind) -> Option<&str> {
         self.operations
             .iter()

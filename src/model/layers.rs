@@ -357,6 +357,55 @@ impl NativeLayersModel {
         *self != before
     }
 
+    pub(crate) fn set_spatial_object_layer(
+        &mut self,
+        layer_id: &str,
+        name: &str,
+        loaded: bool,
+    ) -> bool {
+        let before = self.clone();
+        self.layers.retain(|layer| layer.layer_id != layer_id);
+        if loaded {
+            self.layers.push(NativeLayerModel {
+                layer_id: layer_id.to_string(),
+                kind: "spatial_shape".to_string(),
+                name: name.to_string(),
+                stack: "overlays".to_string(),
+                available: true,
+                visible: true,
+                offset_world: [0.0, 0.0],
+                loaded_offset_world: [0.0, 0.0],
+                presentation: json!({
+                    "visible":true,
+                    "opacity":0.75,
+                    "width_screen_px":1.0,
+                    "color_rgb":[0,255,120],
+                    "objects":{
+                        "visible":true,
+                        "opacity":0.75,
+                        "width_screen_px":1.0,
+                        "color_rgb":[0,255,120],
+                        "fill_cells":false,
+                        "fill_opacity":0.30,
+                        "selected_fill_opacity":0.70,
+                        "show_selection_overlay":true,
+                        "fast_rendering":true,
+                        "color_property":"",
+                        "color_level_overrides":{},
+                        "filter":{
+                            "mode":"simple",
+                            "logic":"all",
+                            "clauses":[{"enabled":true,"property":"id","query":""}],
+                        },
+                    },
+                }),
+            });
+        } else if self.active_layer_id.as_deref() == Some(layer_id) {
+            self.active_layer_id = self.layers.first().map(|layer| layer.layer_id.clone());
+        }
+        *self != before
+    }
+
     pub(crate) fn set_segmentation_labels(&mut self, loaded: bool, visible: bool) -> bool {
         let before = self.clone();
         self.layers

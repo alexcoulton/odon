@@ -196,7 +196,6 @@ fn remote_sessions_listing_and_opens_complete_without_a_ui_frame() {
     assert_eq!(state["mode"], "single");
     assert!(!state.to_string().contains(access_key));
     assert!(!state.to_string().contains(secret_key));
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -290,7 +289,6 @@ fn project_roi_open_supports_http_and_s3_sources_without_a_ui_frame() {
     assert_eq!(applied["resolution"]["roi"]["id"], "s3-roi");
     assert!(!applied.to_string().contains("session-access"));
     assert!(!applied.to_string().contains("session-secret"));
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 struct BlockingRemoteBackend {
@@ -435,7 +433,6 @@ fn clearing_a_session_invalidates_in_flight_remote_work() {
         .unwrap()
         .unwrap_err();
     assert_eq!(cancelled.kind, ControlErrorKind::Cancelled);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 struct BlockingS3OpenBackend {
@@ -529,7 +526,6 @@ fn clearing_a_session_prevents_a_stale_s3_document_install() {
             .unwrap()["mode"],
         "project"
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -617,5 +613,4 @@ fn clearing_a_session_prevents_a_stale_s3_deep_link_commit() {
 
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.document.unwrap().path(), Some(fixture.as_path()));
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

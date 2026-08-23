@@ -40,7 +40,7 @@ pub fn execution_diagnostics(diagnostics: &ActorDiagnostics) -> Value {
         .collect::<serde_json::Map<_, _>>();
     json!({
         "actor_methods": MIGRATED_METHODS,
-        "compatibility_fallback": "legacy_ui",
+        "compatibility_fallback": Value::Null,
         "model_commands_require_ui_frame": false,
         "presentation_is_asynchronous": true,
         "method_routes": method_routes,

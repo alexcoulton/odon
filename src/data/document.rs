@@ -10,6 +10,7 @@ use super::dataset_kind::{
 };
 use super::dataset_source::DatasetSource;
 use super::ome::{Axis, ChannelInfo, DatasetRenderKind, Dims, LevelInfo, OmeZarrDataset};
+use crate::model::ControlObjectResource;
 
 /// Semantic dataset families understood by the control model.
 ///
@@ -87,6 +88,22 @@ pub struct AlternateDocumentResource {
     pub dataset: OmeZarrDataset,
     pub store: Arc<dyn ReadableStorageTraits>,
     payload: Arc<dyn Any + Send + Sync>,
+    object_layers: Arc<Vec<DocumentObjectLayerResource>>,
+}
+
+/// An immutable object layer prepared alongside an alternate document.
+///
+/// These handles are source-neutral on purpose: the actor can own selection, filtering,
+/// analysis, measurements, and exports without knowing how a SpatialData or Xenium adapter
+/// parsed the source. Renderer-specific acceleration data remains inside
+/// [`ControlObjectResource::renderer_payload`].
+#[derive(Debug, Clone)]
+pub struct DocumentObjectLayerResource {
+    pub layer_id: String,
+    pub name: String,
+    pub kind: String,
+    pub primary: bool,
+    pub resource: Arc<ControlObjectResource>,
 }
 
 impl AlternateDocumentResource {
@@ -102,7 +119,17 @@ impl AlternateDocumentResource {
             dataset,
             store,
             payload,
+            object_layers: Arc::new(Vec::new()),
         }
+    }
+
+    pub fn with_object_layers(mut self, layers: Vec<DocumentObjectLayerResource>) -> Self {
+        self.object_layers = Arc::new(layers);
+        self
+    }
+
+    pub fn object_layers(&self) -> &[DocumentObjectLayerResource] {
+        self.object_layers.as_ref()
     }
 
     pub fn payload<T>(&self) -> Option<Arc<T>>

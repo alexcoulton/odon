@@ -77,7 +77,6 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
     assert_eq!(current["cache"]["loaded"], 7);
     assert_eq!(current["cache"]["in_flight"], 2);
     assert_eq!(current["target_level"], 3);
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]
@@ -123,7 +122,6 @@ fn memory_pin_loads_shared_level_data_and_unpins_without_a_frame() {
     assert_eq!(unpinned["unloaded"], true);
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert!(projection.pinned_levels.is_empty());
-    assert_eq!(channels.legacy_rx.len(), 0);
 }
 
 #[test]

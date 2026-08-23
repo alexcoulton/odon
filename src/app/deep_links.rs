@@ -5,18 +5,6 @@ impl OmeZarrViewerApp {
         self.show_scale_bar = show;
     }
 
-    pub fn show_scale_bar(&self) -> bool {
-        self.show_scale_bar
-    }
-
-    pub fn has_unsaved_changes(&self) -> bool {
-        self.mask_layers_project_dirty || self.project_space.has_unsaved_changes()
-    }
-
-    pub fn has_unsaved_mask_changes(&self) -> bool {
-        self.mask_layers_project_dirty
-    }
-
     pub fn set_label_prompt_preference(&mut self, preference: LabelPromptSessionPreference) {
         self.seg_label_prompt_preference = preference;
         if preference == LabelPromptSessionPreference::Ask {
@@ -28,6 +16,7 @@ impl OmeZarrViewerApp {
         self.seg_label_prompt_preference
     }
 
+    #[cfg(test)]
     pub fn apply_deep_link_request(&mut self, request: &DeepLinkRequest) {
         let mut notes = Vec::new();
         let segmentation_source = request
@@ -409,6 +398,7 @@ impl OmeZarrViewerApp {
         (contains_matches.len() == 1).then(|| contains_matches[0])
     }
 
+    #[cfg(test)]
     pub(super) fn find_channel_index_for_link_terms(&self, terms: &[String]) -> Option<usize> {
         for term in terms {
             if let Some(idx) = self.find_channel_index_for_link(term) {
@@ -418,6 +408,7 @@ impl OmeZarrViewerApp {
         None
     }
 
+    #[cfg(test)]
     pub(super) fn set_channel_window_for_link(&mut self, idx: usize, lo: f32, hi: f32) -> bool {
         if !lo.is_finite() || !hi.is_finite() {
             return false;

@@ -17,7 +17,6 @@ fn dataset_inspection_completes_on_a_worker_without_a_ui_frame() {
         inspected["metadata"]["channels"].as_array().unwrap().len(),
         5
     );
-    assert_eq!(channels.legacy_rx.len(), 0);
 
     let (loading, loading_rx) = request("app.get_loading_state", json!({}));
     channels.request_tx.send(loading).unwrap();
@@ -48,5 +47,4 @@ fn dataset_inspection_completes_on_a_worker_without_a_ui_frame() {
     assert_eq!(inspected["error"], "dataset path does not exist");
     assert!(inspected.get("kind").is_none());
     assert!(inspected.get("can_open").is_none());
-    assert_eq!(channels.legacy_rx.len(), 0);
 }

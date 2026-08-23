@@ -1,133 +1,150 @@
 use super::*;
-#[test]
-fn native_viewport_commits_replay_through_the_actor_model() {
-    let mut app = fixture_app();
-    let before = app.viewport_workspace.as_ref().unwrap().clone();
-    let left = before.active_id().clone();
-    let mut after = before.clone();
-    after
-        .clone_viewport(&left, Some("Right".to_string()), ViewportLayout::Horizontal)
-        .unwrap();
-    after.set_links(ViewportLinks {
-        camera: false,
-        plane: true,
-        selection: true,
-    });
-    after.rename(&left, "Left".to_string()).unwrap();
-    let left_state = &mut after.get_mut(&left).unwrap().state;
-    left_state.camera.center_world_lvl0 = egui::pos2(123.0, 456.0);
-    left_state.camera.zoom_screen_per_lvl0_px = 2.5;
-    for channel in &mut left_state.channels {
-        channel.visible = channel.index == 1;
-    }
-    left_state.channels[1].color_rgb = [12, 34, 56];
-    left_state.channel_layer_order.reverse();
-    left_state.channel_sort_mode = ChannelSortMode::NameDesc;
-    left_state
-        .layer_groups
-        .channel_groups
-        .push(ProjectChannelGroup {
-            id: 1,
-            name: "Native group".to_string(),
-            expanded: true,
-            color_rgb: [20, 30, 40],
-        });
-    left_state.layer_groups.channel_members.insert(
-        left_state.channels[1].name.clone(),
-        ProjectChannelGroupMember {
-            group_id: 1,
-            inherit_color: true,
-        },
-    );
-    left_state.object_visible = true;
-    left_state.object_display.fill_cells = true;
-    left_state.object_display.fill_opacity = 0.45;
-    left_state.object_display.color_property_key = Some("phenotype".to_string());
-    left_state.object_display.color_level_overrides.insert(
-        "tumour".to_string(),
-        crate::objects::ObjectColorLevelOverride {
-            visible: true,
-            color_rgb: Some([220, 40, 60]),
-        },
-    );
+use odon::control::ControlCommand;
 
-    app.record_native_viewport_intents(&before, &after);
-    let intents = app.take_native_control_intents();
-    assert!(
-        intents
-            .iter()
-            .any(|intent| intent.method == "viewer.viewports.clone")
-    );
-    assert!(
-        intents
-            .iter()
-            .any(|intent| intent.method == "viewer.viewports.camera.set")
-    );
-    assert!(
-        intents
-            .iter()
-            .any(|intent| intent.method == "viewer.viewports.channels.set_color")
-    );
-    assert!(
-        intents
-            .iter()
-            .any(|intent| intent.method == "viewer.viewports.channels.set_order")
-    );
-    assert!(intents.iter().any(|intent| {
-        intent.method == "viewer.viewports.channels.set_group"
-            && intent.params["replace_all"] == true
-    }));
-    assert!(intents.iter().any(|intent| {
-        intent.method == "viewer.viewports.objects.style.set"
-            && intent.params["color_property"] == "phenotype"
-    }));
-    assert!(
-        intents
-            .iter()
-            .any(|intent| intent.method == "viewer.viewports.objects.legend.set")
-    );
-
+fn actor_model_from_renderer(app: &mut OmeZarrViewerApp) -> odon::model::AppModel {
+    let renderer_workspace = app.control_viewport_workspace_snapshot();
     let mut model = odon::model::AppModel::project();
-    model.install_dataset(&app.dataset);
-    for intent in intents {
-        model
-            .dispatch(intent.method, &intent.params)
-            .expect("native intent is actor-owned")
-            .expect("native intent applies");
-    }
-    let workspace = model
-        .dispatch("viewer.workspace.get", &serde_json::json!({}))
-        .unwrap()
-        .unwrap()
-        .response;
-    assert_eq!(workspace["layout"], "horizontal");
-    assert_eq!(workspace["links"]["camera"], false);
-    let model_left = workspace["viewports"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|viewport| viewport["viewport_id"] == left.as_str())
-        .unwrap();
-    assert_eq!(model_left["title"], "Left");
+    model
+        .bootstrap_dataset_from_renderer(&app.dataset, &renderer_workspace)
+        .expect("fixture renderer state bootstraps the actor model");
+    app.control_actor_workspace_revision = 1;
+    model
+}
+
+fn take_one(app: &mut OmeZarrViewerApp, expected_method: &str) -> NativeControlIntent {
+    let mut intents = app.take_native_control_intents();
+    assert_eq!(intents.len(), 1);
+    let intent = intents.remove(0);
+    assert_eq!(intent.method, expected_method);
+    ControlCommand::decode(intent.method, intent.params.clone())
+        .expect("native viewport interaction emits a typed actor command");
+    intent
+}
+
+fn replay(model: &mut odon::model::AppModel, intent: NativeControlIntent) {
+    model
+        .dispatch(intent.method, &intent.params)
+        .expect("native viewport command is actor-owned")
+        .expect("native viewport command commits");
+}
+
+#[test]
+fn detached_workspace_retains_the_explicit_native_command_scope() {
+    let mut app = fixture_app();
+    let _workspace = app.viewport_workspace.take().expect("fixture workspace");
+    app.control_actor_workspace_revision = 1;
+    app.native_viewport_command_scope = Some(NativeViewportCommandScope {
+        viewport_id: "viewport-1".to_string(),
+        navigation_revision: 7,
+        presentation_revision: 11,
+    });
+
+    assert!(app.submit_native_active_viewport_rendering(true, true, false, false));
+    let rendering = take_one(&mut app, "viewer.viewports.rendering.set");
+    assert_eq!(rendering.params["viewport_id"], "viewport-1");
+    assert_eq!(rendering.params["if_presentation_revision"], 11);
+
+    assert!(app.submit_native_active_viewport_plane(ViewPlaneMode::Xy, Some(3)));
+    let plane = take_one(&mut app, "viewer.viewports.planes.set");
+    assert_eq!(plane.params["viewport_id"], "viewport-1");
+    assert_eq!(plane.params["if_navigation_revision"], 7);
+}
+
+#[test]
+fn native_camera_commit_is_revision_checked_and_replays_through_the_actor() {
+    let mut app = fixture_app();
+    let mut model = actor_model_from_renderer(&mut app);
+    let before = app.camera.clone();
+    let desired = Camera {
+        center_world_lvl0: egui::pos2(123.0, 456.0),
+        zoom_screen_per_lvl0_px: 2.5,
+    };
+
+    assert!(app.submit_native_camera(&desired));
+    assert_eq!(app.camera.center_world_lvl0, before.center_world_lvl0);
     assert_eq!(
-        model_left["camera"]["center_world_lvl0"],
+        app.camera.zoom_screen_per_lvl0_px,
+        before.zoom_screen_per_lvl0_px
+    );
+    let intent = take_one(&mut app, "viewer.viewports.camera.set");
+    assert_eq!(intent.params["if_navigation_revision"], 1);
+    replay(&mut model, intent);
+
+    let workspace = model.render_workspace_snapshot().unwrap();
+    assert_eq!(
+        workspace["viewports"][0]["camera"]["center_world_lvl0"],
         serde_json::json!([123.0, 456.0])
     );
     assert_eq!(
-        model_left["channels"][1]["color_rgb"],
-        serde_json::json!([12, 34, 56])
+        workspace["viewports"][0]["camera"]["zoom_screen_per_lvl0_px"],
+        2.5
+    );
+}
+
+#[test]
+fn native_channel_group_commit_waits_for_actor_projection() {
+    let mut app = fixture_app();
+    let mut model = actor_model_from_renderer(&mut app);
+    let before = app.current_layer_groups();
+    let mut desired = before.clone();
+    desired.channel_groups.push(ProjectChannelGroup {
+        id: 9,
+        name: "Native group".to_string(),
+        expanded: true,
+        color_rgb: [20, 30, 40],
+    });
+    desired.channel_members.insert(
+        app.channels[1].name.clone(),
+        ProjectChannelGroupMember {
+            group_id: 9,
+            inherit_color: true,
+        },
+    );
+
+    assert!(app.commit_current_channel_groups(desired));
+    assert_eq!(app.current_layer_groups(), before);
+    let intent = take_one(&mut app, "viewer.viewports.channels.set_group");
+    assert_eq!(intent.params["replace_all"], true);
+    replay(&mut model, intent);
+
+    let workspace = model.render_workspace_snapshot().unwrap();
+    assert_eq!(workspace["viewports"][0]["channel_groups"][0]["id"], 9);
+    assert_eq!(
+        workspace["viewports"][0]["channel_groups"][0]["name"],
+        "Native group"
+    );
+}
+
+#[test]
+fn native_quick_contrast_is_one_atomic_layer_transaction() {
+    let mut app = fixture_app();
+    let mut model = actor_model_from_renderer(&mut app);
+    let before = app.channels[0].window;
+
+    app.apply_channel_window_to_indices(&[0, 1], 10.0, 80.0);
+    assert_eq!(app.channels[0].window, before);
+    let intent = take_one(&mut app, "viewer.viewports.layers.state.replace");
+    replay(&mut model, intent);
+
+    let workspace = model.render_workspace_snapshot().unwrap();
+    assert_eq!(
+        workspace["viewports"][0]["channels"][0]["window"],
+        serde_json::json!({"min":10.0,"max":80.0})
     );
     assert_eq!(
-        model_left["channel_order"],
-        serde_json::json!([4, 3, 2, 1, 0])
+        workspace["viewports"][0]["channels"][1]["window"],
+        serde_json::json!({"min":10.0,"max":80.0})
     );
-    assert_eq!(model_left["channel_sort"], "name_desc");
-    assert_eq!(model_left["channel_groups"][0]["name"], "Native group");
-    assert_eq!(model_left["objects"]["visible"], true);
-    assert_eq!(model_left["objects"]["fill_cells"], true);
-    assert_eq!(model_left["objects"]["color_property"], "phenotype");
-    assert_eq!(
-        model_left["objects"]["color_level_overrides"]["tumour"]["color_rgb"],
-        serde_json::json!([220, 40, 60])
-    );
+}
+
+#[test]
+fn native_object_filter_command_keeps_worker_evaluation_and_revision_guard() {
+    let mut app = fixture_app();
+    actor_model_from_renderer(&mut app);
+    let filter = app.seg_objects.viewport_filter_state();
+
+    assert!(app.submit_native_object_filter_at("viewport-1", 4, &filter));
+    let intent = take_one(&mut app, "viewer.viewports.objects.filter.set");
+    assert_eq!(intent.params["if_presentation_revision"], 4);
+    assert!(intent.params.get("mode").is_some());
 }

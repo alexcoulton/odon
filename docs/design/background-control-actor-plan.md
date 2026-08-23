@@ -1,20 +1,64 @@
 # Background-Safe Central Model and Control Actor Plan
 
-Status: implementation in progress. The original local OME-Zarr/two-viewport background-safety
-slice is implemented and has automated no-frame coverage. The broader application-surface
-migration is 220 of 261 registered application methods, leaving 41. Mode- and target-aware route
-metadata, scoped readiness, application settings/recent projects, lifecycle decisions, dataset
-inspection, and deep-link parsing/resolution/filter/generation are now actor-owned. The control
-actor has also been reorganized into a small façade with dedicated runtime, dispatch, worker,
-completion, projection, diagnostics, domain, and test modules. The main remaining work is
-alternate-document subresources, retained compute tasks, mosaic
-state, explicit presentation tasks, duplicate renderer-owned semantic state, and real platform
-occlusion acceptance. Before those migrations continue, the former 27,951-line `src/app.rs` has
-also been converted into a responsibility-based `src/app/` module tree with an explicit legacy
-boundary, split characterization tests, structural guardrails, and a field-ownership inventory.
-The updated execution plan below is authoritative for the remaining work.
+Status: stabilization and acceptance in progress. All 263 registered application methods are now
+actor-routed in every supported mode and target combination, leaving zero legacy application
+routes. The legacy request channel, canvas-deferred semantic queue, and
+`RootApp::reply_to_control_request` dispatcher have been removed. Alternate object resources,
+retained compute, mosaic state, and presentation capture use actor-owned state, bounded workers,
+or explicit presentation acknowledgements. Renderer integration is isolated behind projection
+and native-observation adapters. Direct remote compatibility mutations and native before/after
+snapshot translators are gone. Project and mosaic UI actions now emit typed actor commands at
+their interaction points, including project creation, metadata, ROI and saved-view edits,
+samplesheet/discovery work, TIFF opening, selected-ROI mosaic opening, mosaic layout/focus/camera,
+and shared mosaic presentation. Viewport, mask, and native-layer commits likewise originate
+directly at their interaction points, including worker-backed mask append-and-reload persistence
+and revision-checked layer gesture transactions.
 
-Date: 2026-08-22
+The control actor is organized as a small façade with dedicated runtime, dispatch, worker,
+completion, projection, diagnostics, domain, and test modules. The former 27,951-line `src/app.rs`
+is a responsibility-based `src/app/` tree. The canonical `AppModel` is likewise split into
+construction, runtime, dispatch, project, compute, resource, object, mask, layer, saved-view, and
+viewport modules; `src/model/app.rs` now holds shared types and pure helpers rather than a second
+13,420-line implementation monolith. `RootApp` no longer contains the application command surface,
+and its projection, remote-dialog, and tests are separate modules with structural size guards. The
+transport-independent `OdonControlRequest` envelope now belongs to `src/control`, the required
+local `OdonControlRuntime` is isolated in `src/mcp/runtime.rs`, and
+`src/mcp/bridge.rs` is a small façade for connection-scoped shared state rather than actor
+construction or renderer queues. The bridge implementation is split into TCP listener/framing and
+worker queues (`bridge/transport.rs`), JSON-RPC and actor-mailbox dispatch (`bridge/dispatch.rs`),
+batch and retained-task orchestration (`bridge/tasks.rs`), background readiness monitors
+(`bridge/waits.rs`), and task/UI/event protocol registries (`bridge/services.rs`), with tests in
+`bridge/tests.rs`. This is a source boundary only: the wire protocol and actor mailbox are
+unchanged.
+Remaining release work is cumulative regression evidence, performance evidence, and real platform
+occlusion acceptance, not application-method migration.
+
+The multi-ROI application shell follows the same rule. The former 8,024-line `src/mosaic/mod.rs`
+is now a compact state/type façade with separate control, construction, lifecycle,
+memory/navigation, layer/dialog, panel, canvas, tile, I/O, and test modules. Mosaic command
+semantics remain actor-owned; this split only makes renderer and transient UI responsibilities
+reviewable.
+
+Object-layer renderer integration is no longer concentrated in the former 6,758-line
+`src/objects/core.rs`. Its façade retains shared adapter/export types and small geometry helpers;
+runtime loading, source formats, properties/presentation UI, selection/filtering, exports, and
+tests live under `src/objects/core/`. Actor-side object resources remain immutable and shared; this
+split organizes the renderer consumer and does not move canonical object semantics out of the
+actor.
+
+The custom threshold compatibility panel is split along its blocking-I/O boundary as well:
+`custom/cell_thresholds.rs` owns panel state and renderer projection,
+`cell_thresholds/data.rs` owns parquet loading and dataset/marker inference, and
+`cell_thresholds/threshold_files.rs` owns CSV/JSON threshold parsing. These renderer-side adapters
+do not replace the canonical actor analysis/resource path.
+
+The former 4,654-line `src/project/space.rs` is also responsibility-split. Versioned project/view
+DTOs and pure matching helpers remain in the façade; actor projection and persistence, ROI/view
+state, browser UI, saved-view dialogs, samplesheet/discovery workflows, and tests live under
+`src/project/space/`. Project semantics still enter the shared typed command outbox before any
+renderer mirror changes.
+
+Date: 2026-08-23
 
 Target: make Python, MCP, native UI, and future clients operate on one canonical
 Rust application model that continues to execute while Odon's window is
@@ -28,6 +72,7 @@ Related documents:
 - `docs/design/multi-viewport-plan.md`
 - `docs/design/layout-tree-milestone-plan.md`
 - `docs/design/test-coverage-matrix.md`
+- `docs/testing/background-control-acceptance.md`
 
 ## Implementation Status
 
@@ -35,6 +80,9 @@ The background-safe first vertical slice is now implemented in
 `src/control/actor/` and `src/model/app.rs`:
 
 - the protocol bridge submits commands to a dedicated control actor;
+- native UI and TCP clients construct the same transport-independent control request envelope;
+- local actor construction and renderer projection handles live in a dedicated required-runtime
+  module, while TCP binding, authentication, JSON-RPC dispatch, and connections live in the bridge;
 - local OME-Zarr metadata/storage opening runs on a worker and installs a
   generation-checked document model without a UI frame;
 - viewport layout, titles, links, logical geometry, camera, plane, channel
@@ -85,6 +133,10 @@ The background-safe first vertical slice is now implemented in
   focus, and native selection commits are actor-owned; immutable polygon/point geometry stays in
   the shared object resource, standalone filter selection runs on a bounded worker, and selection
   projections contain only indices plus a generation; and
+- native rectangle, lasso, clear, click, and point-to-object ID selection controls submit
+  target-aware actor commands before renderer state changes; click transactions retain exact
+  renderer hit-testing semantics and are rejected if their consumed selection generation is stale;
+  and
 - Odon-native channel/overlay inventory, order, active layer, visibility, presentation, and
   translation are actor-owned for single-image viewports; compatibility renderers may contribute
   newly discovered descriptors but cannot overwrite existing actor presentation, and native UI
@@ -115,28 +167,22 @@ The background-safe first vertical slice is now implemented in
   aware, tests are split by behavior, and actor-capability metadata is registry-owned; and
 - native macOS project Open, Save, and Save As menu actions enqueue the same actor commands as
   remote clients, after any semantic native edits collected in the current frame; and
-- diagnostics expose actor health, per-method actor/hybrid/legacy routing, queue wait,
+- diagnostics expose actor health, per-method actor/control-service routing, queue wait,
   model time, reply time, projection coalescing, worker counts, and
   presentation wait separately. The method catalog now declares execution
   class and readiness requirements.
 
-The compatibility dispatcher remains for alternate-dataset subresources, compute/export domains,
-mosaic control, and renderer-specific pixel operations. Native UI
-commits for the migrated viewport fields now submit the same typed actor
-commands after an optimistic renderer-local interaction; Phase 7 must still
-remove the duplicate semantic storage and extend that command-only boundary to
-the remaining domains. Cross-platform manual covered/minimized/Space
-acceptance also remains outstanding.
+There is no compatibility dispatcher or production legacy semantic route. Native UI commits use
+typed actor commands; renderer observations are limited to native-origin deltas and immutable
+presentation state. The former renderer-snapshot event publisher has also been removed: canonical
+actor commands are now the only source of semantic protocol events. Cross-platform manual
+covered/minimized/Space acceptance remains outstanding.
 
-As of this revision, 236 commands are listed as actor-capable: 220 of the 261
-application-registry methods, 15 of the 34 protocol-service methods, plus the actor-only
-method-availability query. This count is diagnostic, not a completion metric: 41 application
-methods remain outside the actor list, and some listed methods are still hybrid or fall back by
-mode or target. The other 19 protocol
-services (handshake, event/task management, and declarative-UI registries) already execute outside
-the render loop but have not all been folded into the canonical actor. Major remaining domains
-include the remaining alternate-dataset subresources, analysis, measurements, exports, mosaic, and explicit
-presentation tasks.
+As of this revision, 278 commands are listed as actor-capable: all 263 application-registry
+methods, including `app.get_method_availability`, plus 15 of the 34 protocol-service methods. The
+other 19 protocol services (handshake, event/task management, and declarative-UI registries) are
+control-service operations that already execute outside the render loop and are not application
+semantic routes.
 
 ## Updated Execution Plan (Authoritative)
 
@@ -174,22 +220,15 @@ recorded before Gate A is declared complete.
 
 ### Current method ledger
 
-The registry currently contains 261 application methods. The actor list contains 220 of them;
-41 remain. The remaining inventory is fixed by registry family as follows. The two mosaic-opening
-methods are shown with the mosaic workstream because they depend on the canonical mosaic model,
-even though their registry names live under `project.*` and `datasets.*`.
+The registry contains 263 application methods, and all 263 are present in the actor-capable list.
+The route-matrix audit evaluates every supported mode and target variant and reports zero
+`legacy_ui` or hybrid routes. Pixel capture methods are included: they enter an actor-owned
+presentation task and wait for a generation-specific renderer acknowledgement without blocking
+the actor mailbox.
 
-| Remaining workstream | Methods | Count |
-| --- | --- | ---: |
-| Single-view resource and compute domains | analysis, measurements, and object exports | 18 |
-| Mosaic semantic state and resources | `mosaic.*`, `project.rois.open_selected_mosaic`, `datasets.open_mosaic_samplesheet` | 19 |
-| Pixel presentation and capture | viewer/workspace/application/project screenshot capture | 4 |
-| **Total** |  | **41** |
-
-The 220-method actor count must not be interpreted as 220 methods being universally complete.
-For example, a method may execute in the actor for a primary single-image target but use the
-compatibility path for a SpatialData shape or mosaic. Diagnostics and documentation therefore
-need a route matrix rather than one static label per method.
+The actor-capability count still must not be used as the only completion signal. Registry, route,
+no-frame execution, resumed projection, persistence, and platform-occlusion evidence are recorded
+separately.
 
 ### Non-negotiable implementation invariants
 
@@ -277,6 +316,26 @@ domain preparation, and domain completion are separate modules. Tests are split 
 uniqueness/known-method audit. New migrations must place preparation and completion logic in their
 domain modules and must not grow a new central dispatch or completion match.
 
+The bounded resource-worker runtime follows the same rule. `control/actor/worker.rs` owns worker
+thread creation and the single `LoadJob` dispatch loop; memory, thresholds, analysis, measurements,
+project/ROI loading, and screenshot/label computations live in domain modules under
+`control/actor/worker/`. This changes neither queue topology nor completion ordering, and a source
+guard prevents domain computation from accumulating in the dispatch loop again.
+
+The command registry is likewise one authoritative API surface without being one source-file
+monolith. `src/control/registry.rs` defines shared descriptor types and lookup/introspection
+behavior; `registry/catalog.rs` owns application descriptors; `protocol_catalog.rs` owns protocol
+services and aliases; `schema.rs` owns generated request schemas; and actor-capability metadata and
+tests have dedicated modules. A structural guard caps the façade and production modules and keeps
+catalog data, schemas, and tests from accumulating in the façade again.
+
+Typed command decoding is a separate companion boundary. `src/control/command.rs` now retains only
+the public `ControlCommand` envelope, descriptor resolution, revision extraction, and service
+method classification. Serde request DTOs and defaults live in `control/command/requests.rs`,
+method-specific validation lives in `requests/validation.rs`, and characterization tests live in
+`command/tests.rs`. Registry metadata remains authoritative; the split does not duplicate the
+method catalog or introduce a second decoder.
+
 #### Application source organization
 
 Current state: complete as a prerequisite. The former `src/app.rs` mixed shared types, 184 fields,
@@ -284,8 +343,9 @@ frame orchestration, rendering, blocking compatibility workflows, control handle
 tests in 27,951 lines. It is now `src/app/mod.rs` plus responsibility modules for construction,
 projection, lifecycle, datasets, projects, viewports, canvas/rendering, layers, selection,
 thresholds, memory, screenshots, and tile scheduling. Frame-driven compatibility handlers are
-isolated under `src/app/legacy_control/`, and app tests are split by behavior under
-`src/app/tests/`.
+isolated as renderer snapshots/projection adapters under `src/app/renderer_bridge/`, and app tests
+are split by behavior under `src/app/tests/`. Direct compatibility mutation helpers retained for
+characterization are guarded by `cfg(test)` and are absent from production builds.
 
 This is a source-boundary refactor, not a claim that the aggregate app state is already correctly
 owned. `docs/design/app-state-ownership-inventory.md` classifies every field and gives its deletion
@@ -293,6 +353,141 @@ wave. Structural tests keep the façade and responsibility modules below generou
 keep the `eframe::App` lifecycle out of the façade, and preserve the actor façade boundary. New
 actor waves must delete their corresponding legacy handlers and compatibility fields rather than
 merely adding more modules.
+
+The viewport canvas now has an explicit interaction/render boundary. `app/canvas.rs` retains the
+hard per-viewport clip, tile scheduling, ordered overlay painting, HUD, and capture sequencing;
+`app/canvas/interactions.rs` owns camera, selection, mask, layer-move, and transform gestures and
+returns the one camera-motion signal consumed by the paint phase. This keeps the clip and draw
+order auditable while preventing gesture mutation from being buried in the render pipeline.
+
+Native-layer renderer integration is likewise source-separated beneath the tiny
+`app/layer_runtime.rs` façade. Dedicated modules own typed command submission, quick-contrast UI,
+layer metadata/visibility access, offset persistence and commits, transformed visible-region math,
+and layer-order rebuilding. All methods retain app-only visibility and continue to consume or
+commit the same actor projection; this is not a new semantic layer model.
+
+Annotation rendering is also separated from its source decoders. `annotations/mod.rs` retains the
+layer model/UI and draw orchestration; hit testing, category/color LUT construction, parquet
+schema/data decoding, and OpenGL execution live in dedicated child modules. They consume the same
+shared annotation payloads and do not create a second resource or command owner.
+
+Raw-tile OpenGL rendering follows the same source boundary. `render/tiles_gl.rs` retains the public
+draw DTOs and `TilesGl` façade; child modules own paint orchestration, cache/GPU/FBO lifecycle,
+geometry and affine math, R16 texture upload, and versioned shader compilation. The split exposes
+no new application API and leaves tile rendering as a consumer of actor-owned state.
+
+Line-bin OpenGL rendering is split behind its unchanged public façade as well. The generic
+line-segment renderer, object-indexed selection renderer, and shared shader compiler live in
+separate child modules. Their LRU buffers and selection-state textures remain renderer resources;
+they consume actor-projected geometry and selection generations without owning either semantic
+model.
+
+The same guard now applies to the canonical model. Its former 13,420-line `src/model/app.rs`
+combined all domain mutations, dispatch, shared types, helpers, and tests. `src/model/app.rs` is now
+a compact type/helper façade, behavior is grouped under `src/model/app/`, and characterization
+tests live in `src/model/app/tests.rs`. This is source organization only: all domain `impl
+AppModel` blocks still mutate the same actor-owned value, and registry dispatch remains a single
+typed entry point.
+
+The viewport command surface is split one level further without splitting its owner.
+`model/app/viewport_commands.rs` retains dataset/revision helpers and active-viewport compatibility
+commands; `viewport_commands/workspace.rs` owns topology and link groups; `navigation.rs` owns
+camera and plane mutations; and `presentation.rs` owns scoped channels, objects, and rendering.
+Every method remains an inherent operation on the same actor-owned `AppModel` and retains the same
+typed dispatch path.
+
+The declarative UI service is split behind the same stable `UiRegistry` API. `control/ui.rs` owns
+extension/contribution registry state and lifecycle operations; `ui/render.rs` owns native window
+and contribution placement; `ui/render/components.rs` owns recursive widget rendering and
+interaction event policy; `ui/validation.rs` owns tree limits, capability checks, patches, and
+native binding synchronization; and tests live separately. Python and protocol clients continue to
+submit the same declarative component trees and drain the same typed UI actions.
+
+Object-layer implementation follows the same boundary. The former object core is split into
+runtime/loading, properties UI, selection, export, and test modules. Object analysis now keeps its
+UI and threshold-set orchestration in `objects/analysis.rs`, while property-cache/live-selection
+derivation and pure histogram/threshold/scatter algorithms live in dedicated child modules.
+Structural guards cap both façades and their production modules; this is organization of the same
+renderer-side object layer, not a new semantic owner beside the actor.
+
+Object presentation state is also separated beneath `objects/core/properties_ui.rs`. The façade
+owns the egui properties panel; `properties_ui/style.rs` owns actor style projection and global
+display settings; `filters.rs` owns filter/query state and property selection; and `colors.rs` owns
+legend entries, per-value colors/visibility, project display persistence, and loaded-property
+reconciliation. All remain inherent methods on one `ObjectsLayer` projection.
+
+At the outer object-module boundary, `objects/mod.rs` now retains shared `ObjectsLayer` state and
+supporting DTO/types only. The native actor object-resource service and filter evaluator live in
+`objects/control_service.rs`; typed property-column storage and matching live in
+`property_store.rs`; default renderer/UI projection construction lives in `defaults.rs`; and their
+tests live in `objects/tests.rs`. Existing public re-exports preserve the service and UI-action API.
+
+Object rendering is split at its own runtime boundaries. `objects/render.rs` owns the actual draw
+pipeline and presentation styles; `render/selection.rs` owns hover, query, selection, and selected
+render-state updates; `render/mesh.rs` owns fill meshes and render-cache identifiers;
+`render/selection_geometry.rs` owns pure hit-test geometry; and `render/lods.rs` owns LOD and color
+group construction. Geometry/cache regression tests live in `render/tests.rs` rather than the
+production modules.
+
+The actor-owned `MosaicModel` is independently split by semantic domain. Its façade retains shared
+types, construction, resource installation, snapshot/projection, and command dispatch;
+`model/mosaic/memory.rs` owns pin lifecycle; `objects.rs` owns object-resource loading;
+`layout.rs` owns item layout, selection, focus, and camera navigation; `presentation.rs` owns
+channels, native layers, panels, and rendering settings; and tests live separately. These modules
+all implement the same actor-owned model and do not shard state or ordering authority.
+
+The canonical mask model is split without splitting its owner. `model/masks.rs` retains the
+`MaskModel` state type and defaults; `masks/state.rs` owns projection, persistence, and worker-result
+installation; `commands.rs` owns generation-checked CRUD dispatch; `validation.rs` owns parameter
+and polygon validation; `geojson.rs` owns file decoding; and tests live separately. The actor still
+serializes every mutation through one model value and exposes the same crate-visible contracts.
+
+Deep-link input is organized behind the unchanged `deep_link.rs` public façade. Dedicated modules
+own canonical URL serialization, project/example/ROI resolution, URL and value parsing, and
+actor-facing segmentation/filter derivation, with characterization tests isolated separately.
+Native URL handlers and actor commands therefore consume one request contract without coupling
+the parser to project loading, renderer construction, or command execution.
+
+Canonical project state follows the same single-owner split. `model/project.rs` retains
+`ProjectModelSnapshot` and the private `ProjectModel`; `project/state.rs` owns install, persistence,
+manifest, sample-sheet, discovery, and worker-result transitions; `commands.rs` owns project/ROI/
+saved-view dispatch and navigation; and `validation.rs` owns snapshot and request normalization.
+The modules share one private snapshot and do not create an alternate project command path.
+
+Renderer construction follows source boundaries rather than accumulating in one constructor file.
+`mosaic/construction.rs` is the CLI/samplesheet entry façade; actor-resource, project, local,
+remote, project-config, and samplesheet adapters live under `mosaic/construction/`. Each adapter
+prepares source-specific resources and passes a typed `PreparedMosaicConstruction` to
+`assembly.rs`, which is the only place that applies shared `MosaicViewerApp` defaults. This removes
+six duplicated full-state initializers without changing the renderer state type or actor cutover.
+
+Mosaic control integration is separated behind a matching `mosaic/control.rs` façade.
+`control/intents.rs` owns typed native command submission; `project.rs` owns renderer-side project
+serialization, restoration, and preload installation; `snapshots.rs` owns control projections and
+test-only compatibility queries; `screenshots.rs` owns capture requests and naming; and `host.rs`
+owns narrow platform-facing requests. Every method remains on the same `MosaicViewerApp`, and the
+split neither restores renderer semantic ownership nor changes actor routing.
+
+The native TIFF resource provider is also separated at its natural I/O boundaries.
+`xenium/tiff_pyramid.rs` retains public TIFF/OME-TIFF types and `TiffPyramid` behavior;
+`tiff_pyramid/inspection.rs` owns IFD inspection, channel ordering, and pyramid construction;
+`metadata.rs` owns OME-XML parsing; `loaders.rs` owns chunk decoding and bounded asynchronous tile,
+histogram, and channel-max loaders; and format/loader tests live in `tests.rs`. The public exports
+through `xenium::` remain unchanged.
+
+SpatialData renderer adapters are separated without changing their format or ownership boundary.
+`spatialdata/layers.rs` now owns only the discovered-layer collection and public target types;
+`layers/shapes.rs` owns polygon/point shape loading, drawing, and object-layer adaptation;
+`layers/points.rs` owns point interaction, feature presentation, and rendering; and
+`layers/points/prepare.rs` owns background coordinate normalization and feature-cache/bin
+construction. Actor workers still prepare canonical document resources, while these modules remain
+renderer adapters for the resulting SpatialData elements.
+
+The underlying parquet-shape adapter is also split without changing its public loader contracts:
+`spatialdata/parquet_shapes.rs` owns schema inspection and projected/cancellable batch loading,
+`parquet_shapes/geometry.rs` owns the private WKB/Arrow geometry decoder and centroid summaries,
+and `parquet_shapes/tests.rs` contains decoder characterization. Actor workers continue to call the
+same public loader functions.
 
 #### Ownership cleanup during each migration
 
@@ -318,14 +513,14 @@ explicit and prevents the broad method waves from building on another global-bus
 | 9 | Actor-owned retained-task kernel | Complete as a foundation | Actor orders task mutation; transport is a thin observer; blocked-worker cancellation remains responsive |
 | 10 | Wave 2B deep-link resolution | Complete | Current, external, and example-project resolution works without frames |
 | 11 | Wave 2C remote sessions and remote OME-Zarr | Complete | HTTP/S3 list/open no-frame tests cover cancellation, stale work, and credential redaction; native single-open uses the same actor commands |
-| 12 | Wave 2D TIFF/SpatialData/Xenium adapters | In progress | All three opens are actor-routed and reach primary-document readiness without a frame; selected SpatialData/Xenium subresources still need typed actor-owned preparation |
+| 12 | Wave 2D TIFF/SpatialData/Xenium adapters | Complete for registered surface | All three opens and target-aware secondary object resources are prepared without a frame |
 | 13 | Wave 2E project preload and ROI-open transaction | Complete | Actor-owned preload resources are shared with atomic local/HTTP/S3 ROI opens; failure, cancellation, and stale completion retain the prior document |
 | 14 | Wave 2F transactional deep-link apply | Complete | Current/external project, ROI, resources, saved view, filters, and camera commit atomically with cancellation and stale-completion guards; native URL/open entry points use the actor |
-| 15 | Wave 3 retained compute/resources | In progress | Threshold and memory are complete; analysis, measurement, and export tasks must progress and cancel without frames |
-| 16 | Wave 4 canonical mosaic and mosaic opening | Pending | Complete mosaic state and resource workflow executes with frames paused |
-| 17 | Wave 5 presentation tasks | Pending | Pixel capture waits explicitly for presentation while unrelated commands continue |
-| 18 | Wave 6 legacy semantic-path removal | Pending | No semantic/resource method can reach the frame-driven dispatcher |
-| 19 | Wave 7 release audit | Pending | Both completion gates and every registry route have recorded evidence |
+| 15 | Wave 3 retained compute/resources | Complete | Threshold, memory, analysis, measurement, and export tasks progress and cancel without frames |
+| 16 | Wave 4 canonical mosaic and mosaic opening | Complete | Complete mosaic state and resource workflow executes with frames paused |
+| 17 | Wave 5 presentation tasks | Complete | Pixel capture waits explicitly for presentation while unrelated commands continue |
+| 18 | Wave 6 legacy semantic-path removal | Complete | Legacy channels, dispatchers, renderer event publishers, and native snapshot translators are absent; native commits originate as typed commands |
+| 19 | Wave 7 release audit | In progress | Automated cumulative verification and manual platform acceptance remain |
 
 The execution rule is deliberately strict: finish and test each row before using it as a
 dependency for the next one. This does not require one commit per row, but each row should remain
@@ -335,10 +530,14 @@ independently reviewable.
 
 Three numbers must be reported separately throughout implementation:
 
-- **registry coverage:** currently 220/261 application methods actor-capable;
-- **route coverage:** the supported mode/target routes that are actor-owned; the evaluator exists,
-  and the verifier must now enumerate and count its declared variants; and
+- **registry coverage:** 263/263 application methods actor-capable;
+- **route coverage:** zero legacy or hybrid application routes across supported modes and targets;
 - **acceptance coverage:** commands proven to complete under paused frames and real OS occlusion.
+
+The retained platform matrix, commands, and visual-resume checklist live in
+`docs/testing/background-control-acceptance.md`. The verifier can write one JSON semantic/resource
+record per native-window condition; visual projection inspection is recorded separately so a
+successful background command run cannot be mistaken for proof of renderer catch-up.
 
 An increase in registry coverage alone does not close either completion gate. The verifier should
 eventually derive all three figures from registry metadata and retained test evidence so that this
@@ -657,6 +856,14 @@ Exit evidence:
 
 ### Wave 6 — remove the semantic compatibility path
 
+Status: complete for the production application surface. The registry audit reports no legacy
+route, the bridge has no legacy request channel, and `RootApp` has no semantic request dispatcher.
+Renderer snapshots and actor projection application live in explicitly named bridge modules;
+test-only compatibility helpers are not compiled into Odon. Native-layer activation, visibility,
+ordering, properties, offsets, and channel transforms now commit directly from their interaction
+points; drag previews retain their starting presentation revision and control projections are
+deferred until the gesture ends.
+
 - generate a registry audit that fails if any semantic/resource method can reach
   `RootApp::reply_to_control_request`;
 - delete the canvas-deferred request queue after only presentation tasks use presentation reports;
@@ -673,7 +880,36 @@ Exit evidence:
 - diagnostics show no legacy semantic routes in any supported mode/target combination; and
 - compile-time module visibility makes direct semantic renderer mutation difficult.
 
+Native project, single-viewer, and mosaic controls now submit direct actor commands. Viewport
+workspace, camera, plane, rendering, channel, object-presentation, mosaic layout/focus, and
+worker-backed object-filter interactions emit commands at their commit points. The final
+before/after mosaic snapshot translator and its root module have been deleted; a structural test
+prevents their reintroduction. Revision-tagged camera drags remain optimistic renderer previews,
+then submit `viewer.camera.set`. Actor projections update renderer mirrors through projection-only
+helpers and cannot feed commands back into the actor. Renderer-only observations (resource
+discovery, tile-loading telemetry, and measured geometry) remain intentionally.
+
+Native-layer projection no longer reuses renderer command emulators. A dedicated projection module
+applies actor-validated presentation, ordering, offsets, and active-layer state without generating
+responses or semantic intents; the old `control_set_*` layer methods are test-only characterization
+fixtures. Regression coverage includes first-projection mask-to-channel activation feedback and
+exact clearing of an actor-projected automatic contrast window.
+
+Top-level project-workspace actions now originate from one `ProjectSpace` typed-command outbox
+before their root, single-viewer, or mosaic host can create a semantic relay request. The single
+viewer ROI selector follows the same route. Existing semantic `ViewerRequest` and `MosaicRequest`
+semantic variants have been deleted. `RootApp` requires its actor runtime, and actor construction
+precedes optional TCP-server binding and manifest publication; a TCP failure reports that
+Python/MCP access is unavailable while local actor controls continue, whereas an
+actor-construction failure aborts application construction instead of enabling a frame-driven
+semantic fallback. Startup dataset opens also enter the actor outbox, and the old root direct-open
+and direct deep-link chains are gone. Platform effects and transient dialogs intentionally remain
+host-owned.
+
 ### Wave 7 — stabilization and release evidence
+
+The detailed execution sequence for the remaining ownership cleanup, compatibility deletion, and
+release sign-off is maintained in `actor-refactor-completion-plan.md`.
 
 Run and retain evidence for:
 
@@ -692,20 +928,23 @@ The release audit must inspect every registry method and every requirement above
 known failure is not completion evidence; each item needs a passing test, recorded platform result,
 or explicit intentional exclusion.
 
-## Architectural Summary
+## Historical Architecture and Migration Record
+
+The remainder of this document records the pre-cutover problem and the phases used to reach the
+current architecture. References to a remaining or temporary legacy path describe that historical
+state; the authoritative current status and release gates are above.
 
 Odon originally accepted protocol requests on background network threads but
-executed all application commands from `RootApp::update`. The remaining legacy
-routes still have this defect: their progress depends on eframe receiving a native
-redraw. On macOS, a fully covered window can be reported as occluded and AppKit
-may withhold redraws, so those commands do not progress until Odon becomes visible.
+executed all application commands from `RootApp::update`. Those routes depended on eframe receiving
+a native redraw. On macOS, a fully covered window can be reported as occluded and AppKit may
+withhold redraws, so commands did not progress until Odon became visible.
 
-The implemented direction is to make a central, UI-independent Rust model the
+The implemented architecture makes a central, UI-independent Rust model the
 canonical owner of controllable application state. A dedicated control actor
-serializes migrated semantic commands against that model. Python, MCP, deep links,
+serializes semantic commands against that model. Python, MCP, deep links,
 native menus, and egui controls converge on the same typed commands. The egui
 application consumes model projections and renders them when frames are available;
-the updated plan completes that boundary for the remaining application surface.
+the production application surface now uses that boundary throughout.
 
 ```text
  Python SDK ----\
@@ -725,9 +964,9 @@ and readiness into the actor. Subsequent work migrated substantial project, laye
 object, mask, and label state. The updated waves finish the remaining compute,
 mosaic, presentation, and application-level domains.
 
-## Problem Statement
+## Original Problem Statement (Resolved)
 
-The remaining legacy control path is:
+The former legacy control path was:
 
 ```text
 protocol thread -> OdonControlRequest queue -> request_repaint()
@@ -736,7 +975,7 @@ protocol thread -> OdonControlRequest queue -> request_repaint()
                                             -> protocol reply
 ```
 
-Any method still using this path has several consequences:
+Methods using this path had several consequences:
 
 - A semantic command cannot complete without a GUI frame.
 - macOS window occlusion becomes an application-readiness condition.

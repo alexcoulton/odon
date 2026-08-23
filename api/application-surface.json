@@ -1033,14 +1033,14 @@
       "title":"Project mask persistence",
       "phase":"E",
       "status":"covered",
-      "native_entry_points":["Project save", "ROI mask restoration"],
-      "methods":["viewer.masks.persistence.get", "viewer.masks.persistence.sync"],
+      "native_entry_points":["Project save", "Save Masks", "ROI mask restoration"],
+      "methods":["viewer.masks.persistence.get", "viewer.masks.persistence.sync", "viewer.masks.persistence.append_geojson"],
       "events":["viewer.masks.changed"],
       "permissions":["viewer.masks.read", "viewer.masks.write"],
-      "python_sync":["odon.resources:Masks.get_persistence", "odon.resources:Masks.sync_to_project"],
-      "python_async":["odon.async_resources:AsyncMasks.get_persistence", "odon.async_resources:AsyncMasks.sync_to_project"],
-      "tests":["python:test_mask_crud_wrappers"],
-      "notes":"Sync updates the in-memory project representation; project.save persists it to disk."
+      "python_sync":["odon.resources:Masks.get_persistence", "odon.resources:Masks.sync_to_project", "odon.resources:Masks.append_to_geojson"],
+      "python_async":["odon.async_resources:AsyncMasks.get_persistence", "odon.async_resources:AsyncMasks.sync_to_project", "odon.async_resources:AsyncMasks.append_to_geojson"],
+      "tests":["python:test_mask_crud_wrappers", "rust:drawn_masks_append_clear_and_reload_without_a_ui_frame"],
+      "notes":"Sync updates the in-memory project representation; project.save persists it to disk. Append writes drawn masks on a worker, clears only the saved snapshot, and reloads the read-only file-backed layer."
     },
     {
       "id": "LAYER-01.native-stack",
