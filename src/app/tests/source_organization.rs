@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,39 @@ fn rust_files(path: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     files.sort();
     files
+}
+
+fn struct_field_names(contents: &str, struct_name: &str) -> BTreeSet<String> {
+    let marker = format!("pub struct {struct_name} {{");
+    let body = contents
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("missing {marker}"))
+        .1;
+    let mut fields = BTreeSet::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line == "}" {
+            break;
+        }
+        if line.is_empty() || line.starts_with("#") {
+            continue;
+        }
+        let Some((candidate, _)) = line.split_once(':') else {
+            continue;
+        };
+        let candidate = candidate.trim();
+        if !candidate.is_empty()
+            && candidate
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+        {
+            assert!(
+                fields.insert(candidate.to_string()),
+                "duplicate source field {struct_name}.{candidate}"
+            );
+        }
+    }
+    fields
 }
 
 #[test]
@@ -1099,6 +1133,118 @@ fn renderer_bridge_is_a_projection_only_boundary() {
 }
 
 #[test]
+fn renderer_semantic_emulator_allowlist_can_only_shrink() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/renderer_bridge");
+    let mutation_prefixes = [
+        "control_set_",
+        "control_create_",
+        "control_update_",
+        "control_remove_",
+        "control_reset_",
+        "control_swap_",
+        "control_zoom",
+        "control_fit_",
+        "control_load_",
+        "control_unload_",
+        "control_select_",
+        "control_step_",
+        "control_configure_",
+    ];
+    let allowed = BTreeSet::from(
+        [
+            "channels.rs::control_reset_channel_transform",
+            "channels.rs::control_set_active_channel",
+            "channels.rs::control_set_channel_color",
+            "channels.rs::control_set_channel_contrast",
+            "channels.rs::control_set_channel_note",
+            "channels.rs::control_set_channel_transform",
+            "channels.rs::control_set_plane",
+            "channels.rs::control_set_rendering",
+            "channels.rs::control_set_side_panels",
+            "channels.rs::control_set_smooth_pixels",
+            "channels.rs::control_set_visible_channels",
+            "channels.rs::control_step_plane",
+            "layers.rs::control_reset_native_layer_offset",
+            "layers.rs::control_set_active_native_layer",
+            "layers.rs::control_set_native_layer_offset",
+            "layers.rs::control_set_native_layer_order",
+            "layers.rs::control_set_native_layer_presentation",
+            "layers.rs::control_set_native_layer_visibility",
+            "objects.rs::control_select_filtered_objects",
+            "objects.rs::control_select_filtered_objects_current",
+            "objects.rs::control_select_object_ids",
+            "objects.rs::control_set_object_filter_query",
+            "objects.rs::control_set_object_overlay_visibility",
+            "resources.rs::control_load_labels",
+            "resources.rs::control_unload_labels",
+            "view.rs::control_fit_to_view",
+            "view.rs::control_set_camera",
+            "view.rs::control_set_channel_group",
+            "view.rs::control_set_channel_order",
+            "view.rs::control_set_channel_presentation",
+            "view.rs::control_zoom",
+            "viewports.rs::control_configure_viewport_link_group",
+            "viewports.rs::control_create_viewport",
+            "viewports.rs::control_create_viewport_link_group",
+            "viewports.rs::control_fit_viewport_camera",
+            "viewports.rs::control_remove_viewport",
+            "viewports.rs::control_remove_viewport_link_group",
+            "viewports.rs::control_set_active_viewport",
+            "viewports.rs::control_set_viewport_active_channel",
+            "viewports.rs::control_set_viewport_camera",
+            "viewports.rs::control_set_viewport_channel_color",
+            "viewports.rs::control_set_viewport_channel_contrast",
+            "viewports.rs::control_set_viewport_channel_group",
+            "viewports.rs::control_set_viewport_channel_order",
+            "viewports.rs::control_set_viewport_channels",
+            "viewports.rs::control_set_viewport_layer",
+            "viewports.rs::control_set_viewport_layout",
+            "viewports.rs::control_set_viewport_links",
+            "viewports.rs::control_set_viewport_object_filter",
+            "viewports.rs::control_set_viewport_object_legend",
+            "viewports.rs::control_set_viewport_object_style",
+            "viewports.rs::control_set_viewport_plane",
+            "viewports.rs::control_set_viewport_rendering",
+            "viewports.rs::control_swap_viewports",
+            "viewports.rs::control_update_viewport_link_group",
+        ]
+        .map(str::to_string),
+    );
+    let mut found = BTreeSet::new();
+
+    for path in rust_files(&root) {
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("renderer bridge filename");
+        for line in source(&path).lines() {
+            let Some(after_fn) = line.split_once("fn ").map(|(_, rest)| rest) else {
+                continue;
+            };
+            let Some(name) = after_fn.split_once('(').map(|(name, _)| name.trim()) else {
+                continue;
+            };
+            if mutation_prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            {
+                found.insert(format!("{filename}::{name}"));
+            }
+        }
+    }
+
+    let additions = found.difference(&allowed).cloned().collect::<Vec<_>>();
+    assert!(
+        additions.is_empty(),
+        "new renderer semantic emulators are forbidden: {additions:?}"
+    );
+    assert!(
+        found.len() <= allowed.len(),
+        "the renderer semantic emulator inventory may only shrink"
+    );
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1270,4 +1416,117 @@ fn root_requires_the_actor_and_host_requests_are_platform_only() {
             "mosaic host requests must not carry actor-owned semantics: {forbidden}"
         );
     }
+}
+
+#[test]
+fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ledger: serde_json::Value =
+        serde_json::from_str(&source(root.join("api/state-ownership-ledger.json")))
+            .expect("state ownership ledger must be valid JSON");
+    assert_eq!(ledger["schema_version"], 1);
+
+    let owners = ledger["owners"]
+        .as_object()
+        .expect("ownership ledger owners must be an object");
+    let targets = [
+        ("OmeZarrViewerApp", "src/app/mod.rs"),
+        ("RootApp", "src/root_app.rs"),
+        ("MosaicViewerApp", "src/mosaic/mod.rs"),
+    ];
+    let allowed_classes = BTreeSet::from([
+        "actor_projection",
+        "mixed_compatibility",
+        "platform_effect",
+        "renderer",
+        "shared_resource",
+        "transient_ui",
+    ]);
+    let allowed_dispositions = BTreeSet::from(["delete", "narrow", "replace", "retain"]);
+    let required_metadata = [
+        "canonical_writer",
+        "projection_source",
+        "renderer_consumers",
+        "persistence_consumers",
+        "native_commit_point",
+    ];
+    let mut total_fields = 0usize;
+
+    for (struct_name, source_path) in targets {
+        let actual = struct_field_names(&source(root.join(source_path)), struct_name);
+        let entries = owners
+            .get(struct_name)
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("missing ownership entries for {struct_name}"));
+        let mut classified = BTreeMap::<String, String>::new();
+        let mut ids = BTreeSet::new();
+
+        for entry in entries {
+            let id = entry["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{struct_name} ownership entry is missing an id"));
+            assert!(
+                ids.insert(id.to_string()),
+                "duplicate ownership id {struct_name}.{id}"
+            );
+            let current_class = entry["current_class"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{struct_name}.{id} is missing current_class"));
+            assert!(
+                allowed_classes.contains(current_class),
+                "invalid current_class {current_class} for {struct_name}.{id}"
+            );
+            let disposition = entry["disposition"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{struct_name}.{id} is missing disposition"));
+            assert!(
+                allowed_dispositions.contains(disposition),
+                "invalid disposition {disposition} for {struct_name}.{id}"
+            );
+            let milestone = entry["milestone"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{struct_name}.{id} is missing milestone"));
+            assert!(
+                (2..=8).contains(&milestone),
+                "invalid milestone {milestone} for {struct_name}.{id}"
+            );
+            for key in required_metadata {
+                assert!(
+                    entry[key]
+                        .as_str()
+                        .is_some_and(|value| !value.trim().is_empty()),
+                    "{struct_name}.{id} is missing {key}"
+                );
+            }
+            let fields = entry["fields"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{struct_name}.{id} fields must be an array"));
+            assert!(!fields.is_empty(), "{struct_name}.{id} has no fields");
+            for field in fields {
+                let field = field
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{struct_name}.{id} contains a non-string field"));
+                assert!(
+                    classified
+                        .insert(field.to_string(), id.to_string())
+                        .is_none(),
+                    "{struct_name}.{field} is classified more than once"
+                );
+            }
+        }
+
+        let classified = classified.into_keys().collect::<BTreeSet<_>>();
+        let missing = actual.difference(&classified).cloned().collect::<Vec<_>>();
+        let unknown = classified.difference(&actual).cloned().collect::<Vec<_>>();
+        assert!(
+            missing.is_empty() && unknown.is_empty(),
+            "{struct_name} ownership mismatch; missing={missing:?}, unknown={unknown:?}"
+        );
+        total_fields += actual.len();
+    }
+
+    assert_eq!(
+        total_fields, 319,
+        "review the ownership ledger when host fields change"
+    );
 }

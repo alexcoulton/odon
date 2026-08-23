@@ -2,13 +2,40 @@
 
 Status: Wave 7 ownership and release audit
 
-Date: 2026-08-22
+Date: 2026-08-23
 
 This document classifies the state still assembled by `OmeZarrViewerApp` after the application
 source split. It prevents file modularization from being mistaken for ownership modularization.
 The long-term rule is that semantic state has one owner in the control actor, immutable CPU
 resources cross the actor/renderer boundary through generation-tagged handles, and `app` retains
 only renderer resources, frame-local interaction state, and narrow platform effects.
+
+The executable ledger is `api/state-ownership-ledger.json`. It covers every field of
+`OmeZarrViewerApp`, `RootApp`, and `MosaicViewerApp` exactly once and records each family's current
+class, disposition, canonical writer, projection source, renderer and persistence consumers,
+native commit point, and completion milestone. The structural test
+`application_state_ownership_ledger_covers_every_host_field_exactly_once` compares the ledger to
+the Rust struct definitions, rejects duplicate or unknown fields, and requires new fields to be
+classified before the suite can pass.
+
+Current executable-ledger baseline:
+
+| Host | Fields | Retain | Narrow | Replace | Delete |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `OmeZarrViewerApp` | 193 | 64 | 100 | 29 | 0 |
+| `RootApp` | 43 | 16 | 18 | 8 | 1 |
+| `MosaicViewerApp` | 83 | 20 | 59 | 4 | 0 |
+| **Total** | **319** | **100** | **177** | **41** | **1** |
+
+`Retain` does not mean actor ownership: retained fields are renderer resources/observations,
+transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
+`delete` are the remaining ownership-cleanup queue and must be updated as each slice lands.
+
+The test-only renderer semantic-emulator baseline is 55 methods: 24 in `viewports.rs`, 12 in
+`channels.rs`, 6 each in `layers.rs` and `view.rs`, 5 in `objects.rs`, and 2 in `resources.rs`.
+`renderer_semantic_emulator_allowlist_can_only_shrink` forbids additions to that exact inventory.
+Milestone 2 retires the methods as actor-plus-projection fixtures replace the old GUI
+characterization path.
 
 ## Ownership classes
 
