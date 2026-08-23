@@ -47,6 +47,49 @@ fn comparison_commands_advance_without_a_renderer() {
 }
 
 #[test]
+fn invalid_workspace_ratios_are_rejected_before_any_mutation() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+
+    for ratio in [json!("half"), json!(0.95)] {
+        let error = model
+            .dispatch(
+                "viewer.viewports.clone",
+                &json!({"layout":"horizontal", "ratio":ratio}),
+            )
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind, ControlErrorKind::InvalidParams);
+        assert_eq!(
+            model.workspace_snapshot().unwrap()["viewports"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    model
+        .dispatch(
+            "viewer.viewports.clone",
+            &json!({"layout":"horizontal", "ratio":0.6}),
+        )
+        .unwrap()
+        .unwrap();
+    let before = model.layout_snapshot().unwrap();
+    let error = model
+        .dispatch(
+            "viewer.workspace.layout.set",
+            &json!({"layout":"vertical", "ratio":0.95}),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::InvalidParams);
+    assert_eq!(model.layout_snapshot().unwrap(), before);
+}
+
+#[test]
 fn readiness_and_availability_queries_are_background_safe_in_every_mode() {
     let mut model = AppModel::project();
     for mode in [ModelMode::Project, ModelMode::Mosaic, ModelMode::Transition] {

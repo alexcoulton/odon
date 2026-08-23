@@ -1,16 +1,19 @@
 use super::*;
 #[test]
 fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let created = app.control_create_viewport(&serde_json::json!({
-        "viewport_id": left,
-        "layout": "horizontal",
-        "ratio": 0.55,
-    }));
+    let created = app.actor_command(
+        "viewer.viewports.clone",
+        serde_json::json!({
+            "viewport_id": left,
+            "layout": "horizontal",
+            "ratio": 0.55,
+        }),
+    );
     assert!(created.get("error").is_none(), "{created:#}");
 
     let ctx = egui::Context::default();
@@ -48,9 +51,12 @@ fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
     assert!((canvases[0].width() / content_width - 0.55).abs() < 0.01);
 
     let before_activation = canvases;
-    let activated = app.control_set_active_viewport(&serde_json::json!({
-        "viewport_id": left,
-    }));
+    let activated = app.actor_command(
+        "viewer.viewports.set_active",
+        serde_json::json!({
+            "viewport_id": left,
+        }),
+    );
     assert!(activated.get("error").is_none(), "{activated:#}");
     ctx.begin_pass(egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(

@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestone 0 automated verification passed; checkpoint pending
+Status: in progress — Milestones 0 and 1 complete; Milestone 2 renderer-emulator retirement in progress
 
 Date: 2026-08-23
 

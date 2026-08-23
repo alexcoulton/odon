@@ -14,10 +14,10 @@ fn multi_viewport_workspace_roundtrips_through_versioned_project_state() {
         .as_str()
         .unwrap()
         .to_string();
-    app.control_set_viewport_links(&serde_json::json!({
-        "camera": false,
-        "plane": true,
-        "selection": true,
+    assert!(app.set_viewport_links(ViewportLinks {
+        camera: false,
+        plane: true,
+        selection: true,
     }));
     app.control_set_viewport_channels(&serde_json::json!({
         "viewport_id": left,

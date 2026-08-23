@@ -31,11 +31,14 @@ Current executable-ledger baseline:
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
 `delete` are the remaining ownership-cleanup queue and must be updated as each slice lands.
 
-The test-only renderer semantic-emulator baseline is 55 methods: 24 in `viewports.rs`, 12 in
+The initial test-only renderer semantic-emulator baseline was 55 allowlisted methods. The first
+Milestone 2 slice retired workspace activation/removal/rename, layout/swap, direct link mutation,
+and link-group emulation. The current allowlist is 46 methods: 15 in `viewports.rs`, 12 in
 `channels.rs`, 6 each in `layers.rs` and `view.rs`, 5 in `objects.rs`, and 2 in `resources.rs`.
-`renderer_semantic_emulator_allowlist_can_only_shrink` forbids additions to that exact inventory.
-Milestone 2 retires the methods as actor-plus-projection fixtures replace the old GUI
-characterization path.
+(`control_rename_viewport` was also retired; the initial prefix-based count did not include it.)
+`renderer_semantic_emulator_allowlist_can_only_shrink` forbids additions to the inventory.
+Milestone 2 continues retiring the remaining methods as actor-plus-projection fixtures replace the
+old GUI characterization path.
 
 ## Ownership classes
 

@@ -71,11 +71,11 @@ fn motivating_two_property_comparison_runs_end_to_end_on_one_document() {
     assert!(left_palette.get("error").is_none(), "{left_palette:#}");
     assert!(right_palette.get("error").is_none(), "{right_palette:#}");
 
-    app.control_set_viewport_links(&serde_json::json!({
-        "camera": true,
-        "plane": true,
-        "selection": true,
-    }));
+    app.set_viewport_links(ViewportLinks {
+        camera: true,
+        plane: true,
+        selection: true,
+    });
     let navigation = app.control_set_viewport_camera(&serde_json::json!({
         "viewport_id": left,
         "center_world_lvl0": [12.0, 18.0],

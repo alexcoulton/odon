@@ -1,18 +1,21 @@
 use super::*;
 #[test]
 fn two_viewport_controls_keep_presentation_independent_and_navigation_linked() {
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let initial = app.control_viewport_workspace_snapshot();
     let left = initial["active_viewport_id"]
         .as_str()
         .expect("initial viewport ID")
         .to_string();
 
-    let created = app.control_create_viewport(&serde_json::json!({
-        "source_viewport_id": left,
-        "title": "Property B",
-        "layout": "horizontal",
-    }));
+    let created = app.actor_command(
+        "viewer.viewports.clone",
+        serde_json::json!({
+            "source_viewport_id": left,
+            "title": "Property B",
+            "layout": "horizontal",
+        }),
+    );
     let right = created["viewport_id"]
         .as_str()
         .expect("created viewport ID")
@@ -40,11 +43,14 @@ fn two_viewport_controls_keep_presentation_independent_and_navigation_linked() {
         1
     );
 
-    let left_style = app.control_set_viewport_object_style(&serde_json::json!({
-        "viewport_id": left,
-        "fill_cells": true,
-        "fill_opacity": 0.2,
-    }));
+    let left_style = app.actor_command(
+        "viewer.viewports.objects.style.set",
+        serde_json::json!({
+            "viewport_id": left,
+            "fill_cells": true,
+            "fill_opacity": 0.2,
+        }),
+    );
     assert!(
         (left_style["result"]["style"]["fill_opacity"]
             .as_f64()
@@ -53,11 +59,14 @@ fn two_viewport_controls_keep_presentation_independent_and_navigation_linked() {
             .abs()
             < 1.0e-6
     );
-    let right_style = app.control_set_viewport_object_style(&serde_json::json!({
-        "viewport_id": right,
-        "fill_cells": true,
-        "fill_opacity": 0.8,
-    }));
+    let right_style = app.actor_command(
+        "viewer.viewports.objects.style.set",
+        serde_json::json!({
+            "viewport_id": right,
+            "fill_cells": true,
+            "fill_opacity": 0.8,
+        }),
+    );
     assert!(
         (right_style["result"]["style"]["fill_opacity"]
             .as_f64()
@@ -67,41 +76,59 @@ fn two_viewport_controls_keep_presentation_independent_and_navigation_linked() {
             < 1.0e-6
     );
 
-    app.control_set_viewport_channels(&serde_json::json!({
-        "viewport_id": left,
-        "channels": ["CD3"],
-        "mode": "only",
-    }));
-    app.control_set_viewport_channels(&serde_json::json!({
-        "viewport_id": right,
-        "channels": ["PanCK"],
-        "mode": "only",
-    }));
+    app.actor_command(
+        "viewer.viewports.channels.set_visible",
+        serde_json::json!({
+            "viewport_id": left,
+            "channels": ["CD3"],
+            "mode": "only",
+        }),
+    );
+    app.actor_command(
+        "viewer.viewports.channels.set_visible",
+        serde_json::json!({
+            "viewport_id": right,
+            "channels": ["PanCK"],
+            "mode": "only",
+        }),
+    );
 
-    app.control_set_viewport_camera(&serde_json::json!({
-        "viewport_id": left,
-        "center_world_lvl0": [123.0, 456.0],
-        "zoom": 3.0,
-    }));
-    let linked_right = app.control_get_viewport_camera(&serde_json::json!({
-        "viewport_id": right,
-    }));
+    app.actor_command(
+        "viewer.viewports.camera.set",
+        serde_json::json!({
+            "viewport_id": left,
+            "center_world_lvl0": [123.0, 456.0],
+            "zoom": 3.0,
+        }),
+    );
+    let linked_right = app.actor_query(
+        "viewer.viewports.camera.get",
+        serde_json::json!({
+            "viewport_id": right,
+        }),
+    );
     assert_eq!(
         linked_right["result"]["center_world_lvl0"],
         serde_json::json!([123.0, 456.0])
     );
     assert_eq!(linked_right["result"]["zoom_screen_per_lvl0_px"], 3.0);
 
-    app.control_set_viewport_links(&serde_json::json!({
-        "camera": false,
-        "plane": true,
-        "selection": true,
-    }));
-    app.control_set_viewport_camera(&serde_json::json!({
-        "viewport_id": right,
-        "center_world_lvl0": [10.0, 20.0],
-        "zoom": 1.5,
-    }));
+    app.actor_command(
+        "viewer.viewport_links.set",
+        serde_json::json!({
+            "camera": false,
+            "plane": true,
+            "selection": true,
+        }),
+    );
+    app.actor_command(
+        "viewer.viewports.camera.set",
+        serde_json::json!({
+            "viewport_id": right,
+            "center_world_lvl0": [10.0, 20.0],
+            "zoom": 1.5,
+        }),
+    );
 
     let workspace = app.control_viewport_workspace_snapshot();
     let viewports = workspace["viewports"].as_array().unwrap();

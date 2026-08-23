@@ -59,6 +59,21 @@ impl AppModel {
             .ok_or_else(|| invalid("layout is required"))?;
         let layout = ViewportLayout::parse(value)
             .ok_or_else(|| invalid("layout must be 'single', 'horizontal', or 'vertical'"))?;
+        let ratio = params
+            .get("ratio")
+            .map(|value| {
+                value
+                    .as_f64()
+                    .ok_or_else(|| invalid("ratio must be a number"))
+            })
+            .transpose()?;
+        if let Some(ratio) = ratio {
+            if !ratio.is_finite() || !(0.1..=0.9).contains(&ratio) {
+                return Err(invalid(
+                    "split ratio must be finite and between 0.1 and 0.9",
+                ));
+            }
+        }
         if let Some(requested) = params
             .get("viewports")
             .or_else(|| params.get("viewport_ids"))
@@ -71,7 +86,7 @@ impl AppModel {
                 .workspace
                 .set_layout(layout)
                 .map_err(|e| invalid(e.to_string()))?;
-            if let Some(ratio) = params.get("ratio").and_then(Value::as_f64) {
+            if let Some(ratio) = ratio {
                 changed |= dataset
                     .workspace
                     .set_split_ratio(ratio as f32)
@@ -110,6 +125,21 @@ impl AppModel {
         &mut self,
         params: &Value,
     ) -> Result<Value, ControlError> {
+        let ratio = params
+            .get("ratio")
+            .map(|value| {
+                value
+                    .as_f64()
+                    .ok_or_else(|| invalid("ratio must be a number"))
+            })
+            .transpose()?;
+        if let Some(ratio) = ratio {
+            if !ratio.is_finite() || !(0.1..=0.9).contains(&ratio) {
+                return Err(invalid(
+                    "split ratio must be finite and between 0.1 and 0.9",
+                ));
+            }
+        }
         let id = {
             let dataset = self.dataset_mut()?;
             let workspace = &mut dataset.workspace;
@@ -147,7 +177,7 @@ impl AppModel {
             let id = workspace
                 .clone_viewport(&source, title, layout)
                 .map_err(|e| invalid(e.to_string()))?;
-            if let Some(ratio) = params.get("ratio").and_then(Value::as_f64) {
+            if let Some(ratio) = ratio {
                 workspace
                     .set_split_ratio(ratio as f32)
                     .map_err(|e| invalid(e.to_string()))?;

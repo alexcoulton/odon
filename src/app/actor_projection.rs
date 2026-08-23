@@ -601,6 +601,11 @@ impl OmeZarrViewerApp {
             .take()
             .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
         let current_active = current.active_id().clone();
+        let previous_viewport_ids = current
+            .viewports()
+            .iter()
+            .map(|viewport| viewport.id.clone())
+            .collect::<HashSet<_>>();
         if let Some(active) = current.get_mut(&current_active) {
             active.state = ViewerViewportState::capture(self);
         }
@@ -659,6 +664,17 @@ impl OmeZarrViewerApp {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "actor projection has no active viewport ID".to_string())
             .and_then(|id| ViewportId::new(id).map_err(|error| error.to_string()))?;
+        let projected_viewport_ids = slots
+            .iter()
+            .map(|viewport| viewport.id.clone())
+            .collect::<HashSet<_>>();
+        if current_active != active || previous_viewport_ids != projected_viewport_ids {
+            self.cancel_viewport_transient_gestures();
+        }
+        self.screenshot_pending
+            .retain(|pending| projected_viewport_ids.contains(&pending.viewport_id));
+        self.screenshot_in_flight
+            .retain(|_, viewport_id| projected_viewport_ids.contains(viewport_id));
         let layout = projection
             .get("layout")
             .and_then(serde_json::Value::as_str)

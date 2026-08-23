@@ -67,8 +67,8 @@ The following checks cover the parts that do not require a real native window co
 
 Latest cumulative run before platform acceptance:
 
-- Rust library: 169 passed, 0 failed.
-- Rust `odon` binary: 186 passed, 0 failed, 4 tests intentionally ignored by the latest cumulative run; the frame-planning benchmark was previously run explicitly and passed, while three extended-fixture tests remain unavailable.
+- Rust library: 170 passed, 0 failed.
+- Rust `odon` binary: 188 passed, 0 failed, 4 tests intentionally ignored by the latest cumulative run; the frame-planning benchmark was previously run explicitly and passed, while three extended-fixture tests remain unavailable.
 - Rust `data_contracts` integration: 10 passed, 0 failed.
 - Python SDK: 88 passed, 0 failed.
 

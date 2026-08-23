@@ -1,14 +1,17 @@
 use super::*;
 #[test]
 fn workspace_canvas_rect_is_the_union_of_both_viewport_canvases() {
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let right = app.control_create_viewport(&serde_json::json!({
-        "layout": "horizontal",
-    }))["viewport_id"]
+    let right = app.actor_command(
+        "viewer.viewports.clone",
+        serde_json::json!({
+            "layout": "horizontal",
+        }),
+    )["viewport_id"]
         .as_str()
         .unwrap()
         .to_string();

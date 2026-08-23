@@ -14,6 +14,10 @@ fn fixture_app() -> OmeZarrViewerApp {
     OmeZarrViewerApp::new_runtime(&egui::Context::default(), false, dataset, store, settings)
 }
 
+fn fixture_actor_app() -> ActorAppFixture {
+    ActorAppFixture::new(fixture_app())
+}
+
 fn visible_channel_names(app: &OmeZarrViewerApp) -> Vec<String> {
     app.control_visible_channel_snapshot()
         .as_array()

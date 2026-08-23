@@ -1,10 +1,12 @@
 # Actor Refactor Milestone 0 Checkpoint
 
-Status: automated verification passed; checkpoint commit pending
+Status: complete
 
 Date: 2026-08-23
 
 Base commit: `7737aab` (`refactor: migrate presentation and saved views to actor`)
+
+Checkpoint commit: `8ce14b6` (`refactor: complete actor control cutover checkpoint`)
 
 ## Checkpoint scope
 
@@ -70,7 +72,8 @@ The explicit benchmark reported:
 - `RootApp` requires the actor and retains only the named platform-effect route.
 - Source-organization guards cover the newly split responsibility boundaries.
 
-## Remaining Milestone 0 action
+## Milestone 0 closure
 
-Create a reviewable checkpoint commit containing only the source and evidence scope above. After
-that commit, begin the executable ownership ledger; do not resume broad file splitting.
+The source and evidence scope above was committed without the preserved local files. Milestone 1
+then added the executable ownership ledger in commit `54a9388`. Further work proceeds by ownership
+slice; broad file splitting has stopped.
