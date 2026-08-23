@@ -1133,6 +1133,49 @@ fn renderer_bridge_is_a_projection_only_boundary() {
 }
 
 #[test]
+fn native_workspace_topology_has_no_renderer_mutation_fallback() {
+    let app_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app");
+    let runtime = source(app_dir.join("viewport_runtime.rs"));
+    let ui = source(app_dir.join("viewport_ui.rs"));
+    let combined = format!("{runtime}\n{ui}");
+
+    for removed_handler in [
+        "fn split_active_viewport(",
+        "fn remove_viewport(",
+        "fn set_viewport_layout(",
+        "fn set_viewport_links(",
+    ] {
+        assert!(
+            !combined.contains(removed_handler),
+            "native viewport topology must not regain renderer handler {removed_handler}"
+        );
+    }
+    for forbidden_mutation in [
+        "workspace.clone_viewport(",
+        "workspace.set_layout(",
+        "workspace.set_links(",
+        "workspace.swap_order(",
+        "workspace.set_active(",
+        "workspace.rename(",
+        "workspace.set_split_ratio(",
+        "workspace.remove(&viewport_id)",
+    ] {
+        assert!(
+            !combined.contains(forbidden_mutation),
+            "native viewport topology must commit through the actor: {forbidden_mutation}"
+        );
+    }
+    assert!(
+        !ui.contains("native_viewport_actor_owned()"),
+        "viewport chrome must submit topology commands even before its first actor projection"
+    );
+
+    let root = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app.rs"));
+    assert!(root.contains("app.control_renderer_observation_snapshot()"));
+    assert!(root.contains("report_renderer_observation("));
+}
+
+#[test]
 fn renderer_has_no_semantic_command_emulators() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/renderer_bridge");
     let mutation_prefixes = [

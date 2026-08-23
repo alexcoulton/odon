@@ -1,4 +1,38 @@
 use super::*;
+
+#[test]
+fn renderer_observation_excludes_actor_owned_workspace_semantics() {
+    let mut app = fixture_app();
+    let observation = app.control_renderer_observation_snapshot();
+
+    for forbidden in [
+        "revision",
+        "layout",
+        "ratio",
+        "active_viewport_id",
+        "links",
+        "viewports",
+        "labels",
+        "masks",
+        "panels",
+        "ui",
+        "channel_metadata",
+        "channel_transforms",
+        "channel_presentation",
+    ] {
+        assert!(
+            observation.get(forbidden).is_none(),
+            "renderer observation must not feed actor-owned '{forbidden}' state back into the actor"
+        );
+    }
+    assert!(observation.get("shared_resources").is_some());
+    assert!(observation.get("performance").is_some());
+    assert!(observation.get("tile_loading_observation").is_some());
+    assert_eq!(
+        observation["native_layer_observations"][0]["viewport_id"],
+        "viewport-1"
+    );
+}
 #[test]
 fn coalesced_actor_projection_replaces_the_renderer_workspace_atomically() {
     let mut app = fixture_app();

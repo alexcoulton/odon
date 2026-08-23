@@ -42,25 +42,18 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
         crate::model::TilePrefetchMode::Off
     );
 
-    let (workspace, workspace_rx) = request("viewer.workspace.get", json!({}));
-    channels.request_tx.send(workspace).unwrap();
-    let mut observed = workspace_rx
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap()
-        .unwrap();
-    observed.as_object_mut().unwrap().insert(
-        "tile_loading_observation".to_string(),
-        json!({
+    let observed = json!({
+        "tile_loading_observation": {
             "cache":{"loaded":7,"capacity":256,"in_flight":2},
             "target_level":3,
             "realized_generation":generation,
             "status":"Tile loading policy realized by renderer.",
-        }),
-    );
+        },
+    });
     channels
         .model_tx
-        .send(ActorModelUpdate::RendererWorkspaceObserved {
-            workspace: observed,
+        .send(ActorModelUpdate::RendererObservation {
+            observation: observed,
             based_on_projection_revision: projection.revision,
         })
         .unwrap();

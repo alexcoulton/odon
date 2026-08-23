@@ -1,6 +1,67 @@
 use super::super::*;
 
 impl OmeZarrViewerApp {
+    pub fn control_renderer_observation_snapshot(&mut self) -> serde_json::Value {
+        let active_id = self
+            .viewport_workspace
+            .as_ref()
+            .map(|workspace| workspace.active_id().clone());
+        let runtime = ViewerViewportState::capture(self);
+        let native_layer_observations = self
+            .viewport_workspace
+            .clone()
+            .into_iter()
+            .flat_map(|workspace| workspace.viewports().to_vec())
+            .map(|viewport| {
+                if active_id.as_ref() != Some(&viewport.id) {
+                    viewport.state.apply(self);
+                }
+                serde_json::json!({
+                    "viewport_id": viewport.id.as_str(),
+                    "native_layers": self.control_native_layer_snapshot_list(),
+                })
+            })
+            .collect::<Vec<_>>();
+        runtime.apply(self);
+
+        let cpu_loader_stats = self.loader.stats();
+        serde_json::json!({
+            "shared_resources": {
+                "document_instances": 1,
+                "dataset_source": self.dataset.source.source_key(),
+                "dataset_instances": 1,
+                "cpu_tile_cache_instances": 1,
+                "cpu_tile_cache_entries": self.cache.len(),
+                "cpu_decoded_tile_cache_instances": 1,
+                "cpu_decoded_tile_cache_entries": cpu_loader_stats.decoded_cache_entries,
+                "cpu_decoded_tile_cache_bytes": cpu_loader_stats.decoded_cache_bytes,
+                "cpu_decode_requests": cpu_loader_stats.decode_requests,
+                "cpu_source_reads": cpu_loader_stats.source_reads,
+                "cpu_decoded_cache_hits": cpu_loader_stats.cache_hits,
+                "gpu_raw_tile_cache_instances": usize::from(self.tiles_gl.is_some()),
+                "gpu_raw_tile_cache_entries": self.tiles_gl.as_ref().map(TilesGl::len).unwrap_or(0),
+                "primary_object_geometry_instances": 1,
+                "primary_object_count": self.seg_objects.object_count(),
+            },
+            "performance": {
+                "frame_plan_last_ms": self.viewport_frame_plan_ms,
+                "frame_plan_ema_ms": self.viewport_frame_plan_ema_ms,
+                "frame_plan_samples": self.viewport_frame_plan_samples,
+            },
+            "tile_loading_observation": {
+                "cache": {
+                    "loaded": self.cache.len(),
+                    "capacity": self.cache.capacity(),
+                    "in_flight": self.cache.in_flight_len(),
+                },
+                "target_level": self.last_target_level,
+                "realized_generation": self.control_actor_tile_policy_generation,
+                "status": self.tile_loading_status,
+            },
+            "native_layer_observations": native_layer_observations,
+        })
+    }
+
     pub fn control_viewport_workspace_snapshot(&mut self) -> serde_json::Value {
         self.sync_runtime_to_active_viewport();
         let Some(workspace) = self.viewport_workspace.clone() else {

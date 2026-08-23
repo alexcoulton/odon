@@ -333,6 +333,14 @@ The production `legacy_control` boundary disappeared in Wave 6. `renderer_bridge
 narrow renderer integration boundary; test-only characterization helpers are retired as their
 actor-plus-projection replacements reach equivalent coverage.
 
+The first Milestone 3 topology cut removed native renderer fallbacks for viewport clone, remove,
+activate, rename, layout, ratio, swap, and links. Those actions now remain pending until the actor
+projection confirms them, even before the first projection has been consumed. The recurring
+renderer-to-actor report no longer sends a workspace snapshot: its dedicated observation payload
+contains only shared-resource/cache telemetry, frame and tile-loading observations, and missing
+native-layer resource descriptors. Direct project compatibility restoration and mutation of the
+combined per-frame viewport container remain open in the `viewer.workspace_projection` ledger row.
+
 ## Native cutover status
 
 The remote application surface has no legacy execution route, and native project, single-viewer,

@@ -989,8 +989,8 @@ impl RootApp {
         let Mode::Single(app) = &mut self.mode else {
             return;
         };
-        let _ = self.control_runtime.observe_renderer_workspace(
-            app.control_viewport_workspace_snapshot(),
+        let _ = self.control_runtime.report_renderer_observation(
+            app.control_renderer_observation_snapshot(),
             self.control_projection_revision_applied,
         );
     }

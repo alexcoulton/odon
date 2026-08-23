@@ -272,15 +272,15 @@ impl OdonControlRuntime {
             .is_ok()
     }
 
-    pub fn observe_renderer_workspace(
+    pub fn report_renderer_observation(
         &self,
-        workspace: Value,
+        observation: Value,
         based_on_projection_revision: u64,
     ) -> bool {
         self.actor_model_tx
             .try_send(
-                crate::control::actor::ActorModelUpdate::RendererWorkspaceObserved {
-                    workspace,
+                crate::control::actor::ActorModelUpdate::RendererObservation {
+                    observation,
                     based_on_projection_revision,
                 },
             )

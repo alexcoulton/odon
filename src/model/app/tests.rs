@@ -984,7 +984,7 @@ fn stale_renderer_observation_cannot_revert_actor_owned_state() {
         .unwrap();
     let current_revision = model.mark_projection_dirty();
 
-    assert!(model.observe_renderer_workspace(&stale, current_revision - 1));
+    assert!(model.observe_renderer_state(&stale, current_revision - 1));
     let current = model.render_workspace_snapshot().unwrap();
     assert_eq!(current["channel_metadata"][1]["note"], "new actor value");
     assert_eq!(
@@ -998,10 +998,10 @@ fn stale_renderer_observation_cannot_revert_actor_owned_state() {
     assert_eq!(current["channel_presentation"]["search"], "actor search");
     assert_eq!(current["panels"], json!({"left":false,"right":false}));
 
-    assert!(!model.observe_renderer_workspace(&stale, current_revision + 1));
+    assert!(!model.observe_renderer_state(&stale, current_revision + 1));
     let mut wrong_document = stale;
     wrong_document["shared_resources"]["dataset_source"] = json!("another dataset");
-    assert!(!model.observe_renderer_workspace(&wrong_document, current_revision));
+    assert!(!model.observe_renderer_state(&wrong_document, current_revision));
     assert_eq!(model.render_workspace_snapshot().unwrap(), current);
 }
 

@@ -28,7 +28,6 @@ impl OmeZarrViewerApp {
             .map(|viewport| viewport.id.clone())
             .collect::<Vec<_>>();
         let multi_view = viewport_ids.len() > 1;
-        let mut remove_requested = None;
         if multi_view {
             self.viewport_raw_active_keys = Some(HashSet::new());
             self.viewport_cpu_active_keys = Some(HashSet::new());
@@ -41,9 +40,7 @@ impl OmeZarrViewerApp {
         match workspace.layout() {
             ViewportLayout::Single => {
                 if let Some(id) = viewport_ids.first() {
-                    if self.ui_viewport_cell(ui, ctx, &mut workspace, id) {
-                        remove_requested = Some(id.clone());
-                    }
+                    self.ui_viewport_cell(ui, ctx, &mut workspace, id);
                 }
             }
             ViewportLayout::Horizontal => {
@@ -57,9 +54,7 @@ impl OmeZarrViewerApp {
                         egui::vec2(first_width, available.y),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            if self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[0]) {
-                                remove_requested = Some(viewport_ids[0].clone());
-                            }
+                            self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[0]);
                         },
                     );
                     ui.separator();
@@ -67,9 +62,7 @@ impl OmeZarrViewerApp {
                         egui::vec2(second_width, available.y),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            if self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[1]) {
-                                remove_requested = Some(viewport_ids[1].clone());
-                            }
+                            self.ui_viewport_cell(ui, ctx, &mut workspace, &viewport_ids[1]);
                         },
                     );
                 });
@@ -89,9 +82,7 @@ impl OmeZarrViewerApp {
                         egui::vec2(available.x, cell_height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            if self.ui_viewport_cell(ui, ctx, &mut workspace, id) {
-                                remove_requested = Some(id.clone());
-                            }
+                            self.ui_viewport_cell(ui, ctx, &mut workspace, id);
                         },
                     );
                     if index + 1 < viewport_ids.len() {
@@ -99,15 +90,6 @@ impl OmeZarrViewerApp {
                     }
                 }
             }
-        }
-
-        if let Some(viewport_id) = remove_requested
-            && workspace.len() > 1
-            && workspace.remove(&viewport_id).is_ok()
-        {
-            self.cancel_viewport_transient_gestures();
-            self.screenshot_pending
-                .retain(|pending| pending.viewport_id != viewport_id);
         }
 
         if let Some(active_keys) = self.viewport_raw_active_keys.take() {
@@ -211,9 +193,9 @@ impl OmeZarrViewerApp {
         ctx: &egui::Context,
         workspace: &mut ViewportWorkspace<ViewerViewportState>,
         viewport_id: &ViewportId,
-    ) -> bool {
+    ) {
         let Some(viewport) = workspace.get(viewport_id) else {
-            return false;
+            return;
         };
         let before = viewport.state.clone();
         let title = viewport.title.clone();
@@ -341,18 +323,14 @@ impl OmeZarrViewerApp {
                 .get(viewport_id)
                 .map(|viewport| viewport.presentation_revision)
                 .unwrap_or(1);
-            if self.native_viewport_actor_owned() {
-                self.submit_native_viewport_intent(
-                    "viewer.viewports.rename",
-                    serde_json::json!({
-                        "viewport_id":viewport_id.as_str(),
-                        "if_presentation_revision":revision,
-                        "title":title,
-                    }),
-                );
-            } else if workspace.rename(viewport_id, title).unwrap_or(false) {
-                let _ = workspace.bump_presentation_revision(viewport_id);
-            }
+            self.submit_native_viewport_intent(
+                "viewer.viewports.rename",
+                serde_json::json!({
+                    "viewport_id":viewport_id.as_str(),
+                    "if_presentation_revision":revision,
+                    "title":title,
+                }),
+            );
         }
         ui.separator();
 
@@ -403,25 +381,18 @@ impl OmeZarrViewerApp {
         }
 
         if activate {
-            if self.native_viewport_actor_owned() {
-                if !is_active {
-                    self.submit_native_viewport_intent(
-                        "viewer.viewports.set_active",
-                        serde_json::json!({"viewport_id":viewport_id.as_str()}),
-                    );
-                }
-            } else if workspace.set_active(viewport_id).unwrap_or(false) {
-                self.cancel_viewport_transient_gestures();
+            if !is_active {
+                self.submit_native_viewport_intent(
+                    "viewer.viewports.set_active",
+                    serde_json::json!({"viewport_id":viewport_id.as_str()}),
+                );
             }
         }
-        if close_requested && self.native_viewport_actor_owned() {
+        if close_requested {
             self.submit_native_viewport_intent(
                 "viewer.viewports.remove",
                 serde_json::json!({"viewport_id":viewport_id.as_str()}),
             );
-            false
-        } else {
-            close_requested
         }
     }
 }

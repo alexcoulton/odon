@@ -32,8 +32,8 @@ pub enum ActorModelUpdate {
         path: Option<PathBuf>,
         recent_project_exists: Vec<(PathBuf, bool)>,
     },
-    RendererWorkspaceObserved {
-        workspace: Value,
+    RendererObservation {
+        observation: Value,
         based_on_projection_revision: u64,
     },
     PresentationApplied(u64),
@@ -378,11 +378,11 @@ fn apply_model_update(
         } => {
             model.bootstrap_settings(settings, path, recent_project_exists);
         }
-        ActorModelUpdate::RendererWorkspaceObserved {
-            workspace,
+        ActorModelUpdate::RendererObservation {
+            observation,
             based_on_projection_revision,
         } => {
-            model.observe_renderer_workspace(&workspace, based_on_projection_revision);
+            model.observe_renderer_state(&observation, based_on_projection_revision);
         }
         ActorModelUpdate::PresentationApplied(revision) => {
             model.mark_projection_presented(revision);

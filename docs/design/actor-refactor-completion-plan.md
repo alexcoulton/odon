@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 2 complete; Milestone 3 ownership cleanup next
+Status: in progress — Milestones 0 through 2 complete; Milestone 3 topology ownership in progress
 
 Date: 2026-08-23
 
@@ -189,6 +189,13 @@ Exit criteria:
 ## Milestone 3 — remove viewport and presentation mirrors
 
 Purpose: make the actor model the sole semantic source for the most frequently changing state.
+
+Current progress: native viewport chrome always emits typed topology commands, including before
+the first actor projection, and has no renderer-mutation fallback for clone, remove, activate,
+rename, layout, ratio, swap, or links. Periodic renderer feedback now uses a renderer-only
+observation payload; actor-owned workspace, navigation, channel, layer, panel, and mask semantics
+are absent from that path. Project compatibility restoration and the mutable per-frame viewport
+state container remain to be narrowed before the first ownership slice is closed.
 
 Ownership slices, in order:
 

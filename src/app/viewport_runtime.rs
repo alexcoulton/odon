@@ -10,9 +10,6 @@ impl OmeZarrViewerApp {
         method: &'static str,
         params: serde_json::Value,
     ) -> bool {
-        if !self.native_viewport_actor_owned() {
-            return false;
-        }
         self.native_control_intents
             .push(NativeControlIntent { method, params });
         true
@@ -116,99 +113,6 @@ impl OmeZarrViewerApp {
         std::mem::take(&mut self.native_control_intents)
     }
 
-    pub(super) fn split_active_viewport(
-        &mut self,
-        layout: ViewportLayout,
-        title: Option<String>,
-    ) -> Result<ViewportId, String> {
-        self.cancel_viewport_transient_gestures();
-        let mut workspace = self
-            .viewport_workspace
-            .take()
-            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
-        let source_id = workspace.active_id().clone();
-        if let Some(source) = workspace.get_mut(&source_id) {
-            source.state = ViewerViewportState::capture(self);
-        }
-        let result = workspace
-            .clone_viewport(&source_id, title, layout)
-            .map_err(|error| error.to_string());
-        if result.is_ok() {
-            workspace.active().state.apply(self);
-        }
-        self.viewport_workspace = Some(workspace);
-        result
-    }
-
-    pub(super) fn remove_viewport(&mut self, viewport_id: &ViewportId) -> Result<(), String> {
-        self.cancel_viewport_transient_gestures();
-        let mut workspace = self
-            .viewport_workspace
-            .take()
-            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
-        let active_id = workspace.active_id().clone();
-        if let Some(active) = workspace.get_mut(&active_id) {
-            active.state = ViewerViewportState::capture(self);
-        }
-        let result = workspace
-            .remove(viewport_id)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-        if result.is_ok() {
-            self.screenshot_pending
-                .retain(|pending| pending.viewport_id != *viewport_id);
-            self.loader
-                .set_active_render_ids(Self::workspace_cpu_render_ids(&workspace));
-        }
-        workspace.active().state.apply(self);
-        self.bump_render_id();
-        self.viewport_workspace = Some(workspace);
-        result
-    }
-
-    pub(super) fn set_viewport_layout(&mut self, layout: ViewportLayout) -> Result<bool, String> {
-        let Some(workspace) = self.viewport_workspace.as_mut() else {
-            return Err("viewer workspace is not initialized".to_string());
-        };
-        workspace
-            .set_layout(layout)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(super) fn set_viewport_links(&mut self, links: ViewportLinks) -> bool {
-        let Some(mut workspace) = self.viewport_workspace.take() else {
-            return false;
-        };
-        let active_id = workspace.active_id().clone();
-        if let Some(active) = workspace.get_mut(&active_id) {
-            active.state = ViewerViewportState::capture(self);
-        }
-        let active_state = workspace.active().state.clone();
-        let other_ids = workspace
-            .viewports()
-            .iter()
-            .filter(|viewport| viewport.id != active_id)
-            .map(|viewport| viewport.id.clone())
-            .collect::<Vec<_>>();
-        for id in other_ids {
-            if let Some(viewport) = workspace.get_mut(&id) {
-                let before = viewport.state.clone();
-                viewport
-                    .state
-                    .copy_linked_navigation_from(&active_state, links);
-                if viewport.state.camera_changed_from(&before)
-                    || viewport.state.plane_changed_from(&before)
-                {
-                    viewport.navigation_revision =
-                        viewport.navigation_revision.wrapping_add(1).max(1);
-                }
-            }
-        }
-        let changed = workspace.set_links(links);
-        self.viewport_workspace = Some(workspace);
-        changed
-    }
-
     pub(super) fn ui_viewport_controls(&mut self, ui: &mut egui::Ui) {
         let Some(workspace) = self.viewport_workspace.as_ref() else {
             return;
@@ -222,7 +126,7 @@ impl OmeZarrViewerApp {
         ui.menu_button(format!("Views ({viewport_count})"), |ui| {
             if viewport_count == 1 {
                 if ui.button("Split side by side").clicked() {
-                    if !self.submit_native_viewport_intent(
+                    self.submit_native_viewport_intent(
                         "viewer.viewports.clone",
                         serde_json::json!({
                             "viewport_id":active_id.as_str(),
@@ -230,13 +134,11 @@ impl OmeZarrViewerApp {
                             "ratio":split_ratio,
                             "activate":true,
                         }),
-                    ) {
-                        let _ = self.split_active_viewport(ViewportLayout::Horizontal, None);
-                    }
+                    );
                     ui.close();
                 }
                 if ui.button("Split top and bottom").clicked() {
-                    if !self.submit_native_viewport_intent(
+                    self.submit_native_viewport_intent(
                         "viewer.viewports.clone",
                         serde_json::json!({
                             "viewport_id":active_id.as_str(),
@@ -244,9 +146,7 @@ impl OmeZarrViewerApp {
                             "ratio":split_ratio,
                             "activate":true,
                         }),
-                    ) {
-                        let _ = self.split_active_viewport(ViewportLayout::Vertical, None);
-                    }
+                    );
                     ui.close();
                 }
                 return;
@@ -257,31 +157,22 @@ impl OmeZarrViewerApp {
                 .selectable_label(layout == ViewportLayout::Horizontal, "Side by side")
                 .clicked()
             {
-                if !self.submit_native_viewport_intent(
+                self.submit_native_viewport_intent(
                     "viewer.workspace.layout.set",
                     serde_json::json!({"layout":"horizontal","ratio":split_ratio}),
-                ) {
-                    let _ = self.set_viewport_layout(ViewportLayout::Horizontal);
-                }
+                );
             }
             if ui
                 .selectable_label(layout == ViewportLayout::Vertical, "Top and bottom")
                 .clicked()
             {
-                if !self.submit_native_viewport_intent(
+                self.submit_native_viewport_intent(
                     "viewer.workspace.layout.set",
                     serde_json::json!({"layout":"vertical","ratio":split_ratio}),
-                ) {
-                    let _ = self.set_viewport_layout(ViewportLayout::Vertical);
-                }
+                );
             }
             if ui.button("Swap positions").clicked() {
-                if !self
-                    .submit_native_viewport_intent("viewer.workspace.swap", serde_json::json!({}))
-                    && let Some(workspace) = self.viewport_workspace.as_mut()
-                {
-                    workspace.swap_order();
-                }
+                self.submit_native_viewport_intent("viewer.workspace.swap", serde_json::json!({}));
             }
             let mut next_ratio = split_ratio;
             if ui
@@ -292,13 +183,10 @@ impl OmeZarrViewerApp {
                 )
                 .changed()
             {
-                if !self.submit_native_viewport_intent(
+                self.submit_native_viewport_intent(
                     "viewer.workspace.layout.set",
                     serde_json::json!({"layout":layout.as_str(),"ratio":next_ratio}),
-                ) && let Some(workspace) = self.viewport_workspace.as_mut()
-                {
-                    let _ = workspace.set_split_ratio(next_ratio);
-                }
+                );
             }
 
             ui.separator();
@@ -315,26 +203,22 @@ impl OmeZarrViewerApp {
                 .on_hover_text("Object selection is shared by the document")
                 .changed();
             if links_changed {
-                if !self.submit_native_viewport_intent(
+                self.submit_native_viewport_intent(
                     "viewer.viewport_links.set",
                     serde_json::json!({
                         "camera":next_links.camera,
                         "plane":next_links.plane,
                         "selection":next_links.selection,
                     }),
-                ) {
-                    self.set_viewport_links(next_links);
-                }
+                );
             }
 
             ui.separator();
             if ui.button("Close active view").clicked() {
-                if !self.submit_native_viewport_intent(
+                self.submit_native_viewport_intent(
                     "viewer.viewports.remove",
                     serde_json::json!({"viewport_id":active_id.as_str()}),
-                ) {
-                    let _ = self.remove_viewport(&active_id);
-                }
+                );
                 ui.close();
             }
         });

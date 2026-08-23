@@ -554,9 +554,9 @@ impl AppModel {
     /// cameras, planes, and workspace structure must come back as typed native commands. A
     /// delayed renderer snapshot may be based on an older projection revision, so copying those
     /// fields here would allow a frame rendered after an occlusion to undo newer Python work.
-    pub fn observe_renderer_workspace(
+    pub fn observe_renderer_state(
         &mut self,
-        snapshot: &Value,
+        observation: &Value,
         based_on_projection_revision: u64,
     ) -> bool {
         if based_on_projection_revision > self.projection_revision {
@@ -565,7 +565,7 @@ impl AppModel {
         let Some(dataset) = self.dataset.as_mut() else {
             return false;
         };
-        let observed_source = snapshot
+        let observed_source = observation
             .get("shared_resources")
             .and_then(|resources| resources.get("dataset_source"))
             .and_then(Value::as_str);
@@ -583,16 +583,19 @@ impl AppModel {
         // These fields are still produced by renderer-side compatibility domains. They do not
         // overlap any actor-owned mutation and are therefore safe to merge even when the
         // observation is based on an older projection revision.
-        if let Some(shared_resources) = snapshot.get("shared_resources") {
+        if let Some(shared_resources) = observation.get("shared_resources") {
             dataset.shared_resources = shared_resources.clone();
         }
-        if let Some(performance) = snapshot.get("performance") {
+        if let Some(performance) = observation.get("performance") {
             dataset.performance = performance.clone();
         }
-        if let Some(observation) = snapshot.get("tile_loading_observation") {
-            self.tile_loading.observe(observation);
+        if let Some(tile_loading) = observation.get("tile_loading_observation") {
+            self.tile_loading.observe(tile_loading);
         }
-        if let Some(projected) = snapshot.get("viewports").and_then(Value::as_array) {
+        if let Some(projected) = observation
+            .get("native_layer_observations")
+            .and_then(Value::as_array)
+        {
             for value in projected {
                 let Some(id) = value
                     .get("viewport_id")

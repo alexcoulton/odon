@@ -29,6 +29,22 @@ fn replay(model: &mut odon::model::AppModel, intent: NativeControlIntent) {
 }
 
 #[test]
+fn native_workspace_topology_commands_do_not_fall_back_to_renderer_mutation() {
+    let mut app = fixture_app();
+    app.control_actor_workspace_revision = 0;
+    let before = app.viewport_workspace.as_ref().unwrap().revision();
+
+    assert!(app.submit_native_viewport_intent(
+        "viewer.workspace.layout.set",
+        serde_json::json!({"layout":"horizontal","ratio":0.4}),
+    ));
+
+    let intent = take_one(&mut app, "viewer.workspace.layout.set");
+    assert_eq!(intent.params["layout"], "horizontal");
+    assert_eq!(app.viewport_workspace.as_ref().unwrap().revision(), before);
+}
+
+#[test]
 fn detached_workspace_retains_the_explicit_native_command_scope() {
     let mut app = fixture_app();
     let _workspace = app.viewport_workspace.take().expect("fixture workspace");
