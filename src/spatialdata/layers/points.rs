@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossbeam_channel::Receiver;
 use eframe::egui;
 
 use crate::features::points::{
@@ -31,8 +30,6 @@ pub struct SpatialPointsLayer {
     pub threshold: f32,
     pub max_render_points_total: usize,
 
-    points_parquet_dir: PathBuf,
-    options: PointsLoadOptions,
     base_transform: SpatialDataTransform2,
     image_size_world: Option<[f32; 2]>,
     scale_mode: SpatialScaleMode,
@@ -62,7 +59,6 @@ pub struct SpatialPointsLayer {
     hover_raw_indices: Option<Arc<Vec<u32>>>,
     bounds_world: Option<egui::Rect>,
     bins: Option<Arc<PointIndexBins>>,
-    load_rx: Option<Receiver<anyhow::Result<PreparedSpatialPoints>>>,
     status: String,
     gl: PointsGlRenderer,
 }
@@ -111,7 +107,7 @@ struct SpatialPointsPrepareConfig {
     scale_mul: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PreparedSpatialPoints {
     raw_xy: Arc<Vec<[f32; 2]>>,
     meta: Arc<PointsMeta>,
@@ -126,32 +122,62 @@ struct PreparedSpatialPoints {
     loaded_count: usize,
 }
 
-impl SpatialPointsLayer {
-    pub fn new(
-        name: String,
-        points_parquet_dir: PathBuf,
-        transform: SpatialDataTransform2,
-        feature_key: Option<String>,
-        max_points: usize,
-        image_size_world: Option<[f32; 2]>,
-    ) -> Self {
-        let mut options = PointsLoadOptions::default();
-        options.max_points = max_points;
-        if let Some(k) = feature_key {
-            if !k.trim().is_empty() {
-                options.feature_column = Some(k);
-            }
-        }
+#[derive(Clone)]
+pub(crate) struct PreparedSpatialPointsLayer {
+    name: String,
+    base_transform: SpatialDataTransform2,
+    image_size_world: Option<[f32; 2]>,
+    prepared: PreparedSpatialPoints,
+}
 
-        let mut s = Self {
+pub(crate) fn prepare_spatial_points_layer(
+    name: String,
+    points_parquet_dir: PathBuf,
+    transform: SpatialDataTransform2,
+    feature_key: Option<String>,
+    max_points: usize,
+    image_size_world: Option<[f32; 2]>,
+) -> anyhow::Result<PreparedSpatialPointsLayer> {
+    let mut options = PointsLoadOptions {
+        max_points,
+        ..Default::default()
+    };
+    if let Some(key) = feature_key.filter(|key| !key.trim().is_empty()) {
+        options.feature_column = Some(key);
+    }
+    let config = SpatialPointsPrepareConfig {
+        base_transform: transform,
+        image_size_world,
+        scale_mode: SpatialScaleMode::Auto,
+        axis_mode: SpatialAxisMode::Auto,
+        scale_mul: 1.0,
+    };
+    let prepared = load_points_sample(&points_parquet_dir, &options)
+        .and_then(|payload| prepare_spatial_points_payload(payload, config))?;
+    Ok(PreparedSpatialPointsLayer {
+        name,
+        base_transform: transform,
+        image_size_world,
+        prepared,
+    })
+}
+
+impl SpatialPointsLayer {
+    pub(crate) fn from_prepared(prepared: PreparedSpatialPointsLayer) -> Self {
+        let PreparedSpatialPointsLayer {
             name,
-            visible: false,
+            base_transform,
+            image_size_world,
+            prepared,
+        } = prepared;
+        let loaded_count = prepared.loaded_count;
+        let mut layer = Self {
+            name,
+            visible: true,
             style: PointsStyle::default(),
             threshold: 0.5,
             max_render_points_total: 200_000,
-            points_parquet_dir,
-            options,
-            base_transform: transform,
+            base_transform,
             image_size_world,
             scale_mode: SpatialScaleMode::Auto,
             axis_mode: SpatialAxisMode::Auto,
@@ -164,9 +190,9 @@ impl SpatialPointsLayer {
             pending_positive_cell_selection: None,
             cell_selection_status: String::new(),
             last_match_count: 0,
-            last_loaded_count: 0,
+            last_loaded_count: loaded_count,
             last_auto_choice: String::new(),
-            generation: 1,
+            generation: 2,
             raw_xy: None,
             meta: None,
             positions_world: None,
@@ -179,69 +205,15 @@ impl SpatialPointsLayer {
             hover_raw_indices: None,
             bounds_world: None,
             bins: None,
-            load_rx: None,
-            status: String::new(),
+            status: format!("Loaded {loaded_count} points (sample)."),
             gl: PointsGlRenderer::default(),
         };
-        s.request_load();
-        s
-    }
-
-    fn request_load(&mut self) {
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<PreparedSpatialPoints>>(1);
-        self.load_rx = Some(rx);
-        self.status = "Loading points...".to_string();
-        self.visible = true;
-
-        let dir = self.points_parquet_dir.clone();
-        let options = self.options.clone();
-        let config = self.prepare_config();
-
-        std::thread::Builder::new()
-            .name("spatialdata-points-loader".to_string())
-            .spawn(move || {
-                let msg = load_points_sample(&dir, &options)
-                    .and_then(|payload| prepare_spatial_points_payload(payload, config));
-                let _ = tx.send(msg);
-            })
-            .ok();
-    }
-
-    pub fn tick(&mut self) {
-        use crossbeam_channel::TryRecvError;
-
-        let Some(rx) = self.load_rx.as_ref().cloned() else {
-            return;
-        };
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.load_rx = None;
-                    match msg {
-                        Ok(prepared) => {
-                            let n = prepared.loaded_count;
-                            self.apply_prepared_snapshot(prepared);
-                            self.generation = self.generation.wrapping_add(1).max(1);
-                            self.last_loaded_count = n;
-                            self.status = format!("Loaded {n} points (sample).");
-                        }
-                        Err(err) => {
-                            self.status = format!("Load failed: {err}");
-                            self.visible = false;
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.load_rx = None;
-                    break;
-                }
-            }
-        }
+        layer.apply_prepared_snapshot(prepared);
+        layer
     }
 
     pub fn is_loading(&self) -> bool {
-        self.load_rx.is_some()
+        false
     }
 
     pub fn bounds_world(&self) -> Option<egui::Rect> {
@@ -966,43 +938,7 @@ impl SpatialPointsLayer {
             ui.label(self.cell_selection_status.clone());
         }
         ui.separator();
-        ui.horizontal(|ui| {
-            let mut all = self.options.max_points == 0;
-            if ui
-                .checkbox(&mut all, "All")
-                .on_hover_text("Load all points (may be slow / memory-heavy).")
-                .changed()
-            {
-                self.options.max_points = if all { 0 } else { 200_000 };
-                changed = true;
-            }
-            if !all {
-                ui.add(
-                    egui::DragValue::new(&mut self.options.max_points)
-                        .speed(1)
-                        .range(1..=200_000_000)
-                        .prefix("Max points "),
-                )
-                .on_hover_text("Reload to apply.");
-            } else {
-                ui.label("Max points: ∞");
-            }
-            if ui.button("Reload points").clicked() {
-                self.raw_xy = None;
-                self.meta = None;
-                self.positions_world = None;
-                self.visible_raw_indices = None;
-                self.values = None;
-                self.feature_points.clear();
-                self.feature_cache.clear();
-                self.hover_positions_world = None;
-                self.hover_raw_indices = None;
-                self.bounds_world = None;
-                self.bins = None;
-                self.request_load();
-                changed = true;
-            }
-        });
+        ui.label(format!("Actor-prepared points: {}", self.last_loaded_count));
 
         if !self.status.is_empty() {
             ui.label(self.status.clone());

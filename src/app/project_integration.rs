@@ -125,15 +125,15 @@ impl OmeZarrViewerApp {
         self.remote_runtime = runtime;
     }
 
-    pub fn attach_spatialdata_layers(
+    pub fn attach_prepared_spatialdata_layers(
         &mut self,
         spatial_root: PathBuf,
         image_transform: SpatialDataTransform2,
-        extra_images: Vec<SpatialDataElement>,
+        extra_images: Vec<crate::spatialdata::PreparedSpatialImage>,
         labels: Option<SpatialDataElement>,
         tables: Vec<SpatialDataElement>,
-        shapes: Vec<SpatialDataElement>,
-        points: Option<(SpatialDataElement, usize)>,
+        shapes: Vec<crate::spatialdata::PreparedSpatialShape>,
+        points: Option<crate::spatialdata::PreparedSpatialPointsLayer>,
     ) {
         self.spatial_image_layers.clear();
         self.spatial_layers.clear();
@@ -143,12 +143,12 @@ impl OmeZarrViewerApp {
         self.spatial_image_transform = image_transform;
         self.spatial_label_transform = labels
             .as_ref()
-            .map(|l| l.transform.relative_to(image_transform))
+            .map(|label| label.transform.relative_to(image_transform))
             .unwrap_or_default();
         self.spatial_root = Some(spatial_root.clone());
         self.spatial_label_store = zarrs::filesystem::FilesystemStore::new(&spatial_root)
             .ok()
-            .map(|s| Arc::new(s) as Arc<dyn zarrs::storage::ReadableStorageTraits>);
+            .map(|store| Arc::new(store) as Arc<dyn zarrs::storage::ReadableStorageTraits>);
         self.xenium_cells_offset_world = egui::Vec2::ZERO;
         self.xenium_transcripts_offset_world = egui::Vec2::ZERO;
         self.spatial_points_offset_world = egui::Vec2::ZERO;
@@ -161,78 +161,8 @@ impl OmeZarrViewerApp {
         self.seg_label_selected.clear();
         self.seg_label_input = self.seg_label_selected.clone();
         self.seg_label_prompt_open = false;
-
-        for image in &extra_images {
-            let mut image = image.clone();
-            image.transform = image.transform.relative_to(image_transform);
-            if let Err(err) = self.spatial_image_layers.load_image(
-                &spatial_root,
-                &image,
-                self.tiles_gl.is_some(),
-                self.smooth_pixels,
-            ) {
-                eprintln!(
-                    "failed to load SpatialData image layer {}: {err}",
-                    image.name
-                );
-            }
-        }
-
-        for sh in &shapes {
-            let mut sh = sh.clone();
-            sh.transform = sh.transform.relative_to(image_transform);
-            if sh.name == "cell_boundaries" {
-                if let Some(rel) = sh.rel_parquet.as_ref() {
-                    self.seg_objects.load_spatialdata_shapes(
-                        spatial_root.join(rel),
-                        sh.transform,
-                        sh.name.as_str(),
-                    );
-                }
-            } else {
-                let id = self.spatial_layers.load_shapes(&sh);
-                if let Some(layer) = self.spatial_layers.shapes.iter_mut().find(|s| s.id == id)
-                    && let Some(objects) = layer.object_layer_mut()
-                {
-                    objects.fast_rendering = self.fast_object_rendering;
-                }
-            }
-        }
-        if let Some((pt, max_points)) = points.as_ref() {
-            let mut pt = pt.clone();
-            pt.transform = pt.transform.relative_to(image_transform);
-            let shape0 = self.dataset.levels.get(0).map(|l| l.shape.clone());
-            let image_size = shape0.and_then(|s| {
-                let x = s.get(self.dataset.dims.x).copied()? as f32;
-                let y = s.get(self.dataset.dims.y).copied()? as f32;
-                Some([x, y])
-            });
-            self.spatial_layers
-                .load_points_with_image_size(&pt, *max_points, image_size);
-        }
-        self.rebuild_layer_orders();
-        self.bump_render_id();
-    }
-
-    pub fn attach_prepared_spatialdata_layers(
-        &mut self,
-        spatial_root: PathBuf,
-        image_transform: SpatialDataTransform2,
-        extra_images: Vec<crate::spatialdata::PreparedSpatialImage>,
-        labels: Option<SpatialDataElement>,
-        tables: Vec<SpatialDataElement>,
-        shapes: Vec<SpatialDataElement>,
-        points: Option<(SpatialDataElement, usize)>,
-    ) {
-        self.attach_spatialdata_layers(
-            spatial_root,
-            image_transform,
-            Vec::new(),
-            labels,
-            tables,
-            shapes,
-            points,
-        );
+        self.spatial_layers.attach_prepared_shapes(shapes);
+        self.spatial_layers.attach_prepared_points(points);
         for mut image in extra_images {
             image.element.transform = image.element.transform.relative_to(image_transform);
             if let Err(error) = self.spatial_image_layers.load_prepared_image(

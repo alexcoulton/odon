@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2};
 
@@ -6,7 +6,9 @@ mod points;
 mod shapes;
 
 pub use points::SpatialPointsLayer;
+pub(crate) use points::{PreparedSpatialPointsLayer, prepare_spatial_points_layer};
 pub use shapes::SpatialShapesLayer;
+pub(crate) use shapes::{PreparedSpatialShape, prepare_spatial_shape_data};
 
 // SpatialData elements are discovered from format-specific metadata, then adapted
 // into the viewer's native overlay types. The rest of the app should not need to
@@ -45,33 +47,18 @@ impl SpatialDataLayers {
         self.tables = tables;
     }
 
-    fn root(&self) -> Option<&Path> {
-        self.root.as_deref()
-    }
-
-    pub fn load_shapes(&mut self, element: &SpatialDataElement) -> u64 {
-        // Shape elements always start as lightweight SpatialShapesLayer wrappers.
-        // The actual load step decides whether they stay as raw polylines/points or
-        // are promoted into an ObjectsLayer for shared selection/filtering behavior.
-        let Some(root) = self.root().map(|p| p.to_path_buf()) else {
-            return 0;
-        };
-        let Some(rel) = element.rel_parquet.clone() else {
-            return 0;
-        };
-        let path = root.join(rel);
-        let id = self.next_shape_layer_id.max(1);
-        self.next_shape_layer_id = id.wrapping_add(1).max(1);
-        let layer = SpatialShapesLayer::new(
-            id,
-            None,
-            None,
-            format!("Shapes: {}", element.name),
-            path,
-            element.transform,
-        );
-        self.shapes.push(layer);
-        id
+    pub(crate) fn attach_prepared_shapes(&mut self, shapes: Vec<PreparedSpatialShape>) {
+        self.next_shape_layer_id = shapes
+            .iter()
+            .map(|shape| shape.id)
+            .max()
+            .unwrap_or(0)
+            .wrapping_add(1)
+            .max(1);
+        self.shapes = shapes
+            .into_iter()
+            .map(SpatialShapesLayer::from_prepared)
+            .collect();
     }
 
     pub fn load_external_shapes(
@@ -95,39 +82,13 @@ impl SpatialDataLayers {
         id
     }
 
-    pub fn load_points_with_image_size(
-        &mut self,
-        element: &SpatialDataElement,
-        max_points: usize,
-        image_size_world: Option<[f32; 2]>,
-    ) {
-        // Points are rebuilt from the parquet source each time because preparation
-        // derives world-space bounds, feature caches, and optional image scaling
-        // from the current metadata instead of storing a second normalized copy.
-        let Some(root) = self.root().map(|p| p.to_path_buf()) else {
-            return;
-        };
-        let Some(rel) = element.rel_parquet.clone() else {
-            return;
-        };
-        let path = root.join(rel);
-        let layer = SpatialPointsLayer::new(
-            format!("Points: {}", element.name),
-            path,
-            element.transform,
-            element.feature_key.clone(),
-            max_points,
-            image_size_world,
-        );
-        self.points = Some(layer);
+    pub(crate) fn attach_prepared_points(&mut self, points: Option<PreparedSpatialPointsLayer>) {
+        self.points = points.map(SpatialPointsLayer::from_prepared);
     }
 
     pub fn tick(&mut self) {
         for s in &mut self.shapes {
             s.tick();
-        }
-        if let Some(p) = self.points.as_mut() {
-            p.tick();
         }
     }
 

@@ -556,15 +556,39 @@
         "milestone": 4
       },
       {
-        "id": "viewer.external_spatial_layer_adapters",
-        "fields": ["spatial_image_layers", "spatial_layers", "xenium_layers"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor document/external-layer resource models and renderer adapters",
-        "projection_source": "document and external data-resource generations",
-        "renderer_consumers": "SpatialData and Xenium renderers",
-        "persistence_consumers": "actor-owned document/resource descriptors and layer presentation",
-        "native_commit_point": "typed dataset/data-layer command",
+        "id": "viewer.spatial_image_renderer_adapters",
+        "fields": ["spatial_image_layers"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "renderer attachment of immutable actor-prepared image documents and actor-registered external presentation resources",
+        "projection_source": "document generation and external resource/layer revision",
+        "renderer_consumers": "secondary image tile scheduling, GPU upload, and painting",
+        "persistence_consumers": "none; actor-owned document and resource descriptors are authoritative",
+        "native_commit_point": "none; presentation adapter consumes typed dataset/data-layer state",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.spatial_shape_point_renderer_adapters",
+        "fields": ["spatial_layers"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor bounded alternate-document worker plus renderer presentation adapters",
+        "projection_source": "generation-tagged prepared shape, point, and object resources",
+        "renderer_consumers": "shape/point GPU caches, spatial indexes, hit testing, tables, and paint UI",
+        "persistence_consumers": "none; actor project/document descriptors and native-layer presentation are authoritative",
+        "native_commit_point": "typed dataset, object, selection, or native-layer command",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.xenium_renderer_adapters",
+        "fields": ["xenium_layers"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor bounded Xenium document worker plus renderer presentation adapters",
+        "projection_source": "immutable prepared cell-bin and transcript resources for the active document generation",
+        "renderer_consumers": "Xenium GPU caches, feature selection drafts, hit testing, and paint UI",
+        "persistence_consumers": "none; actor document identity and viewport presentation are authoritative",
+        "native_commit_point": "typed Xenium open, selection, or native-layer command",
         "milestone": 5
       },
       {

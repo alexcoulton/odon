@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 4 complete; Milestone 5 has one ownership row remaining
+Status: in progress — Milestones 0 through 5 complete; Milestone 6 is next
 
 Date: 2026-08-23
 
@@ -54,16 +54,16 @@ histogram and automatic-contrast workers, and renderer-local memory-pinning work
 
 ### Current measured checkpoint
 
-The executable ledger currently covers 289 concrete host fields. It has 261 retained fields and 28
+The executable ledger currently covers 289 concrete host fields. It has 264 retained fields and 25
 fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
 command emulators.
 
 | Milestone | Open rows | Open fields | Remaining ownership domains |
 | --- | ---: | ---: | --- |
-| 5 | 1 | 3 | external spatial adapters |
+| 5 | 0 | 0 | complete |
 | 6 | 9 | 12 | host requests, native command outboxes, root mode/deep-link/projection relays, mosaic shell state |
 | 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
-| **Total** | **12** | **28** | |
+| **Total** | **11** | **25** | |
 
 `Retain` means the field has a valid final role as a renderer resource/observation, transient UI
 draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
@@ -343,10 +343,11 @@ Exit criteria:
 
 Purpose: finish the less frame-sensitive but persistence-critical ownership domains.
 
-Status: in progress. The histogram/automatic-contrast, unified memory-pinning, and project/legacy
-analysis UI slices are implemented in the current checkpoints. Earlier slices checkpointed
-settings and mosaic project projections, project object preload, remote datasets, labels, TIFF
-planes/tile policy, and threshold analysis. One executable-ledger row remains, containing 3 fields.
+Status: complete on 2026-08-23. Histogram/automatic contrast, unified memory pinning,
+project/legacy analysis UI, and SpatialData/Xenium resources now have explicit final ownership.
+Earlier slices checkpointed settings and mosaic project projections, project object preload,
+remote datasets, labels, TIFF planes/tile policy, and threshold analysis. No Milestone 5 ownership
+row remains open.
 
 Work:
 
@@ -445,9 +446,10 @@ generation observation, ROI UI draft, and renderer-only compatibility-resource r
 Commit gate: project save/open/ROI workflows never reconstruct state from a viewer panel; persistence
 round trips use a known actor revision; the project UI row is closed.
 
-#### 5D — SpatialData and Xenium renderer adapters
+#### 5D — SpatialData and Xenium renderer adapters — complete
 
-Open row: `viewer.external_spatial_layer_adapters` (3 fields).
+Closed row: `viewer.external_spatial_layer_adapters` (3 fields), split into retained image,
+shape/point, and Xenium renderer/shared-resource adapter rows.
 
 - audit all production construction, tick, retry, and load entry points for image, shape, point,
   cell, and transcript adapters;
@@ -461,6 +463,13 @@ Commit gate: renderer adapter `tick` methods perform presentation/resource consu
 filesystem/network/decoder work; no-frame SpatialData and Xenium resource tests pass; the final
 Milestone 5 row is closed.
 
+Checkpoint evidence: the bounded alternate-document worker prepares raw SpatialData shapes,
+sampled points, object resources, secondary images, Xenium cell bins, and Xenium transcripts before
+the document becomes resource-ready. The renderer installs immutable payloads and retains only
+tile/GPU caches, presentation properties, spatial indexes, hit testing, and feature-selection
+drafts. The legacy SpatialData point thread and UI-triggered Xenium transcript reload worker are
+deleted; source guards reject their return.
+
 Checkpoint evidence: project save now captures the canonical actor workspace immediately before
 building its immutable persistence payload, and a no-frame round trip proves a camera edit is saved
 without renderer synchronization. Production panel drawing, deep-link application, and
@@ -468,7 +477,7 @@ without renderer synchronization. Production panel drawing, deep-link applicatio
 restorer are test-only, ROI actions enter typed commands, and source guards reject renderer reverse
 synchronization.
 
-#### 5E — Milestone 5 cumulative gate
+#### 5E — Milestone 5 cumulative gate — complete
 
 - run formatting, all-target compilation, Rust library/bin/data-contract suites, Python SDK tests,
   registry/application-surface audits, generated-reference checks, and the ownership-ledger guard;
@@ -478,6 +487,12 @@ synchronization.
 
 Milestone 6 may begin only when the current Milestone 5 row is closed and this cumulative
 gate passes.
+
+Checkpoint evidence: formatting and all-target compilation passed; Rust library tests passed
+183/183, binary tests passed 205 with 4 fixture-dependent ignores, data-contract tests passed
+10/10, and Python SDK tests passed 96/96. Registry, application-surface, ownership-ledger, JSON,
+generated Python reference, no-frame, queue-bound, projection-reuse, and local command-latency
+checks passed on the same tree.
 
 ## Milestone 6 — narrow the application shell and platform boundary
 
@@ -668,9 +683,9 @@ From the present checkpoint, work proceeds in this order:
 3. **5C project UI — complete:** project persistence captures the actor workspace at a known
    generation, reverse renderer synchronization is absent from production, and panel/resource
    fields have explicit final roles.
-4. **5D external spatial adapters — next:** move the last decoder/load lifecycles behind shared resources;
-   then run the **5E cumulative gate** and checkpoint Milestone 5.
-5. **6A–6C application shell:** classify platform effects, remove shell semantic authority, and
+4. **5D external spatial adapters — complete:** document decoders run on the bounded actor worker,
+   immutable resources feed renderer adapters, and the 5E cumulative gate passed.
+5. **6A–6C application shell — next:** classify platform effects, remove shell semantic authority, and
    consolidate native command ingress; then checkpoint Milestone 6.
 6. **7A presentation tasks:** unify screenshot state and generation-specific acknowledgement.
 7. **7B completion audit:** test and document every method's exact sync/async completion contract;

@@ -40,7 +40,7 @@ pub struct SpatialShapesLayer {
 }
 
 #[derive(Debug, Clone)]
-enum SpatialShapesData {
+pub(crate) enum SpatialShapesData {
     Lines(Arc<LineSegmentsBins>),
     Points {
         positions_world: Arc<Vec<egui::Pos2>>,
@@ -48,7 +48,97 @@ enum SpatialShapesData {
     },
 }
 
+#[derive(Clone)]
+pub(crate) struct PreparedSpatialShape {
+    pub id: u64,
+    pub element: crate::spatialdata::SpatialDataElement,
+    pub object_backed: bool,
+    pub data: Option<SpatialShapesData>,
+}
+
+pub(crate) fn prepare_spatial_shape_data(
+    parquet_path: &Path,
+    transform: SpatialDataTransform2,
+) -> anyhow::Result<SpatialShapesData> {
+    let options = ShapesLoadOptions {
+        transform,
+        ..Default::default()
+    };
+    match detect_shapes_render_kind(parquet_path)? {
+        ShapesRenderKind::Lines => {
+            let polylines = load_shapes_polylines_exterior(parquet_path, &options)?;
+            let Some(bins) = LineSegmentsBins::build_from_polylines(&polylines, 2048.0) else {
+                anyhow::bail!("no valid segments after parsing");
+            };
+            Ok(SpatialShapesData::Lines(Arc::new(bins)))
+        }
+        ShapesRenderKind::Circles => {
+            let polylines = load_shapes_circle_polylines(parquet_path, &options, 16)?;
+            let Some(bins) = LineSegmentsBins::build_from_polylines(&polylines, 2048.0) else {
+                anyhow::bail!("no valid circle segments after parsing");
+            };
+            Ok(SpatialShapesData::Lines(Arc::new(bins)))
+        }
+        ShapesRenderKind::Points => {
+            let positions = load_shapes_points(parquet_path, &options)?;
+            if positions.is_empty() {
+                anyhow::bail!("no valid points after parsing");
+            }
+            Ok(SpatialShapesData::Points {
+                values: Arc::new(vec![1.0f32; positions.len()]),
+                positions_world: Arc::new(positions),
+            })
+        }
+    }
+}
+
 impl SpatialShapesLayer {
+    pub(crate) fn from_prepared(prepared: PreparedSpatialShape) -> Self {
+        let PreparedSpatialShape {
+            id,
+            element,
+            object_backed,
+            data,
+        } = prepared;
+        let mut object_layer = object_backed.then(ObjectsLayer::default);
+        if let Some(objects) = object_layer.as_mut() {
+            objects.visible = true;
+            objects.opacity = 0.75;
+            objects.width_screen_px = 1.0;
+            objects.color_rgb = [0, 255, 120];
+        }
+        let status = match data.as_ref() {
+            Some(SpatialShapesData::Lines(bins)) => {
+                format!("Loaded {} segments.", bins.segments.len())
+            }
+            Some(SpatialShapesData::Points {
+                positions_world, ..
+            }) => format!("Loaded {} points.", positions_world.len()),
+            None if object_backed => "Waiting for actor object projection.".to_string(),
+            None => String::new(),
+        };
+        Self {
+            id,
+            external_id: None,
+            external_resource_id: None,
+            name: format!("Shapes: {}", element.name),
+            visible: true,
+            opacity: 0.75,
+            width_screen_px: 1.0,
+            color_rgb: [0, 255, 120],
+            offset_world: egui::Vec2::ZERO,
+            parquet_path: PathBuf::new(),
+            transform: element.transform,
+            object_layer,
+            data,
+            generation: 2,
+            gl_lines: LineBinsGlRenderer::new(1024),
+            gl_points: PointsGlRenderer::default(),
+            load_rx: None,
+            status,
+        }
+    }
+
     pub fn new(
         id: u64,
         external_id: Option<String>,
@@ -113,40 +203,7 @@ impl SpatialShapesLayer {
         std::thread::Builder::new()
             .name("spatialdata-shapes-loader".to_string())
             .spawn(move || {
-                let msg = (|| -> anyhow::Result<SpatialShapesData> {
-                    match detect_shapes_render_kind(&parquet_path)? {
-                        ShapesRenderKind::Lines => {
-                            let polylines =
-                                load_shapes_polylines_exterior(&parquet_path, &options)?;
-                            let Some(bins) =
-                                LineSegmentsBins::build_from_polylines(&polylines, 2048.0)
-                            else {
-                                anyhow::bail!("no valid segments after parsing");
-                            };
-                            Ok(SpatialShapesData::Lines(Arc::new(bins)))
-                        }
-                        ShapesRenderKind::Circles => {
-                            let polylines =
-                                load_shapes_circle_polylines(&parquet_path, &options, 16)?;
-                            let Some(bins) =
-                                LineSegmentsBins::build_from_polylines(&polylines, 2048.0)
-                            else {
-                                anyhow::bail!("no valid circle segments after parsing");
-                            };
-                            Ok(SpatialShapesData::Lines(Arc::new(bins)))
-                        }
-                        ShapesRenderKind::Points => {
-                            let positions = load_shapes_points(&parquet_path, &options)?;
-                            if positions.is_empty() {
-                                anyhow::bail!("no valid points after parsing");
-                            }
-                            Ok(SpatialShapesData::Points {
-                                values: Arc::new(vec![1.0f32; positions.len()]),
-                                positions_world: Arc::new(positions),
-                            })
-                        }
-                    }
-                })();
+                let msg = prepare_spatial_shape_data(&parquet_path, options.transform);
                 let _ = tx.send(msg);
             })
             .ok();

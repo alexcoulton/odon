@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossbeam_channel::Receiver;
 use eframe::egui;
 
 use crate::features::points::{
@@ -12,9 +11,7 @@ use crate::features::points::{
 use crate::render::line_bins::LineSegmentsBins;
 use crate::render::line_bins_gl::{LineBinsGlDrawData, LineBinsGlDrawParams, LineBinsGlRenderer};
 use crate::render::points::PointsStyle;
-use crate::xenium::transcripts::{
-    XeniumTranscriptsAllPayload, XeniumTranscriptsMeta, load_transcripts_all_points,
-};
+use crate::xenium::transcripts::{XeniumTranscriptsAllPayload, XeniumTranscriptsMeta};
 use odon::data::point_bins::PointIndexBins;
 
 #[derive(Clone)]
@@ -63,12 +60,6 @@ impl XeniumLayers {
                 prepared.payload,
             )
         });
-    }
-
-    pub fn tick(&mut self) {
-        if let Some(t) = self.transcripts.as_mut() {
-            t.tick();
-        }
     }
 }
 
@@ -181,20 +172,14 @@ pub struct XeniumTranscriptsLayer {
     pub visible: bool,
     pub style: PointsStyle,
     pub gene_query: String,
-    pub max_points_total: usize,
     pub max_render_points_total: usize,
 
     gene_popup_open: bool,
-
-    zip: PathBuf,
-    pixel_size_um: f32,
 
     meta: Option<Arc<XeniumTranscriptsMeta>>,
     genes: HashMap<String, XeniumGenePoints>,
 
     preloaded: Option<Vec<Option<PreloadedGeneData>>>,
-    preload_rx: Option<Receiver<anyhow::Result<XeniumTranscriptsAllPayload>>>,
-
     hover_refs: Vec<HoverRef>,
     hover_positions_world: Option<Arc<Vec<egui::Pos2>>>,
     hover_bins: Option<Arc<PointIndexBins>>,
@@ -225,17 +210,17 @@ struct XeniumGenePoints {
 
 impl XeniumTranscriptsLayer {
     pub fn from_prepared(
-        zip: PathBuf,
-        pixel_size_um: f32,
+        _zip: PathBuf,
+        _pixel_size_um: f32,
         meta: Arc<XeniumTranscriptsMeta>,
         payload: Arc<XeniumTranscriptsAllPayload>,
     ) -> Self {
-        let mut layer = Self::empty(zip, pixel_size_um, Some(meta));
+        let mut layer = Self::empty(Some(meta));
         layer.apply_preloaded_payload((*payload).clone());
         layer
     }
 
-    fn empty(zip: PathBuf, pixel_size_um: f32, meta: Option<Arc<XeniumTranscriptsMeta>>) -> Self {
+    fn empty(meta: Option<Arc<XeniumTranscriptsMeta>>) -> Self {
         Self {
             name: "Transcripts (Xenium)".to_string(),
             visible: false,
@@ -248,17 +233,12 @@ impl XeniumTranscriptsLayer {
                 stroke_negative: egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
             },
             gene_query: String::new(),
-            // 0 = no limit (load everything).
-            max_points_total: 0,
             // Cap the number of points rendered at once by forcing a coarser LOD.
             max_render_points_total: 200_000,
             gene_popup_open: false,
-            zip,
-            pixel_size_um,
             meta,
             genes: HashMap::new(),
             preloaded: None,
-            preload_rx: None,
             hover_refs: Vec::new(),
             hover_positions_world: None,
             hover_bins: None,
@@ -291,29 +271,6 @@ impl XeniumTranscriptsLayer {
             .iter()
             .position(|g| normalize_feature_key(g) == key)
             .and_then(|i| u16::try_from(i).ok())
-    }
-
-    fn request_preload_all(&mut self) {
-        if self.preloaded.is_some() || self.preload_rx.is_some() {
-            return;
-        }
-        let Some(meta) = self.meta.as_ref().cloned() else {
-            self.status = "No transcripts metadata.".to_string();
-            return;
-        };
-        let zip = self.zip.clone();
-        let pixel_size_um = self.pixel_size_um;
-        let max_points_total = self.max_points_total;
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<XeniumTranscriptsAllPayload>>(1);
-        self.preload_rx = Some(rx);
-        self.status = "Preloading transcripts (all genes)...".to_string();
-        std::thread::Builder::new()
-            .name("xenium-transcripts-preload".to_string())
-            .spawn(move || {
-                let msg = load_transcripts_all_points(&zip, &meta, pixel_size_um, max_points_total);
-                let _ = tx.send(msg);
-            })
-            .ok();
     }
 
     fn apply_preloaded_payload(&mut self, payload: XeniumTranscriptsAllPayload) {
@@ -383,9 +340,6 @@ impl XeniumTranscriptsLayer {
         if !enabled || already_loaded {
             return;
         }
-        if self.preloaded.is_none() {
-            self.request_preload_all();
-        }
         let preloaded = self.preloaded.as_deref();
         if let Some(g) = self.genes.get_mut(&key) {
             Self::attach_preloaded_for_gene(preloaded, g);
@@ -417,31 +371,6 @@ impl XeniumTranscriptsLayer {
         }
         self.hover_bins = PointIndexBins::build(&positions, 2048.0).map(Arc::new);
         self.hover_positions_world = Some(Arc::new(positions));
-    }
-
-    pub fn tick(&mut self) {
-        use crossbeam_channel::TryRecvError;
-        let Some(rx) = self.preload_rx.as_ref().cloned() else {
-            return;
-        };
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.preload_rx = None;
-                    match msg {
-                        Ok(payload) => self.apply_preloaded_payload(payload),
-                        Err(err) => {
-                            self.status = format!("Preload failed: {err}");
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.preload_rx = None;
-                    break;
-                }
-            }
-        }
     }
 
     pub fn draw(
@@ -529,23 +458,7 @@ impl XeniumTranscriptsLayer {
             changed = true;
         }
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Preload limit (0 = no limit)");
-            ui.add(egui::DragValue::new(&mut self.max_points_total).speed(1000));
-            if ui.button("Reload").clicked() {
-                // Re-run the preload with the new limit.
-                self.preloaded = None;
-                self.preload_rx = None;
-                for g in self.genes.values_mut() {
-                    g.ids = None;
-                    g.series.clear_payload();
-                    g.series.status.clear();
-                }
-                self.request_preload_all();
-                self.rebuild_hover_index();
-                changed = true;
-            }
-        });
+        ui.label("Transcript data is prepared by the control actor when the dataset opens.");
         ui.horizontal(|ui| {
             ui.label("Render cap (0 = no limit)");
             changed |= ui

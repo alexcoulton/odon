@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 175 | 163 | 12 | 0 | 0 |
+| `OmeZarrViewerApp` | 175 | 166 | 9 | 0 | 0 |
 | `RootApp` | 36 | 32 | 4 | 0 | 0 |
 | `MosaicViewerApp` | 78 | 66 | 12 | 0 | 0 |
-| **Total** | **289** | **261** | **28** | **0** | **0** |
+| **Total** | **289** | **264** | **25** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -89,7 +89,7 @@ not necessarily the owner in the current compatibility implementation.
 | Legacy GeoJSON lines | `seg_geojson` | Renderer-owned loader/resource mixed with actor native-layer presentation | Actor retained resource plus shared line-bin handle; Milestone 4 |
 | Primary object adapter | `seg_objects` | Renderer adapter over an actor-owned shared object resource | Retain renderer caches/hit testing; actor owns source, properties, style, filter, selection, analysis, and persistence; Milestone 4 complete |
 | Spatial document context | `spatial_image_transform`, `spatial_label_transform`, `spatial_root`, `spatial_label_store` | Immutable alternate-document renderer context | Retain as handles/values derived from the actor-opened document resource |
-| External spatial adapters | `spatial_image_layers`, `spatial_layers`, `xenium_layers` | Mixed actor-projected resources and renderer adapters | Finish external resource narrowing in Milestone 5 |
+| External spatial adapters | `spatial_image_layers`, `spatial_layers`, `xenium_layers` | Renderer adapters over actor-prepared SpatialData/Xenium documents and registered presentation resources | Actor worker owns document metadata/data decoding; renderer retains tile/GPU caches, spatial indexes, hit testing, and paint UI; Milestone 5D complete |
 | Layer transforms | `channel_offsets_world`, `channel_scales`, `channel_rotations_rad`, `loaded_layer_offsets_world`, `points_offset_world`, `spatial_points_offset_world`, `seg_labels_offset_world`, `seg_geojson_offset_world`, `seg_objects_offset_world`, `xenium_cells_offset_world`, `xenium_transcripts_offset_world` | Actor-native presentation for migrated layers and legacy mirrors for others | Actor per-viewport presentation; Wave 6/7 |
 | Layer ordering/gestures | `overlay_layer_order`, `channel_layer_order`, `channel_sort_mode`, `layer_drag`, `layer_move`, `layer_transform` | Actor ordering mirror plus transient gestures | Actor owns order; drag/move/transform previews remain transient; Wave 7 |
 | TIFF plane state | `tiff_plane_state` | Alternate-document resource plus dialog draft | Actor document/plane model and transient draft; Wave 2D |

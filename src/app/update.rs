@@ -74,7 +74,6 @@ impl eframe::App for OmeZarrViewerApp {
         }
         self.spatial_image_layers.tick();
         self.spatial_layers.tick();
-        self.xenium_layers.tick();
         self.legacy_cell_threshold_points
             .tick(&mut self.cell_points);
         self.roi_selector_ui.tick();

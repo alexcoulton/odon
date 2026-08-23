@@ -9,6 +9,10 @@ pub use discover::{
 };
 pub use image_layers::{PreparedSpatialImage, SpatialImageLayer, SpatialImageLayers};
 pub use layers::{PositiveCellSelectionTarget, SpatialDataLayers, SpatialShapesLayer};
+pub(crate) use layers::{
+    PreparedSpatialPointsLayer, PreparedSpatialShape, prepare_spatial_points_layer,
+    prepare_spatial_shape_data,
+};
 pub use parquet_points::{PointsLoadOptions, PointsMeta, PointsPayload, load_points_sample};
 pub use parquet_shapes::{
     ShapesLoadOptions, ShapesObjectSchema, ShapesRenderKind, detect_shapes_render_kind,

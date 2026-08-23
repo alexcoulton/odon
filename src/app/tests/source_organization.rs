@@ -1077,6 +1077,38 @@ fn spatialdata_layers_stay_split_by_responsibility() {
 }
 
 #[test]
+fn spatialdata_and_xenium_documents_install_actor_prepared_resources() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let datasets = source(root.join("src/app_support/datasets.rs"));
+    let integration = source(root.join("src/app/project_integration.rs"));
+    let points = source(root.join("src/spatialdata/layers/points.rs"));
+    let shapes = source(root.join("src/spatialdata/layers/shapes.rs"));
+    let xenium = source(root.join("src/xenium/layers.rs"));
+    let update = source(root.join("src/app/update.rs"));
+
+    assert!(datasets.contains("Vec<crate::spatialdata::PreparedSpatialShape>"));
+    assert!(datasets.contains("Option<crate::spatialdata::PreparedSpatialPointsLayer>"));
+    assert!(datasets.contains("prepare_spatial_shape_data("));
+    assert!(datasets.contains("prepare_spatial_points_layer("));
+    assert!(integration.contains("attach_prepared_shapes(shapes)"));
+    assert!(integration.contains("attach_prepared_points(points)"));
+    assert!(!integration.contains("fn attach_spatialdata_layers("));
+    assert!(!integration.contains("load_spatialdata_shapes("));
+
+    assert!(points.contains("fn from_prepared("));
+    assert!(!points.contains("spatialdata-points-loader"));
+    assert!(!points.contains("fn request_load("));
+    assert!(!points.contains("Receiver<anyhow::Result<PreparedSpatialPoints>>"));
+    assert!(shapes.contains("fn from_prepared("));
+
+    assert!(xenium.contains("fn from_prepared("));
+    assert!(!xenium.contains("xenium-transcripts-preload"));
+    assert!(!xenium.contains("preload_rx"));
+    assert!(!xenium.contains("fn request_preload_all("));
+    assert!(!update.contains("self.xenium_layers.tick()"));
+}
+
+#[test]
 fn spatialdata_parquet_shapes_stay_split_by_responsibility() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let facade = source(root.join("src/spatialdata/parquet_shapes.rs"));

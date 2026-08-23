@@ -33,8 +33,8 @@ pub(crate) struct PreparedSpatialDataDocument {
     pub extra_images: Vec<crate::spatialdata::PreparedSpatialImage>,
     pub labels: Option<SpatialDataElement>,
     pub tables: Vec<SpatialDataElement>,
-    pub shapes: Vec<SpatialDataElement>,
-    pub points: Option<(SpatialDataElement, usize)>,
+    pub shapes: Vec<crate::spatialdata::PreparedSpatialShape>,
+    pub points: Option<crate::spatialdata::PreparedSpatialPointsLayer>,
 }
 
 #[derive(Clone)]
@@ -183,6 +183,7 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
             .collect::<anyhow::Result<Vec<_>>>()?;
         let mut next_shape_layer_id = 1_u64;
         let mut object_layers = Vec::new();
+        let mut prepared_shapes = Vec::new();
         for shape in &shapes {
             let Some(relative_path) = shape.rel_parquet.as_ref() else {
                 continue;
@@ -198,39 +199,87 @@ impl AlternateDatasetBackend for NativeAlternateDatasetBackend {
                         | crate::spatialdata::ShapesRenderKind::Circles
                 )
                 || (render_kind == crate::spatialdata::ShapesRenderKind::Lines && supports_objects);
+            let numeric_layer_id = (!primary).then(|| {
+                let id = next_shape_layer_id;
+                next_shape_layer_id = next_shape_layer_id.wrapping_add(1).max(1);
+                id
+            });
             let layer_id = if primary {
                 "segmentation_objects".to_string()
             } else {
-                let id = next_shape_layer_id;
-                next_shape_layer_id = next_shape_layer_id.wrapping_add(1).max(1);
-                format!("spatial_shape:{id}")
+                format!(
+                    "spatial_shape:{}",
+                    numeric_layer_id.expect("non-primary ID")
+                )
             };
-            if !actor_object_layer {
-                continue;
-            }
             let transform = shape.transform.relative_to(image.transform);
-            let resource =
-                crate::objects::load_control_spatialdata_object_resource(parquet_path, transform)?;
-            object_layers.push(DocumentObjectLayerResource {
-                layer_id,
-                name: shape.name.clone(),
-                kind: if primary {
-                    "segmentation_objects".to_string()
+            if actor_object_layer {
+                let resource = crate::objects::load_control_spatialdata_object_resource(
+                    parquet_path.clone(),
+                    transform,
+                )?;
+                object_layers.push(DocumentObjectLayerResource {
+                    layer_id,
+                    name: shape.name.clone(),
+                    kind: if primary {
+                        "segmentation_objects".to_string()
+                    } else {
+                        "spatial_shape".to_string()
+                    },
+                    primary,
+                    resource: Arc::new(resource),
+                });
+            }
+            if let Some(id) = numeric_layer_id {
+                let mut element = shape.clone();
+                element.transform = transform;
+                let data = if actor_object_layer {
+                    None
                 } else {
-                    "spatial_shape".to_string()
-                },
-                primary,
-                resource: Arc::new(resource),
-            });
+                    Some(crate::spatialdata::prepare_spatial_shape_data(
+                        &parquet_path,
+                        transform,
+                    )?)
+                };
+                prepared_shapes.push(crate::spatialdata::PreparedSpatialShape {
+                    id,
+                    element,
+                    object_backed: actor_object_layer,
+                    data,
+                });
+            }
         }
+        let prepared_points = points
+            .as_ref()
+            .map(|element| {
+                let relative_path = element.rel_parquet.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("SpatialData points element has no parquet path")
+                })?;
+                let transform = element.transform.relative_to(image.transform);
+                let image_size_world = dataset.levels.first().and_then(|level| {
+                    Some([
+                        *level.shape.get(dataset.dims.x)? as f32,
+                        *level.shape.get(dataset.dims.y)? as f32,
+                    ])
+                });
+                crate::spatialdata::prepare_spatial_points_layer(
+                    format!("Points: {}", element.name),
+                    discovery.root.join(relative_path),
+                    transform,
+                    element.feature_key.clone(),
+                    options.points_max,
+                    image_size_world,
+                )
+            })
+            .transpose()?;
         let payload = PreparedSpatialDataDocument {
             root: discovery.root,
             image_transform: image.transform,
             extra_images: prepared_extra_images,
             labels,
             tables: discovery.tables,
-            shapes,
-            points: points.map(|element| (element, options.points_max)),
+            shapes: prepared_shapes,
+            points: prepared_points,
         };
         Ok((
             OpenedDocument {

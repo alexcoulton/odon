@@ -34,28 +34,6 @@ impl SpatialImageLayers {
         self.next_id = 1;
     }
 
-    pub fn load_image(
-        &mut self,
-        root: &Path,
-        element: &SpatialDataElement,
-        gpu_available: bool,
-        smooth_pixels: bool,
-    ) -> anyhow::Result<u64> {
-        let id = self.next_id.max(1);
-        self.next_id = id.wrapping_add(1).max(1);
-        let layer = SpatialImageLayer::open(
-            id,
-            None,
-            None,
-            format!("Image: {}", element.name),
-            root.join(&element.rel_group),
-            gpu_available,
-            smooth_pixels,
-        )?;
-        self.images.push(layer);
-        Ok(id)
-    }
-
     pub fn load_prepared_image(
         &mut self,
         prepared: PreparedSpatialImage,
