@@ -2,9 +2,9 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(super) fn ensure_threshold_region_full_level_default(&mut self) {
-        if self.threshold_region_full_level < self.dataset.levels.len()
+        if self.threshold_region_draft.full_level < self.dataset.levels.len()
             && self
-                .threshold_region_level_pixel_count(self.threshold_region_full_level)
+                .threshold_region_level_pixel_count(self.threshold_region_draft.full_level)
                 .is_some_and(|pixels| pixels <= THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS)
         {
             return;
@@ -15,9 +15,9 @@ impl OmeZarrViewerApp {
             self.dataset.dims.x,
             THRESHOLD_REGION_MAX_INTERACTIVE_PIXELS,
         ) {
-            self.threshold_region_full_level = level;
+            self.threshold_region_draft.full_level = level;
         } else {
-            self.threshold_region_full_level = self.dataset.levels.len().saturating_sub(1);
+            self.threshold_region_draft.full_level = self.dataset.levels.len().saturating_sub(1);
         }
     }
 

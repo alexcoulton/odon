@@ -1750,6 +1750,38 @@ fn document_tiff_plane_and_tile_policy_commits_are_actor_only() {
 }
 
 #[test]
+fn threshold_controls_wait_for_actor_projection_and_shared_resources() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let controls = source(root.join("src/app/contrast_ui.rs"));
+    let projection = source(root.join("src/app/actor_projection.rs"));
+    let worker = source(root.join("src/control/actor/worker.rs"));
+
+    for method in [
+        "viewer.thresholds.preview.start",
+        "viewer.thresholds.preview.configure",
+        "viewer.thresholds.preview.refresh",
+        "viewer.thresholds.preview.apply",
+        "viewer.thresholds.preview.cancel",
+    ] {
+        assert!(controls.contains(method));
+    }
+    for forbidden in [
+        "self.threshold_region_min_pixels =",
+        "self.threshold_region_scope =",
+        "self.threshold_region_full_level =",
+        "self.threshold_region_status.clear()",
+        "self.threshold_region_preview.as_mut()",
+    ] {
+        assert!(
+            !controls.contains(forbidden),
+            "threshold UI must not optimistically mutate actor projection/resource state: {forbidden}"
+        );
+    }
+    assert!(projection.contains("ControlThresholdPreviewResource"));
+    assert!(worker.contains("LoadJob::Threshold"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -2041,7 +2073,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 293,
+        total_fields, 294,
         "review the ownership ledger when host fields change"
     );
 }

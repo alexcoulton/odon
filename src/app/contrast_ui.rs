@@ -238,31 +238,34 @@ impl OmeZarrViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Scope");
                     ui.selectable_value(
-                        &mut self.threshold_region_scope,
+                        &mut self.threshold_region_draft.scope,
                         ThresholdRegionScope::VisibleRegion,
                         "Visible region",
                     );
                     ui.selectable_value(
-                        &mut self.threshold_region_scope,
+                        &mut self.threshold_region_draft.scope,
                         ThresholdRegionScope::EntireImage,
                         "Entire image",
                     );
                 });
 
                 let mut start_enabled = true;
-                let mut start_label = match self.threshold_region_scope {
+                let mut start_label = match self.threshold_region_draft.scope {
                     ThresholdRegionScope::VisibleRegion => "Start threshold preview from visible region".to_string(),
                     ThresholdRegionScope::EntireImage => "Start threshold preview from entire image".to_string(),
                 };
-                if self.threshold_region_scope == ThresholdRegionScope::EntireImage {
+                if self.threshold_region_draft.scope == ThresholdRegionScope::EntireImage {
                     self.ensure_threshold_region_full_level_default();
                     let max_level = self.dataset.levels.len().saturating_sub(1);
-                    self.threshold_region_full_level =
-                        self.threshold_region_full_level.min(max_level);
+                    self.threshold_region_draft.full_level =
+                        self.threshold_region_draft.full_level.min(max_level);
                     ui.horizontal(|ui| {
                         ui.label("Level");
                         egui::ComboBox::from_id_salt("threshold-region-full-level")
-                            .selected_text(format!("Level {}", self.threshold_region_full_level))
+                            .selected_text(format!(
+                                "Level {}",
+                                self.threshold_region_draft.full_level
+                            ))
                             .show_ui(ui, |ui| {
                                 for level in &self.dataset.levels {
                                     let label = self
@@ -282,7 +285,7 @@ impl OmeZarrViewerApp {
                                         })
                                         .unwrap_or_else(|| format!("Level {}", level.index));
                                     ui.selectable_value(
-                                        &mut self.threshold_region_full_level,
+                                        &mut self.threshold_region_draft.full_level,
                                         level.index,
                                         label,
                                     );
@@ -290,7 +293,9 @@ impl OmeZarrViewerApp {
                             });
                     });
                     if let Some((width, height, pixels)) =
-                        self.threshold_region_full_level_summary(self.threshold_region_full_level)
+                        self.threshold_region_full_level_summary(
+                            self.threshold_region_draft.full_level,
+                        )
                     {
                         ui.label(format!(
                             "Preview size: {width} x {height} ({pixels} pixels)."
@@ -313,8 +318,7 @@ impl OmeZarrViewerApp {
                     .add_enabled(start_enabled, egui::Button::new(start_label))
                     .clicked()
                 {
-                    self.threshold_region_status.clear();
-                    let scope = match self.threshold_region_scope {
+                    let scope = match self.threshold_region_draft.scope {
                         ThresholdRegionScope::VisibleRegion => "visible",
                         ThresholdRegionScope::EntireImage => "entire_image",
                     };
@@ -322,8 +326,8 @@ impl OmeZarrViewerApp {
                         method: "viewer.thresholds.preview.start",
                         params: serde_json::json!({
                             "scope":scope,
-                            "level":self.threshold_region_full_level,
-                            "min_component_pixels":self.threshold_region_min_pixels,
+                            "level":self.threshold_region_draft.full_level,
+                            "min_component_pixels":self.threshold_region_draft.min_pixels,
                             "channel":self.selected_channel,
                         }),
                     });
@@ -379,18 +383,10 @@ impl OmeZarrViewerApp {
                         .changed()
                     })
                     .inner;
-                let mut preview_changed = false;
-                if threshold_changed {
-                    if let Some(preview) = self.threshold_region_preview.as_mut() {
-                        preview.threshold = threshold;
-                    }
-                    preview_changed = true;
-                }
-                if min_pixels_changed && min_pixels != self.threshold_region_min_pixels {
-                    self.threshold_region_min_pixels = min_pixels;
-                    preview_changed = true;
-                }
-                if preview_changed {
+                if threshold_changed
+                    || (min_pixels_changed
+                        && min_pixels != self.threshold_region_min_pixels)
+                {
                     self.native_control_intents.push(NativeControlIntent {
                         method: "viewer.thresholds.preview.configure",
                         params: serde_json::json!({
@@ -402,14 +398,12 @@ impl OmeZarrViewerApp {
 
                 ui.horizontal(|ui| {
                     if ui.button("Refresh preview").clicked() {
-                        self.threshold_region_status.clear();
                         self.native_control_intents.push(NativeControlIntent {
                             method: "viewer.thresholds.preview.refresh",
                             params: serde_json::json!({}),
                         });
                     }
                     if ui.button("Apply mask from preview").clicked() {
-                        self.threshold_region_status.clear();
                         self.native_control_intents.push(NativeControlIntent {
                             method: "viewer.thresholds.preview.apply",
                             params: serde_json::json!({"sync_project":true}),
@@ -430,7 +424,7 @@ impl OmeZarrViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Min component pixels");
                     ui.add(
-                        egui::DragValue::new(&mut self.threshold_region_min_pixels)
+                        egui::DragValue::new(&mut self.threshold_region_draft.min_pixels)
                             .range(1..=1_000_000)
                             .speed(1.0),
                     );

@@ -232,15 +232,15 @@
         "milestone": 5
       },
       {
-        "id": "viewer.point_annotation_resources",
+        "id": "viewer.cell_threshold_points",
         "fields": ["cell_points"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor point resource registry",
-        "projection_source": "point resource generation",
-        "renderer_consumers": "point render adapter",
-        "persistence_consumers": "project resource descriptor",
-        "native_commit_point": "typed point resource command",
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "CellThresholdsPanel renderer data adapter",
+        "projection_source": "native-only cell-threshold loader result and actor-projected layer presentation",
+        "renderer_consumers": "point render adapter and native cell-threshold panel",
+        "persistence_consumers": "none; threshold configuration is separate from the point draw cache",
+        "native_commit_point": "none; renderer data cache",
         "milestone": 5
       },
       {
@@ -292,15 +292,39 @@
         "milestone": 4
       },
       {
-        "id": "viewer.threshold_preview",
-        "fields": ["threshold_region_min_pixels", "threshold_region_scope", "threshold_region_full_level", "threshold_region_status", "threshold_region_preview"],
-        "current_class": "mixed_compatibility",
-        "disposition": "replace",
+        "id": "viewer.threshold_projection",
+        "fields": ["threshold_region_min_pixels", "threshold_region_scope", "threshold_region_full_level", "threshold_region_status"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
         "canonical_writer": "ControlActor threshold retained task",
-        "projection_source": "threshold preview generation and shared result",
-        "renderer_consumers": "threshold panel and preview renderer",
+        "projection_source": "threshold preview state generation",
+        "renderer_consumers": "threshold panel",
         "persistence_consumers": "analysis configuration",
         "native_commit_point": "typed threshold command",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.threshold_resource",
+        "fields": ["threshold_region_preview"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor bounded threshold worker",
+        "projection_source": "generation-tagged ControlThresholdPreviewResource",
+        "renderer_consumers": "CPU/GPU threshold preview adapters",
+        "persistence_consumers": "none; applied masks are committed separately by the actor",
+        "native_commit_point": "typed threshold preview command",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.threshold_draft",
+        "fields": ["threshold_region_draft"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "egui threshold controls",
+        "projection_source": "current actor threshold configuration",
+        "renderer_consumers": "threshold start controls",
+        "persistence_consumers": "none",
+        "native_commit_point": "typed threshold preview command",
         "milestone": 5
       },
       {

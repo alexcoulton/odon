@@ -96,6 +96,11 @@ impl OmeZarrViewerApp {
         if let Some(status) = state.get("status").and_then(serde_json::Value::as_str) {
             self.threshold_region_status = status.to_string();
         }
+        self.threshold_region_draft = ThresholdRegionDraft {
+            min_pixels: self.threshold_region_min_pixels,
+            scope: self.threshold_region_scope,
+            full_level: self.threshold_region_full_level,
+        };
         if let Some(resource) = resource {
             if resource.generation() <= self.control_actor_threshold_generation {
                 return Ok(());

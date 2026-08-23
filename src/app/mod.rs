@@ -596,6 +596,13 @@ enum ThresholdRegionScope {
     EntireImage,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ThresholdRegionDraft {
+    min_pixels: usize,
+    scope: ThresholdRegionScope,
+    full_level: usize,
+}
+
 impl ThresholdRegionScope {
     fn label(self) -> &'static str {
         match self {
@@ -1928,6 +1935,7 @@ pub struct OmeZarrViewerApp {
     threshold_region_full_level: usize,
     threshold_region_status: String,
     threshold_region_preview: Option<ThresholdRegionPreview>,
+    threshold_region_draft: ThresholdRegionDraft,
     cells_outlines_visible: bool,
     cells_outlines_color_rgb: [u8; 3],
     cells_outlines_opacity: f32,
