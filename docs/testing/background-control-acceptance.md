@@ -45,7 +45,7 @@ The following checks cover the parts that do not require a real native window co
 | Production project attachment and dataset switching cannot restore semantic view state directly in the renderer | viewport source guard | Passing; legacy restorer is test-only |
 | Periodic renderer observation excludes actor-owned semantic state | `renderer_observation_excludes_actor_owned_workspace_semantics` | Passing |
 | Renderer frames cannot advance viewport revisions or linked navigation | `horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas` plus the viewport source guard | Passing |
-| Per-viewport canvas/cache history is structurally separate from projected semantic fields | `viewport_render_history_is_explicitly_separated_from_projected_state` | Passing |
+| Per-viewport render history and interaction/cache drafts are structurally separate from projected semantic fields | `viewport_render_history_is_explicitly_separated_from_projected_state` | Passing |
 | Native camera fit queues before the first projection without mutating renderer state | `native_camera_fit_queues_before_first_projection_without_mutating_renderer_state` | Passing |
 | Native channel controls queue before the first projection without mutating renderer state | `native_channel_controls_queue_before_first_projection_without_mutating_renderer_state` plus the viewport source guard | Passing |
 | Native layer commits queue before the first projection without mutating renderer state | `native_layer_commits_queue_before_first_projection_without_mutating_renderer_state` plus the viewport source guard | Passing |

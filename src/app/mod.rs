@@ -813,12 +813,21 @@ struct ViewportRenderState {
 }
 
 #[derive(Debug, Clone)]
+struct ViewportTransientState {
+    draft_view_slice_level0: Option<u64>,
+    selected_channel_layers: HashSet<usize>,
+    selected_channel_group_id: Option<u64>,
+    selected_overlay_layers: HashSet<LayerId>,
+    object_filter_cache: ObjectViewportFilterCacheState,
+}
+
+#[derive(Debug, Clone)]
 struct ViewerViewportState {
     camera: Camera,
     render: ViewportRenderState,
+    transient: ViewportTransientState,
     selected_channel: usize,
     view_plane_mode: ViewPlaneMode,
-    draft_view_slice_level0: Option<u64>,
     current_x_level0: u64,
     current_y_level0: u64,
     current_z_level0: u64,
@@ -826,15 +835,11 @@ struct ViewerViewportState {
     layer_groups: ProjectLayerGroups,
     channel_window_overrides: HashMap<String, (f32, f32)>,
     active_layer: LayerId,
-    selected_channel_layers: HashSet<usize>,
-    selected_channel_group_id: Option<u64>,
-    selected_overlay_layers: HashSet<LayerId>,
     overlay_layer_order: Vec<LayerId>,
     channel_layer_order: Vec<usize>,
     channel_sort_mode: ChannelSortMode,
     object_display: ObjectProjectDisplayState,
     object_filter: ObjectViewportFilterState,
-    object_filter_cache: ObjectViewportFilterCacheState,
     object_visible: bool,
     object_opacity: f32,
     object_width_screen_px: f32,
@@ -1497,9 +1502,15 @@ impl ViewerViewportState {
                 zoom_out_floor_until: app.zoom_out_floor_until,
                 zoom_out_floor_visible_world_tiles: app.zoom_out_floor_visible_world_tiles,
             },
+            transient: ViewportTransientState {
+                draft_view_slice_level0: app.draft_view_slice_level0,
+                selected_channel_layers: app.selected_channel_layers.clone(),
+                selected_channel_group_id: app.selected_channel_group_id,
+                selected_overlay_layers: app.selected_overlay_layers.clone(),
+                object_filter_cache: app.seg_objects.viewport_filter_cache_state(),
+            },
             selected_channel: app.selected_channel,
             view_plane_mode: app.view_plane_mode,
-            draft_view_slice_level0: app.draft_view_slice_level0,
             current_x_level0: app.current_x_level0,
             current_y_level0: app.current_y_level0,
             current_z_level0: app.current_z_level0,
@@ -1507,15 +1518,11 @@ impl ViewerViewportState {
             layer_groups: app.current_layer_groups(),
             channel_window_overrides: app.channel_window_overrides.clone(),
             active_layer: app.active_layer,
-            selected_channel_layers: app.selected_channel_layers.clone(),
-            selected_channel_group_id: app.selected_channel_group_id,
-            selected_overlay_layers: app.selected_overlay_layers.clone(),
             overlay_layer_order: app.overlay_layer_order.clone(),
             channel_layer_order: app.channel_layer_order.clone(),
             channel_sort_mode: app.channel_sort_mode,
             object_display: app.seg_objects.project_display_state(),
             object_filter: app.seg_objects.viewport_filter_state(),
-            object_filter_cache: app.seg_objects.viewport_filter_cache_state(),
             object_visible: app.seg_objects.visible,
             object_opacity: app.seg_objects.opacity,
             object_width_screen_px: app.seg_objects.width_screen_px,
@@ -1631,7 +1638,7 @@ impl ViewerViewportState {
         app.zoom_out_floor_visible_world_tiles = self.render.zoom_out_floor_visible_world_tiles;
         app.selected_channel = self.selected_channel;
         app.view_plane_mode = self.view_plane_mode;
-        app.draft_view_slice_level0 = self.draft_view_slice_level0;
+        app.draft_view_slice_level0 = self.transient.draft_view_slice_level0;
         app.current_x_level0 = self.current_x_level0;
         app.current_y_level0 = self.current_y_level0;
         app.current_z_level0 = self.current_z_level0;
@@ -1653,10 +1660,10 @@ impl ViewerViewportState {
             .clone_from(&self.channel_window_overrides);
         app.active_layer = self.active_layer;
         app.selected_channel_layers
-            .clone_from(&self.selected_channel_layers);
-        app.selected_channel_group_id = self.selected_channel_group_id;
+            .clone_from(&self.transient.selected_channel_layers);
+        app.selected_channel_group_id = self.transient.selected_channel_group_id;
         app.selected_overlay_layers
-            .clone_from(&self.selected_overlay_layers);
+            .clone_from(&self.transient.selected_overlay_layers);
         app.overlay_layer_order
             .clone_from(&self.overlay_layer_order);
         app.channel_layer_order
@@ -1667,7 +1674,7 @@ impl ViewerViewportState {
         app.seg_objects
             .apply_viewport_filter_state(&self.object_filter);
         app.seg_objects
-            .apply_viewport_filter_cache_state(&self.object_filter_cache);
+            .apply_viewport_filter_cache_state(&self.transient.object_filter_cache);
         app.seg_objects.visible = self.object_visible;
         app.seg_objects.opacity = self.object_opacity;
         app.seg_objects.width_screen_px = self.object_width_screen_px;

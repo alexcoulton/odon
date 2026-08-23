@@ -818,7 +818,7 @@ impl OmeZarrViewerApp {
                     ViewPlaneMode::Xz => state.current_y_level0 = slice,
                     ViewPlaneMode::Yz => state.current_x_level0 = slice,
                 }
-                state.draft_view_slice_level0 = None;
+                state.transient.draft_view_slice_level0 = None;
             }
         }
 
@@ -1021,7 +1021,7 @@ impl OmeZarrViewerApp {
             if let Some(filter) = objects.get("filter") {
                 state.object_filter = ObjectViewportFilterState::from_project_json(filter)
                     .map_err(|error| format!("actor object filter is invalid: {error}"))?;
-                state.object_filter_cache = ObjectViewportFilterCacheState::empty();
+                state.transient.object_filter_cache = ObjectViewportFilterCacheState::empty();
             }
         }
 

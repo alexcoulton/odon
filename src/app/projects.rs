@@ -174,7 +174,7 @@ impl OmeZarrViewerApp {
             }
             if let Some(filter) = saved_viewport.object_filter.as_ref() {
                 state.object_filter = ObjectViewportFilterState::from_project_json(filter)?;
-                state.object_filter_cache = ObjectViewportFilterCacheState::empty();
+                state.transient.object_filter_cache = ObjectViewportFilterCacheState::empty();
             }
             if let Some(value) = saved_viewport.object_visible {
                 state.object_visible = value;

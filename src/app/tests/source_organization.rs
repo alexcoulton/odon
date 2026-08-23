@@ -1300,6 +1300,27 @@ fn viewport_render_history_is_explicitly_separated_from_projected_state() {
     assert!(projected_state.contains("render: ViewportRenderState"));
     assert!(!projected_state.contains("last_canvas_rect:"));
     assert!(!projected_state.contains("active_render_id:"));
+
+    let transient_state = app
+        .split("struct ViewportTransientState {")
+        .nth(1)
+        .and_then(|tail| tail.split("struct ViewerViewportState {").next())
+        .expect("viewport transient state precedes projected viewport state");
+    for field in [
+        "draft_view_slice_level0",
+        "selected_channel_layers",
+        "selected_channel_group_id",
+        "selected_overlay_layers",
+        "object_filter_cache",
+    ] {
+        assert!(
+            transient_state.contains(field),
+            "transient interaction field must remain isolated: {field}"
+        );
+    }
+    assert!(projected_state.contains("transient: ViewportTransientState"));
+    assert!(!projected_state.contains("draft_view_slice_level0:"));
+    assert!(!projected_state.contains("object_filter_cache:"));
 }
 
 #[test]

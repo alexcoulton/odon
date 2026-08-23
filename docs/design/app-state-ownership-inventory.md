@@ -347,7 +347,8 @@ per-frame viewport container stays open in the `viewer.workspace_projection` led
 heavyweight project resource materialization is tracked in the resource milestones. The first
 container split is in place: `ViewportRenderState` now isolates canvas geometry, render IDs,
 previous selections, level/fallback history, and zoom-out retention from projected viewport
-semantics.
+semantics. `ViewportTransientState` separately contains slice drafts, channel/group/overlay
+multi-selection, and object-filter cache state.
 Frame capture may retain an optimistic camera or slice preview for painting, but it no longer
 increments actor-owned navigation/presentation revisions or copies linked navigation to sibling
 viewports. Camera fit and committed plane changes always queue typed actor commands; query-only

@@ -207,7 +207,9 @@ annotation and other heavyweight project resources belong to the shared-resource
 Milestone 5. The combined viewport value now contains an explicit nested `ViewportRenderState` for
 canvas geometry, render generations, prior plane selections, level history, fallback ceilings, and
 zoom-out retention. This makes those renderer-only fields mechanically distinct from the actor
-projection fields while the two are still carried by one workspace container. Native channel
+projection fields while the two are still carried by one workspace container. Channel selection
+drafts, slice drafts, overlay multi-selection, and object-filter caches are likewise isolated in
+`ViewportTransientState`, rather than appearing as projected semantic fields. Native channel
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
 the renderer only as the current paint/UI input.

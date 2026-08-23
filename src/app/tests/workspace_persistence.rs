@@ -73,7 +73,7 @@ fn multi_viewport_workspace_roundtrips_through_versioned_project_state() {
             .unwrap()
             .state;
         state.object_filter = filter;
-        state.object_filter_cache = ObjectViewportFilterCacheState::empty();
+        state.transient.object_filter_cache = ObjectViewportFilterCacheState::empty();
         state.clone()
     };
     right_state.apply(&mut app);
