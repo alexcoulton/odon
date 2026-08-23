@@ -538,14 +538,14 @@ impl AppModel {
         self.renderer_gpu_available = available;
     }
 
-    pub fn bootstrap_dataset_from_renderer(
-        &mut self,
-        dataset: &OmeZarrDataset,
-        workspace: &Value,
-    ) -> Result<(), ControlError> {
+    pub fn bootstrap_dataset(&mut self, dataset: &OmeZarrDataset) -> Result<(), ControlError> {
         self.document_generation = self.document_generation.wrapping_add(1).max(1);
+        let source_key = dataset.source.source_key();
         self.install_dataset(dataset);
-        self.restore_renderer_workspace(workspace)
+        if let Some(view) = self.project.roi_view_state_json(&source_key).cloned() {
+            self.restore_project_roi_view(&view)?;
+        }
+        Ok(())
     }
 
     /// Merge renderer-owned compatibility data into the canonical model.

@@ -1,12 +1,16 @@
 use super::*;
 use odon::control::ControlCommand;
 
-fn actor_model_from_renderer(app: &mut OmeZarrViewerApp) -> odon::model::AppModel {
-    let renderer_workspace = app.control_viewport_workspace_snapshot();
+fn actor_model_fixture(app: &mut OmeZarrViewerApp) -> odon::model::AppModel {
     let mut model = odon::model::AppModel::project();
     model
-        .bootstrap_dataset_from_renderer(&app.dataset, &renderer_workspace)
-        .expect("fixture renderer state bootstraps the actor model");
+        .bootstrap_dataset(&app.dataset)
+        .expect("fixture installs the actor dataset");
+    let projection = model
+        .render_workspace_snapshot()
+        .expect("installed dataset has an actor projection");
+    app.apply_control_actor_workspace_projection(&projection)
+        .expect("fixture consumes the canonical actor projection");
     app.control_actor_workspace_revision = 1;
     model
 }
@@ -33,7 +37,7 @@ fn replay(model: &mut odon::model::AppModel, intent: NativeControlIntent) {
 #[test]
 fn native_layer_visibility_commits_directly_without_mutating_the_renderer() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     assert!(app.channels[0].visible);
 
     assert!(app.submit_native_layer_visibility(LayerId::Channel(0), false));
@@ -51,7 +55,7 @@ fn native_layer_visibility_commits_directly_without_mutating_the_renderer() {
 #[test]
 fn native_layer_active_and_order_interactions_emit_direct_actor_commands() {
     let mut active_app = fixture_app();
-    let mut active_model = actor_model_from_renderer(&mut active_app);
+    let mut active_model = actor_model_fixture(&mut active_app);
     let active_before = active_app.active_layer;
     active_app.commit_active_layer(LayerId::Channel(2));
     assert_eq!(active_app.active_layer, active_before);
@@ -67,7 +71,7 @@ fn native_layer_active_and_order_interactions_emit_direct_actor_commands() {
     assert_eq!(active["layer_id"], "channel:2");
 
     let mut order_app = fixture_app();
-    let mut order_model = actor_model_from_renderer(&mut order_app);
+    let mut order_model = actor_model_fixture(&mut order_app);
     let before = order_app.channel_layer_order.clone();
     let channel_count = order_app.channels.len();
     assert!(
@@ -86,7 +90,7 @@ fn native_layer_active_and_order_interactions_emit_direct_actor_commands() {
 #[test]
 fn native_layer_bulk_visibility_and_offsets_are_atomic_actor_transactions() {
     let mut visibility_app = fixture_app();
-    let mut visibility_model = actor_model_from_renderer(&mut visibility_app);
+    let mut visibility_model = actor_model_fixture(&mut visibility_app);
     assert!(
         visibility_app
             .submit_native_layer_visibilities([LayerId::Channel(0), LayerId::Channel(1)], false,)
@@ -100,7 +104,7 @@ fn native_layer_bulk_visibility_and_offsets_are_atomic_actor_transactions() {
     assert_eq!(workspace["viewports"][0]["channels"][1]["visible"], false);
 
     let mut offset_app = fixture_app();
-    let mut offset_model = actor_model_from_renderer(&mut offset_app);
+    let mut offset_model = actor_model_fixture(&mut offset_app);
     assert!(offset_app.commit_layer_offsets(&[LayerOffsetEntry {
         layer: LayerId::Channel(0),
         offset_world: egui::vec2(11.0, -3.0),
@@ -121,7 +125,7 @@ fn native_layer_bulk_visibility_and_offsets_are_atomic_actor_transactions() {
 #[test]
 fn actor_native_layer_projection_is_the_only_committed_renderer_write() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     assert!(app.submit_native_layer_visibility(LayerId::Channel(0), false));
     let intent = take_one(&mut app, "viewer.viewports.layers.set_visibility");
     replay(&mut model, intent);
@@ -201,7 +205,7 @@ fn native_layer_projection_clears_an_explicit_null_channel_window() {
 #[test]
 fn native_channel_transform_is_revision_checked_and_projection_committed() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     assert!(app.submit_native_channel_transform(
         0,
         Some(egui::vec2(3.0, -2.0)),

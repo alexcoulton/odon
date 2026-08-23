@@ -1238,6 +1238,23 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(root.contains("app.control_renderer_observation_snapshot()"));
     assert!(root.contains("report_renderer_observation("));
     assert!(!root.contains("app.set_show_scale_bar(visible)"));
+    assert!(root.contains("runtime.bootstrap_project_model(snapshot)"));
+    assert!(
+        !root.contains("app.control_viewport_workspace_snapshot(),"),
+        "dataset bootstrap must restore actor-owned project state instead of importing a renderer workspace"
+    );
+
+    let actor_runtime =
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/control/actor/runtime.rs"));
+    let bootstrap_variant = actor_runtime
+        .split("BootstrapDataset {")
+        .nth(1)
+        .and_then(|tail| tail.split("},").next())
+        .expect("actor runtime declares BootstrapDataset");
+    assert!(
+        !bootstrap_variant.contains("workspace"),
+        "renderer workspace data must not cross the production dataset-bootstrap boundary"
+    );
 }
 
 #[test]

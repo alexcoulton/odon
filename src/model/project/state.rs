@@ -12,6 +12,14 @@ use super::validation::*;
 use super::*;
 
 impl ProjectModel {
+    pub(crate) fn roi_view_state_json(&self, source_key: &str) -> Option<&Value> {
+        self.snapshot
+            .state
+            .get("roi_views")
+            .and_then(Value::as_object)
+            .and_then(|views| views.get(source_key))
+    }
+
     pub(crate) fn activate_roi(&mut self, roi: &ProjectRoi) -> Result<(), ControlError> {
         let index = self.roi_index_by_id(&roi.id)?;
         let key = required_source_key(&self.snapshot.rois[index])?;

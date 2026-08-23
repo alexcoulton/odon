@@ -47,10 +47,14 @@ pub(super) struct ActorAppFixture {
 impl ActorAppFixture {
     pub(super) fn new(mut app: OmeZarrViewerApp) -> Self {
         let mut model = AppModel::project();
-        let renderer_workspace = app.control_viewport_workspace_snapshot();
         model
-            .bootstrap_dataset_from_renderer(&app.dataset, &renderer_workspace)
-            .expect("actor fixture bootstraps from renderer state");
+            .bootstrap_dataset(&app.dataset)
+            .expect("actor fixture installs the dataset");
+        let projection = model
+            .render_workspace_snapshot()
+            .expect("installed dataset has an actor projection");
+        app.apply_control_actor_workspace_projection(&projection)
+            .expect("actor fixture starts from the canonical projection");
         Self { app, model }
     }
 

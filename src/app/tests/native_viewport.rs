@@ -1,12 +1,16 @@
 use super::*;
 use odon::control::ControlCommand;
 
-fn actor_model_from_renderer(app: &mut OmeZarrViewerApp) -> odon::model::AppModel {
-    let renderer_workspace = app.control_viewport_workspace_snapshot();
+fn actor_model_fixture(app: &mut OmeZarrViewerApp) -> odon::model::AppModel {
     let mut model = odon::model::AppModel::project();
     model
-        .bootstrap_dataset_from_renderer(&app.dataset, &renderer_workspace)
-        .expect("fixture renderer state bootstraps the actor model");
+        .bootstrap_dataset(&app.dataset)
+        .expect("fixture installs the actor dataset");
+    let projection = model
+        .render_workspace_snapshot()
+        .expect("installed dataset has an actor projection");
+    app.apply_control_actor_workspace_projection(&projection)
+        .expect("fixture consumes the canonical actor projection");
     app.control_actor_workspace_revision = 1;
     model
 }
@@ -115,7 +119,7 @@ fn detached_workspace_retains_the_explicit_native_command_scope() {
 #[test]
 fn native_camera_commit_is_revision_checked_and_replays_through_the_actor() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     let before = app.camera.clone();
     let desired = Camera {
         center_world_lvl0: egui::pos2(123.0, 456.0),
@@ -146,7 +150,7 @@ fn native_camera_commit_is_revision_checked_and_replays_through_the_actor() {
 #[test]
 fn native_channel_group_commit_waits_for_actor_projection() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     let before = app.current_layer_groups();
     let mut desired = before.clone();
     desired.channel_groups.push(ProjectChannelGroup {
@@ -180,7 +184,7 @@ fn native_channel_group_commit_waits_for_actor_projection() {
 #[test]
 fn native_quick_contrast_is_one_atomic_layer_transaction() {
     let mut app = fixture_app();
-    let mut model = actor_model_from_renderer(&mut app);
+    let mut model = actor_model_fixture(&mut app);
     let before = app.channels[0].window;
 
     app.apply_channel_window_to_indices(&[0, 1], 10.0, 80.0);
@@ -202,7 +206,7 @@ fn native_quick_contrast_is_one_atomic_layer_transaction() {
 #[test]
 fn native_object_filter_command_keeps_worker_evaluation_and_revision_guard() {
     let mut app = fixture_app();
-    actor_model_from_renderer(&mut app);
+    actor_model_fixture(&mut app);
     let filter = app.seg_objects.viewport_filter_state();
 
     assert!(app.submit_native_object_filter_at("viewport-1", 4, &filter));

@@ -184,18 +184,11 @@ impl OdonControlRuntime {
     pub fn bootstrap_dataset_model(
         &self,
         dataset: crate::data::ome::OmeZarrDataset,
-        workspace: Value,
         store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
-        path: PathBuf,
     ) {
-        let _ =
-            self.actor_model_tx
-                .send(crate::control::actor::ActorModelUpdate::BootstrapDataset {
-                    dataset,
-                    workspace,
-                    store,
-                    path,
-                });
+        let _ = self
+            .actor_model_tx
+            .send(crate::control::actor::ActorModelUpdate::BootstrapDataset { dataset, store });
     }
 
     pub fn report_renderer_capabilities(&self, gpu_available: bool) {

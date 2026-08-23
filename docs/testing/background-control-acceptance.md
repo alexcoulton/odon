@@ -41,6 +41,7 @@ The following checks cover the parts that do not require a real native window co
 | Legacy UI request dispatcher is absent | `production_control_path_has_no_legacy_ui_dispatcher` | Passing |
 | Renderer adapters contain no semantic command emulators | `renderer_has_no_semantic_command_emulators` | Passing; inventory reduced from 55 to zero |
 | Native viewport topology has no renderer mutation fallback | `native_workspace_topology_commands_do_not_fall_back_to_renderer_mutation` and `native_workspace_topology_has_no_renderer_mutation_fallback` | Passing |
+| Dataset bootstrap restores persisted project views in the actor without importing renderer workspace state | `dataset_bootstrap_restores_actor_project_workspace_and_supersedes_workers` plus the viewport source guard | Passing |
 | Periodic renderer observation excludes actor-owned semantic state | `renderer_observation_excludes_actor_owned_workspace_semantics` | Passing |
 | Renderer frames cannot advance viewport revisions or linked navigation | `horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas` plus the viewport source guard | Passing |
 | Native camera fit queues before the first projection without mutating renderer state | `native_camera_fit_queues_before_first_projection_without_mutating_renderer_state` | Passing |

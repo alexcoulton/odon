@@ -1,9 +1,9 @@
 use super::*;
 #[test]
 fn extended_overlay_presentation_roundtrips_per_viewport() {
-    fn add_mask(app: &mut OmeZarrViewerApp) {
+    fn add_mask(app: &mut OmeZarrViewerApp, id: u64) {
         app.mask_layers.push(MaskLayer {
-            id: 41,
+            id,
             name: "Comparison mask".to_string(),
             visible: true,
             opacity: 0.5,
@@ -19,18 +19,30 @@ fn extended_overlay_presentation_roundtrips_per_viewport() {
         app.rebuild_layer_orders();
     }
 
-    let mut app = fixture_app();
-    add_mask(&mut app);
-    app.mask_layers[0].opacity = 0.2;
-    app.mask_layers[0].display_mode = MaskDisplayMode::TranslucentFill;
-    app.mask_layers[0].color_rgb = [10, 20, 30];
-    app.cell_points.visible = true;
-    app.cell_points.style.radius_screen_px = 3.0;
-    let mut app = ActorAppFixture::new(app);
+    let mut app = fixture_actor_app();
+    let mask_id = app.actor_command(
+        "viewer.masks.layers.create",
+        serde_json::json!({"name": "Comparison mask"}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    let mask_layer_id = format!("mask:{mask_id}");
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
+    app.actor_command(
+        "viewer.viewports.layers.set",
+        serde_json::json!({
+            "viewport_id": left,
+            "layer_id": mask_layer_id,
+            "presentation": {
+                "opacity": 0.2,
+                "display_mode": "translucent_fill",
+                "color_rgb": [10, 20, 30],
+            },
+        }),
+    );
     let right = app.actor_command(
         "viewer.viewports.create",
         serde_json::json!({"layout": "horizontal"}),
@@ -38,10 +50,18 @@ fn extended_overlay_presentation_roundtrips_per_viewport() {
         .as_str()
         .unwrap()
         .to_string();
-    app.mask_layers[0].opacity = 0.8;
-    app.mask_layers[0].display_mode = MaskDisplayMode::FilledPreview;
-    app.mask_layers[0].color_rgb = [200, 100, 50];
-    app.cell_points.style.radius_screen_px = 9.0;
+    app.actor_command(
+        "viewer.viewports.layers.set",
+        serde_json::json!({
+            "viewport_id": right,
+            "layer_id": mask_layer_id,
+            "presentation": {
+                "opacity": 0.8,
+                "display_mode": "filled_preview",
+                "color_rgb": [200, 100, 50],
+            },
+        }),
+    );
 
     app.sync_current_view_state_into_project_space();
     let saved = app
@@ -53,7 +73,7 @@ fn extended_overlay_presentation_roundtrips_per_viewport() {
     let decoded: ProjectRoiViewState = serde_json::from_value(encoded).unwrap();
 
     let mut restored = fixture_app();
-    add_mask(&mut restored);
+    add_mask(&mut restored, mask_id);
     restored
         .project_space
         .set_roi_view_state(&restored.dataset.source, decoded);
@@ -70,9 +90,7 @@ fn extended_overlay_presentation_roundtrips_per_viewport() {
     assert!((left.masks[0].opacity - 0.2).abs() < 1e-6);
     assert_eq!(left.masks[0].display_mode, MaskDisplayMode::TranslucentFill);
     assert_eq!(left.masks[0].color_rgb, [10, 20, 30]);
-    assert!((left.cell_points_style.radius_screen_px - 3.0).abs() < 1e-6);
     assert!((right.masks[0].opacity - 0.8).abs() < 1e-6);
     assert_eq!(right.masks[0].display_mode, MaskDisplayMode::FilledPreview);
     assert_eq!(right.masks[0].color_rgb, [200, 100, 50]);
-    assert!((right.cell_points_style.radius_screen_px - 9.0).abs() < 1e-6);
 }

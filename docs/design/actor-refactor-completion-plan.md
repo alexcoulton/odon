@@ -197,7 +197,11 @@ observation payload; actor-owned workspace, navigation, channel, layer, panel, a
 are absent from that path. Renderer frames no longer advance navigation/presentation revisions or
 propagate linked camera/plane state, and native camera-fit and plane controls have no direct
 semantic fallback. Project compatibility restoration and the mutable per-frame viewport state
-container remain to be narrowed before the first ownership slice is closed. Native channel
+container remain to be narrowed before the first ownership slice is closed. Production dataset
+bootstrap no longer accepts a renderer workspace: the project snapshot is installed first, and the
+actor restores the matching persisted ROI view into its canonical workspace before projecting it.
+Legacy in-process `set_project_space` restoration paths still need to cross that same boundary.
+Native channel
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
 the renderer only as the current paint/UI input.

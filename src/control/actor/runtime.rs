@@ -17,9 +17,7 @@ pub enum ActorModelUpdate {
     },
     BootstrapDataset {
         dataset: OmeZarrDataset,
-        workspace: Value,
         store: Arc<dyn ReadableStorageTraits>,
-        path: PathBuf,
     },
     BootstrapMode(ModelMode),
     BootstrapMosaic {
@@ -328,14 +326,9 @@ fn apply_model_update(
         ActorModelUpdate::RendererCapabilities { gpu_available } => {
             model.set_renderer_gpu_available(gpu_available);
         }
-        ActorModelUpdate::BootstrapDataset {
-            dataset,
-            workspace,
-            store,
-            path: _,
-        } => {
-            if let Err(error) = model.bootstrap_dataset_from_renderer(&dataset, &workspace) {
-                eprintln!("could not bootstrap control actor from renderer state: {error}");
+        ActorModelUpdate::BootstrapDataset { dataset, store } => {
+            if let Err(error) = model.bootstrap_dataset(&dataset) {
+                eprintln!("could not bootstrap control actor dataset: {error}");
                 *render_document = None;
             } else {
                 *render_document = Some(Arc::new(RenderDocument {

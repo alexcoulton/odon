@@ -703,7 +703,7 @@ fn panel_changes_derive_background_geometry_without_a_frame() {
 }
 
 #[test]
-fn renderer_bootstrap_atomically_replaces_workspace_and_supersedes_workers() {
+fn dataset_bootstrap_restores_actor_project_workspace_and_supersedes_workers() {
     let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
     let mut source = AppModel::project();
     source.install_dataset(&dataset);
@@ -725,18 +725,26 @@ fn renderer_bootstrap_atomically_replaces_workspace_and_supersedes_workers() {
         )
         .unwrap()
         .unwrap();
-    let renderer_workspace = source.render_workspace_snapshot().unwrap();
+    let saved_workspace = project_workspace_view_json(&source.dataset().unwrap().workspace);
+    let source_key = dataset.source.source_key();
 
     let mut target = AppModel::project();
+    assert!(
+        target.bootstrap_project_from_renderer(ProjectModelSnapshot {
+            state: json!({"roi_views": {source_key: {"workspace": saved_workspace}}}),
+            ..ProjectModelSnapshot::default()
+        })
+    );
     let stale_generation = target.begin_dataset_open("superseded");
     target
-        .bootstrap_dataset_from_renderer(&dataset, &renderer_workspace)
-        .expect("native renderer state bootstraps atomically");
+        .bootstrap_dataset(&dataset)
+        .expect("actor project state bootstraps atomically");
     assert!(!target.install_dataset_for_generation(stale_generation, &dataset, Vec::new(), None));
-    assert_eq!(
-        target.render_workspace_snapshot().unwrap(),
-        renderer_workspace
-    );
+    let mut restored = target.render_workspace_snapshot().unwrap();
+    let mut expected = source.render_workspace_snapshot().unwrap();
+    restored.as_object_mut().unwrap().remove("revision");
+    expected.as_object_mut().unwrap().remove("revision");
+    assert_eq!(restored, expected);
 }
 
 #[test]
@@ -922,8 +930,9 @@ fn complete_channel_presentation_executes_and_roundtrips_without_a_renderer() {
     );
 
     let mut restored = AppModel::project();
+    restored.install_dataset(&dataset);
     restored
-        .bootstrap_dataset_from_renderer(&dataset, &projection)
+        .restore_renderer_workspace(&projection)
         .expect("complete presentation projection roundtrips");
     assert_eq!(restored.render_workspace_snapshot().unwrap(), projection);
 

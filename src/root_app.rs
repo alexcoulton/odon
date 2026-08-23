@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -237,26 +237,21 @@ impl RootApp {
         let runtime = &self.control_runtime;
         runtime.bootstrap_settings(self.app_settings.clone(), settings_file_path().ok());
         runtime.report_renderer_capabilities(self.gpu_available);
+        // Project state must reach the actor before dataset installation so the actor can restore
+        // the matching ROI view directly into its canonical workspace. The renderer is only a
+        // projection consumer and is not serialized back into this bootstrap transaction.
+        if let Some(snapshot) = project_snapshot {
+            runtime.bootstrap_project_model(snapshot);
+        }
         match &mut self.mode {
-            Mode::Single(app) => runtime.bootstrap_dataset_model(
-                app.control_actor_dataset(),
-                app.control_viewport_workspace_snapshot(),
-                app.control_actor_store(),
-                app.control_actor_dataset()
-                    .source
-                    .local_path()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from(app.control_actor_source_key())),
-            ),
+            Mode::Single(app) => runtime
+                .bootstrap_dataset_model(app.control_actor_dataset(), app.control_actor_store()),
             Mode::Project { .. } => runtime.bootstrap_model_mode(ModelMode::Project),
             Mode::Mosaic { mosaic, .. } => runtime.bootstrap_mosaic_model(
                 mosaic.control_actor_resource(),
                 mosaic.control_actor_semantic_snapshot(),
             ),
             Mode::Transition => runtime.bootstrap_model_mode(ModelMode::Transition),
-        }
-        if let Some(snapshot) = project_snapshot {
-            runtime.bootstrap_project_model(snapshot);
         }
         self.control_actor_mode_signature = Some(signature);
     }
@@ -1398,7 +1393,7 @@ impl RootApp {
             if let Err(err) = ps.load_from_file(path) {
                 ps.set_status(format!("Load project failed: {err}"));
             }
-            app.set_project_space(ps);
+            app.set_project_space_from_actor(ps);
         }
         let mut root = Self {
             mode: Mode::Single(app),
