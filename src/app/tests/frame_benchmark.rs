@@ -20,17 +20,16 @@ fn benchmark_single_and_two_viewport_frame_planning() {
     }
 
     let ctx = egui::Context::default();
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let single_ms = run_frames(&mut app, &ctx, 40);
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let created = app.control_create_viewport(&serde_json::json!({
-        "viewport_id": left,
-        "layout": "horizontal",
-    }));
-    assert!(created.get("error").is_none(), "{created:#}");
+    app.actor_command(
+        "viewer.viewports.create",
+        serde_json::json!({"viewport_id": left, "layout": "horizontal"}),
+    );
     let split_ms = run_frames(&mut app, &ctx, 40);
     let resources = app.control_viewport_workspace_snapshot()["shared_resources"].clone();
     println!(

@@ -1,67 +1,82 @@
 use super::*;
 #[test]
 fn multi_viewport_workspace_roundtrips_through_versioned_project_state() {
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let right = app.control_create_viewport(&serde_json::json!({
-        "title": "Marker B",
-        "layout": "vertical",
-        "ratio": 0.65,
-    }))["viewport_id"]
+    let right = app.actor_command(
+        "viewer.viewports.create",
+        serde_json::json!({"title": "Marker B", "layout": "vertical", "ratio": 0.65}),
+    )["viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    assert!(app.set_viewport_links(ViewportLinks {
-        camera: false,
-        plane: true,
-        selection: true,
-    }));
-    app.control_set_viewport_channels(&serde_json::json!({
-        "viewport_id": left,
-        "channels": ["CD3"],
-        "mode": "only",
-    }));
-    app.control_set_viewport_channels(&serde_json::json!({
-        "viewport_id": right,
-        "channels": ["PanCK"],
-        "mode": "only",
-    }));
-    app.control_set_viewport_object_style(&serde_json::json!({
-        "viewport_id": left,
-        "fill_cells": true,
-        "fill_opacity": 0.25,
-    }));
-    app.control_set_viewport_object_style(&serde_json::json!({
-        "viewport_id": right,
-        "fill_cells": true,
-        "fill_opacity": 0.75,
-    }));
-    app.control_set_viewport_object_filter(&serde_json::json!({
-        "viewport_id": right,
+    app.actor_command(
+        "viewer.viewport_links.set",
+        serde_json::json!({"camera": false, "plane": true, "selection": true}),
+    );
+    for (viewport_id, channel) in [(&left, "CD3"), (&right, "PanCK")] {
+        app.actor_command(
+            "viewer.viewports.channels.set_visible",
+            serde_json::json!({
+                "viewport_id": viewport_id,
+                "channels": [channel],
+                "mode": "only",
+            }),
+        );
+    }
+    for (viewport_id, fill_opacity) in [(&left, 0.25), (&right, 0.75)] {
+        app.actor_command(
+            "viewer.viewports.objects.style.set",
+            serde_json::json!({
+                "viewport_id": viewport_id,
+                "fill_cells": true,
+                "fill_opacity": fill_opacity,
+            }),
+        );
+    }
+    app.actor_command(
+        "viewer.viewports.rendering.set",
+        serde_json::json!({
+            "viewport_id": left,
+            "smooth_pixels": false,
+            "show_scale_bar": false,
+            "show_hud": false,
+            "show_tile_debug": true,
+        }),
+    );
+    for (viewport_id, center, zoom) in [(&left, [10.0, 20.0], 2.0), (&right, [30.0, 40.0], 3.0)] {
+        app.actor_command(
+            "viewer.viewports.camera.set",
+            serde_json::json!({
+                "viewport_id": viewport_id,
+                "center_world_lvl0": center,
+                "zoom": zoom,
+            }),
+        );
+    }
+    let filter = ObjectViewportFilterState::from_project_json(&serde_json::json!({
         "mode": "simple",
         "logic": "all",
         "clauses": [{"property": "id", "query": "1"}],
-    }));
-    app.control_set_viewport_rendering(&serde_json::json!({
-        "viewport_id": left,
-        "smooth_pixels": false,
-        "show_scale_bar": false,
-        "show_hud": false,
-        "show_tile_debug": true,
-    }));
-    app.control_set_viewport_camera(&serde_json::json!({
-        "viewport_id": left,
-        "center_world_lvl0": [10.0, 20.0],
-        "zoom": 2.0,
-    }));
-    app.control_set_viewport_camera(&serde_json::json!({
-        "viewport_id": right,
-        "center_world_lvl0": [30.0, 40.0],
-        "zoom": 3.0,
-    }));
+    }))
+    .unwrap();
+    let right_id = ViewportId::new(&right).unwrap();
+    let right_state = {
+        let state = &mut app
+            .viewport_workspace
+            .as_mut()
+            .unwrap()
+            .get_mut(&right_id)
+            .unwrap()
+            .state;
+        state.object_filter = filter;
+        state.object_filter_cache = ObjectViewportFilterCacheState::empty();
+        state.clone()
+    };
+    right_state.apply(&mut app);
 
     app.sync_current_view_state_into_project_space();
     let saved = app

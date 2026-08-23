@@ -91,65 +91,6 @@ impl ObjectsLayer {
         before != self.selected_object_indices
     }
 
-    #[cfg(test)]
-    pub fn control_select_ids_json(
-        &mut self,
-        ids: &std::collections::HashSet<String>,
-        mode: &str,
-        local_to_world_offset: egui::Vec2,
-        limit: usize,
-    ) -> serde_json::Value {
-        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
-            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
-        }
-        let indices = self.object_indices_matching_ids(ids);
-        let missing = ids
-            .iter()
-            .filter(|id| {
-                self.object_indices_matching_ids(&std::collections::HashSet::from([(*id).clone()]))
-                    .is_empty()
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let changed = self.apply_object_selection_mode(&indices, mode);
-        serde_json::json!({
-            "changed": changed,
-            "matched_count": indices.len(),
-            "missing_ids": missing,
-            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
-        })
-    }
-
-    #[cfg(test)]
-    pub fn control_select_filtered_json(
-        &mut self,
-        mode: &str,
-        local_to_world_offset: egui::Vec2,
-        limit: usize,
-    ) -> serde_json::Value {
-        self.ensure_filter_cache();
-        let indices = self
-            .filtered_ordered_indices
-            .as_ref()
-            .map(|indices| indices.as_ref().clone())
-            .unwrap_or_else(|| {
-                self.objects
-                    .as_ref()
-                    .map(|objects| (0..objects.len()).collect())
-                    .unwrap_or_default()
-            });
-        if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
-            return serde_json::json!({"error": "selection mode must be replace, add, remove, or toggle"});
-        }
-        let changed = self.apply_object_selection_mode(&indices, mode);
-        serde_json::json!({
-            "changed": changed,
-            "matched_count": indices.len(),
-            "filter_revision": self.filter_generation,
-            "selection": self.selection_snapshot_json(local_to_world_offset, limit),
-        })
-    }
-
     pub fn install_control_selection(
         &mut self,
         selected_indices: &[usize],

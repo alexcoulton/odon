@@ -1133,7 +1133,7 @@ fn renderer_bridge_is_a_projection_only_boundary() {
 }
 
 #[test]
-fn renderer_semantic_emulator_allowlist_can_only_shrink() {
+fn renderer_has_no_semantic_command_emulators() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/renderer_bridge");
     let mutation_prefixes = [
         "control_set_",
@@ -1151,57 +1151,6 @@ fn renderer_semantic_emulator_allowlist_can_only_shrink() {
         "control_step_",
         "control_configure_",
     ];
-    let allowed = BTreeSet::from(
-        [
-            "channels.rs::control_reset_channel_transform",
-            "channels.rs::control_set_active_channel",
-            "channels.rs::control_set_channel_color",
-            "channels.rs::control_set_channel_contrast",
-            "channels.rs::control_set_channel_note",
-            "channels.rs::control_set_channel_transform",
-            "channels.rs::control_set_plane",
-            "channels.rs::control_set_rendering",
-            "channels.rs::control_set_side_panels",
-            "channels.rs::control_set_smooth_pixels",
-            "channels.rs::control_set_visible_channels",
-            "channels.rs::control_step_plane",
-            "layers.rs::control_reset_native_layer_offset",
-            "layers.rs::control_set_active_native_layer",
-            "layers.rs::control_set_native_layer_offset",
-            "layers.rs::control_set_native_layer_order",
-            "layers.rs::control_set_native_layer_presentation",
-            "layers.rs::control_set_native_layer_visibility",
-            "objects.rs::control_select_filtered_objects",
-            "objects.rs::control_select_filtered_objects_current",
-            "objects.rs::control_select_object_ids",
-            "objects.rs::control_set_object_filter_query",
-            "objects.rs::control_set_object_overlay_visibility",
-            "resources.rs::control_load_labels",
-            "resources.rs::control_unload_labels",
-            "view.rs::control_fit_to_view",
-            "view.rs::control_set_camera",
-            "view.rs::control_set_channel_group",
-            "view.rs::control_set_channel_order",
-            "view.rs::control_set_channel_presentation",
-            "view.rs::control_zoom",
-            "viewports.rs::control_create_viewport",
-            "viewports.rs::control_fit_viewport_camera",
-            "viewports.rs::control_set_viewport_active_channel",
-            "viewports.rs::control_set_viewport_camera",
-            "viewports.rs::control_set_viewport_channel_color",
-            "viewports.rs::control_set_viewport_channel_contrast",
-            "viewports.rs::control_set_viewport_channel_group",
-            "viewports.rs::control_set_viewport_channel_order",
-            "viewports.rs::control_set_viewport_channels",
-            "viewports.rs::control_set_viewport_layer",
-            "viewports.rs::control_set_viewport_object_filter",
-            "viewports.rs::control_set_viewport_object_legend",
-            "viewports.rs::control_set_viewport_object_style",
-            "viewports.rs::control_set_viewport_plane",
-            "viewports.rs::control_set_viewport_rendering",
-        ]
-        .map(str::to_string),
-    );
     let mut found = BTreeSet::new();
 
     for path in rust_files(&root) {
@@ -1225,14 +1174,9 @@ fn renderer_semantic_emulator_allowlist_can_only_shrink() {
         }
     }
 
-    let additions = found.difference(&allowed).cloned().collect::<Vec<_>>();
     assert!(
-        additions.is_empty(),
-        "new renderer semantic emulators are forbidden: {additions:?}"
-    );
-    assert!(
-        found.len() <= allowed.len(),
-        "the renderer semantic emulator inventory may only shrink"
+        found.is_empty(),
+        "renderer semantic command emulators are forbidden: {found:?}"
     );
 }
 

@@ -148,6 +148,60 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         "phenotype == 'tumour'"
     );
 
+    let (create, create_rx) = request(
+        "viewer.viewports.create",
+        json!({"viewport_id":"viewport-1","layout":"horizontal"}),
+    );
+    channels.request_tx.send(create).unwrap();
+    let right = create_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap()["viewport_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (right_filter, right_filter_rx) = request(
+        "viewer.viewports.objects.filter.set",
+        json!({
+            "viewport_id":right,
+            "mode":"query",
+            "query":"phenotype == 'immune'",
+        }),
+    );
+    channels.request_tx.send(right_filter).unwrap();
+    right_filter_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    let (ambiguous, ambiguous_rx) = request(
+        "viewer.objects.selection.select_filtered",
+        json!({"target":"segmentation_objects"}),
+    );
+    channels.request_tx.send(ambiguous).unwrap();
+    let ambiguous = ambiguous_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(ambiguous.kind, ControlErrorKind::InvalidParams);
+    assert!(ambiguous.message.contains("requires viewport_id"));
+
+    let (left_selection, left_selection_rx) = request(
+        "viewer.objects.selection.select_filtered",
+        json!({
+            "target":"segmentation_objects",
+            "viewport_id":"viewport-1",
+            "mode":"replace",
+        }),
+    );
+    channels.request_tx.send(left_selection).unwrap();
+    let left_selection = left_selection_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(left_selection["matched_count"], 1);
+    assert_eq!(left_selection["selection"]["primary"]["id"], "cell-a");
+
     let (select_filtered, select_filtered_rx) = request(
         "viewer.objects.selection.select_filtered",
         json!({
@@ -163,6 +217,17 @@ fn object_resources_load_and_clear_without_draining_the_ui_queue() {
         .unwrap();
     assert_eq!(standalone_selection["matched_count"], 1);
     assert_eq!(standalone_selection["selection"]["primary"]["id"], "cell-b");
+
+    // Restore the original single-view workspace before exercising the
+    // screen-space query below. The comparison viewport is active after
+    // creation and intentionally has no renderer-observed geometry.
+    let (remove_right, remove_right_rx) =
+        request("viewer.viewports.remove", json!({"viewport_id":right}));
+    channels.request_tx.send(remove_right).unwrap();
+    remove_right_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
 
     let (select_ids, select_ids_rx) = request(
         "viewer.objects.selection.select_ids",

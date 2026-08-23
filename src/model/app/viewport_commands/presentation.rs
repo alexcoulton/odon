@@ -45,6 +45,10 @@ impl AppModel {
         }
         if let Some(first) = selectors.first() {
             target.state.active_channel = resolve_channel(&target.state.channels, first)?;
+            target
+                .state
+                .native_layers
+                .set_active(&format!("channel:{}", target.state.active_channel))?;
         }
         let visible_channels = visible_channels_json(&target.state);
         let _ = workspace.bump_presentation_revision(&id);
@@ -68,6 +72,10 @@ impl AppModel {
         let active_before = workspace.active().state.clone();
         let target = workspace.get_mut(&id).ok_or_else(|| not_found(&id))?;
         target.state.active_channel = resolve_channel(&target.state.channels, &selector)?;
+        target
+            .state
+            .native_layers
+            .set_active(&format!("channel:{}", target.state.active_channel))?;
         let active_channel = target.state.active_channel;
         let active_channel = active_channel_json(&target.state.channels[active_channel]);
         let _ = workspace.bump_presentation_revision(&id);
@@ -98,8 +106,20 @@ impl AppModel {
         let active_before = workspace.active().state.clone();
         let target = workspace.get_mut(&id).ok_or_else(|| not_found(&id))?;
         let index = resolve_channel(&target.state.channels, &selector)?;
-        let changed = target.state.channels[index].color_rgb != rgb;
+        let channel_name = target.state.channels[index].name.clone();
+        let color_changed = target.state.channels[index].color_rgb != rgb;
         target.state.channels[index].color_rgb = rgb;
+        let inheritance_changed = target
+            .state
+            .channel_groups
+            .channel_members
+            .get_mut(&channel_name)
+            .is_some_and(|member| {
+                let changed = member.inherit_color;
+                member.inherit_color = false;
+                changed
+            });
+        let changed = color_changed || inheritance_changed;
         let channel = full_channel_json(
             &target.state.channels[index],
             index == target.state.active_channel,

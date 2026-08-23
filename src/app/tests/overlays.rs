@@ -26,13 +26,15 @@ fn extended_overlay_presentation_roundtrips_per_viewport() {
     app.mask_layers[0].color_rgb = [10, 20, 30];
     app.cell_points.visible = true;
     app.cell_points.style.radius_screen_px = 3.0;
+    let mut app = ActorAppFixture::new(app);
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let right = app.control_create_viewport(&serde_json::json!({
-        "layout": "horizontal",
-    }))["viewport_id"]
+    let right = app.actor_command(
+        "viewer.viewports.create",
+        serde_json::json!({"layout": "horizontal"}),
+    )["viewport_id"]
         .as_str()
         .unwrap()
         .to_string();

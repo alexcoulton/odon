@@ -46,7 +46,6 @@ mod comparison_workflow;
 mod deep_link_apply;
 mod deep_link_channels;
 mod explicit_layers;
-mod filter_sources;
 mod frame_benchmark;
 mod header_geometry;
 mod labels;

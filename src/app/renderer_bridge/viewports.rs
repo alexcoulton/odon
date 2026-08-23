@@ -67,7 +67,7 @@ impl OmeZarrViewerApp {
                 "note": channel.note,
             })).collect::<Vec<_>>(),
             "channel_transforms": self.channels.iter().enumerate().map(|(index, _)| {
-                self.control_get_channel_transform(&serde_json::json!({"index": index}))
+                self.channel_transform_snapshot(index)
             }).collect::<Vec<_>>(),
             "channel_presentation": self.control_channel_presentation_json(),
             "performance": {
@@ -157,81 +157,6 @@ impl OmeZarrViewerApp {
         )
     }
 
-    pub fn control_create_viewport(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.sync_runtime_to_active_viewport();
-        let split_ratio = match Self::parse_viewport_split_ratio(params) {
-            Ok(value) => value,
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let layout = match params
-            .get("layout")
-            .and_then(serde_json::Value::as_str)
-            .map(ViewportLayout::parse)
-        {
-            Some(Some(layout @ (ViewportLayout::Horizontal | ViewportLayout::Vertical))) => layout,
-            Some(Some(ViewportLayout::Single)) => {
-                return serde_json::json!({"error": "creating a second viewport requires a split layout"});
-            }
-            Some(None) => {
-                return serde_json::json!({"error": "layout must be 'horizontal' or 'vertical'"});
-            }
-            None => ViewportLayout::Horizontal,
-        };
-        let title = params
-            .get("title")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        let activate = params
-            .get("activate")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        let Some(mut workspace) = self.viewport_workspace.take() else {
-            return serde_json::json!({"error": "viewer workspace is not initialized"});
-        };
-        let previous_active = workspace.active_id().clone();
-        let source_id = match params
-            .get("source_viewport_id")
-            .or_else(|| params.get("viewport_id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            Some(value) => match ViewportId::new(value) {
-                Ok(id) => id,
-                Err(error) => {
-                    self.viewport_workspace = Some(workspace);
-                    return serde_json::json!({"error": error.to_string()});
-                }
-            },
-            None => previous_active.clone(),
-        };
-        let created = workspace.clone_viewport(&source_id, title, layout);
-        let viewport_id = match created {
-            Ok(id) => id,
-            Err(error) => {
-                self.viewport_workspace = Some(workspace);
-                return serde_json::json!({"error": error.to_string()});
-            }
-        };
-        if let Some(ratio) = split_ratio {
-            if let Err(error) = workspace.set_split_ratio(ratio) {
-                self.viewport_workspace = Some(workspace);
-                return serde_json::json!({"error": error.to_string()});
-            }
-        }
-        if !activate {
-            let _ = workspace.set_active(&previous_active);
-        } else {
-            self.cancel_viewport_transient_gestures();
-        }
-        workspace.active().state.apply(self);
-        self.bump_render_id();
-        self.viewport_workspace = Some(workspace);
-        serde_json::json!({
-            "created": true,
-            "viewport_id": viewport_id.as_str(),
-            "workspace": self.control_viewport_workspace_snapshot(),
-        })
-    }
-
     pub(in crate::app) fn control_in_viewport(
         &mut self,
         params: &serde_json::Value,
@@ -258,10 +183,6 @@ impl OmeZarrViewerApp {
                 .get("if_navigation_revision")
                 .and_then(serde_json::Value::as_u64)
                 .map(|expected| ("navigation", expected, target.navigation_revision)),
-            ViewportControlDomain::Presentation => params
-                .get("if_presentation_revision")
-                .and_then(serde_json::Value::as_u64)
-                .map(|expected| ("presentation", expected, target.presentation_revision)),
         };
         if let Some((kind, expected, current)) = revision_guard
             && expected != current
@@ -292,9 +213,6 @@ impl OmeZarrViewerApp {
                 ViewportControlDomain::Read => {}
                 ViewportControlDomain::Navigation => {
                     let _ = workspace.bump_navigation_revision(&viewport_id);
-                }
-                ViewportControlDomain::Presentation => {
-                    let _ = workspace.bump_presentation_revision(&viewport_id);
                 }
             }
         }
@@ -333,9 +251,6 @@ impl OmeZarrViewerApp {
                     active_after.camera_changed_from(&active_before)
                         || active_after.plane_changed_from(&active_before)
                 }
-                ViewportControlDomain::Presentation => {
-                    active_after.presentation_changed_from(&active_before)
-                }
             };
         workspace.active().state.apply(self);
         self.bump_render_id();
@@ -352,176 +267,9 @@ impl OmeZarrViewerApp {
         })
     }
 
-    pub(in crate::app) fn control_filter_sensitive_operation(
-        &mut self,
-        params: &serde_json::Value,
-        operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
-    ) -> serde_json::Value {
-        if params.get("viewport_id").is_some() {
-            return self.control_in_viewport(params, ViewportControlDomain::Read, operation);
-        }
-        if params.get("filter_query").is_some()
-            || params
-                .get("use_all_objects")
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-        {
-            return self.control_with_temporary_object_filter(params, operation);
-        }
-        if params
-            .get("use_active_viewport_filter")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-            || self
-                .viewport_workspace
-                .as_ref()
-                .is_none_or(|workspace| workspace.len() <= 1)
-        {
-            return operation(self, params);
-        }
-        serde_json::json!({
-            "error": "multi-viewport filter-sensitive operations require viewport_id, filter_query, use_all_objects=true, or explicit use_active_viewport_filter=true",
-        })
-    }
-
-    pub(in crate::app) fn control_with_temporary_object_filter(
-        &mut self,
-        params: &serde_json::Value,
-        operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
-    ) -> serde_json::Value {
-        let mut effective = params.clone();
-        if effective.get("target").is_none()
-            && let Some(object) = effective.as_object_mut()
-        {
-            // A standalone query is a data input, so it defaults to the stable
-            // primary object resource instead of whichever layer is active.
-            object.insert("target".to_string(), serde_json::json!("objects"));
-        }
-        let target = match self.control_object_selection_target(&effective) {
-            Ok(target @ (LayerId::SegmentationObjects | LayerId::SpatialShape(_))) => target,
-            Ok(_) => {
-                return serde_json::json!({
-                    "error": "filter-sensitive operations require an object-backed target",
-                });
-            }
-            Err(error) => return serde_json::json!({"error": error}),
-        };
-        let use_all = params
-            .get("use_all_objects")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true);
-        let query = params
-            .get("filter_query")
-            .and_then(serde_json::Value::as_str);
-        if !use_all && query.is_none() {
-            return serde_json::json!({"error": "filter_query must be a string"});
-        }
-
-        let (saved_filter, saved_cache, query_error) = match target {
-            LayerId::SegmentationObjects => {
-                let filter = self.seg_objects.viewport_filter_state();
-                let cache = self.seg_objects.viewport_filter_cache_state();
-                if use_all {
-                    self.seg_objects.clear_filter();
-                } else if let Some(query) = query {
-                    self.seg_objects.set_filter_query_from_text(query);
-                }
-                let error = self.seg_objects.filter_snapshot_json()["query"]["error"]
-                    .as_str()
-                    .map(str::to_string);
-                (filter, cache, error)
-            }
-            LayerId::SpatialShape(id) => {
-                let Some(objects) = self
-                    .spatial_layers
-                    .shapes
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                    .and_then(|layer| layer.object_layer_mut())
-                else {
-                    return serde_json::json!({
-                        "error": format!("spatial shape layer {id} has no object layer"),
-                    });
-                };
-                let filter = objects.viewport_filter_state();
-                let cache = objects.viewport_filter_cache_state();
-                if use_all {
-                    objects.clear_filter();
-                } else if let Some(query) = query {
-                    objects.set_filter_query_from_text(query);
-                }
-                let error = objects.filter_snapshot_json()["query"]["error"]
-                    .as_str()
-                    .map(str::to_string);
-                (filter, cache, error)
-            }
-            _ => unreachable!(),
-        };
-        if let Some(error) = query_error {
-            match target {
-                LayerId::SegmentationObjects => {
-                    self.seg_objects.apply_viewport_filter_state(&saved_filter);
-                    self.seg_objects
-                        .apply_viewport_filter_cache_state(&saved_cache);
-                }
-                LayerId::SpatialShape(id) => {
-                    if let Some(objects) = self
-                        .spatial_layers
-                        .shapes
-                        .iter_mut()
-                        .find(|layer| layer.id == id)
-                        .and_then(|layer| layer.object_layer_mut())
-                    {
-                        objects.apply_viewport_filter_state(&saved_filter);
-                        objects.apply_viewport_filter_cache_state(&saved_cache);
-                    }
-                }
-                _ => unreachable!(),
-            }
-            return serde_json::json!({"error": format!("invalid filter_query: {error}")});
-        }
-
-        let result = operation(self, &effective);
-        match target {
-            LayerId::SegmentationObjects => {
-                self.seg_objects.apply_viewport_filter_state(&saved_filter);
-                self.seg_objects
-                    .apply_viewport_filter_cache_state(&saved_cache);
-            }
-            LayerId::SpatialShape(id) => {
-                if let Some(objects) = self
-                    .spatial_layers
-                    .shapes
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                    .and_then(|layer| layer.object_layer_mut())
-                {
-                    objects.apply_viewport_filter_state(&saved_filter);
-                    objects.apply_viewport_filter_cache_state(&saved_cache);
-                }
-            }
-            _ => unreachable!(),
-        }
-        result
-    }
-
     pub fn control_get_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
         self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
             app.control_camera_snapshot()
-        })
-    }
-
-    pub fn control_set_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Navigation,
-            OmeZarrViewerApp::control_set_camera,
-        )
-    }
-
-    pub fn control_fit_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Navigation, |app, _| {
-            app.control_fit_to_view()
         })
     }
 
@@ -529,44 +277,6 @@ impl OmeZarrViewerApp {
         self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
             app.control_plane_snapshot()
         })
-    }
-
-    pub fn control_set_viewport_plane(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Navigation,
-            OmeZarrViewerApp::control_set_plane,
-        )
-    }
-
-    pub fn control_set_viewport_object_style(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            |app, params| {
-                let result = app.seg_objects.control_set_style_json(params);
-                app.bump_render_id();
-                result
-            },
-        )
-    }
-
-    pub fn control_set_viewport_object_legend(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            |app, params| {
-                let result = app.seg_objects.control_set_legend_json(params);
-                app.bump_render_id();
-                result
-            },
-        )
     }
 
     pub fn control_get_viewport_object_filter(
@@ -578,36 +288,6 @@ impl OmeZarrViewerApp {
         })
     }
 
-    pub fn control_set_viewport_object_filter(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            |app, params| {
-                let result = if params.get("model").is_some()
-                    || params.get("clauses").is_some()
-                    || params.get("logic").is_some()
-                    || params.get("mode").is_some()
-                {
-                    app.seg_objects.control_set_filter_model_json(params)
-                } else if let Some(query) = params
-                    .get("query")
-                    .or_else(|| params.get("expression"))
-                    .and_then(serde_json::Value::as_str)
-                {
-                    app.seg_objects.set_filter_query_from_text(query);
-                    app.seg_objects.filter_snapshot_json()
-                } else {
-                    serde_json::json!({"error": "provide query or a filter model"})
-                };
-                app.bump_render_id();
-                result
-            },
-        )
-    }
-
     pub fn control_get_viewport_channels(
         &mut self,
         params: &serde_json::Value,
@@ -615,61 +295,6 @@ impl OmeZarrViewerApp {
         self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
             app.control_channel_snapshot()
         })
-    }
-
-    pub fn control_set_viewport_channels(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_visible_channels,
-        )
-    }
-
-    pub fn control_set_viewport_active_channel(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_active_channel,
-        )
-    }
-
-    pub fn control_set_viewport_channel_color(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_channel_color,
-        )
-    }
-
-    pub fn control_set_viewport_channel_contrast(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_channel_contrast,
-        )
-    }
-
-    pub fn control_set_viewport_channel_order(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_channel_order,
-        )
     }
 
     pub fn control_get_viewport_channel_groups(
@@ -681,33 +306,7 @@ impl OmeZarrViewerApp {
         })
     }
 
-    pub fn control_set_viewport_channel_group(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_channel_group,
-        )
-    }
-
     #[cfg(test)]
-    pub fn control_get_viewport_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, params| {
-            app.control_get_native_layer(params)
-        })
-    }
-
-    #[cfg(test)]
-    pub fn control_set_viewport_layer(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_native_layer_presentation,
-        )
-    }
-
     pub fn control_get_viewport_rendering(
         &mut self,
         params: &serde_json::Value,
@@ -715,16 +314,5 @@ impl OmeZarrViewerApp {
         self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
             app.control_rendering_snapshot()
         })
-    }
-
-    pub fn control_set_viewport_rendering(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        self.control_in_viewport(
-            params,
-            ViewportControlDomain::Presentation,
-            OmeZarrViewerApp::control_set_rendering,
-        )
     }
 }

@@ -352,6 +352,7 @@ impl OmeZarrViewerApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn find_channel_index_for_link(&self, channel_name: &str) -> Option<usize> {
         let needle = normalize_deep_link_name(channel_name);
         if needle.is_empty() {

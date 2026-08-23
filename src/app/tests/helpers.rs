@@ -45,9 +45,12 @@ pub(super) struct ActorAppFixture {
 }
 
 impl ActorAppFixture {
-    pub(super) fn new(app: OmeZarrViewerApp) -> Self {
+    pub(super) fn new(mut app: OmeZarrViewerApp) -> Self {
         let mut model = AppModel::project();
-        model.install_dataset(&app.dataset);
+        let renderer_workspace = app.control_viewport_workspace_snapshot();
+        model
+            .bootstrap_dataset_from_renderer(&app.dataset, &renderer_workspace)
+            .expect("actor fixture bootstraps from renderer state");
         Self { app, model }
     }
 
@@ -93,6 +96,26 @@ impl ActorAppFixture {
         self.app
             .apply_control_actor_workspace_projection(&projection)
             .expect("actor fixture projection applies");
+    }
+
+    pub(super) fn install_object_resource(&mut self, resource: odon::model::ControlObjectResource) {
+        let source = resource.source.display().to_string();
+        let (document_generation, resource_generation) =
+            self.model.begin_object_resource_load(source);
+        assert!(
+            self.app
+                .install_control_actor_object_resource(resource_generation, &resource),
+            "renderer installs the actor-prepared object resource"
+        );
+        assert!(
+            self.model.install_object_resource_for_generation(
+                document_generation,
+                resource_generation,
+                std::sync::Arc::new(resource),
+            ),
+            "actor model installs the prepared object resource"
+        );
+        self.apply_latest_projection();
     }
 }
 

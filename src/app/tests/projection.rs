@@ -195,7 +195,11 @@ fn coalesced_actor_projection_replaces_the_renderer_workspace_atomically() {
         .unwrap()
         .unwrap();
 
-    let projection = model.render_workspace_snapshot().unwrap();
+    let mut projection = model.render_workspace_snapshot().unwrap();
+    projection["viewports"][0]["objects"]["filter"] = serde_json::json!({
+        "mode": "query",
+        "query": "marker_a >= 1",
+    });
     app.apply_control_actor_workspace_projection(&projection)
         .expect("latest actor projection applies without command replay");
     let rendered = app.control_viewport_workspace_snapshot();

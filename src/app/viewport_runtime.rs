@@ -350,22 +350,6 @@ impl OmeZarrViewerApp {
         ViewportId::new(value).map_err(|error| error.to_string())
     }
 
-    #[cfg(test)]
-    pub(super) fn parse_viewport_split_ratio(
-        params: &serde_json::Value,
-    ) -> Result<Option<f32>, String> {
-        let Some(value) = params.get("ratio") else {
-            return Ok(None);
-        };
-        let ratio = value
-            .as_f64()
-            .ok_or_else(|| "ratio must be a number".to_string())? as f32;
-        if !ratio.is_finite() || !(0.1..=0.9).contains(&ratio) {
-            return Err("ratio must be finite and between 0.1 and 0.9".to_string());
-        }
-        Ok(Some(ratio))
-    }
-
     pub(super) fn sync_runtime_to_active_viewport(&mut self) {
         let state = ViewerViewportState::capture(self);
         if let Some(workspace) = self.viewport_workspace.as_mut() {

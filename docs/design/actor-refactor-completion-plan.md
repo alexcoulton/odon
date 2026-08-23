@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 and 1 complete; Milestone 2 renderer-emulator retirement in progress
+Status: in progress — Milestones 0 through 2 complete; Milestone 3 ownership cleanup next
 
 Date: 2026-08-23
 
@@ -45,8 +45,9 @@ The remaining gap is architectural rather than method-count based. `OmeZarrViewe
 and renderer adapters still contain compatibility mirrors, snapshot assemblers, test-only command
 emulators, and mixed renderer/transient state that must be narrowed or deleted.
 
-The current working tree is also substantially ahead of its last commit. It must be stabilized and
-checkpointed before further ownership changes are layered on top.
+The stabilized migration base, executable ownership ledger, and renderer-emulator retirement are
+now separately checkpointed milestones. The next work is removal of viewport and presentation
+mirrors, starting with workspace topology and navigation state.
 
 ## Completion gates
 
@@ -156,6 +157,11 @@ Exit criteria:
 
 Purpose: ensure tests exercise the production actor boundary instead of preserving an obsolete
 renderer-side control implementation.
+
+Status: complete on 2026-08-23. The renderer semantic-emulator inventory fell from 55 methods to
+zero. Application tests now use an in-process `AppModel` command boundary followed by renderer
+projection, and `renderer_has_no_semantic_command_emulators` rejects any reintroduction of the
+recognized mutation families under `renderer_bridge`.
 
 First target: `src/app/renderer_bridge/viewports.rs`, whose large direct-control implementation is
 compiled only for tests.

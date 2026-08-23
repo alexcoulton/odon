@@ -72,64 +72,6 @@ impl OmeZarrViewerApp {
         )
     }
 
-    #[cfg(test)]
-    pub fn control_set_channel_order(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        if let Some(sort) = params.get("sort").and_then(serde_json::Value::as_str) {
-            let Some(mode) = ChannelSortMode::from_storage_key(sort) else {
-                return serde_json::json!({"error": format!("unknown channel sort mode '{sort}'")});
-            };
-            self.channel_sort_mode = mode;
-            return serde_json::json!({
-                "changed": true,
-                "sort": mode.storage_key(),
-                "order": self.control_channel_order_snapshot(),
-            });
-        }
-
-        let Some(values) = params.get("channels").and_then(serde_json::Value::as_array) else {
-            return serde_json::json!({"error": "set_channel_order requires channels or sort"});
-        };
-        let mut indices = Vec::new();
-        let mut unresolved = Vec::new();
-        for value in values {
-            match self.control_channel_index_from_value(value) {
-                Ok(idx) => {
-                    if !indices.contains(&idx) {
-                        indices.push(idx);
-                    }
-                }
-                Err(err) => unresolved.push(err),
-            }
-        }
-        if !unresolved.is_empty() {
-            return serde_json::json!({"error": format!("unresolved channel(s): {}", unresolved.join("; "))});
-        }
-        let mode = params
-            .get("mode")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("listed_first");
-        match mode {
-            "listed_first" => self.move_channels_to_top_for_deep_link(&indices),
-            "exact" => {
-                if indices.len() != self.channels.len() {
-                    return serde_json::json!({"error": "exact channel order must include every channel exactly once"});
-                }
-                self.channel_layer_order = indices;
-                self.channel_sort_mode = ChannelSortMode::Manual;
-                self.bump_render_id();
-            }
-            other => {
-                return serde_json::json!({"error": format!("unknown channel order mode '{other}'")});
-            }
-        }
-        serde_json::json!({
-            "changed": true,
-            "mode": mode,
-            "sort": self.channel_sort_mode.storage_key(),
-            "order": self.control_channel_order_snapshot(),
-        })
-    }
-
     pub fn control_channel_presentation_json(&self) -> serde_json::Value {
         serde_json::json!({
             "search": self.channel_list_search,
@@ -139,107 +81,8 @@ impl OmeZarrViewerApp {
     }
 
     #[cfg(test)]
-    pub fn control_set_channel_presentation(
-        &mut self,
-        params: &serde_json::Value,
-    ) -> serde_json::Value {
-        let search = match params.get("search") {
-            Some(value) => match value.as_str() {
-                Some(value) => Some(value.to_string()),
-                None => return serde_json::json!({"error": "search must be a string"}),
-            },
-            None => None,
-        };
-        let sort = match params.get("sort") {
-            Some(value) => match value.as_str().and_then(ChannelSortMode::from_storage_key) {
-                Some(value) => Some(value),
-                None => return serde_json::json!({"error": "unknown channel sort mode"}),
-            },
-            None => None,
-        };
-        if let Some(search) = search {
-            self.channel_list_search = search;
-        }
-        if let Some(sort) = sort {
-            self.channel_sort_mode = sort;
-        }
-        self.control_channel_presentation_json()
-    }
-
-    #[cfg(test)]
     pub fn control_channel_groups_snapshot(&self) -> serde_json::Value {
         channel_groups_snapshot(&self.current_layer_groups(), &self.channels)
-    }
-
-    #[cfg(test)]
-    pub fn control_set_channel_group(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let Some(values) = params.get("channels").and_then(serde_json::Value::as_array) else {
-            return serde_json::json!({"error": "set_channel_group requires channels"});
-        };
-        let mut indices = Vec::new();
-        let mut unresolved = Vec::new();
-        for value in values {
-            match self.control_channel_index_from_value(value) {
-                Ok(idx) => {
-                    if !indices.contains(&idx) {
-                        indices.push(idx);
-                    }
-                }
-                Err(err) => unresolved.push(err),
-            }
-        }
-        if !unresolved.is_empty() {
-            return serde_json::json!({"error": format!("unresolved channel(s): {}", unresolved.join("; "))});
-        }
-        if indices.is_empty() {
-            return serde_json::json!({"error": "no channels resolved"});
-        }
-
-        let mut groups = self.current_layer_groups();
-        let requested_group_id = params.get("group_id").and_then(serde_json::Value::as_u64);
-        let requested_name = params
-            .get("group")
-            .or_else(|| params.get("name"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let group_id = ensure_channel_group(
-            &mut groups,
-            requested_group_id,
-            requested_name,
-            mcp_color_from_params(params),
-        );
-        if params
-            .get("replace_group_members")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
-            groups
-                .channel_members
-                .retain(|_, member| member.group_id != group_id);
-        }
-        let inherit_color = params
-            .get("inherit_color")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        for idx in &indices {
-            if let Some(ch) = self.channels.get(*idx) {
-                groups.channel_members.insert(
-                    ch.name.clone(),
-                    ProjectChannelGroupMember {
-                        group_id,
-                        inherit_color,
-                    },
-                );
-            }
-        }
-        self.selected_channel_group_id = Some(group_id);
-        self.set_current_layer_groups(groups);
-        serde_json::json!({
-            "changed": true,
-            "group_id": group_id,
-            "groups": self.control_channel_groups_snapshot(),
-        })
     }
 
     pub(in crate::app) fn control_channel_order_snapshot(&self) -> serde_json::Value {
@@ -278,77 +121,6 @@ impl OmeZarrViewerApp {
     }
 
     #[cfg(test)]
-    pub fn control_set_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        if let Some(center) = params
-            .get("center_world_lvl0")
-            .and_then(serde_json::Value::as_array)
-            && center.len() == 2
-        {
-            let x = center[0].as_f64().map(|value| value as f32);
-            let y = center[1].as_f64().map(|value| value as f32);
-            if let (Some(x), Some(y)) = (x, y)
-                && x.is_finite()
-                && y.is_finite()
-            {
-                self.camera.center_world_lvl0 = egui::pos2(x, y);
-            }
-        }
-        if let Some(x) = params
-            .get("center_x")
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32)
-            && x.is_finite()
-        {
-            self.camera.center_world_lvl0.x = x;
-        }
-        if let Some(y) = params
-            .get("center_y")
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32)
-            && y.is_finite()
-        {
-            self.camera.center_world_lvl0.y = y;
-        }
-        if let Some(zoom) = params
-            .get("zoom_screen_per_lvl0_px")
-            .or_else(|| params.get("zoom"))
-            .and_then(serde_json::Value::as_f64)
-            .map(|value| value as f32)
-            && zoom.is_finite()
-            && zoom > 0.0
-        {
-            self.camera.zoom_screen_per_lvl0_px = zoom.clamp(0.000_01, 5000.0);
-        }
-        self.bump_render_id();
-        self.control_camera_snapshot()
-    }
-
-    #[cfg(test)]
-    pub fn control_zoom(&mut self, factor: f32) -> serde_json::Value {
-        if !factor.is_finite() || factor <= 0.0 {
-            return serde_json::json!({"error": "zoom factor must be finite and > 0"});
-        }
-        if let Some(viewport) = self.last_canvas_rect {
-            self.camera
-                .zoom_about_screen_point(viewport, viewport.center(), factor);
-        } else {
-            self.camera.zoom_screen_per_lvl0_px =
-                (self.camera.zoom_screen_per_lvl0_px * factor).clamp(0.000_01, 5000.0);
-        }
-        self.bump_render_id();
-        self.control_camera_snapshot()
-    }
-
-    #[cfg(test)]
-    pub fn control_fit_to_view(&mut self) -> serde_json::Value {
-        let Some(viewport) = self.last_canvas_rect else {
-            return serde_json::json!({"error": "No canvas viewport is available yet."});
-        };
-        self.fit_to_rect(viewport);
-        self.bump_render_id();
-        self.control_camera_snapshot()
-    }
-
     pub(in crate::app) fn control_channel_index_from_params(
         &self,
         params: &serde_json::Value,
@@ -366,6 +138,7 @@ impl OmeZarrViewerApp {
         Err("provide index, name, channel, or marker".to_string())
     }
 
+    #[cfg(test)]
     pub(in crate::app) fn control_channel_index_from_value(
         &self,
         value: &serde_json::Value,

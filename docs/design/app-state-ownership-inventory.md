@@ -31,14 +31,13 @@ Current executable-ledger baseline:
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
 `delete` are the remaining ownership-cleanup queue and must be updated as each slice lands.
 
-The initial test-only renderer semantic-emulator baseline was 55 allowlisted methods. The first
-Milestone 2 slice retired workspace activation/removal/rename, layout/swap, direct link mutation,
-and link-group emulation. The current allowlist is 46 methods: 15 in `viewports.rs`, 12 in
-`channels.rs`, 6 each in `layers.rs` and `view.rs`, 5 in `objects.rs`, and 2 in `resources.rs`.
-(`control_rename_viewport` was also retired; the initial prefix-based count did not include it.)
-`renderer_semantic_emulator_allowlist_can_only_shrink` forbids additions to the inventory.
-Milestone 2 continues retiring the remaining methods as actor-plus-projection fixtures replace the
-old GUI characterization path.
+The initial test-only renderer semantic-emulator baseline was 55 allowlisted methods. Milestone 2
+retired all 55 across workspace topology, navigation, channels, layers, rendering preferences,
+labels, object presentation, filters, and selection. The current inventory is zero.
+`renderer_has_no_semantic_command_emulators` scans `renderer_bridge` and fails if a recognized
+mutation family is reintroduced. Renderer observation, readiness, projection application, and
+presentation acknowledgement remain valid responsibilities; application semantic tests now issue
+commands through an in-process actor model and consume its projection.
 
 ## Ownership classes
 
@@ -110,7 +109,7 @@ Production behavior is organized as follows:
 | `selection.rs`, `thresholds.rs`, `mask_interaction.rs` | Spatial selection, threshold preview, transient mask gestures |
 | `projects.rs`, `project_integration.rs`, `deep_links.rs` | Project state, project resources, deep-link compatibility |
 | `memory_ui.rs`, `screenshots.rs` | Memory/pinning UI and screenshot presentation work |
-| `renderer_bridge/` | Renderer observations and actor projection adapters; old direct helpers are test-only |
+| `renderer_bridge/` | Renderer observations, readiness, actor projection adapters, and presentation acknowledgement; semantic command emulators are forbidden |
 | `tests/` | Characterization and structural regression tests, split by behavior |
 
 The canvas boundary is split by frame phase. `app/canvas.rs` owns allocation, the hard viewport
@@ -344,10 +343,10 @@ typed-command decoding tests, semantic non-mutation tests, and projection no-fee
 this boundary.
 
 Native-layer projection is now isolated in `app/actor_layer_projection.rs`. It decodes canonical
-actor state directly and cannot call the former renderer-side `control_set_*` command emulators;
-those characterization mutators are compiled only in tests. First-projection active-layer replay is
-also command-silent, and an explicit actor `window: null` clears a stale renderer contrast window
-instead of being discarded by command-validation compatibility logic.
+actor state directly and cannot call the deleted renderer-side `control_set_*` command emulators.
+First-projection active-layer replay is also command-silent, and an explicit actor `window: null`
+clears a stale renderer contrast window instead of being discarded by command-validation
+compatibility logic.
 
 Top-level `ProjectSpaceAction` values now enter a shared typed-command outbox in `ProjectSpace`
 before the single-viewer, mosaic, or root project-page hosts can translate them. This includes ROI

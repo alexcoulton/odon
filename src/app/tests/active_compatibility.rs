@@ -1,181 +1,142 @@
 use super::*;
+
 #[test]
-fn background_actor_preserves_active_view_compatibility_methods() {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
-    let (dataset, store) = OmeZarrDataset::open_local(&fixture).expect("open OME-Zarr fixture");
-    let mut model = AppModel::project();
-    model.install_dataset(&dataset);
-    let mut app = OmeZarrViewerApp::new_runtime(
-        &egui::Context::default(),
-        false,
-        dataset,
-        store,
-        AutoContrastSettings {
-            enabled_on_open: false,
-            ..AutoContrastSettings::default()
-        },
+fn actor_active_view_compatibility_methods_project_into_the_renderer() {
+    let mut app = fixture_actor_app();
+
+    let channels = app.actor_query("viewer.channels.list", serde_json::json!({}));
+    assert_eq!(channels["channels"], app.control_channel_snapshot());
+    let visible = app.actor_query("viewer.channels.list_visible", serde_json::json!({}));
+    assert_eq!(visible["channels"], app.control_visible_channel_snapshot());
+    let active = app.actor_query("viewer.channels.get_active", serde_json::json!({}));
+    assert_eq!(
+        active["active_channel"],
+        app.control_active_channel_snapshot()
     );
 
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.list", serde_json::json!({})),
-        serde_json::json!({"mode":"single","channels":app.control_channel_snapshot()})
+    let visible = app.actor_command(
+        "viewer.channels.set_visible",
+        serde_json::json!({"channels":["CD3","PanCK"],"mode":"only"}),
     );
+    assert_eq!(visible["result"]["changed"], true);
     assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.channels.list_visible",
-            serde_json::json!({}),
-        ),
-        serde_json::json!({"mode":"single","channels":app.control_visible_channel_snapshot()})
-    );
-    assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.channels.get_active",
-            serde_json::json!({}),
-        ),
-        serde_json::json!({"mode":"single","active_channel":app.control_active_channel_snapshot()})
+        app.control_visible_channel_snapshot(),
+        app.actor_query("viewer.channels.list_visible", serde_json::json!({}))["channels"]
     );
 
-    let visible = serde_json::json!({"channels":["CD3","PanCK"],"mode":"only"});
-    let renderer = app.control_set_visible_channels(&visible);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_visible", visible),
-        serde_json::json!({"mode":"single","result":renderer})
+    let active = app.actor_command(
+        "viewer.channels.set_active",
+        serde_json::json!({"channel":"PanCK"}),
     );
-    let active = serde_json::json!({"channel":"PanCK"});
-    let renderer = app.control_set_active_channel(&active);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_active", active),
-        serde_json::json!({"mode":"single","result":renderer})
-    );
-    let contrast = serde_json::json!({"channel":"PanCK","min":100.0,"max":1000.0});
-    let renderer = app.control_set_channel_contrast(&contrast);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_contrast", contrast),
-        serde_json::json!({"mode":"single","contrast":renderer})
-    );
+    assert_eq!(active["result"]["active_channel"]["name"], "PanCK");
+    assert_eq!(app.control_active_channel_snapshot()["name"], "PanCK");
 
-    let note = serde_json::json!({"channel":"PanCK","note":"epithelial marker"});
-    let renderer = app.control_set_channel_note(&note);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_note", note),
-        renderer
+    let contrast = app.actor_command(
+        "viewer.channels.set_contrast",
+        serde_json::json!({"channel":"PanCK","min":100.0,"max":1000.0}),
     );
-    let transform = serde_json::json!({
-        "channel":"PanCK",
-        "offset_world":[4.0,-2.0],
-        "scale":[1.2,0.8],
-        "rotation_rad":0.25,
-    });
-    let renderer = app.control_set_channel_transform(&transform);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_transform", transform),
-        renderer
+    assert_eq!(contrast["contrast"]["max"], 1000.0);
+    assert_eq!(app.channels[2].window, Some((100.0, 1000.0)));
+
+    let note = app.actor_command(
+        "viewer.channels.set_note",
+        serde_json::json!({"channel":"PanCK","note":"epithelial marker"}),
     );
+    assert_eq!(note["channel"]["note"], "epithelial marker");
+    assert_eq!(app.channels[2].note, "epithelial marker");
+
+    let transform = app.actor_command(
+        "viewer.channels.set_transform",
+        serde_json::json!({
+            "channel":"PanCK",
+            "offset_world":[4.0,-2.0],
+            "scale":[1.2,0.8],
+            "rotation_rad":0.25,
+        }),
+    );
+    assert_eq!(transform["changed"], true);
     let selector = serde_json::json!({"channel":"PanCK"});
     assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.channels.get_transform",
-            selector.clone()
-        ),
-        app.control_get_channel_transform(&selector)
+        app.actor_query("viewer.channels.get_transform", selector.clone()),
+        app.channel_transform_snapshot(2)
     );
 
-    let order = serde_json::json!({"channels":[4,3,2,1,0],"mode":"exact"});
-    let renderer = app.control_set_channel_order(&order);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_order", order),
-        renderer
+    let order = app.actor_command(
+        "viewer.channels.set_order",
+        serde_json::json!({"channels":[4,3,2,1,0],"mode":"exact"}),
     );
-    let presentation = serde_json::json!({"search":"CD","sort":"visible_first"});
-    let renderer = app.control_set_channel_presentation(&presentation);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.presentation.set", presentation),
-        renderer
+    assert_eq!(order["changed"], true);
+    assert_eq!(app.channel_layer_order, vec![4, 3, 2, 1, 0]);
+
+    let presentation = app.actor_command(
+        "viewer.channels.presentation.set",
+        serde_json::json!({"search":"CD","sort":"visible_first"}),
     );
+    assert_eq!(presentation["search"], "CD");
     assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.channels.presentation.get",
-            serde_json::json!({})
-        ),
+        app.actor_query("viewer.channels.presentation.get", serde_json::json!({})),
         app.control_channel_presentation_json()
     );
-    let group = serde_json::json!({
-        "channels":["CD3","PanCK"],
-        "name":"Comparison markers",
-        "color_rgb":[20,40,60],
-    });
-    let renderer = app.control_set_channel_group(&group);
-    assert_eq!(
-        actor_call(&mut model, "viewer.channels.set_group", group),
-        serde_json::json!({"mode":"single","result":renderer})
-    );
-    assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.channels.list_groups",
-            serde_json::json!({})
-        ),
+
+    let group = app.actor_command(
+        "viewer.channels.set_group",
         serde_json::json!({
-            "mode":"single",
-            "groups":app.control_channel_groups_snapshot(),
-        })
+            "channels":["CD3","PanCK"],
+            "name":"Comparison markers",
+            "color_rgb":[20,40,60],
+        }),
+    );
+    assert_eq!(group["result"]["changed"], true);
+    assert_eq!(
+        app.actor_query("viewer.channels.list_groups", serde_json::json!({}))["groups"],
+        app.control_channel_groups_snapshot()
     );
 
-    let renderer = app.control_reset_channel_transform(&selector);
+    let reset = app.actor_command("viewer.channels.reset_transform", selector);
     assert_eq!(
-        actor_call(&mut model, "viewer.channels.reset_transform", selector),
-        renderer
+        reset["transform"]["offset_world"],
+        serde_json::json!([0.0, 0.0])
     );
 
-    let camera = serde_json::json!({"center_x":123.0,"center_y":234.0,"zoom":2.5});
-    let mut renderer =
-        serde_json::json!({"mode":"single","camera":app.control_set_camera(&camera)});
-    let mut actor = actor_call(&mut model, "viewer.camera.set", camera);
-    renderer["camera"]
-        .as_object_mut()
-        .unwrap()
-        .remove("viewport");
-    actor["camera"].as_object_mut().unwrap().remove("viewport");
-    assert_eq!(actor, renderer);
-
-    let plane = serde_json::json!({"mode":"xy","slice":99});
-    let renderer = app.control_set_plane(&plane);
-    assert_eq!(
-        actor_call(&mut model, "viewer.planes.set", plane),
-        serde_json::json!({"mode":"single","result":renderer})
+    let camera = app.actor_command(
+        "viewer.camera.set",
+        serde_json::json!({"center_x":123.0,"center_y":234.0,"zoom":2.5}),
     );
-    let renderer = app.control_step_plane(&serde_json::json!({"step": 1}), true);
     assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.planes.next",
-            serde_json::json!({"step":1}),
-        ),
-        serde_json::json!({"mode":"single","result":renderer})
+        camera["camera"]["center_world_lvl0"],
+        serde_json::json!([123.0, 234.0])
+    );
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(123.0, 234.0));
+
+    let plane = app.actor_command(
+        "viewer.planes.set",
+        serde_json::json!({"mode":"xy","slice":99}),
+    );
+    assert_eq!(plane["result"]["plane"]["slice"], 0);
+    let stepped = app.actor_command("viewer.planes.next", serde_json::json!({"step":1}));
+    assert_eq!(stepped["result"]["changed"], false);
+    assert_eq!(
+        app.actor_query("viewer.planes.get", serde_json::json!({}))["plane"],
+        app.control_plane_snapshot()
     );
 
-    let renderer = app.control_set_smooth_pixels(&serde_json::json!({"smooth":false}));
-    assert_eq!(
-        actor_call(
-            &mut model,
-            "viewer.rendering.set_smooth_pixels",
-            serde_json::json!({"smooth":false}),
-        ),
-        serde_json::json!({"mode":"single","result":renderer})
+    let smooth = app.actor_command(
+        "viewer.rendering.set_smooth_pixels",
+        serde_json::json!({"smooth":false}),
     );
+    assert_eq!(smooth["result"]["smooth_pixels"]["smooth"], false);
+    assert!(!app.smooth_pixels);
 
-    let panels = serde_json::json!({"left":false,"right":true});
-    let renderer = app.control_set_side_panels(&panels);
-    assert_eq!(
-        actor_call(&mut model, "viewer.panels.set", panels),
-        serde_json::json!({"mode":"single","result":renderer})
+    let panels = app.actor_command(
+        "viewer.panels.set",
+        serde_json::json!({"left":false,"right":true}),
     );
     assert_eq!(
-        actor_call(&mut model, "viewer.panels.get", serde_json::json!({})),
-        serde_json::json!({"mode":"single","panels":app.control_side_panels_snapshot()})
+        panels["result"]["panels"],
+        serde_json::json!({"left":false,"right":true})
+    );
+    assert_eq!(
+        app.actor_query("viewer.panels.get", serde_json::json!({}))["panels"],
+        app.control_side_panels_snapshot()
     );
 }

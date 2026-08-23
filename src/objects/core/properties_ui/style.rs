@@ -40,45 +40,6 @@ impl ObjectsLayer {
         }
     }
 
-    #[cfg(test)]
-    pub fn control_style_snapshot_json(&mut self) -> serde_json::Value {
-        let color_mode = match self.color_mode {
-            ObjectColorMode::Single => "single",
-            ObjectColorMode::ByProperty => "property",
-        };
-        let legend = self
-            .active_color_legend_entries()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|entry| {
-                let override_style = self.color_level_overrides.get(&entry.value_label);
-                serde_json::json!({
-                    "value": entry.value_label,
-                    "count": entry.count,
-                    "color_rgb": override_style
-                        .and_then(|style| style.color_rgb)
-                        .unwrap_or(entry.color_rgb),
-                    "visible": override_style.is_none_or(|style| style.visible),
-                })
-            })
-            .collect::<Vec<_>>();
-        serde_json::json!({
-            "visible": self.visible,
-            "opacity": self.opacity,
-            "width_screen_px": self.width_screen_px,
-            "color_rgb": self.color_rgb,
-            "fill_cells": self.fill_cells,
-            "fill_opacity": self.fill_opacity,
-            "selected_fill_opacity": self.selected_fill_opacity,
-            "show_selection_overlay": self.show_selection_overlay,
-            "fast_rendering": self.fast_rendering,
-            "color_mode": color_mode,
-            "color_property": (self.color_mode == ObjectColorMode::ByProperty)
-                .then_some(self.color_property_key.as_str()),
-            "legend": legend,
-        })
-    }
-
     pub(crate) fn apply_actor_style_projection_json(
         &mut self,
         params: &serde_json::Value,
@@ -164,72 +125,5 @@ impl ObjectsLayer {
             self.generation = self.generation.wrapping_add(1).max(1);
         }
         Ok(changed)
-    }
-
-    #[cfg(test)]
-    pub fn control_set_style_json(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        match self.apply_actor_style_projection_json(params) {
-            Ok(changed) => serde_json::json!({
-                "changed": changed,
-                "style": self.control_style_snapshot_json(),
-            }),
-            Err(error) => serde_json::json!({"error": error}),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn control_set_legend_json(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
-            return serde_json::json!({"error": "Select a color_property before editing its legend."});
-        }
-        let Some(entries) = params.get("entries").and_then(serde_json::Value::as_array) else {
-            return serde_json::json!({"error": "entries is required"});
-        };
-        let mut overrides = self.color_level_overrides.clone();
-        for entry in entries {
-            let Some(value) = entry
-                .get("value")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                return serde_json::json!({"error": "each legend entry requires a non-empty value"});
-            };
-            let style = overrides.entry(value.to_string()).or_default();
-            if let Some(visible) = entry.get("visible").and_then(serde_json::Value::as_bool) {
-                style.visible = visible;
-            }
-            if entry.get("color_rgb").is_some() {
-                style.color_rgb = match entry.get("color_rgb") {
-                    Some(serde_json::Value::Null) => None,
-                    Some(serde_json::Value::Array(values))
-                        if values.len() == 3
-                            && values
-                                .iter()
-                                .all(|value| value.as_u64().is_some_and(|v| v <= 255)) =>
-                    {
-                        Some([
-                            values[0].as_u64().unwrap() as u8,
-                            values[1].as_u64().unwrap() as u8,
-                            values[2].as_u64().unwrap() as u8,
-                        ])
-                    }
-                    _ => {
-                        return serde_json::json!({"error": "legend color_rgb must be null or three integers from 0 to 255"});
-                    }
-                };
-            }
-        }
-        let property = self.color_property_key.clone();
-        self.color_level_overrides_property_key = property;
-        self.color_level_overrides = overrides;
-        self.color_groups = None;
-        self.filtered_color_groups = None;
-        self.color_legend_cache = None;
-        self.generation = self.generation.wrapping_add(1).max(1);
-        serde_json::json!({
-            "changed": true,
-            "style": self.control_style_snapshot_json(),
-        })
     }
 }

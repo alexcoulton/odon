@@ -189,7 +189,6 @@ where
 enum ViewportControlDomain {
     Read,
     Navigation,
-    Presentation,
 }
 const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
@@ -2378,6 +2377,7 @@ fn looks_like_fluorophore_token(token: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
+#[cfg(test)]
 fn cd_marker_digit_suffix(value: &str) -> Option<(&str, &str)> {
     let rest = value.strip_prefix("cd")?;
     let digit_len = rest
@@ -2393,6 +2393,7 @@ fn cd_marker_digit_suffix(value: &str) -> Option<(&str, &str)> {
     Some((digits, suffix))
 }
 
+#[cfg(test)]
 fn marker_alias_matches(requested: &str, candidate_marker: &str) -> bool {
     let requested = normalize_deep_link_name(requested);
     let candidate = normalize_deep_link_name(candidate_marker);
@@ -2542,121 +2543,6 @@ fn channel_groups_snapshot(
             })
             .collect(),
     )
-}
-
-#[cfg(test)]
-fn ensure_channel_group(
-    groups: &mut ProjectLayerGroups,
-    requested_group_id: Option<u64>,
-    requested_name: Option<&str>,
-    color_rgb: Option<[u8; 3]>,
-) -> u64 {
-    if let Some(group_id) = requested_group_id
-        && let Some(group) = groups
-            .channel_groups
-            .iter_mut()
-            .find(|group| group.id == group_id)
-    {
-        if let Some(name) = requested_name {
-            group.name = name.to_string();
-        }
-        if let Some(color_rgb) = color_rgb {
-            group.color_rgb = color_rgb;
-        }
-        return group_id;
-    }
-    if let Some(name) = requested_name
-        && let Some(group) = groups
-            .channel_groups
-            .iter_mut()
-            .find(|group| group.name == name)
-    {
-        if let Some(color_rgb) = color_rgb {
-            group.color_rgb = color_rgb;
-        }
-        return group.id;
-    }
-    let existing = groups
-        .channel_groups
-        .iter()
-        .map(|group| group.id)
-        .collect::<Vec<_>>();
-    let id = requested_group_id
-        .filter(|id| !groups.channel_groups.iter().any(|group| group.id == *id))
-        .unwrap_or_else(|| layer_groups::next_group_id(&existing));
-    groups.channel_groups.push(ProjectChannelGroup {
-        id,
-        name: requested_name
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("Group {id}")),
-        expanded: true,
-        color_rgb: color_rgb.unwrap_or([255, 255, 255]),
-    });
-    id
-}
-
-#[cfg(test)]
-fn mcp_color_from_params(params: &serde_json::Value) -> Option<[u8; 3]> {
-    if let Some(values) = params
-        .get("color_rgb")
-        .and_then(serde_json::Value::as_array)
-        && values.len() == 3
-    {
-        let r = values[0].as_u64().filter(|value| *value <= 255)? as u8;
-        let g = values[1].as_u64().filter(|value| *value <= 255)? as u8;
-        let b = values[2].as_u64().filter(|value| *value <= 255)? as u8;
-        return Some([r, g, b]);
-    }
-    params
-        .get("color")
-        .or_else(|| params.get("colour"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(parse_mcp_color_rgb)
-}
-
-#[cfg(test)]
-fn parse_mcp_color_rgb(value: &str) -> Option<[u8; 3]> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    match lower.as_str() {
-        "white" => Some([255, 255, 255]),
-        "black" => Some([0, 0, 0]),
-        "red" => Some([230, 57, 70]),
-        "green" => Some([42, 157, 143]),
-        "blue" => Some([69, 123, 157]),
-        "cyan" => Some([0, 188, 212]),
-        "magenta" => Some([216, 27, 96]),
-        "yellow" => Some([255, 202, 40]),
-        "orange" => Some([251, 133, 0]),
-        "purple" => Some([126, 87, 194]),
-        "pink" => Some([244, 143, 177]),
-        "lime" => Some([139, 195, 74]),
-        "teal" => Some([0, 150, 136]),
-        "amber" => Some([255, 193, 7]),
-        "gray" | "grey" => Some([158, 158, 158]),
-        _ => parse_mcp_hex_color_rgb(trimmed),
-    }
-}
-
-#[cfg(test)]
-fn parse_mcp_hex_color_rgb(value: &str) -> Option<[u8; 3]> {
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        return Some([r, g, b]);
-    }
-    if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
-        let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
-        let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
-        return Some([r * 17, g * 17, b * 17]);
-    }
-    None
 }
 
 pub(crate) fn build_tiff_dataset(
@@ -2913,16 +2799,6 @@ impl OmeZarrViewerApp {
             self.bump_render_id();
         }
     }
-}
-
-#[cfg(test)]
-fn control_object_debug_limit(params: &serde_json::Value) -> usize {
-    params
-        .get("limit")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(64)
-        .clamp(1, 10_000)
 }
 
 fn apply_preserved_channel_settings(prev: &[ChannelInfo], new: &mut [ChannelInfo]) {

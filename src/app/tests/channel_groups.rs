@@ -1,31 +1,37 @@
 use super::*;
 #[test]
 fn channel_group_presentation_is_independent_and_persistent_per_viewport() {
-    let mut app = fixture_app();
+    let mut app = fixture_actor_app();
     let left = app.control_viewport_workspace_snapshot()["active_viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let grouped = app.control_set_viewport_channel_group(&serde_json::json!({
-        "viewport_id": left,
-        "channels": ["DAPI"],
-        "group": "Nuclei",
-        "color": "#102030",
-        "inherit_color": true,
-    }));
+    let grouped = app.actor_command(
+        "viewer.viewports.channels.set_group",
+        serde_json::json!({
+            "viewport_id": left,
+            "channels": ["DAPI"],
+            "group": "Nuclei",
+            "color_rgb": [16, 32, 48],
+            "inherit_color": true,
+        }),
+    );
     assert_eq!(grouped["result"]["changed"], true);
-    let right = app.control_create_viewport(&serde_json::json!({
-        "title": "Override",
-        "layout": "horizontal",
-    }))["viewport_id"]
+    let right = app.actor_command(
+        "viewer.viewports.create",
+        serde_json::json!({"title": "Override", "layout": "horizontal"}),
+    )["viewport_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let changed = app.control_set_viewport_channel_color(&serde_json::json!({
-        "viewport_id": right,
-        "channel": "DAPI",
-        "color_rgb": [200, 100, 50],
-    }));
+    let changed = app.actor_command(
+        "viewer.viewports.channels.set_color",
+        serde_json::json!({
+            "viewport_id": right,
+            "channel": "DAPI",
+            "color_rgb": [200, 100, 50],
+        }),
+    );
     assert_eq!(changed["result"]["changed"], true);
 
     app.sync_current_view_state_into_project_space();
