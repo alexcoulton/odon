@@ -912,6 +912,33 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::Annotations { request, spec } => {
+                            let result = (|| -> anyhow::Result<AnnotationLoadResult> {
+                                let schema = read_parquet_columns(&spec.path)?;
+                                let dataset = if spec.load_dataset {
+                                    Some(load_annotations_parquet(
+                                        &spec.path,
+                                        &spec.roi_id_column,
+                                        &spec.x_column,
+                                        &spec.y_column,
+                                        &spec.value_column,
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                Ok(AnnotationLoadResult { schema, dataset })
+                            })();
+                            if completions
+                                .send(LoadCompletion::Annotations {
+                                    request,
+                                    spec,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::ObjectFilter {
                             document_generation,
                             resource_generation,

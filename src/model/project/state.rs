@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::control::ControlError;
+use crate::data::annotations::ProjectAnnotationLayerState;
 use crate::data::dataset_kind::{LocalDatasetKind, classify_local_dataset_path};
 use crate::data::dataset_source::DatasetSource;
 use crate::data::project_config::{ProjectConfig, ProjectRoi};
@@ -59,6 +60,29 @@ impl ProjectModel {
             return Ok(());
         }
         views.insert(source_key.to_string(), view);
+        self.mark_structural_change();
+        Ok(())
+    }
+
+    pub(crate) fn set_mosaic_annotation_layers(
+        &mut self,
+        layers: Vec<ProjectAnnotationLayerState>,
+    ) -> Result<(), ControlError> {
+        let state = self
+            .snapshot
+            .state
+            .as_object_mut()
+            .ok_or_else(|| invalid("project state must be an object"))?;
+        let mosaic = state
+            .entry("mosaic")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| invalid("project mosaic state must be an object"))?;
+        let value = json!(layers);
+        if mosaic.get("annotation_layers") == Some(&value) {
+            return Ok(());
+        }
+        mosaic.insert("annotation_layers".to_string(), value);
         self.mark_structural_change();
         Ok(())
     }

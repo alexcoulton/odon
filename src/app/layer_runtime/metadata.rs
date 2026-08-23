@@ -2,13 +2,10 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(in crate::app) fn add_annotation_layer(&mut self) {
-        let id = self.next_annotation_layer_id.max(1);
-        self.next_annotation_layer_id = id.wrapping_add(1).max(1);
-        let name = format!("Annotations {id}");
-        self.annotation_layers
-            .push(AnnotationPointsLayer::new(id, name));
-        self.set_active_layer(LayerId::Annotation(id));
-        self.rebuild_layer_orders();
+        self.native_control_intents.push(NativeControlIntent {
+            method: "viewer.annotations.layers.create",
+            params: serde_json::json!({}),
+        });
     }
 
     pub fn add_annotation_layer_from_menu(&mut self) {

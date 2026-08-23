@@ -536,6 +536,25 @@ pub(super) fn dispatch_request(
         begin_mask_append(model, request, load_job_tx, diagnostics);
         return;
     }
+    if matches!(
+        request.command.method(),
+        "viewer.annotations.source.inspect"
+            | "viewer.annotations.source.load"
+            | "viewer.annotations.source.reload"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_annotation_load(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
+        return;
+    }
 
     if is_resource_registry_method(request.command.method()) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);

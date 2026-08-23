@@ -75,13 +75,6 @@ impl OmeZarrViewerApp {
         if !self.screenshot_in_flight.is_empty() {
             reasons.push("screenshot");
         }
-        if self
-            .annotation_layers
-            .iter()
-            .any(|layer| layer.has_pending_work())
-        {
-            reasons.push("annotations");
-        }
         reasons
     }
 

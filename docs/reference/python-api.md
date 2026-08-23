@@ -153,6 +153,7 @@ async names below have identical arguments and add `await` to network calls:
 | `native_layers` | complete native-layer inventory, active layer, visibility, order and alignment offsets |
 | `labels` | NGFF label discovery, load/unload, render state and visibility |
 | `objects` | source lifecycle, paged properties, styling/legend, filter models, spatial queries, selection and focus |
+| `annotations` | point-layer CRUD and styling, Parquet schema inspection, background loading/reloading and source clearing |
 | `masks` | layer/polygon CRUD, selection, undo, GeoJSON import/export and project synchronization |
 | `thresholds` | levels, bounded preview configuration, refresh, polygon application and cancellation |
 | `analysis` | calls/selections/mappings, histograms, threshold suggestions, presets and cache warmup |

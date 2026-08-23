@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use crate::control::{ControlError, ControlErrorKind};
+use crate::data::annotations::ProjectAnnotationLayerState;
 use crate::data::ome::ChannelInfo;
 use crate::data::project_config::ProjectMaskLayer;
 
@@ -476,6 +477,36 @@ impl NativeLayersModel {
             .as_deref()
             .is_some_and(|layer_id| layer_id.starts_with("mask:"))
         {
+            self.active_layer_id = self.layers.first().map(|layer| layer.layer_id.clone());
+        }
+        *self != before
+    }
+
+    pub(crate) fn sync_annotations(&mut self, annotations: &[ProjectAnnotationLayerState]) -> bool {
+        let before = self.clone();
+        self.layers.retain(|layer| layer.kind != "annotation");
+        self.layers
+            .extend(annotations.iter().map(|annotation| NativeLayerModel {
+                layer_id: format!("annotation:{}", annotation.id),
+                kind: "annotation".to_string(),
+                name: annotation.name.clone(),
+                stack: "overlays".to_string(),
+                available: true,
+                visible: annotation.visible,
+                offset_world: annotation.offset_world,
+                loaded_offset_world: [0.0, 0.0],
+                presentation: json!({
+                    "visible": annotation.visible,
+                    "opacity": annotation.opacity,
+                    "radius_screen_px": annotation.radius_screen_px,
+                    "stroke_width": annotation.stroke_width,
+                    "stroke_color_rgb": annotation.stroke_color_rgb,
+                    "stroke_color_alpha": annotation.stroke_color_alpha,
+                }),
+            }));
+        if self.active_layer_id.as_deref().is_some_and(|id| {
+            id.starts_with("annotation:") && !self.layers.iter().any(|layer| layer.layer_id == id)
+        }) {
             self.active_layer_id = self.layers.first().map(|layer| layer.layer_id.clone());
         }
         *self != before

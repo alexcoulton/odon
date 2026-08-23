@@ -86,15 +86,6 @@ impl eframe::App for OmeZarrViewerApp {
             Duration::from_secs(2),
         );
         self.sync_analysis_follow_active_channel_state();
-        let mut ann_changed = false;
-        for layer in &mut self.annotation_layers {
-            ann_changed |= layer.tick();
-        }
-        if ann_changed {
-            self.bump_render_id();
-            ctx.request_repaint();
-        }
-
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let title = format!("OME-Zarr: {}", self.current_roi_compact_label());

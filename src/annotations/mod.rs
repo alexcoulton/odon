@@ -2,9 +2,8 @@ mod colors;
 mod gl;
 mod selection;
 
-pub use colors::{build_category_luts, default_category_styles};
+pub use colors::build_category_luts;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,8 +16,8 @@ use self::gl::{AnnotationGlDraw, AnnotationGlDrawParams, AnnotationGlRenderer};
 use self::selection::{PointsRadius, pick_nearest_in_roi};
 use odon::data::annotations::{
     AnnotationColumnInfo, AnnotationDataset, AnnotationRoiData, AnnotationValueMode,
-    load_annotations_parquet, read_parquet_columns,
 };
+use odon::model::ControlAnnotationLayerProjection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationShape {
@@ -136,8 +135,14 @@ pub struct AnnotationPointsLayer {
     generation: u64,
     schema: Option<Vec<AnnotationColumnInfo>>,
     schema_status: String,
-    schema_rx: Option<crossbeam_channel::Receiver<anyhow::Result<Vec<AnnotationColumnInfo>>>>,
-    load_rx: Option<crossbeam_channel::Receiver<anyhow::Result<AnnotationDataset>>>,
+    pending_source_request: Option<AnnotationSourceRequest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationSourceRequest {
+    Inspect,
+    Load,
+    Reload,
 }
 
 impl AnnotationPointsLayer {
@@ -161,140 +166,107 @@ impl AnnotationPointsLayer {
             generation: 1,
             schema: None,
             schema_status: String::new(),
-            schema_rx: None,
-            load_rx: None,
+            pending_source_request: None,
         }
     }
 
-    pub fn has_pending_work(&self) -> bool {
-        self.schema_rx.is_some() || self.load_rx.is_some()
-    }
-
-    pub fn request_schema_load(&mut self) {
-        let Some(path) = self.parquet.path.clone() else {
-            self.schema = None;
-            return;
-        };
-        self.schema_status = "Reading parquet schema...".to_string();
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<Vec<AnnotationColumnInfo>>>(1);
-        self.schema_rx = Some(rx);
-        std::thread::Builder::new()
-            .name("annotations-parquet-schema".to_string())
-            .spawn(move || {
-                let res = read_parquet_columns(&path);
-                let _ = tx.send(res);
-            })
-            .ok();
-    }
-
-    pub fn request_load(&mut self) {
-        let Some(path) = self.parquet.path.clone() else {
-            self.status = "No parquet selected.".to_string();
-            return;
-        };
-        let roi_id = self.parquet.roi_id_column.trim().to_string();
-        let x = self.parquet.x_column.trim().to_string();
-        let y = self.parquet.y_column.trim().to_string();
-        let value = self.parquet.value_column.trim().to_string();
-        if roi_id.is_empty() || x.is_empty() || y.is_empty() || value.is_empty() {
-            self.status = "Missing required column names.".to_string();
-            return;
-        }
-
-        self.status = "Loading annotations...".to_string();
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<AnnotationDataset>>(1);
-        self.load_rx = Some(rx);
-        std::thread::Builder::new()
-            .name("annotations-parquet-loader".to_string())
-            .spawn(move || {
-                let res = load_annotations_parquet(&path, &roi_id, &x, &y, &value);
-                let _ = tx.send(res);
-            })
-            .ok();
-    }
-
-    pub fn tick(&mut self) -> bool {
-        use crossbeam_channel::TryRecvError;
-        let mut changed = false;
-        if let Some(rx) = self.schema_rx.as_ref().cloned() {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.schema_rx = None;
-                    match msg {
-                        Ok(cols) => {
-                            self.schema = Some(cols);
-                            self.schema_status.clear();
-                            changed = true;
-                        }
-                        Err(err) => {
-                            self.schema_status = format!("Schema failed: {err}");
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    self.schema_rx = None;
-                }
-            }
-        }
-
-        if let Some(rx) = self.load_rx.as_ref().cloned() {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.load_rx = None;
-                    match msg {
-                        Ok(ds) => {
-                            self.apply_dataset(ds);
-                            self.status = format!(
-                                "Loaded {} points across {} ROIs.",
-                                self.dataset.as_ref().map(|d| d.total_points).unwrap_or(0),
-                                self.dataset.as_ref().map(|d| d.total_rois).unwrap_or(0)
-                            );
-                            changed = true;
-                        }
-                        Err(err) => {
-                            self.status = format!("Load failed: {err}");
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    self.load_rx = None;
-                }
-            }
-        }
-        changed
-    }
-
-    fn apply_dataset(&mut self, ds: AnnotationDataset) {
-        let previous_category_styles = self
+    pub fn apply_control_projection(&mut self, projection: &ControlAnnotationLayerProjection) {
+        let state = &projection.state;
+        self.id = state.id;
+        self.name = state.name.clone();
+        self.visible = state.visible;
+        self.style.radius_screen_px = state.radius_screen_px;
+        self.style.opacity = state.opacity;
+        self.style.stroke.width = state.stroke_width;
+        self.style.stroke.color = egui::Color32::from_rgba_unmultiplied(
+            state.stroke_color_rgb[0],
+            state.stroke_color_rgb[1],
+            state.stroke_color_rgb[2],
+            state.stroke_color_alpha,
+        );
+        self.offset_world = egui::vec2(state.offset_world[0], state.offset_world[1]);
+        self.parquet.path = state.parquet_path.as_deref().map(PathBuf::from);
+        self.parquet.roi_id_column = state.roi_id_column.clone();
+        self.parquet.x_column = state.x_column.clone();
+        self.parquet.y_column = state.y_column.clone();
+        self.parquet.value_column = state.value_column.clone();
+        self.selected_value_column = state.selected_value_column.clone();
+        self.category_styles = state
             .category_styles
             .iter()
-            .cloned()
-            .map(|style| (style.name.clone(), style))
-            .collect::<HashMap<_, _>>();
-        let previous_continuous_range = self.continuous_range;
-        let ds = Arc::new(ds);
-        self.generation = self.generation.wrapping_add(1).max(1);
-        self.dataset = Some(ds.clone());
-        self.parquet.value_column = self.selected_value_column.clone();
-        self.continuous_range = if ds.mode == AnnotationValueMode::Continuous {
-            previous_continuous_range.or(Some((ds.value_min, ds.value_max)))
+            .map(|style| AnnotationCategoryStyle {
+                name: style.name.clone(),
+                visible: style.visible,
+                color: egui::Color32::from_rgb(
+                    style.color_rgb[0],
+                    style.color_rgb[1],
+                    style.color_rgb[2],
+                ),
+                shape: AnnotationShape::from_storage_key(&style.shape)
+                    .unwrap_or(AnnotationShape::Circle),
+            })
+            .collect();
+        self.continuous_shape = state
+            .continuous_shape
+            .as_deref()
+            .and_then(AnnotationShape::from_storage_key)
+            .unwrap_or(AnnotationShape::Circle);
+        self.continuous_range = state.continuous_range.map(|[low, high]| (low, high));
+        self.schema = Some(projection.schema.as_ref().clone());
+        self.schema_status = if projection.pending {
+            projection.status.clone()
         } else {
-            None
+            String::new()
         };
+        self.status = projection.status.clone();
+        self.dataset = projection
+            .resource
+            .as_ref()
+            .map(|resource| Arc::clone(&resource.dataset));
+        self.generation = projection.resource_generation.max(1);
+    }
 
-        if ds.mode == AnnotationValueMode::Categorical {
-            let mut category_styles = default_category_styles(&ds.categories);
-            for style in &mut category_styles {
-                if let Some(saved) = previous_category_styles.get(&style.name) {
-                    *style = saved.clone();
-                }
-            }
-            self.category_styles = category_styles;
-        } else {
-            self.category_styles.clear();
-        }
+    pub fn control_state_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name":self.name,
+            "visible":self.visible,
+            "radius_screen_px":self.style.radius_screen_px,
+            "opacity":self.style.opacity,
+            "stroke_width":self.style.stroke.width,
+            "stroke_color_rgb":[self.style.stroke.color.r(),self.style.stroke.color.g(),self.style.stroke.color.b()],
+            "stroke_color_alpha":self.style.stroke.color.a(),
+            "offset_world":[self.offset_world.x,self.offset_world.y],
+            "roi_id_column":self.parquet.roi_id_column,
+            "x_column":self.parquet.x_column,
+            "y_column":self.parquet.y_column,
+            "value_column":self.parquet.value_column,
+            "selected_value_column":self.selected_value_column,
+            "category_styles":self.category_styles.iter().map(|style| serde_json::json!({
+                "name":style.name,
+                "visible":style.visible,
+                "color_rgb":[style.color.r(),style.color.g(),style.color.b()],
+                "shape":style.shape.storage_key(),
+            })).collect::<Vec<_>>(),
+            "continuous_shape":self.continuous_shape.storage_key(),
+            "continuous_range":self.continuous_range.map(|(low, high)| [low, high]),
+        })
+    }
+
+    pub fn take_control_source_request(
+        &mut self,
+    ) -> Option<(AnnotationSourceRequest, serde_json::Value)> {
+        let request = self.pending_source_request.take()?;
+        Some((
+            request,
+            serde_json::json!({
+                "layer_id":self.id,
+                "path":self.parquet.path.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                "roi_id_column":self.parquet.roi_id_column,
+                "x_column":self.parquet.x_column,
+                "y_column":self.parquet.y_column,
+                "value_column":self.parquet.value_column,
+            }),
+        ))
     }
 
     pub fn draw_single(
@@ -698,25 +670,16 @@ impl AnnotationPointsLayer {
                 {
                     self.parquet.path = Some(path);
                     self.schema = None;
-                    self.schema_rx = None;
                     self.dataset = None;
                     self.status.clear();
-                    self.request_schema_load();
+                    self.pending_source_request = Some(AnnotationSourceRequest::Inspect);
                     changed = true;
                 }
             }
             if ui.button("Reload").clicked() {
-                self.request_load();
-                changed = true;
+                self.pending_source_request = Some(AnnotationSourceRequest::Reload);
             }
         });
-        if self.schema.is_none()
-            && self.schema_rx.is_none()
-            && self.parquet.path.is_some()
-            && self.schema_status.is_empty()
-        {
-            self.request_schema_load();
-        }
         if !self.schema_status.is_empty() {
             ui.label(self.schema_status.clone());
         }
@@ -787,7 +750,7 @@ impl AnnotationPointsLayer {
         }
         if ui.button("Load").clicked() {
             self.selected_value_column = self.parquet.value_column.clone();
-            self.request_load();
+            self.pending_source_request = Some(AnnotationSourceRequest::Load);
             changed = true;
         }
 

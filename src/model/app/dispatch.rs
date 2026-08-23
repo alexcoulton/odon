@@ -197,6 +197,15 @@ impl AppModel {
                 | "viewer.native_layers.set_order"
                 | "viewer.native_layers.set_offset"
                 | "viewer.native_layers.reset_offset"
+                | "viewer.annotations.layers.list"
+                | "viewer.annotations.layers.get"
+                | "viewer.annotations.layers.create"
+                | "viewer.annotations.layers.update"
+                | "viewer.annotations.layers.delete"
+                | "viewer.annotations.source.inspect"
+                | "viewer.annotations.source.load"
+                | "viewer.annotations.source.reload"
+                | "viewer.annotations.source.clear"
                 | "viewer.masks.layers.list"
                 | "viewer.masks.layers.get"
                 | "viewer.masks.layers.create"
@@ -445,6 +454,25 @@ impl AppModel {
             return Some(result.map(|response| ModelDispatch { response, present }));
         }
         if self.mode == ModelMode::Mosaic {
+            if method == "viewer.native_layers.set_visibility"
+                && let Ok(layer_id) = Self::native_layer_id(params)
+                && let Some(id) = layer_id
+                    .strip_prefix("annotation:")
+                    .and_then(|value| value.parse::<u64>().ok())
+            {
+                let visible = params
+                    .get("visible")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| invalid("visible is required"));
+                return Some(visible.and_then(|visible| {
+                    self.update_annotation_layer(id, &json!({"visible":visible}))?;
+                    let (response, present) = self
+                        .mosaic
+                        .dispatch_shared(method, params)
+                        .expect("mosaic supports native-layer visibility")?;
+                    Ok(ModelDispatch { response, present })
+                }));
+            }
             if let Some(result) = self.mosaic.dispatch_shared(method, params) {
                 if result.is_ok() && matches!(method, "memory.unpin" | "memory.unpin_all") {
                     self.readiness.cancel_kind_pending(
@@ -456,7 +484,9 @@ impl AppModel {
             }
         }
         if matches!(self.mode, ModelMode::Project | ModelMode::Mosaic) {
-            return None;
+            if self.mode == ModelMode::Project || !method.starts_with("viewer.annotations.") {
+                return None;
+            }
         }
         if self.mode == ModelMode::Transition
             && !matches!(method, "app.get_loading_state" | "get_loading_state")
@@ -470,6 +500,37 @@ impl AppModel {
                 "required_readiness": ["model", "resources"],
                 "loading": self.loading_state()["loading"],
             }))));
+        }
+        if method.starts_with("viewer.annotations.") {
+            let result = match method {
+                "viewer.annotations.layers.list" => Ok(self.annotation_snapshot()),
+                "viewer.annotations.layers.get" => {
+                    Self::annotation_id(params).and_then(|id| self.annotation_layer_snapshot(id))
+                }
+                "viewer.annotations.layers.create" => self.create_annotation_layer(params),
+                "viewer.annotations.layers.update" => Self::annotation_id(params)
+                    .and_then(|id| self.update_annotation_layer(id, params)),
+                "viewer.annotations.layers.delete" => {
+                    Self::annotation_id(params).and_then(|id| self.delete_annotation_layer(id))
+                }
+                "viewer.annotations.source.clear" => {
+                    Self::annotation_id(params).and_then(|id| self.clear_annotation_source(id))
+                }
+                "viewer.annotations.source.inspect"
+                | "viewer.annotations.source.load"
+                | "viewer.annotations.source.reload" => {
+                    return Some(Err(ControlError::new(
+                        ControlErrorKind::Internal,
+                        "annotation source work must be prepared by the control actor",
+                    )));
+                }
+                _ => unreachable!("annotation method was checked before dispatch"),
+            };
+            let present = !matches!(
+                method,
+                "viewer.annotations.layers.list" | "viewer.annotations.layers.get"
+            );
+            return Some(result.map(|response| ModelDispatch { response, present }));
         }
         if let Err(error) = self.check_viewport_revision(params) {
             return Some(Err(error));

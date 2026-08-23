@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 193 | 64 | 100 | 29 | 0 |
-| `RootApp` | 43 | 16 | 18 | 8 | 1 |
-| `MosaicViewerApp` | 83 | 20 | 59 | 4 | 0 |
-| **Total** | **319** | **100** | **177** | **41** | **1** |
+| `OmeZarrViewerApp` | 189 | 114 | 51 | 24 | 0 |
+| `RootApp` | 42 | 16 | 18 | 8 | 0 |
+| `MosaicViewerApp` | 78 | 43 | 31 | 4 | 0 |
+| **Total** | **309** | **173** | **100** | **36** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -71,7 +71,8 @@ not necessarily the owner in the current compatibility implementation.
 | Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab` | Projectable UI settings and platform dialog state | Actor settings for visible panels/tabs; close dialog remains transient platform UI; Wave 6/7 |
 | Memory/pinning | `memory_selected_channels`, `pinned_levels`, `pending_memory_load`, `memory_status`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Legacy memory operation, resources, and UI status | Actor retained task and resource generations; system snapshot may remain UI cache; Wave 3 |
 | Project/ROI panels | `project_space`, `project_cfg_seen`, `roi_selector`, `cell_thresholds` | Actor project mirror plus legacy panel models | Actor project/analysis models; UI keeps only drafts; Waves 2E and 3, mirror removal Wave 7 |
-| Point/annotation data | `cell_points`, `annotation_layers`, `next_annotation_layer_id` | Legacy semantic resources and IDs | Actor resource registry/shared payloads; Wave 2E/6 |
+| Point data | `cell_points` | Legacy point resource adapter | Actor point resource registry/shared payload; Milestone 5 |
+| Annotation data | `annotation_layers` | Renderer adapters over actor projection and shared immutable datasets | Retain renderer adapters; actor owns identity, source configuration, styles, persistence, readiness, and resource generations; Milestone 4 complete |
 | Masks | `mask_layers`, `control_actor_mask_generation`, `control_actor_mask_undo_available` | Read-only actor projection consumed by mask rendering and properties UI | Retain the projection and generation; all mask identity, edit, persistence, and undo semantics are actor-owned |
 | Mask gestures | `tool_mode`, `drawing_mask_layer`, `drawing_mask_polygon`, `selected_mask_polygon`, `selected_mask_vertex`, `dragging_mask_vertex`, `moving_mask_polygon` | Frame-local edit previews tagged with their starting actor generation | Retain gestures transiently; committed polygons and offsets enter typed actor transactions |
 | Object selection gestures | `selection_rect_start_world`, `selection_rect_current_world`, `selection_lasso_world` | Frame-local rectangle/lasso previews | Transient UI; completed selection commits to actor |
@@ -125,11 +126,13 @@ offset baselines/commits, transformed visible-region geometry, and deterministic
 rebuilding. Methods remain visible only within `crate::app`, and semantic commits still enter the
 typed actor-command outbox.
 
-The annotation renderer adapter keeps its data/presentation model in `annotations/mod.rs`, while
+The annotation renderer adapter keeps its projected paint/UI adapter in `annotations/mod.rs`, while
 hit testing, category/color LUT construction, parquet schema/data decoding, and OpenGL drawing live
 in `annotations/selection.rs`, `colors.rs`, `parquet.rs`, and `gl.rs`. CPU and GL rendering consume
-the same immutable ROI payloads and category styles. These modules do not own durable annotation
-commands; actor resources and generations remain authoritative.
+the same immutable ROI payloads and category styles. Parquet decoding runs on the actor's bounded
+worker service; the actor validates source and document generations before installing a shared
+resource. These renderer modules neither allocate durable layer IDs nor reconstruct annotation
+project state. Native edits and source actions use the typed `viewer.annotations.*` commands.
 
 The raw-tile OpenGL renderer is split below the same renderer-only boundary.
 `render/tiles_gl.rs` retains the public draw DTOs and `TilesGl` resource façade;

@@ -87,7 +87,6 @@ impl MosaicViewerApp {
             channel_layer_order,
             channel_sort_mode: ChannelSortMode::Manual,
             annotation_layers: Vec::new(),
-            next_annotation_layer_id: 1,
             last_target_level_by_dataset_id: vec![None; sources_len],
             fallback_ceiling_by_dataset_id: vec![None; sources_len],
             zoom_out_floor_by_dataset_id: vec![None; sources_len],

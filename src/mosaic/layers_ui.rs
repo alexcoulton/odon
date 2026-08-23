@@ -309,16 +309,10 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn add_annotation_layer(&mut self) {
-        let id = self.next_annotation_layer_id.max(1);
-        self.next_annotation_layer_id = id.wrapping_add(1).max(1);
-        let name = format!("Annotations {id}");
-        self.annotation_layers
-            .push(AnnotationPointsLayer::new(id, name));
-        let layer_id = MosaicLayerId::Annotation(id);
-        if !self.overlay_layer_order.contains(&layer_id) {
-            self.overlay_layer_order.push(layer_id);
-        }
-        self.set_active_layer(layer_id);
+        self.submit_native_control_intent(
+            "viewer.annotations.layers.create",
+            serde_json::json!({}),
+        );
     }
 
     pub(super) fn layer_display_name(&self, id: MosaicLayerId) -> String {

@@ -23,20 +23,21 @@ use crate::viewports::{ViewportId, ViewportLayout, ViewportLinks, ViewportWorksp
 use super::layers::NativeLayersModel;
 use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
-    AnalysisModel, ControlLabelResource, ControlMosaicResource, ControlObjectFilterResult,
-    ControlObjectResource, ControlPinnedLevelResource, ControlThresholdPreviewResource,
-    LabelZarrDataset, MaskModel, MeasurementMetric, MeasurementModel, MosaicModel,
-    MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportModel,
-    ObjectExportResult, ObjectExportSpec, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
-    ProjectObjectPreloadCatalog, ProjectObjectPreloadProjection, ProjectObjectPreloadScope,
-    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ReadinessModel,
-    ScreenshotPreferences, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
-    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, object_export_columns,
-    parse_world_points, parse_world_rect, project_object_preload_candidates,
-    project_roi_segmentation_path,
+    AnalysisModel, AnnotationModel, ControlAnnotationLayerProjection, ControlLabelResource,
+    ControlMosaicResource, ControlObjectFilterResult, ControlObjectResource,
+    ControlPinnedLevelResource, ControlThresholdPreviewResource, LabelZarrDataset, MaskModel,
+    MeasurementMetric, MeasurementModel, MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec,
+    ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
+    ObjectSelectionModel, OperationKind, PinnedMemoryModel, ProjectObjectPreloadCatalog,
+    ProjectObjectPreloadProjection, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
+    ProjectObjectPreloadSource, ReadinessModel, ScreenshotPreferences, SystemMemorySnapshot,
+    ThresholdPreviewModel, ThresholdScope, TileLoadingModel, TileLoadingPolicy,
+    default_screenshot_filename, object_export_columns, parse_world_points, parse_world_rect,
+    project_object_preload_candidates, project_roi_segmentation_path,
 };
 
 mod analysis;
+mod annotations;
 mod construction;
 mod dispatch;
 mod masks;
@@ -406,6 +407,7 @@ pub struct AppModel {
     tile_loading: TileLoadingModel,
     pinned_memory: PinnedMemoryModel,
     threshold_preview: ThresholdPreviewModel,
+    annotations: AnnotationModel,
     analyses: HashMap<ObjectTarget, AnalysisModel>,
     measurement: MeasurementModel,
     object_export: ObjectExportModel,

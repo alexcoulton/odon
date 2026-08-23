@@ -1,22 +1,6 @@
 use eframe::egui;
 
-use super::{AnnotationCategoryStyle, AnnotationShape};
-
-pub fn default_category_styles(categories: &[String]) -> Vec<AnnotationCategoryStyle> {
-    let mut out = Vec::new();
-    out.reserve(categories.len());
-    for (i, name) in categories.iter().enumerate() {
-        let (r, g, b) = categorical_color_u8(i);
-        let shape = AnnotationShape::ALL[i % AnnotationShape::ALL.len()];
-        out.push(AnnotationCategoryStyle {
-            name: name.clone(),
-            visible: true,
-            color: egui::Color32::from_rgba_unmultiplied(r, g, b, 230),
-            shape,
-        });
-    }
-    out
-}
+use super::AnnotationCategoryStyle;
 
 pub fn build_category_luts(
     styles: &[AnnotationCategoryStyle],
@@ -61,33 +45,6 @@ pub(super) fn tint_color32(c: egui::Color32, tint_rgb: [u8; 3], strength: f32) -
         .round()
         .clamp(0.0, 255.0) as u8;
     egui::Color32::from_rgba_unmultiplied(r, g, b, c.a())
-}
-
-fn categorical_color_u8(i: usize) -> (u8, u8, u8) {
-    // Cycle through a high-contrast palette (20 colors).
-    const P: &[(u8, u8, u8)] = &[
-        (31, 119, 180),
-        (255, 127, 14),
-        (44, 160, 44),
-        (214, 39, 40),
-        (148, 103, 189),
-        (140, 86, 75),
-        (227, 119, 194),
-        (127, 127, 127),
-        (188, 189, 34),
-        (23, 190, 207),
-        (174, 199, 232),
-        (255, 187, 120),
-        (152, 223, 138),
-        (255, 152, 150),
-        (197, 176, 213),
-        (196, 156, 148),
-        (247, 182, 210),
-        (199, 199, 199),
-        (219, 219, 141),
-        (158, 218, 229),
-    ];
-    P[i % P.len()]
 }
 
 pub(super) fn turbo_rgb_u8(t: f32) -> (u8, u8, u8) {

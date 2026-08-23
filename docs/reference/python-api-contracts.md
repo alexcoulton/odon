@@ -36,6 +36,7 @@ app
 │   ├── native_layers     (also app.native_layers)
 │   ├── layers            (also app.layers)
 │   ├── objects           (also app.objects)
+│   ├── annotations       (also app.annotations)
 │   ├── masks             (also app.masks)
 │   ├── thresholds        (also app.thresholds)
 │   ├── analysis          (also app.analysis)
@@ -453,6 +454,15 @@ filters carry a query string. Object style, legend, analysis, measurement, and
 export dictionaries are validated by Rust. Use runtime method schemas and
 current state snapshots for the supported fields of the connected experimental
 build.
+
+### Point annotations
+
+`app.annotations` manages actor-owned point layers in both single-image and mosaic modes. Layer
+state includes stable numeric identity, visibility, point/stroke style, world offset, column
+mapping, categorical colours/shapes, and continuous value range. `inspect()`, `load()`, and
+`reload()` return retained tasks; Parquet I/O and indexing proceed on Odon's bounded worker service
+without waiting for an egui frame. The renderer receives immutable generation-tagged shared data,
+so a covered or minimized window catches up from the latest projection when it paints again.
 
 ### Masks and threshold regions
 

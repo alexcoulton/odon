@@ -1,6 +1,29 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub(crate) fn apply_control_actor_annotation_layers(
+        &mut self,
+        projections: &[odon::model::ControlAnnotationLayerProjection],
+    ) {
+        let mut existing = self
+            .annotation_layers
+            .drain(..)
+            .map(|layer| (layer.id, layer))
+            .collect::<std::collections::HashMap<_, _>>();
+        self.annotation_layers = projections
+            .iter()
+            .map(|projection| {
+                let mut layer = existing.remove(&projection.state.id).unwrap_or_else(|| {
+                    AnnotationPointsLayer::new(projection.state.id, projection.state.name.clone())
+                });
+                layer.apply_control_projection(projection);
+                layer
+            })
+            .collect();
+        self.rebuild_layer_orders();
+        self.bump_render_id();
+    }
+
     fn projected_native_layer_id(&self, raw: &str) -> Result<LayerId, String> {
         let id = self
             .parse_layer_id_storage_key(raw)

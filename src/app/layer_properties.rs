@@ -243,6 +243,7 @@ impl OmeZarrViewerApp {
                     ui.label("Annotation layer not found.");
                     return;
                 };
+                let annotation_before = self.annotation_layers[idx].control_state_json();
                 let mut groups_cfg = self.current_layer_groups();
                 let mut groups_changed = false;
                 ui.horizontal(|ui| {
@@ -394,21 +395,36 @@ impl OmeZarrViewerApp {
                     }
                 }
                 ui.separator();
-                if self.annotation_layers[idx].ui_properties(ui) {
-                    self.bump_render_id();
+                self.annotation_layers[idx].ui_properties(ui);
+                let annotation_after = self.annotation_layers[idx].control_state_json();
+                let source_request = self.annotation_layers[idx].take_control_source_request();
+                if annotation_after != annotation_before {
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.annotations.layers.update",
+                        params: serde_json::json!({"layer_id":id,"state":annotation_after}),
+                    });
+                }
+                if let Some((request, params)) = source_request {
+                    let method = match request {
+                        crate::annotations::AnnotationSourceRequest::Inspect => {
+                            "viewer.annotations.source.inspect"
+                        }
+                        crate::annotations::AnnotationSourceRequest::Load => {
+                            "viewer.annotations.source.load"
+                        }
+                        crate::annotations::AnnotationSourceRequest::Reload => {
+                            "viewer.annotations.source.reload"
+                        }
+                    };
+                    self.native_control_intents
+                        .push(NativeControlIntent { method, params });
                 }
                 ui.separator();
                 if ui.button("Delete layer").clicked() {
-                    self.annotation_layers.remove(idx);
-                    if self.active_layer == LayerId::Annotation(id) {
-                        self.active_layer = if !self.channels.is_empty() {
-                            LayerId::Channel(self.selected_channel.min(self.channels.len() - 1))
-                        } else {
-                            LayerId::Points
-                        };
-                    }
-                    self.rebuild_layer_orders();
-                    self.bump_render_id();
+                    self.native_control_intents.push(NativeControlIntent {
+                        method: "viewer.annotations.layers.delete",
+                        params: serde_json::json!({"layer_id":id}),
+                    });
                     return;
                 }
 

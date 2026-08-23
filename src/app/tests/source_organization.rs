@@ -1493,6 +1493,53 @@ fn native_mask_semantics_and_io_have_no_renderer_commit_fallback() {
 }
 
 #[test]
+fn annotation_semantics_resources_and_persistence_are_actor_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let app = source(root.join("src/app/mod.rs"));
+    let mosaic = source(root.join("src/mosaic/mod.rs"));
+    let renderer = source(root.join("src/annotations/mod.rs"));
+    let actor_model = source(root.join("src/model/annotations.rs"));
+    let single_project = source(root.join("src/app/projects.rs"));
+    let mosaic_project = source(root.join("src/mosaic/control/project.rs"));
+
+    assert!(!app.contains("next_annotation_layer_id"));
+    assert!(!mosaic.contains("next_annotation_layer_id"));
+    assert!(actor_model.contains("next_id: u64"));
+    assert!(actor_model.contains("resource: Option<Arc<ControlAnnotationResource>>"));
+    for forbidden in [
+        "load_annotations_parquet(",
+        "ParquetRecordBatchReaderBuilder",
+        "schema_rx",
+        "load_rx",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !renderer.contains(forbidden),
+            "annotation decoding and worker ownership must remain outside the renderer: {forbidden}"
+        );
+    }
+
+    assert!(single_project.contains("let annotation_layers = self"));
+    assert!(!single_project.contains(".map(|layer| self.project_annotation_layer_state(layer))"));
+    assert!(mosaic_project.contains("let annotation_layers = self"));
+    assert!(!mosaic_project.contains("project_annotation_layer_state"));
+    assert!(!mosaic_project.contains("restore_annotation_layers"));
+
+    let single_properties = source(root.join("src/app/layer_properties.rs"));
+    let mosaic_properties = source(root.join("src/mosaic/panels.rs"));
+    for method in [
+        "viewer.annotations.layers.update",
+        "viewer.annotations.source.inspect",
+        "viewer.annotations.source.load",
+        "viewer.annotations.source.reload",
+        "viewer.annotations.layers.delete",
+    ] {
+        assert!(single_properties.contains(method));
+        assert!(mosaic_properties.contains(method));
+    }
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1784,7 +1831,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 311,
+        total_fields, 309,
         "review the ownership ledger when host fields change"
     );
 }

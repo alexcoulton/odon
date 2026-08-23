@@ -308,6 +308,7 @@ impl AppModel {
             "object_color_rgb":active.objects.get("color_rgb").cloned().unwrap_or(json!([255,255,255])),
             "object_show_selection_overlay":active.objects.get("show_selection_overlay").cloned().unwrap_or(Value::Bool(true)),
             "workspace":workspace,
+            "annotation_layers":self.annotations.states(),
         });
         self.project.set_roi_view_state_json(&source_key, view)
     }

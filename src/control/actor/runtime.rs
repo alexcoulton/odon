@@ -142,6 +142,7 @@ pub fn spawn_control_actor_with_services(
                                     &mut model,
                                     &mut render_document,
                                     update,
+                                    &load_job_tx,
                                     &diagnostics,
                                 );
                                 continue;
@@ -158,6 +159,11 @@ pub fn spawn_control_actor_with_services(
                                     &platform_effect_tx,
                                     &load_job_tx,
                                     &wake_ui,
+                                    &diagnostics,
+                                );
+                                enqueue_restored_annotations(
+                                    &mut model,
+                                    &load_job_tx,
                                     &diagnostics,
                                 );
                                 continue;
@@ -192,6 +198,7 @@ pub fn spawn_control_actor_with_services(
                                 &mut model,
                                 &mut render_document,
                                 update,
+                                &load_job_tx,
                                 &diagnostics,
                             );
                             presentation_captures.release_presentable(
@@ -260,6 +267,11 @@ pub fn spawn_control_actor_with_services(
                                     &wake_ui,
                                     &diagnostics,
                                 );
+                                enqueue_restored_annotations(
+                                    &mut model,
+                                    &load_job_tx,
+                                    &diagnostics,
+                                );
                             }
                             recv(presentation_completion_rx) -> completion => {
                                 let Ok(completion) = completion else { break; };
@@ -282,6 +294,7 @@ pub fn spawn_control_actor_with_services(
                                     &mut model,
                                     &mut render_document,
                                     update,
+                                    &load_job_tx,
                                     &diagnostics,
                                 );
                                 presentation_captures.release_presentable(
@@ -292,6 +305,11 @@ pub fn spawn_control_actor_with_services(
                             }
                             recv(maintenance_tick) -> _ => {
                                 presentation_captures.sweep(&mut model, &diagnostics);
+                                enqueue_restored_annotations(
+                                    &mut model,
+                                    &load_job_tx,
+                                    &diagnostics,
+                                );
                             }
                         }
                     }
@@ -319,8 +337,10 @@ fn apply_model_update(
     model: &mut AppModel,
     render_document: &mut Option<Arc<RenderDocument>>,
     update: ActorModelUpdate,
+    load_job_tx: &Sender<LoadJob>,
     diagnostics: &ActorDiagnostics,
 ) {
+    let mut restore_annotations = false;
     match update {
         ActorModelUpdate::RendererCapabilities { gpu_available } => {
             model.set_renderer_gpu_available(gpu_available);
@@ -344,6 +364,7 @@ fn apply_model_update(
                     }
                     .into_control(),
                 }));
+                restore_annotations = true;
             }
         }
         ActorModelUpdate::BootstrapMode(mode) => {
@@ -356,6 +377,8 @@ fn apply_model_update(
             *render_document = None;
             if let Err(error) = model.bootstrap_mosaic(resource) {
                 eprintln!("could not bootstrap control actor mosaic: {error:?}");
+            } else {
+                restore_annotations = true;
             }
         }
         ActorModelUpdate::BootstrapProject(snapshot) => {
@@ -385,5 +408,34 @@ fn apply_model_update(
             width,
             height,
         } => model.report_viewport_geometry(&viewport_id, x, y, width, height),
+    }
+    if restore_annotations {
+        enqueue_restored_annotations(model, load_job_tx, diagnostics);
+    }
+}
+
+fn enqueue_restored_annotations(
+    model: &mut AppModel,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) {
+    for spec in model.prepare_restored_annotation_loads() {
+        match load_job_tx.try_send(LoadJob::Annotations {
+            request: None,
+            spec,
+        }) {
+            Ok(()) => {
+                diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                let LoadJob::Annotations { spec, .. } = error.into_inner() else {
+                    unreachable!("restored annotation submission returns its own job")
+                };
+                model.fail_annotation_load(
+                    &spec,
+                    "Annotation worker queue is unavailable".to_string(),
+                );
+            }
+        }
     }
 }

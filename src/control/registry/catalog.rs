@@ -941,6 +941,96 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             NativeLayerSelector
         ),
         method!(
+            "viewer.annotations.layers.list",
+            "List actor-owned point annotation layers, status, schema, and bounded resource metadata.",
+            "viewer.annotations.read",
+            false,
+            false,
+            None,
+            VIEWER_MODES,
+            Empty
+        ),
+        method!(
+            "viewer.annotations.layers.get",
+            "Get one point annotation layer by stable numeric ID.",
+            "viewer.annotations.read",
+            false,
+            false,
+            None,
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.layers.create",
+            "Create a point annotation layer.",
+            "viewer.annotations.write",
+            true,
+            false,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.layers.update",
+            "Update point annotation layer name, visibility, style, mapping, or offset.",
+            "viewer.annotations.write",
+            true,
+            false,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.layers.delete",
+            "Delete a point annotation layer and release its loaded resource.",
+            "viewer.annotations.write",
+            true,
+            false,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.source.inspect",
+            "Inspect an annotation Parquet schema on the background resource service.",
+            "viewer.annotations.write",
+            true,
+            true,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.source.load",
+            "Load point annotations from Parquet on the background resource service.",
+            "viewer.annotations.write",
+            true,
+            true,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.source.reload",
+            "Reload a point annotation layer from its configured Parquet source.",
+            "viewer.annotations.write",
+            true,
+            true,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
+            "viewer.annotations.source.clear",
+            "Clear an annotation source and loaded resource while retaining the layer.",
+            "viewer.annotations.write",
+            true,
+            false,
+            Some("viewer.annotations.changed"),
+            VIEWER_MODES,
+            Object
+        ),
+        method!(
             "viewer.objects.set_visibility",
             "Set object overlay visibility.",
             "viewer.layers.write",

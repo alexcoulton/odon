@@ -23,7 +23,7 @@ from .data import DataResources
 from .layers import Layers
 from .ui import Ui
 from .discovery import Instance, select_instance
-from .resources import Analysis, Application, Channels, Datasets, DeepLinks, Labels, Masks, Measurements, Memory, Mosaic, NativeLayers, ObjectExports, Objects, Planes, ProjectDiscovery, ProjectObjects, ProjectRois, ProjectSamplesheets, Projects, ProjectViews, S3Datasets, Screenshots, Thresholds, Viewer, ViewportLinks, Viewports, ViewportWorkspace
+from .resources import Analysis, Annotations, Application, Channels, Datasets, DeepLinks, Labels, Masks, Measurements, Memory, Mosaic, NativeLayers, ObjectExports, Objects, Planes, ProjectDiscovery, ProjectObjects, ProjectRois, ProjectSamplesheets, Projects, ProjectViews, S3Datasets, Screenshots, Thresholds, Viewer, ViewportLinks, Viewports, ViewportWorkspace
 
 logger = logging.getLogger("odon.client")
 
@@ -136,6 +136,7 @@ class Client:
         self.labels = Labels(self)
         self.memory = Memory(self)
         self.objects = Objects(self)
+        self.annotations = Annotations(self)
         self.masks = Masks(self)
         self.thresholds = Thresholds(self)
         self.analysis = Analysis(self)
@@ -143,6 +144,7 @@ class Client:
         self.object_exports = ObjectExports(self)
         self.mosaic = Mosaic(self)
         self.viewer.objects = self.objects
+        self.viewer.annotations = self.annotations
         self.viewer.masks = self.masks
         self.viewer.thresholds = self.thresholds
         self.viewer.analysis = self.analysis

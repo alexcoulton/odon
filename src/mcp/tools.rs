@@ -139,6 +139,36 @@ fn tools_list() -> Value {
                 "clear_object_filter",
                 "Clear the active object filter/query."
             ),
+            tool_schema(
+                "viewer.annotations.layers.list",
+                "List actor-owned point annotation layers, schema, readiness, and bounded resource metadata."
+            ),
+            annotation_layer_get_tool_schema(),
+            annotation_layer_create_tool_schema(),
+            annotation_layer_update_tool_schema(),
+            annotation_layer_id_tool_schema(
+                "viewer.annotations.layers.delete",
+                "Delete a point annotation layer and release its loaded resource."
+            ),
+            annotation_source_tool_schema(
+                "viewer.annotations.source.inspect",
+                "Inspect an annotation Parquet schema on the background resource service.",
+                true
+            ),
+            annotation_source_tool_schema(
+                "viewer.annotations.source.load",
+                "Load point annotations from Parquet on the background resource service.",
+                true
+            ),
+            annotation_source_tool_schema(
+                "viewer.annotations.source.reload",
+                "Reload a point annotation layer from its configured Parquet source.",
+                false
+            ),
+            annotation_layer_id_tool_schema(
+                "viewer.annotations.source.clear",
+                "Clear an annotation source and loaded resource while retaining the layer."
+            ),
             channel_intensity_stats_tool_schema(),
             set_channel_order_tool_schema(),
             tool_schema(
@@ -190,6 +220,212 @@ fn tool_schema(name: &str, description: &str) -> Value {
             "additionalProperties": false
         }
     })
+}
+
+fn annotation_layer_id_tool_schema(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer_id": {"type": "integer", "minimum": 1},
+                "id": {"type": "integer", "minimum": 1}
+            },
+            "anyOf": [
+                {"required": ["layer_id"]},
+                {"required": ["id"]}
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn annotation_layer_get_tool_schema() -> Value {
+    annotation_layer_id_tool_schema(
+        "viewer.annotations.layers.get",
+        "Get one actor-owned point annotation layer by stable numeric ID.",
+    )
+}
+
+fn annotation_layer_create_tool_schema() -> Value {
+    json!({
+        "name": "viewer.annotations.layers.create",
+        "description": "Create an actor-owned point annotation layer with optional initial presentation and source settings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": annotation_layer_state_schema_properties(false),
+            "additionalProperties": false
+        }
+    })
+}
+
+fn annotation_layer_update_tool_schema() -> Value {
+    let mut properties = annotation_layer_state_schema_properties(true);
+    properties
+        .as_object_mut()
+        .expect("annotation properties object")
+        .insert(
+            "state".to_string(),
+            json!({
+                "type": "object",
+                "properties": annotation_layer_state_schema_properties(false),
+                "additionalProperties": false
+            }),
+        );
+    json!({
+        "name": "viewer.annotations.layers.update",
+        "description": "Update annotation layer name, visibility, style, source mapping, categories, or offset.",
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+            "anyOf": [
+                {"required": ["layer_id"]},
+                {"required": ["id"]}
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn annotation_source_tool_schema(name: &str, description: &str, require_path: bool) -> Value {
+    let required = if require_path {
+        json!({
+            "allOf": [
+                {"anyOf": [{"required": ["layer_id"]}, {"required": ["id"]}]},
+                {"required": ["path"]}
+            ]
+        })
+    } else {
+        json!({
+            "anyOf": [{"required": ["layer_id"]}, {"required": ["id"]}]
+        })
+    };
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "layer_id": {"type": "integer", "minimum": 1},
+            "id": {"type": "integer", "minimum": 1},
+            "path": {"type": "string"},
+            "roi_id_column": {"type": "string"},
+            "x_column": {"type": "string"},
+            "y_column": {"type": "string"},
+            "value_column": {"type": "string"},
+            "selected_value_column": {"type": "string"}
+        },
+        "additionalProperties": false
+    });
+    schema
+        .as_object_mut()
+        .expect("annotation source schema object")
+        .extend(
+            required
+                .as_object()
+                .expect("annotation source requirements")
+                .clone(),
+        );
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": schema
+    })
+}
+
+fn annotation_layer_state_schema_properties(include_id: bool) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        ("name".to_string(), json!({"type": "string"})),
+        ("visible".to_string(), json!({"type": "boolean"})),
+        (
+            "radius_screen_px".to_string(),
+            json!({"type": "number", "exclusiveMinimum": 0}),
+        ),
+        (
+            "opacity".to_string(),
+            json!({"type": "number", "minimum": 0, "maximum": 1}),
+        ),
+        (
+            "stroke_width".to_string(),
+            json!({"type": "number", "minimum": 0}),
+        ),
+        (
+            "stroke_color_rgb".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0, "maximum": 255},
+                "minItems": 3,
+                "maxItems": 3
+            }),
+        ),
+        (
+            "stroke_color_alpha".to_string(),
+            json!({"type": "integer", "minimum": 0, "maximum": 255}),
+        ),
+        (
+            "offset_world".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2
+            }),
+        ),
+        (
+            "parquet_path".to_string(),
+            json!({"type": ["string", "null"]}),
+        ),
+        ("path".to_string(), json!({"type": ["string", "null"]})),
+        ("roi_id_column".to_string(), json!({"type": "string"})),
+        ("x_column".to_string(), json!({"type": "string"})),
+        ("y_column".to_string(), json!({"type": "string"})),
+        ("value_column".to_string(), json!({"type": "string"})),
+        (
+            "selected_value_column".to_string(),
+            json!({"type": "string"}),
+        ),
+        (
+            "category_styles".to_string(),
+            json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "visible": {"type": "boolean"},
+                        "color_rgb": {
+                            "type": "array",
+                            "items": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "minItems": 3,
+                            "maxItems": 3
+                        },
+                        "shape": {"type": "string", "enum": ["circle", "square", "diamond", "cross"]}
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }
+            }),
+        ),
+        (
+            "continuous_shape".to_string(),
+            json!({"type": "string", "enum": ["circle", "square", "diamond", "cross"]}),
+        ),
+        (
+            "continuous_range".to_string(),
+            json!({
+                "type": ["array", "null"],
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2
+            }),
+        ),
+    ]);
+    if include_id {
+        properties.insert(
+            "layer_id".to_string(),
+            json!({"type": "integer", "minimum": 1}),
+        );
+        properties.insert("id".to_string(), json!({"type": "integer", "minimum": 1}));
+    }
+    Value::Object(properties)
 }
 
 fn channel_selector_tool_schema(name: &str, description: &str) -> Value {

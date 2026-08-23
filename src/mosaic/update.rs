@@ -10,12 +10,6 @@ impl eframe::App for MosaicViewerApp {
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
         self.drain_screenshots();
-        for layer in &mut self.annotation_layers {
-            if layer.tick() {
-                ctx.request_repaint();
-            }
-        }
-
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close

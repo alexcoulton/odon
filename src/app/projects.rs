@@ -289,6 +289,13 @@ impl OmeZarrViewerApp {
             })
             .collect::<BTreeMap<_, _>>();
         let workspace = self.project_workspace_view_state();
+        // Annotation state is actor-owned. Preserve the actor projection already stored in the
+        // project instead of reconstructing it from renderer adapters.
+        let annotation_layers = self
+            .project_space
+            .roi_view_state(&self.dataset.source)
+            .map(|view| view.annotation_layers.clone())
+            .unwrap_or_default();
         self.project_space.set_roi_view_state(
             &self.dataset.source,
             ProjectRoiViewState {
@@ -339,11 +346,7 @@ impl OmeZarrViewerApp {
                 analysis: Some(self.seg_objects.project_analysis_state()),
                 camera: Some(self.project_camera_state()),
                 ui: Some(self.project_ui_state()),
-                annotation_layers: self
-                    .annotation_layers
-                    .iter()
-                    .map(|layer| self.project_annotation_layer_state(layer))
-                    .collect(),
+                annotation_layers,
                 workspace,
             },
         );

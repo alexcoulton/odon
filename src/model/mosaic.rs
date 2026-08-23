@@ -308,6 +308,13 @@ impl Default for MosaicModel {
 }
 
 impl MosaicModel {
+    pub(crate) fn sync_annotation_layers(
+        &mut self,
+        layers: &[crate::data::annotations::ProjectAnnotationLayerState],
+    ) {
+        self.native_layers.sync_annotations(layers);
+    }
+
     pub(crate) fn require_ready(&self) -> Result<(), ControlError> {
         self.require_resource().map(|_| ())
     }

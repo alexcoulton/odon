@@ -69,10 +69,11 @@ use crate::objects::{
     ObjectProjectDisplayState, ObjectViewportFilterCacheState, ObjectViewportFilterState,
     ObjectsLayer,
 };
+#[cfg(test)]
+use crate::project::ProjectAnnotationLayerState;
 use crate::project::groups as layer_groups;
 use crate::project::{
-    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
+    ProjectCameraState, ProjectChannelViewState, ProjectObjectCacheUiState, ProjectRoiViewState,
     ProjectSegmentationViewState, ProjectSpace, ProjectSpaceAction, ProjectUiState,
     ProjectViewChannelRef, ProjectViewSpec, ProjectViewportViewState, ProjectWorkspaceViewState,
 };
@@ -1933,7 +1934,6 @@ pub struct OmeZarrViewerApp {
     cell_thresholds: CellThresholdsPanel,
     cell_points: PointsLayer,
     annotation_layers: Vec<AnnotationPointsLayer>,
-    next_annotation_layer_id: u64,
     mask_layers: Vec<MaskLayer>,
     tool_mode: ToolMode,
     drawing_mask_layer: Option<u64>,

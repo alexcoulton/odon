@@ -2447,6 +2447,106 @@ class AsyncObjects:
         )
 
 
+class AsyncAnnotations:
+    """Async actor-owned point annotation layers."""
+
+    def __init__(self, client: "AsyncClient") -> None:
+        self._client = client
+
+    async def list_layers(self) -> Any:
+        return await self._client.call("viewer.annotations.layers.list")
+
+    async def get_layer(self, layer_id: int) -> Any:
+        return await self._client.call(
+            "viewer.annotations.layers.get", {"layer_id": layer_id}
+        )
+
+    async def create_layer(
+        self,
+        name: str | None = None,
+        *,
+        if_revision: int | None = None,
+        **state: Any,
+    ) -> Any:
+        if name is not None:
+            state["name"] = name
+        return await self._client.call(
+            "viewer.annotations.layers.create", _with_revision(state, if_revision)
+        )
+
+    async def update_layer(
+        self, layer_id: int, *, if_revision: int | None = None, **state: Any
+    ) -> Any:
+        return await self._client.call(
+            "viewer.annotations.layers.update",
+            _with_revision({"layer_id": layer_id, "state": state}, if_revision),
+        )
+
+    async def delete_layer(
+        self, layer_id: int, *, if_revision: int | None = None
+    ) -> Any:
+        return await self._client.call(
+            "viewer.annotations.layers.delete",
+            _with_revision({"layer_id": layer_id}, if_revision),
+        )
+
+    @staticmethod
+    def _source_params(
+        layer_id: int,
+        path: str | Path | None = None,
+        **columns: str,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"layer_id": layer_id, **columns}
+        if path is not None:
+            params["path"] = str(path)
+        return params
+
+    async def inspect(
+        self,
+        layer_id: int,
+        path: str | Path,
+        *,
+        if_revision: int | None = None,
+        **columns: str,
+    ) -> Any:
+        return await self._client.tasks.start(
+            "viewer.annotations.source.inspect",
+            _with_revision(self._source_params(layer_id, path, **columns), if_revision),
+            label=f"Inspect annotations from {path}",
+        )
+
+    async def load(
+        self,
+        layer_id: int,
+        path: str | Path | None = None,
+        *,
+        if_revision: int | None = None,
+        **columns: str,
+    ) -> Any:
+        return await self._client.tasks.start(
+            "viewer.annotations.source.load",
+            _with_revision(self._source_params(layer_id, path, **columns), if_revision),
+            label=f"Load annotation layer {layer_id}",
+        )
+
+    async def reload(
+        self, layer_id: int, *, if_revision: int | None = None
+    ) -> Any:
+        return await self._client.tasks.start(
+            "viewer.annotations.source.reload",
+            _with_revision({"layer_id": layer_id}, if_revision),
+            label=f"Reload annotation layer {layer_id}",
+        )
+
+    async def clear_source(
+        self, layer_id: int, *, if_revision: int | None = None
+    ) -> Any:
+        return await self._client.call(
+            "viewer.annotations.source.clear",
+            _with_revision({"layer_id": layer_id}, if_revision),
+        )
+
+
 class AsyncMasks:
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client

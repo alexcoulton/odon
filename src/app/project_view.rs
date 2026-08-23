@@ -81,15 +81,6 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub(super) fn project_path_string(&self, path: &Path) -> String {
-        if let Some(project_dir) = self.project_space.project_dir()
-            && let Ok(relative) = path.strip_prefix(&project_dir)
-        {
-            return relative.to_string_lossy().to_string();
-        }
-        path.to_string_lossy().to_string()
-    }
-
     #[cfg(test)]
     pub(super) fn resolve_project_path(&self, path: &str) -> PathBuf {
         let path_buf = PathBuf::from(path);
@@ -103,53 +94,9 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub(super) fn project_annotation_layer_state(
-        &self,
-        layer: &AnnotationPointsLayer,
-    ) -> ProjectAnnotationLayerState {
-        ProjectAnnotationLayerState {
-            id: layer.id,
-            name: layer.name.clone(),
-            visible: layer.visible,
-            radius_screen_px: layer.style.radius_screen_px,
-            opacity: layer.style.opacity,
-            stroke_width: layer.style.stroke.width,
-            stroke_color_rgb: [
-                layer.style.stroke.color.r(),
-                layer.style.stroke.color.g(),
-                layer.style.stroke.color.b(),
-            ],
-            stroke_color_alpha: layer.style.stroke.color.a(),
-            offset_world: [layer.offset_world.x, layer.offset_world.y],
-            parquet_path: layer
-                .parquet
-                .path
-                .as_deref()
-                .map(|path| self.project_path_string(path)),
-            roi_id_column: layer.parquet.roi_id_column.clone(),
-            x_column: layer.parquet.x_column.clone(),
-            y_column: layer.parquet.y_column.clone(),
-            value_column: layer.parquet.value_column.clone(),
-            selected_value_column: layer.selected_value_column.clone(),
-            category_styles: layer
-                .category_styles
-                .iter()
-                .map(|style| ProjectAnnotationCategoryStyleState {
-                    name: style.name.clone(),
-                    visible: style.visible,
-                    color_rgb: [style.color.r(), style.color.g(), style.color.b()],
-                    shape: style.shape.storage_key().to_string(),
-                })
-                .collect(),
-            continuous_shape: Some(layer.continuous_shape.storage_key().to_string()),
-            continuous_range: layer.continuous_range.map(|(lo, hi)| [lo, hi]),
-        }
-    }
-
     #[cfg(test)]
     pub(super) fn restore_annotation_layers(&mut self, layers: &[ProjectAnnotationLayerState]) {
         self.annotation_layers.clear();
-        self.next_annotation_layer_id = 1;
         for saved in layers {
             let mut layer = AnnotationPointsLayer::new(saved.id, saved.name.clone());
             layer.visible = saved.visible;
@@ -195,11 +142,6 @@ impl OmeZarrViewerApp {
                 layer.continuous_shape = shape;
             }
             layer.continuous_range = saved.continuous_range.map(|[lo, hi]| (lo, hi));
-            if layer.parquet.path.is_some() {
-                layer.request_schema_load();
-                layer.request_load();
-            }
-            self.next_annotation_layer_id = self.next_annotation_layer_id.max(saved.id + 1);
             self.annotation_layers.push(layer);
         }
     }

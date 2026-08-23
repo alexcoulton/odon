@@ -47,21 +47,15 @@ runs on the bounded worker pool. A native committed mask edit is replayed as one
 generation-checked actor transaction, so it cannot silently overwrite a newer
 Python edit; the versioned mask projection is rendered when frames resume.
 
-Other application domains still use the compatibility UI dispatcher while the
-central-model migration continues. In particular, resource-loading saved-view apply,
-project ROI opening, mosaics, other native image resource loading, spatial-shape object selection,
-annotations, threshold-mask computation, measurements, object exports, screenshots, remote stores, TIFF,
-SpatialData, and Xenium have not all been moved to the actor yet. A method in
-one of those domains may still require Odon's native event loop to advance.
-Use `system.get_diagnostics` to inspect every method's current `actor`, `hybrid`,
-`legacy_ui`, or independent `control_service` route and the actor's
-queue/model/reply/presentation timing.
+Point annotation identity, style, column mapping, categorical/continuous presentation, and
+project persistence are actor-owned. Parquet schema inspection and point loading run on the bounded
+worker service. Their immutable indexed datasets are projected to the single-image or mosaic
+renderer by shared handle, so annotation commands and tasks progress while Odon is covered.
 
-Applying a saved view is actor-owned when its referenced object/label resources are already
-available. A preset that itself requests a missing object or label resource remains an explicit
-hybrid route until saved-view application is connected to the actor resource workers; diagnostics report
-`project.views.apply` accordingly. Capturing channel, camera, and object presentation from any
-existing viewport is fully background-safe.
+All registered application methods now have actor execution routes. `system.get_diagnostics`
+reports queue/model/reply/presentation timing and remains the best way to distinguish completion of
+semantic or resource work from its later display. Pixel capture is the intentional exception: it
+waits for a generation-specific presentation acknowledgement while leaving the actor responsive.
 
 Primary object source loading, reload/clear, paginated property access, per-viewport appearance,
 legends, and filters now use the background actor. The source worker produces both the canonical

@@ -148,6 +148,7 @@ impl MosaicViewerApp {
                     ui.label("Annotation layer not found.");
                     return;
                 };
+                let annotation_before = self.annotation_layers[idx].control_state_json();
                 ui.heading(self.annotation_layers[idx].name.clone());
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -311,23 +312,35 @@ impl MosaicViewerApp {
                     }
                 }
                 ui.separator();
-                let changed = self.annotation_layers[idx].ui_properties(ui);
-                if changed {
-                    // Ensure repaint (GL uniforms changed).
+                self.annotation_layers[idx].ui_properties(ui);
+                let annotation_after = self.annotation_layers[idx].control_state_json();
+                let source_request = self.annotation_layers[idx].take_control_source_request();
+                if annotation_after != annotation_before {
+                    self.submit_native_control_intent(
+                        "viewer.annotations.layers.update",
+                        serde_json::json!({"layer_id":id,"state":annotation_after}),
+                    );
+                }
+                if let Some((request, params)) = source_request {
+                    let method = match request {
+                        crate::annotations::AnnotationSourceRequest::Inspect => {
+                            "viewer.annotations.source.inspect"
+                        }
+                        crate::annotations::AnnotationSourceRequest::Load => {
+                            "viewer.annotations.source.load"
+                        }
+                        crate::annotations::AnnotationSourceRequest::Reload => {
+                            "viewer.annotations.source.reload"
+                        }
+                    };
+                    self.submit_native_control_intent(method, params);
                 }
                 ui.separator();
                 if ui.button("Delete layer").clicked() {
-                    let layer_id = MosaicLayerId::Annotation(id);
-                    self.annotation_layers.remove(idx);
-                    self.overlay_layer_order.retain(|l| *l != layer_id);
-                    if self.active_layer == layer_id {
-                        self.active_layer = self
-                            .channel_layer_order
-                            .first()
-                            .copied()
-                            .map(MosaicLayerId::Channel)
-                            .unwrap_or(MosaicLayerId::TextLabels);
-                    }
+                    self.submit_native_control_intent(
+                        "viewer.annotations.layers.delete",
+                        serde_json::json!({"layer_id":id}),
+                    );
                 }
                 if groups_changed {
                     ui.ctx().request_repaint();

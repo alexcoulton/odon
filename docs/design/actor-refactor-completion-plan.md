@@ -235,8 +235,8 @@ rule: they enqueue typed commands and wait for actor projection, with no project
 into `BootstrapMosaic`; RootApp sends the project snapshot first, then only the immutable mosaic
 resource, and `MosaicModel` restores persisted mosaic state before publishing its projection. The
 test-only mosaic channel/layout/focus command emulators and renderer semantic bootstrap assembler
-have been deleted. Annotation geometry is still installed as a renderer resource from the project
-until Milestone 4 gives annotations an actor-owned resource and edit model.
+have been deleted. Annotation ownership subsequently crossed in Milestone 4: the actor now
+restores, loads, persists, and projects annotation layers and their shared data resources.
 
 Ownership slices, in order:
 
@@ -279,7 +279,14 @@ latest projected mask layers plus generation-tagged drawing and move previews; t
 mask ID allocator, undo stack, project-dirty mirror, filesystem loader/writer, and readiness-based
 fallbacks have been deleted. Native mask export now selects a path in the platform UI and performs
 the actual I/O on the actor worker service. Structural guards reject reintroduction of these object
-selection and mask fallback paths.
+selection and mask fallback paths. Annotation layer identity, presentation, source configuration,
+readiness, persistence, schema inspection, and Parquet resource installation are now actor-owned
+in both single-image and mosaic modes. Native UI, Python, and MCP use the same nine
+`viewer.annotations.*` methods. Parquet work runs on the bounded actor worker service, stale
+source/document generations are rejected, and immutable datasets cross into the renderer through
+shared generation-tagged resources. The renderer retains only paint/UI adapters, GL state, and
+pending widget intent; project save paths preserve the actor projection rather than reassembling
+annotation truth from those adapters.
 
 Work:
 

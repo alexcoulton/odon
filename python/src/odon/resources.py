@@ -2413,6 +2413,104 @@ class Objects:
         )
 
 
+class Annotations:
+    """Actor-owned point annotation layers backed by optional Parquet resources."""
+
+    def __init__(self, client: "Client") -> None:
+        self._client = client
+
+    def list_layers(self) -> Any:
+        return self._client.call("viewer.annotations.layers.list")
+
+    def get_layer(self, layer_id: int) -> Any:
+        return self._client.call(
+            "viewer.annotations.layers.get", {"layer_id": layer_id}
+        )
+
+    def create_layer(
+        self,
+        name: str | None = None,
+        *,
+        if_revision: int | None = None,
+        **state: Any,
+    ) -> Any:
+        if name is not None:
+            state["name"] = name
+        return self._client.call(
+            "viewer.annotations.layers.create", _with_revision(state, if_revision)
+        )
+
+    def update_layer(
+        self, layer_id: int, *, if_revision: int | None = None, **state: Any
+    ) -> Any:
+        return self._client.call(
+            "viewer.annotations.layers.update",
+            _with_revision({"layer_id": layer_id, "state": state}, if_revision),
+        )
+
+    def delete_layer(
+        self, layer_id: int, *, if_revision: int | None = None
+    ) -> Any:
+        return self._client.call(
+            "viewer.annotations.layers.delete",
+            _with_revision({"layer_id": layer_id}, if_revision),
+        )
+
+    @staticmethod
+    def _source_params(
+        layer_id: int,
+        path: str | Path | None = None,
+        **columns: str,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"layer_id": layer_id, **columns}
+        if path is not None:
+            params["path"] = str(path)
+        return params
+
+    def inspect(
+        self,
+        layer_id: int,
+        path: str | Path,
+        *,
+        if_revision: int | None = None,
+        **columns: str,
+    ) -> Any:
+        return self._client.tasks.start(
+            "viewer.annotations.source.inspect",
+            _with_revision(self._source_params(layer_id, path, **columns), if_revision),
+            label=f"Inspect annotations from {path}",
+        )
+
+    def load(
+        self,
+        layer_id: int,
+        path: str | Path | None = None,
+        *,
+        if_revision: int | None = None,
+        **columns: str,
+    ) -> Any:
+        return self._client.tasks.start(
+            "viewer.annotations.source.load",
+            _with_revision(self._source_params(layer_id, path, **columns), if_revision),
+            label=f"Load annotation layer {layer_id}",
+        )
+
+    def reload(self, layer_id: int, *, if_revision: int | None = None) -> Any:
+        return self._client.tasks.start(
+            "viewer.annotations.source.reload",
+            _with_revision({"layer_id": layer_id}, if_revision),
+            label=f"Reload annotation layer {layer_id}",
+        )
+
+    def clear_source(
+        self, layer_id: int, *, if_revision: int | None = None
+    ) -> Any:
+        return self._client.call(
+            "viewer.annotations.source.clear",
+            _with_revision({"layer_id": layer_id}, if_revision),
+        )
+
+
 class Masks:
     def __init__(self, client: "Client") -> None:
         self._client = client

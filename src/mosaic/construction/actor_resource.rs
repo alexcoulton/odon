@@ -1,6 +1,50 @@
 use super::*;
 
 impl MosaicViewerApp {
+    pub(crate) fn apply_control_actor_annotation_layers(
+        &mut self,
+        projections: &[odon::model::ControlAnnotationLayerProjection],
+    ) {
+        let mut existing = self
+            .annotation_layers
+            .drain(..)
+            .map(|layer| (layer.id, layer))
+            .collect::<HashMap<_, _>>();
+        self.annotation_layers = projections
+            .iter()
+            .map(|projection| {
+                let mut layer = existing.remove(&projection.state.id).unwrap_or_else(|| {
+                    AnnotationPointsLayer::new(projection.state.id, projection.state.name.clone())
+                });
+                layer.apply_control_projection(projection);
+                layer
+            })
+            .collect();
+        let annotation_ids = self
+            .annotation_layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.overlay_layer_order.retain(
+            |layer| !matches!(layer, MosaicLayerId::Annotation(id) if !annotation_ids.contains(id)),
+        );
+        for id in annotation_ids {
+            let layer = MosaicLayerId::Annotation(id);
+            if !self.overlay_layer_order.contains(&layer) {
+                self.overlay_layer_order.push(layer);
+            }
+        }
+        if matches!(self.active_layer, MosaicLayerId::Annotation(id) if !self.annotation_layers.iter().any(|layer| layer.id == id))
+        {
+            self.active_layer = self
+                .channel_layer_order
+                .first()
+                .copied()
+                .map(MosaicLayerId::Channel)
+                .unwrap_or(MosaicLayerId::TextLabels);
+        }
+    }
+
     pub fn from_control_resource(
         ctx: &egui::Context,
         gpu_available: bool,

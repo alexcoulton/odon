@@ -287,39 +287,7 @@ pub struct ProjectUiState {
     pub manual_level: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct ProjectAnnotationCategoryStyleState {
-    pub name: String,
-    pub visible: bool,
-    pub color_rgb: [u8; 3],
-    pub shape: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct ProjectAnnotationLayerState {
-    pub id: u64,
-    pub name: String,
-    pub visible: bool,
-    pub radius_screen_px: f32,
-    pub opacity: f32,
-    pub stroke_width: f32,
-    pub stroke_color_rgb: [u8; 3],
-    pub stroke_color_alpha: u8,
-    pub offset_world: [f32; 2],
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parquet_path: Option<String>,
-    pub roi_id_column: String,
-    pub x_column: String,
-    pub y_column: String,
-    pub value_column: String,
-    pub selected_value_column: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub category_styles: Vec<ProjectAnnotationCategoryStyleState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continuous_shape: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continuous_range: Option<[f32; 2]>,
-}
+pub use odon::data::annotations::ProjectAnnotationLayerState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ProjectMosaicViewState {

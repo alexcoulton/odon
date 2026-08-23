@@ -26,7 +26,7 @@ use self::io::{
 };
 use self::segmentation_geojson::MosaicGeoJsonSegmentationOverlay;
 use self::tiles_gl::{ChannelDraw, MosaicTileDraw, MosaicTilesGl};
-use crate::annotations::{AnnotationCategoryStyle, AnnotationPointsLayer, AnnotationShape};
+use crate::annotations::AnnotationPointsLayer;
 use crate::app::{NativeControlIntent, S3DatasetSelection};
 use crate::app_support::memory::{
     MemoryChannelRow, MemoryRisk, MemoryRiskLevel, PendingMemoryAction, SystemMemorySnapshot,
@@ -48,9 +48,8 @@ use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rec
 use crate::objects::PreloadedObjectLayer;
 use crate::project::groups as layer_groups;
 use crate::project::{
-    ProjectAnnotationCategoryStyleState, ProjectAnnotationLayerState, ProjectCameraState,
-    ProjectChannelViewState, ProjectMosaicViewState, ProjectObjectCacheUiState, ProjectSpace,
-    ProjectUiState,
+    ProjectCameraState, ProjectChannelViewState, ProjectMosaicViewState, ProjectObjectCacheUiState,
+    ProjectSpace, ProjectUiState,
 };
 use crate::ui::canvas_overlays;
 use crate::ui::channel_notes;
@@ -229,7 +228,6 @@ pub struct MosaicViewerApp {
     channel_layer_order: Vec<usize>,
     channel_sort_mode: ChannelSortMode,
     annotation_layers: Vec<AnnotationPointsLayer>,
-    next_annotation_layer_id: u64,
     last_target_level_by_dataset_id: Vec<Option<usize>>,
     fallback_ceiling_by_dataset_id: Vec<Option<usize>>,
     zoom_out_floor_by_dataset_id: Vec<Option<usize>>,

@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from .async_resources import (
     AsyncAnalysis,
+    AsyncAnnotations,
     AsyncApplication,
     AsyncChannels,
     AsyncDatasets,
@@ -117,6 +118,7 @@ class AsyncClient:
         self.labels = AsyncLabels(self)
         self.memory = AsyncMemory(self)
         self.objects = AsyncObjects(self)
+        self.annotations = AsyncAnnotations(self)
         self.masks = AsyncMasks(self)
         self.thresholds = AsyncThresholds(self)
         self.analysis = AsyncAnalysis(self)
@@ -124,6 +126,7 @@ class AsyncClient:
         self.object_exports = AsyncObjectExports(self)
         self.mosaic = AsyncMosaic(self)
         self.viewer.objects = self.objects
+        self.viewer.annotations = self.annotations
         self.viewer.masks = self.masks
         self.viewer.thresholds = self.thresholds
         self.viewer.analysis = self.analysis

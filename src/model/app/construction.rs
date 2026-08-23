@@ -46,6 +46,7 @@ impl AppModel {
             tile_loading: TileLoadingModel::default(),
             pinned_memory: PinnedMemoryModel::default(),
             threshold_preview: ThresholdPreviewModel::default(),
+            annotations: AnnotationModel::default(),
             analyses: HashMap::from([(ObjectTarget::Primary, AnalysisModel::default())]),
             measurement: MeasurementModel::default(),
             object_export: ObjectExportModel::default(),
@@ -186,6 +187,16 @@ impl AppModel {
         let project = self.project.snapshot();
         self.mosaic
             .restore_project_state(&project.state, &project.config.layer_groups)?;
+        let annotations = project
+            .state
+            .get("mosaic")
+            .and_then(|state| state.get("annotation_layers"))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| invalid(format!("invalid mosaic annotation layers: {error}")))?
+            .unwrap_or_default();
+        self.restore_annotation_states(annotations)?;
         self.mosaic_operation_generation = generation;
         self.mosaic_operation_pending = false;
         self.mode = ModelMode::Mosaic;
@@ -208,6 +219,16 @@ impl AppModel {
         let project = self.project.snapshot();
         self.mosaic
             .restore_project_state(&project.state, &project.config.layer_groups)?;
+        let annotations = project
+            .state
+            .get("mosaic")
+            .and_then(|state| state.get("annotation_layers"))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| invalid(format!("invalid mosaic annotation layers: {error}")))?
+            .unwrap_or_default();
+        self.restore_annotation_states(annotations)?;
         self.mosaic_operation_pending = false;
         self.mode = ModelMode::Mosaic;
         self.dataset = None;
@@ -248,6 +269,10 @@ impl AppModel {
 
     pub(crate) fn mosaic_projection_state(&self) -> Value {
         self.mosaic.projection_state()
+    }
+
+    pub(crate) fn annotation_projections(&self) -> Vec<ControlAnnotationLayerProjection> {
+        self.annotations.projections()
     }
 
     pub(crate) fn mosaic_object_resources(&self) -> Vec<(usize, Arc<ControlObjectResource>)> {

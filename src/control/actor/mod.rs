@@ -24,6 +24,7 @@ use crate::control::{
     ControlError, ControlErrorKind, OdonControlRequest, ResourceRegistry, TaskRegistry,
     TaskServiceHandle, TaskState,
 };
+use crate::data::annotations::{load_annotations_parquet, read_parquet_columns};
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
 };
@@ -44,23 +45,24 @@ use crate::deep_link::{
     requested_bundled_label, resolve_example_project_path, resolve_roi_target,
 };
 use crate::model::{
-    AnalysisResourceSpec, AppModel, ChannelIntensitySpec, ControlLabelResource,
-    ControlMosaicItemResource, ControlMosaicResource, ControlObjectFilterResult,
-    ControlObjectResource, ControlPinnedLevelResource, ControlThresholdPreviewResource,
-    DeepLinkApplyGuard, DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric,
-    MeasurementSpec, MemoryPinSpec, ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec,
-    MosaicObjectLoadResult, MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult,
-    ObjectExportSpec, ObjectResourceLoader, ObjectTarget, ProjectModelSnapshot,
-    ProjectObjectPreloadScope, ProjectObjectPreloadSettings, ProjectObjectPreloadSource,
-    ProjectViewApplySpec, ScreenshotPreferences, SettingsMutationOutcome, SystemMemorySnapshot,
-    ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
-    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
-    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
-    write_object_export,
+    AnalysisResourceSpec, AnnotationLoadResult, AnnotationLoadSpec, AppModel, ChannelIntensitySpec,
+    ControlLabelResource, ControlMosaicItemResource, ControlMosaicResource,
+    ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
+    ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
+    LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
+    MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult, MosaicObjectLoadSpec,
+    ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader, ObjectTarget,
+    ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
+    ProjectObjectPreloadSource, ProjectViewApplySpec, ScreenshotPreferences,
+    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
+    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
+    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
+    threshold_mask_polygons, write_object_export,
 };
 use crate::settings::AppSettings;
 
 mod analysis;
+mod annotations;
 mod application;
 mod channel_io;
 mod channels;
@@ -104,6 +106,7 @@ pub use crate::control::registry::ACTOR_CAPABLE_METHODS as MIGRATED_METHODS;
 use analysis::{
     begin_analysis_compute, begin_analysis_preset_export, begin_analysis_preset_import,
 };
+use annotations::begin_annotation_load;
 use application::{
     begin_lifecycle_request, begin_settings_mutation, enqueue_recent_project_persistence,
 };

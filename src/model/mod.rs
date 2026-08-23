@@ -1,6 +1,7 @@
 //! Canonical, renderer-independent application state.
 
 mod analysis;
+mod annotations;
 mod app;
 mod labels;
 mod layers;
@@ -18,6 +19,8 @@ mod selection;
 mod threshold;
 
 pub(crate) use analysis::AnalysisModel;
+pub(crate) use annotations::{AnnotationLoadResult, AnnotationLoadSpec, AnnotationModel};
+pub use annotations::{ControlAnnotationLayerProjection, ControlAnnotationResource};
 pub(crate) use app::{
     AnalysisResourceSpec, DeepLinkApplyGuard, DeepLinkCurrentResources, MeasurementSpec,
     MemoryPinSpec, ObjectTarget, ProjectViewApplySpec, ThresholdPreviewApplySpec,

@@ -336,6 +336,11 @@ pub(super) enum LoadCompletion {
         name: String,
         result: anyhow::Result<ControlLabelResource>,
     },
+    Annotations {
+        request: Option<OdonControlRequest>,
+        spec: AnnotationLoadSpec,
+        result: anyhow::Result<AnnotationLoadResult>,
+    },
     ObjectFilter {
         document_generation: u64,
         resource_generation: u64,
@@ -435,6 +440,7 @@ impl LoadCompletion {
             Self::ProjectViewApply { .. } => CompletionDomain::Project,
             Self::ObjectResource { .. }
             | Self::Labels { .. }
+            | Self::Annotations { .. }
             | Self::MemoryPin { .. }
             | Self::ThresholdLoad { .. }
             | Self::ThresholdRecompute { .. }
@@ -684,6 +690,10 @@ pub(super) enum LoadJob {
         request: OdonControlRequest,
         document: Arc<RenderDocument>,
         name: String,
+    },
+    Annotations {
+        request: Option<OdonControlRequest>,
+        spec: AnnotationLoadSpec,
     },
     ObjectFilter {
         document_generation: u64,

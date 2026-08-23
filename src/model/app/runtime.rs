@@ -878,6 +878,14 @@ impl AppModel {
                 .set_segmentation_labels(has_labels, has_labels);
         }
         Self::sync_mask_native_layers(dataset);
+        let annotations = view
+            .get("annotation_layers")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| invalid(format!("invalid project annotation layers: {error}")))?
+            .unwrap_or_default();
+        self.restore_annotation_states(annotations)?;
         Ok(())
     }
 

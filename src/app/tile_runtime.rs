@@ -22,10 +22,6 @@ impl OmeZarrViewerApp {
                 || self.hist_navigation_dirty_since.is_some()))
             || self.chanmax_pending.iter().any(|pending| *pending)
             || !self.screenshot_in_flight.is_empty()
-            || self
-                .annotation_layers
-                .iter()
-                .any(|layer| layer.has_pending_work())
     }
 
     pub(super) fn request_tiles_with_budget(

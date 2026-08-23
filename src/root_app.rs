@@ -635,6 +635,7 @@ impl RootApp {
                     };
                     return false;
                 }
+                mosaic.apply_control_actor_annotation_layers(&projection.annotation_layers);
                 self.mode = Mode::Mosaic { mosaic, ret };
             } else if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
                 mosaic
@@ -648,6 +649,7 @@ impl RootApp {
                     log_warn!("could not apply actor mosaic state: {error}");
                     return false;
                 }
+                mosaic.apply_control_actor_annotation_layers(&projection.annotation_layers);
             }
             self.control_document_generation_applied = projection.document_generation;
             self.control_actor_mode_signature = Some(self.control_actor_mode_signature());
@@ -854,6 +856,7 @@ impl RootApp {
                 log_warn!("could not realize actor secondary object resources: {error}");
                 return false;
             }
+            app.apply_control_actor_annotation_layers(&projection.annotation_layers);
         }
         if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
             mosaic.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);

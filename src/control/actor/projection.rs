@@ -46,6 +46,7 @@ pub struct RenderProjection {
     pub workspace: Option<Value>,
     pub object_resource: Option<Arc<ControlObjectResource>>,
     pub secondary_object_layers: Vec<crate::model::ControlSecondaryObjectProjection>,
+    pub annotation_layers: Vec<crate::model::ControlAnnotationLayerProjection>,
     pub label_resource: Option<Arc<ControlLabelResource>>,
 }
 
@@ -94,6 +95,7 @@ pub(super) fn publish_projection(
         workspace: model.render_workspace_snapshot(),
         object_resource: model.object_resource(),
         secondary_object_layers: model.secondary_object_projections(),
+        annotation_layers: model.annotation_projections(),
         label_resource: model.label_resource(),
     };
     let mut coalesced = false;

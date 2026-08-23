@@ -14,6 +14,7 @@ pub(crate) enum OperationKind {
     ProjectRoiOpen,
     ProjectViewApply,
     Labels,
+    Annotations,
     Objects,
     ObjectFilter,
     MaskIo,
@@ -42,6 +43,7 @@ impl OperationKind {
             Self::ProjectRoiOpen => "project_roi_open",
             Self::ProjectViewApply => "project_view_apply",
             Self::Labels => "labels",
+            Self::Annotations => "annotations",
             Self::Objects => "objects",
             Self::ObjectFilter => "object_filter",
             Self::MaskIo => "mask_io",
@@ -323,6 +325,21 @@ impl ReadinessModel {
         }
     }
 
+    pub(crate) fn cancel_scope_pending(
+        &mut self,
+        kind: OperationKind,
+        scope: &str,
+        status: &str,
+    ) -> bool {
+        let key = OperationKey::scoped(kind, scope);
+        let Some(generation) = self.operations.get(&key).and_then(|operation| {
+            (operation.phase == OperationPhase::Pending).then_some(operation.generation)
+        }) else {
+            return false;
+        };
+        self.set_if_current(&key, generation, OperationPhase::Cancelled, status)
+    }
+
     pub(crate) fn aggregate_status(&self) -> &str {
         self.operations
             .values()
@@ -468,5 +485,25 @@ mod tests {
             readiness.snapshot()["object_filter:right"]["phase"],
             "cancelled"
         );
+    }
+
+    #[test]
+    fn cancelling_one_scope_does_not_cancel_its_siblings() {
+        let mut readiness = ReadinessModel::default();
+        readiness.begin_scoped(OperationKind::Annotations, "1", 3, "Loading first");
+        readiness.begin_scoped(OperationKind::Annotations, "2", 4, "Loading second");
+
+        assert!(readiness.cancel_scope_pending(
+            OperationKind::Annotations,
+            "1",
+            "First source was cleared"
+        ));
+        assert_eq!(readiness.snapshot()["annotations:1"]["phase"], "cancelled");
+        assert!(readiness.is_pending_scoped(OperationKind::Annotations, "2", 4));
+        assert!(!readiness.cancel_scope_pending(
+            OperationKind::Annotations,
+            "missing",
+            "Not present"
+        ));
     }
 }

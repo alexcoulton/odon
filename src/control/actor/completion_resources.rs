@@ -184,6 +184,94 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::Annotations {
+            request,
+            spec,
+            result,
+        } => {
+            if request.as_ref().is_some_and(request_is_cancelled) {
+                model.fail_annotation_load(&spec, "Annotation load was cancelled".to_string());
+                publish_projection(
+                    model,
+                    render_document.clone(),
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                );
+                reject_cancelled_request(
+                    request.expect("cancelled annotation job has an API request"),
+                    diagnostics,
+                    "annotation load",
+                );
+                return;
+            }
+            match result {
+                Ok(result) => {
+                    if let Some(response) = model.install_annotation_load(&spec, result) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        if let Some(request) = request {
+                            finish_request(request, response, diagnostics);
+                        }
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        if let Some(request) = request {
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "annotation load was superseded by newer state",
+                                ),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("annotation load failed: {error}");
+                    if model.fail_annotation_load(&spec, message.clone()) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        if let Some(request) = request {
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(ControlErrorKind::Application, message),
+                            );
+                        }
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        if let Some(request) = request {
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(
+                                    ControlErrorKind::Conflict,
+                                    "failed annotation load was superseded by newer state",
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         LoadCompletion::MemoryPin {
             request,
             spec,

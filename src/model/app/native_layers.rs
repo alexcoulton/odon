@@ -499,6 +499,17 @@ impl AppModel {
         params: &Value,
     ) -> Result<Value, ControlError> {
         let scoped = self.active_scoped_native_params(params)?;
+        if method == "viewer.native_layers.set_visibility"
+            && let Some(id) = Self::native_layer_id(params)?
+                .strip_prefix("annotation:")
+                .and_then(|value| value.parse::<u64>().ok())
+        {
+            let visible = params
+                .get("visible")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| invalid("visible is required"))?;
+            self.update_annotation_layer(id, &json!({"visible":visible}))?;
+        }
         let response = match method {
             "viewer.native_layers.set_active" => self.set_native_layer_active(&scoped)?,
             "viewer.native_layers.set_visibility" => self.set_native_layer_visibility(&scoped)?,
@@ -522,6 +533,13 @@ impl AppModel {
                     .ok_or_else(|| invalid("offset_world is required"))?,
             )
         };
+        if let Some(id) = layer_id
+            .strip_prefix("annotation:")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            let effective = offset.unwrap_or([0.0, 0.0]);
+            self.update_annotation_layer(id, &json!({"offset_world":effective}))?;
+        }
         let dataset = self.dataset_mut()?;
         let mut changed = false;
         let viewport_ids = dataset

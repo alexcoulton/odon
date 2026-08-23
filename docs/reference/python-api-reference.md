@@ -431,6 +431,22 @@ Access: `app.objects` or `app.viewer.objects`. Object source, styling, propertie
 | `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; event: viewer.objects.filter.changed) |
 | `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; event: viewer.layers.changed) |
 
+### Annotations
+
+Access: `app.annotations` or `app.viewer.annotations`. Actor-owned point annotation layers, Parquet sources, schema inspection, and styling.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. |
+| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; event: viewer.annotations.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; event: viewer.annotations.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; event: viewer.annotations.changed) |
+| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; event: viewer.annotations.changed) |
+| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; event: viewer.annotations.changed) |
+| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; event: viewer.annotations.changed) |
+| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; event: viewer.annotations.changed) |
+
 ### Masks
 
 Access: `app.masks` or `app.viewer.masks`. Mask layer and polygon editing, selection, history, persistence, and GeoJSON interchange.
@@ -1183,6 +1199,22 @@ Access: `app.objects`. Async object resource.
 | `set_filter(query: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_filter` | single | Set an object filter query. (mutates; event: viewer.layers.changed) |
 | `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; event: viewer.objects.filter.changed) |
 | `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; event: viewer.layers.changed) |
+
+### Async annotations
+
+Access: `app.annotations`. Async point annotation resource.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. |
+| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; event: viewer.annotations.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; event: viewer.annotations.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; event: viewer.annotations.changed) |
+| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; event: viewer.annotations.changed) |
+| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; event: viewer.annotations.changed) |
+| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; event: viewer.annotations.changed) |
+| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; event: viewer.annotations.changed) |
 
 ### Async masks
 
