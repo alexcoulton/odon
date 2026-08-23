@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-08-23T21:05:53.661287+00:00",
+  "verification_scope": "semantic_resource_background_completion",
+  "semantic_result": "pass",
+  "projection_inspection": "pending",
+  "condition": "separate-space",
+  "instance_id": "9c221de2-a6ca-601b-458e-4696032a26fa",
+  "app_version": "0.1.5",
+  "elapsed_seconds": 1.075,
+  "fixture": "/Users/alexcoulton/work/external.repos/odon.pub/fixtures/synthetic_5ch.ome.zarr",
+  "objects_fixture": "/Users/alexcoulton/work/external.repos/odon.pub/fixtures/synthetic_objects.geojson",
+  "open_result": {
+    "opened": true,
+    "mode": "single",
+    "kind": "ome_zarr",
+    "path": "/Users/alexcoulton/work/external.repos/odon.pub/fixtures/synthetic_5ch.ome.zarr",
+    "model_ready": true,
+    "resources_ready": true,
+    "presentation_ready": false,
+    "_control": {
+      "revision": 404
+    }
+  },
+  "model_ready": true,
+  "resources_ready": true,
+  "geometry_ready": true,
+  "presentation_ready": true,
+  "projection_revision": 521,
+  "presented_projection_revision": 521,
+  "viewports": [
+    "viewport-1",
+    "viewport-2"
+  ],
+  "final_projection_expectations": {
+    "left": {
+      "viewport_id": "viewport-1",
+      "visible_channels": [
+        0
+      ],
+      "channel_0_color_rgb": [
+        80,
+        140,
+        255
+      ],
+      "object_filter": "phenotype == 'tumour'",
+      "object_fill_opacity": 0.25,
+      "acceptance_mask_visible": true
+    },
+    "right": {
+      "viewport_id": "viewport-2",
+      "visible_channels": [
+        1
+      ],
+      "channel_1_color_rgb": [
+        255,
+        90,
+        120
+      ],
+      "object_filter": "phenotype == 'immune'",
+      "object_fill_opacity": 0.75,
+      "acceptance_mask_visible": false
+    },
+    "links": {
+      "camera": true,
+      "plane": true,
+      "selection": true
+    }
+  },
+  "channel_stat_count": 262144,
+  "actor_methods_checked": 82,
+  "application_routes_checked": 286
+}

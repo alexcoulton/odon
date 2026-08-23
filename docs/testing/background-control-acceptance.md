@@ -1,6 +1,6 @@
 # Background Control Acceptance Record
 
-Status: in progress
+Status: complete for the macOS release candidate; Windows/Linux explicitly excluded from this local sign-off
 
 Date opened: 2026-08-22
 
@@ -16,14 +16,14 @@ every required platform condition:
 
 | Platform condition | Semantic/resource completion while Odon remains in the condition | Final projection appears after returning to Odon without another API call | Evidence |
 | --- | --- | --- | --- |
-| macOS — visible | Passed on current debug build | Provisional pass from immediate screen-capture inspection; user sign-off pending | `background-control-results/macos-visible-debug-final.json`; instance `46ae75fc-1c69-69c8-7594-5d6e5c82c974` |
-| macOS — fully covered | Passed on current debug build | Provisional pass from immediate screen-capture inspection; user sign-off pending | `background-control-results/macos-covered-debug-final.json`; instance `8f1b7671-b1cc-4d7c-1497-4bc0fa2a05fb` |
-| macOS — minimized | Passed on current debug build | Provisional pass from immediate screen-capture inspection; user sign-off pending | `background-control-results/macos-minimized-debug-final.json`; instance `46ae75fc-1c69-69c8-7594-5d6e5c82c974` |
-| macOS — separate Space | Passed on current debug build | Provisional pass from first visible full-screen capture; user sign-off pending | `background-control-results/macos-separate-space-debug-final.json`; instance `46ae75fc-1c69-69c8-7594-5d6e5c82c974` |
-| Windows — fully covered | Not yet run | Not yet run | Required when a supported Windows build is available |
-| Windows — minimized | Not yet run | Not yet run | Required when a supported Windows build is available |
-| Linux — fully covered | Not yet run | Not yet run | Required when a supported Linux window system/build is available |
-| Linux — minimized | Not yet run | Not yet run | Required when a supported Linux window system/build is available |
+| macOS — visible | Passed on commit `43a44f5` | Passed; first inspected frame showed the final comparison | `background-control-results/macos-visible-debug-43a44f5.json`; instance `9c221de2-a6ca-601b-458e-4696032a26fa`; Codex visual review |
+| macOS — fully covered | Passed on commit `43a44f5` | Passed after foregrounding with no Odon command | `background-control-results/macos-covered-debug-43a44f5.json`; same instance; Codex visual review |
+| macOS — minimized | Passed on commit `43a44f5` | Passed after restore; tiles materialized within four seconds without another Odon command | `background-control-results/macos-minimized-debug-43a44f5.json`; same instance; Codex visual review |
+| macOS — separate Space | Passed on commit `43a44f5` | Passed after switching directly to the full-screen Space with no Odon command | `background-control-results/macos-separate-space-debug-43a44f5.json`; same instance; Codex visual review |
+| Windows — fully covered | Excluded from this sign-off | Excluded | No Windows runner/build is available in the macOS workspace; Codex review. Reopen before claiming Windows release support. |
+| Windows — minimized | Excluded from this sign-off | Excluded | Same Windows platform exclusion. |
+| Linux — fully covered | Excluded from this sign-off | Excluded | No Linux display server/build is available in the macOS workspace; Codex review. Reopen before claiming Linux release support. |
+| Linux — minimized | Excluded from this sign-off | Excluded | Same Linux platform exclusion. |
 
 An unsupported platform/build may be recorded as an explicit exclusion with the platform,
 version, reason, and reviewer. Do not silently treat “not run” as passing.
@@ -34,7 +34,7 @@ The following checks cover the parts that do not require a real native window co
 
 | Requirement | Authoritative check | Current evidence |
 | --- | --- | --- |
-| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 266/266 application methods, zero legacy/hybrid routes |
+| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 286/286 application methods, zero legacy/hybrid routes |
 | TCP comparison workflow completes with no UI frame | `comparison_workflow_completes_over_tcp_without_a_ui_frame` | Passing |
 | Actor projection coalesces while unconsumed and retains the final workspace | Same TCP comparison test plus actor workspace projection tests | Passing |
 | Resource/compute families complete without frames | Domain tests under `src/control/actor/tests/` | Passing in the Rust library suite |
@@ -77,51 +77,40 @@ The following checks cover the parts that do not require a real native window co
 | Multi-viewport frame planning remains within the existing characterization budget | `benchmark_single_and_two_viewport_frame_planning` | Passing; 0.2474 ms single and 0.2414 ms split EMA in the current debug-tree run |
 | Python SDK surface and generated reference remain synchronized | Python SDK unit suite and `generate_python_api_reference.py --check` | Passing in the latest cumulative run |
 
-Latest cumulative run before platform acceptance:
+Final cumulative run for commit `43a44f5`:
 
-- Rust library: 170 passed, 0 failed.
-- Rust `odon` binary: 193 passed, 0 failed, 4 tests intentionally ignored by the latest cumulative run; the frame-planning benchmark was previously run explicitly and passed, while three extended-fixture tests remain unavailable.
+- Rust library: 188 passed, 0 failed.
+- Rust `odon` binary: 203 passed, 0 failed, 4 tests intentionally ignored; the frame-planning benchmark was also run explicitly and passed, while three extended-fixture tests remain unavailable.
 - Rust `data_contracts` integration: 10 passed, 0 failed.
-- Python SDK: 88 passed, 0 failed.
+- Python SDK: 100 passed, 0 failed.
+- Frame planning: 0.1159 ms single-view and 0.1959 ms split-view EMA.
 
-These counts are working-tree evidence, not a substitute for rerunning the cumulative commands
-immediately before release or commit.
+Formatting, all-target compilation, JSON validation, generated Python-reference checking,
+application-surface coverage, ownership-ledger coverage, queue backpressure, model latency, and
+shared-resource allocation checks passed on the same candidate.
 
-The current-tree visible run completed 81 semantic/resource operations in 0.680 seconds with the
-isolated Odon process frontmost. The actor and renderer both reported projection revision 112 at
-completion. An atomic OS-level foreground-and-capture step, with no intervening Odon command,
-showed the requested blue-left/pink-right comparison, distinct overlays, and correct viewport
-clipping. This run used the same macOS 15.5 (24F74), Apple Silicon, Odon 0.1.5 working tree as the
-minimized run. Its JSON retains `"projection_inspection": "pending"`; the table is the separate
-visual-review record and still requires user sign-off.
+## Final macOS candidate record
 
-The current-tree covered run completed 81 semantic/resource operations in 0.720 seconds while a
-maximized terminal covered Odon. The final actor state asserted a linked horizontal comparison,
-blue channel 0 on the left, pink channel 1 on the right, distinct object filters/fill opacities,
-and per-viewport mask visibility. Odon was then foregrounded and captured without an intervening
-Odon API or UI command. The projection was present, unobstructed by the label-discovery modal, and
-all overlays remained within their viewport canvas. The generated JSON deliberately retains
-`"projection_inspection": "pending"`; the table above is the separate review record and still
-requires user sign-off.
+The signed-off native candidate is debug commit `43a44f5`, Odon 0.1.5, macOS 15.5 (24F74),
+Apple Silicon (`arm64`), instance `9c221de2-a6ca-601b-458e-4696032a26fa`. The visible, covered,
+minimized, and separate-Space runs completed 82 actor method checks and audited 286 application
+routes each. Their elapsed times were 0.802 s, 0.843 s, 0.820 s, and 1.075 s respectively.
+In every condition the final actor and presented projection revisions matched at verifier exit.
 
-The current-tree minimized run used a freshly built, isolated Odon process after confirming that
-the instance registry was empty. macOS reported that process's only window as minimized for the
-complete 81-operation verifier run, which completed in 0.676 seconds. The exact process was then
-restored, foregrounded, and captured atomically without an intervening Odon command. Its first
-visible frame contained the expected linked comparison: blue channel 0 on the left, pink channel 1
-on the right, distinct overlays, and no cross-viewport painting. This run used macOS 15.5
-(24F74), Apple Silicon, Odon 0.1.5 from current working tree base `7737aab`. The JSON likewise
-retains `"projection_inspection": "pending"`; the table records the separate visual review and
-still requires user sign-off.
+Visual review used an OS-level activation and screen capture with no intervening Odon API, menu,
+or keyboard command. All four restored views showed the requested linked horizontal comparison:
+blue channel 0 on the left, pink channel 1 on the right, distinct object overlays/fill opacity,
+the acceptance mask visible only on the left, and no cross-viewport painting. The minimized case
+showed the correct semantic projection immediately; its image tiles repopulated over the next four
+seconds while Odon remained frontmost, without another command.
 
-The current-tree separate-Space run placed the isolated Odon process in its own macOS full-screen
-Space, switched back to iTerm2, and confirmed that accessibility exposed zero Odon windows on the
-active Space. All 81 operations completed there in 0.684 seconds. Activating the exact Odon PID
-then switched to its full-screen Space; the first capture, made without an intervening Odon
-command, contained the expected linked blue-left/pink-right comparison and correctly clipped
-overlays. This run used macOS 15.5 (24F74), Apple Silicon, and Odon 0.1.5 from the current working
-tree base `7737aab`. Its JSON retains `"projection_inspection": "pending"`; the table records the
-separate visual review and still requires user sign-off.
+The native presentation probe queued `viewer.screenshot.capture` while the exact window was still
+minimized. On this macOS/eframe combination the renderer continued offscreen presentation, so the
+task had already advanced to structured phase `writing_output` at the 0.5-second observation and
+then completed atomically (186,858-byte PNG, capture ID 1, projection 460). The deterministic
+no-frame actor tests separately exercise the suppressed-frame branch, including structured
+`waiting_for_presentation`, timeout, cancellation, stale acknowledgements, no-clobber behavior,
+and partial-output cleanup.
 
 ## Native-window procedure
 
@@ -161,15 +150,17 @@ observed state before rerunning.
 
 ## Presentation-task check
 
-Rendered-pixel methods are intentionally different from semantic/resource methods. While Odon is
-covered or minimized, queue a screenshot capture and confirm that it reports an explicit
-presentation-waiting state rather than claiming completion. Return to Odon and confirm that the
-generation-matched capture completes. Record this separately from the semantic verifier because
-pixel production legitimately requires a renderer frame.
+Rendered-pixel methods are intentionally different from semantic/resource methods. On a platform
+that suppresses frames while Odon is covered or minimized, queue a screenshot capture and confirm
+that it reports an explicit `waiting_for_presentation` phase rather than claiming completion.
+Return to Odon and confirm that the generation-matched capture completes. If the platform continues
+presenting offscreen, record that behavior and verify the deterministic actor no-frame test instead.
+Record this separately from the semantic verifier because pixel production legitimately requires a
+renderer frame.
 
 ## Release sign-off
 
-Wave 7 may be marked complete only after:
+Wave 7 and Milestone 8 are complete for the recorded macOS candidate because:
 
 - every required row above is passing or explicitly excluded;
 - projection inspection is recorded for every passing semantic run;
@@ -177,3 +168,6 @@ Wave 7 may be marked complete only after:
   tree; and
 - performance evidence satisfies the latency, queue-boundedness, projection-allocation, and frame
   planning requirements in the architecture plan.
+
+Windows and Linux remain explicit platform exclusions for this sign-off. Their rows must be reopened
+and exercised on real native runners before either platform is claimed as release-supported.

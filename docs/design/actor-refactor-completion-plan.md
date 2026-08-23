@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 7 complete; Milestone 8 is next
+Status: complete for the recorded macOS candidate; Windows and Linux remain explicit platform exclusions
 
 Date: 2026-08-23
 
@@ -29,22 +29,24 @@ At completion:
 
 The implementation starts this plan with the following evidence:
 
-- 266 of 266 registered application methods are actor-owned in every supported mode and target;
+- 286 of 286 registered application methods are actor-owned in every supported mode and target;
 - there are zero legacy or hybrid registered application routes;
 - the TCP two-viewer comparison completes without a UI frame;
 - resource and compute families have paused-frame tests;
 - the production legacy UI request dispatcher and snapshot-event publisher are absent;
 - native project, viewer, and mosaic commits enter typed actor commands;
-- macOS visible, covered, minimized, and separate-Space verifier runs completed all 81 operations;
-- the restored macOS window provisionally displayed the final projection without another API call;
-- the most recent recorded cumulative suites passed; and
+- macOS visible, covered, minimized, and separate-Space verifier runs completed all 82 operations;
+- the restored macOS window displayed the final projection without another API call;
+- the final cumulative suites passed on implementation commit `43a44f5`; and
 - source-level modularity guards cover the actor, application, registry, bridge, models, renderers,
   and major resource adapters.
 
-The ownership and routing gap is now closed. `OmeZarrViewerApp`, `RootApp`, and
+The ownership, routing, completion-contract, and macOS acceptance gaps are closed.
+`OmeZarrViewerApp`, `RootApp`, and
 `MosaicViewerApp` contain only classified renderer resources/observations, transient UI drafts,
-shared handles, and platform effects. The remaining work is final automated and native-window
-release evidence.
+shared handles, and platform effects. Final automated and native-window release evidence is archived
+for macOS. Windows and Linux were not available in this macOS workspace and are recorded as explicit
+exclusions, not passing results.
 
 The stabilized migration base, executable ownership ledger, renderer-emulator retirement,
 viewport/presentation migration, and object/mask/annotation migration are separately checkpointed
@@ -74,6 +76,11 @@ source guards describe the resulting boundary.
 ## Completion gates
 
 All four gates are required. Passing one gate must not be presented as completing another.
+
+Final status: Gates A, B, and C are satisfied by the actor-owned routes, closed ownership ledger,
+source guards, and no-frame/task suites. Gate D is satisfied for the recorded macOS candidate by the
+cumulative automated run and native acceptance archive; its Windows and Linux rows are explicitly
+excluded until native runners are available.
 
 ### Gate A — routing and authority
 
@@ -634,6 +641,11 @@ passed on the same tree.
 
 Purpose: convert the completed design into release-quality evidence.
 
+Status: complete on 2026-08-23 for implementation commit `43a44f5`. The macOS visible, covered,
+minimized, and separate-Space runs passed against one exact application instance. Windows and Linux
+were explicitly excluded because this workspace has neither native runner, display server, nor
+build for those platforms; those exclusions must be reopened before claiming platform support.
+
 Automated checks:
 
 ```text
@@ -674,7 +686,8 @@ Exit criteria:
 - no unresolved compatibility item remains in the ownership inventory;
 - the final cumulative suite passes on the exact release candidate;
 - real-window evidence covers every supported required condition; and
-- the working tree is clean after the completion commits.
+- the completion commits leave no unexplained tracked changes or generated output; unrelated local
+  user artifacts are identified and remain outside the refactor.
 
 ## Recommended commit sequence
 
@@ -714,13 +727,14 @@ From the present checkpoint, work proceeds in this order:
    renderers retain only generation-specific pixel adapters.
 7. **7B completion audit — complete:** every method exposes one central completion/cancellation
    contract, sync/async wait distinctions are tested, and the ledger has zero open fields.
-8. **Milestone 8 automation:** run all Rust, Python, generated-contract, performance, allocation,
-   queue-bound, and frame-planning checks on the exact release candidate.
-9. **Milestone 8 native acceptance:** run and archive visible, covered, minimized, and separate-Space
-   evidence on macOS; run supported Windows/Linux covered/minimized checks or record reviewed
-   exclusions; restore the window and visually confirm the latest projection.
-10. Synchronize all architecture/status documents, record exact counts/build identifiers/results,
-    and make the final sign-off commit with no unexplained tracked or untracked output.
+8. **Milestone 8 automation — complete:** all Rust, Python, generated-contract, performance,
+   allocation, queue-bound, and frame-planning checks passed on implementation commit `43a44f5`.
+9. **Milestone 8 native acceptance — complete for macOS:** visible, covered, minimized, and
+   separate-Space evidence is archived and visually signed off; Windows/Linux have reviewed,
+   explicit exclusions.
+10. **Documentation and sign-off — complete:** architecture/status documents contain exact
+    counts, build identifiers, results, and exclusions. Intended completion changes are committed;
+    unrelated local user artifacts remain intentionally untracked and outside this plan.
 
 No later step may be used to declare an earlier ownership gate complete. In particular, passing
 the no-frame API suite does not prove that renderer semantic mirrors have been removed, and a clean

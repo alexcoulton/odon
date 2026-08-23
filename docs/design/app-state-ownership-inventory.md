@@ -1,11 +1,11 @@
 # Odon Application State Ownership Inventory
 
-Status: ownership complete; release audit in progress
+Status: complete; ownership and release audit closed for the recorded macOS candidate
 
 Date: 2026-08-23
 
-This document classifies the state still assembled by `OmeZarrViewerApp` after the application
-source split. It prevents file modularization from being mistaken for ownership modularization.
+This document records the state classifications reached after the application source split and
+actor cutover. It prevents file modularization from being mistaken for ownership modularization.
 The long-term rule is that semantic state has one owner in the control actor, immutable CPU
 resources cross the actor/renderer boundary through generation-tagged handles, and `app` retains
 only renderer resources, frame-local interaction state, and narrow platform effects.
@@ -31,6 +31,10 @@ Current executable-ledger baseline:
 transient UI, shared-resource handles, or narrow platform effects. There are no remaining
 `narrow`, `replace`, or `delete` rows.
 
+The prose field table below is the migration-era audit that led to the executable ledger. Its
+“migration role” and destination notes preserve that history; `api/state-ownership-ledger.json` is
+the authoritative description of every field's final role.
+
 The initial test-only renderer semantic-emulator baseline was 55 allowlisted methods. Milestone 2
 retired all 55 across workspace topology, navigation, channels, layers, rendering preferences,
 labels, object presentation, filters, and selection. The current inventory is zero.
@@ -51,11 +55,12 @@ commands through an in-process actor model and consume its projection.
 
 ## Field inventory
 
-The rows below cover every field of `OmeZarrViewerApp`. A row may describe a tightly coupled field
-family, but each concrete field is named. “Destination” is the intended owner after the actor plan,
-not necessarily the owner in the current compatibility implementation.
+The rows below preserve the migration audit of every field that was present in
+`OmeZarrViewerApp`. A row may describe a tightly coupled field family, but each concrete field is
+named. The destination column records the ownership target used during the cutover; the executable
+ledger records the resulting implementation.
 
-| Area | Fields | Current role | Destination / removal wave |
+| Area | Fields | Migration role | Final destination / completed milestone |
 | --- | --- | --- | --- |
 | Primary document | `dataset`, `store` | Renderer-compatible document metadata and storage | Actor document descriptor plus shared resource handle; renderer projection, Wave 6/7 cleanup |
 | Remote execution | `remote_runtime` | Runtime retained by the viewer | Resource service outside UI; Wave 2C |
