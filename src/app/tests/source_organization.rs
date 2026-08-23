@@ -1589,6 +1589,37 @@ fn segmentation_resources_have_no_frame_driven_filesystem_loader() {
 }
 
 #[test]
+fn native_settings_are_actor_persisted_and_projection_driven() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root_app = source(root.join("src/root_app.rs"));
+    let actor = source(root.join("src/control/actor/application.rs"));
+
+    assert!(root_app.contains("settings_draft: AppSettings"));
+    assert!(root_app.contains("\"app.settings.set\""));
+    assert!(root_app.contains("self.settings_draft = self.app_settings.clone()"));
+    for forbidden in ["fn persist_app_settings", "self.app_settings.save()"] {
+        assert!(
+            !root_app.contains(forbidden),
+            "native settings must not regain GUI-side persistence: {forbidden}"
+        );
+    }
+    assert!(actor.contains("LoadJob::SettingsSave"));
+}
+
+#[test]
+fn mosaic_actor_tasks_do_not_require_a_renderer_pending_item_mirror() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mosaic = source(root.join("src/mosaic/mod.rs"));
+    let projection = source(root.join("src/mosaic/construction/actor_resource.rs"));
+    let update = source(root.join("src/mosaic/update.rs"));
+
+    for source in [&mosaic, &projection, &update] {
+        assert!(!source.contains("pending_object_load_ids"));
+    }
+    assert!(projection.contains("reconcile_actor_load_state"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));

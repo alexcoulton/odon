@@ -478,14 +478,6 @@ impl MosaicViewerApp {
         if let Some(selections) = state.get("object_selections") {
             self.seg_geojson.apply_control_selections(selections)?;
         }
-        self.pending_object_load_ids = state["objects"]["items"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|item| item["requested"].as_bool() == Some(true))
-            .filter_map(|item| item["item_id"].as_u64())
-            .map(|item_id| item_id as usize)
-            .collect();
         self.seg_geojson
             .reconcile_actor_load_state(&state["objects"]);
         self.pinned_levels.replace_control_resources(pinned_levels);

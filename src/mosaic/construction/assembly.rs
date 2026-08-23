@@ -67,7 +67,6 @@ impl MosaicViewerApp {
             mosaic_bounds,
             focused_core_id,
             selected_core_ids: focused_core_id.into_iter().collect(),
-            pending_object_load_ids: HashSet::new(),
             abs_max,
             channels,
             selected_channel: 0,

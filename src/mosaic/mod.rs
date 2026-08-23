@@ -210,7 +210,6 @@ pub struct MosaicViewerApp {
 
     focused_core_id: Option<usize>,
     selected_core_ids: HashSet<usize>,
-    pending_object_load_ids: HashSet<usize>,
 
     abs_max: f32,
     channels: Vec<GlobalChannel>,

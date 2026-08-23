@@ -199,6 +199,7 @@ pub struct RootApp {
     remote_control_pending: Option<RootRemoteControlPending>,
     label_prompt_preference: LabelPromptSessionPreference,
     app_settings: AppSettings,
+    settings_draft: AppSettings,
     settings_open: bool,
     settings_status: String,
     active_help_topic: Option<crate::ui::help::HelpTopic>,
@@ -348,17 +349,6 @@ impl RootApp {
                 mosaic.set_fast_object_rendering(self.app_settings.fast_object_rendering);
             }
             Mode::Project { .. } | Mode::Transition => {}
-        }
-    }
-
-    fn persist_app_settings(&mut self) {
-        match self.app_settings.save() {
-            Ok(path) => {
-                self.settings_status = format!("Saved settings to {}.", path.display());
-            }
-            Err(err) => {
-                self.settings_status = format!("Settings save failed: {err}");
-            }
         }
     }
 
@@ -522,6 +512,9 @@ impl RootApp {
     ) -> bool {
         if self.app_settings != projection.settings {
             self.app_settings = projection.settings.clone();
+            if !self.settings_open {
+                self.settings_draft = projection.settings.clone();
+            }
             self.apply_app_settings_to_mode();
         }
         if let Mode::Single(app) = &mut self.mode {
@@ -1140,7 +1133,7 @@ impl RootApp {
             return;
         }
 
-        let before = self.app_settings.clone();
+        let before = self.settings_draft.clone();
         let mut open = self.settings_open;
         egui::Window::new("Settings")
             .collapsible(false)
@@ -1150,7 +1143,7 @@ impl RootApp {
                 ui.heading("Auto Contrast");
                 ui.horizontal(|ui| {
                     ui.checkbox(
-                        &mut self.app_settings.auto_contrast.enabled_on_open,
+                        &mut self.settings_draft.auto_contrast.enabled_on_open,
                         "Apply auto contrast when opening a dataset",
                     );
                     settings_help_button(
@@ -1166,20 +1159,20 @@ impl RootApp {
                         "Controls how Odon chooses automatic contrast limits from the image intensity distribution.",
                     );
                     egui::ComboBox::from_id_salt("global_auto_contrast_method")
-                        .selected_text(self.app_settings.auto_contrast.method.label())
+                        .selected_text(self.settings_draft.auto_contrast.method.label())
                         .show_ui(ui, |ui| {
                             for method in crate::app_support::settings::AutoContrastMethod::ALL {
                                 ui.selectable_value(
-                                    &mut self.app_settings.auto_contrast.method,
+                                    &mut self.settings_draft.auto_contrast.method,
                                     method,
                                     method.label(),
                                 );
                             }
                         });
                 });
-                ui.label(self.app_settings.auto_contrast.method.description());
+                ui.label(self.settings_draft.auto_contrast.method.description());
 
-                let settings = &mut self.app_settings.auto_contrast;
+                let settings = &mut self.settings_draft.auto_contrast;
                 match settings.method {
                     crate::app_support::settings::AutoContrastMethod::ZeroToP97 => {
                         ui.horizontal(|ui| {
@@ -1226,13 +1219,14 @@ impl RootApp {
                     }
                     crate::app_support::settings::AutoContrastMethod::ZeroToMax => {}
                 }
-                self.app_settings.auto_contrast = self.app_settings.auto_contrast.normalized();
+                self.settings_draft.auto_contrast =
+                    self.settings_draft.auto_contrast.normalized();
 
                 ui.separator();
                 ui.heading("Object Rendering");
                 ui.horizontal(|ui| {
                     ui.checkbox(
-                        &mut self.app_settings.fast_object_rendering,
+                        &mut self.settings_draft.fast_object_rendering,
                         "Fast object rendering",
                     );
                     settings_help_button(
@@ -1249,11 +1243,11 @@ impl RootApp {
                         .clicked()
                     {
                         if let Mode::Single(app) = &mut self.mode {
-                            app.set_auto_contrast_settings(self.app_settings.auto_contrast);
+                            app.set_auto_contrast_settings(self.settings_draft.auto_contrast);
                             app.apply_auto_contrast_now();
                             self.settings_status = format!(
                                 "Applied {} to the current viewer.",
-                                self.app_settings.auto_contrast.method.label()
+                                self.settings_draft.auto_contrast.method.label()
                             );
                         }
                     }
@@ -1279,18 +1273,19 @@ impl RootApp {
             });
         self.settings_open = open;
 
-        if self.app_settings != before {
-            self.apply_app_settings_to_mode();
+        if self.settings_draft != before {
             let submitted = self.control_runtime.submit_native_command(
                 ctx,
                 "app.settings.set",
                 serde_json::json!({
-                    "auto_contrast":self.app_settings.auto_contrast,
-                    "fast_object_rendering":self.app_settings.fast_object_rendering,
+                    "auto_contrast":self.settings_draft.auto_contrast,
+                    "fast_object_rendering":self.settings_draft.fast_object_rendering,
                 }),
             );
             if !submitted {
-                self.persist_app_settings();
+                self.settings_draft = self.app_settings.clone();
+                self.settings_status =
+                    "Could not submit settings to the control actor.".to_string();
             }
         }
     }
@@ -1392,6 +1387,7 @@ impl RootApp {
             remote_s3_browser: None,
             remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            settings_draft: app_settings.clone(),
             app_settings,
             settings_open: false,
             settings_status,
@@ -1459,6 +1455,7 @@ impl RootApp {
             remote_s3_browser: None,
             remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            settings_draft: app_settings.clone(),
             app_settings,
             settings_open: false,
             settings_status,
@@ -1527,6 +1524,7 @@ impl RootApp {
             remote_s3_browser: None,
             remote_control_pending: None,
             label_prompt_preference: LabelPromptSessionPreference::Ask,
+            settings_draft: app_settings.clone(),
             app_settings,
             settings_open: false,
             settings_status,
