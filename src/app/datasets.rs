@@ -18,46 +18,28 @@ impl OmeZarrViewerApp {
         let next_idx =
             self.channel_layer_order[next_pos].min(self.channels.len().saturating_sub(1));
 
-        if self.native_viewport_actor_owned() {
-            let mut state = self.control_native_layer_snapshot_list();
-            for layer in state.as_array_mut().into_iter().flatten() {
-                let Some(index) = layer
-                    .get("layer_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|id| id.strip_prefix("channel:"))
-                    .and_then(|index| index.parse::<usize>().ok())
-                else {
-                    layer["active"] = serde_json::json!(false);
-                    continue;
-                };
-                if index == cur_idx {
-                    layer["visible"] = serde_json::json!(false);
-                    layer["presentation"]["visible"] = serde_json::json!(false);
-                }
-                if index == next_idx {
-                    layer["visible"] = serde_json::json!(true);
-                    layer["presentation"]["visible"] = serde_json::json!(true);
-                }
-                layer["active"] = serde_json::json!(index == next_idx);
+        let mut state = self.control_native_layer_snapshot_list();
+        for layer in state.as_array_mut().into_iter().flatten() {
+            let Some(index) = layer
+                .get("layer_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.strip_prefix("channel:"))
+                .and_then(|index| index.parse::<usize>().ok())
+            else {
+                layer["active"] = serde_json::json!(false);
+                continue;
+            };
+            if index == cur_idx {
+                layer["visible"] = serde_json::json!(false);
+                layer["presentation"]["visible"] = serde_json::json!(false);
             }
-            self.submit_native_layer_state_replace(state);
-            if let Some(ch) = self.channels.get(next_idx) {
-                let _ = self.cell_thresholds.sync_marker_from_channel_name(&ch.name);
+            if index == next_idx {
+                layer["visible"] = serde_json::json!(true);
+                layer["presentation"]["visible"] = serde_json::json!(true);
             }
-            return;
+            layer["active"] = serde_json::json!(index == next_idx);
         }
-
-        if let Some(cur) = self.channels.get_mut(cur_idx) {
-            cur.visible = false;
-        }
-        if let Some(next) = self.channels.get_mut(next_idx) {
-            next.visible = true;
-        }
-
-        self.selected_channel = next_idx;
-        self.active_layer = LayerId::Channel(next_idx);
-        self.hist_dirty = true;
-        self.bump_render_id();
+        self.submit_native_layer_state_replace(state);
 
         if let Some(ch) = self.channels.get(next_idx) {
             let _ = self.cell_thresholds.sync_marker_from_channel_name(&ch.name);

@@ -760,6 +760,7 @@ impl OmeZarrViewerApp {
         self.bump_render_id();
     }
 
+    #[cfg(test)]
     pub(super) fn set_channel_group_color_inheritance(
         &mut self,
         channel_idx: usize,

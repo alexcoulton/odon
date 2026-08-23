@@ -284,19 +284,15 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn set_channel_sort_mode(&mut self, mode: ChannelSortMode) {
-        if self.native_viewport_actor_owned() {
-            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
-                self.submit_native_viewport_intent(
-                    "viewer.viewports.channels.set_order",
-                    serde_json::json!({
-                        "viewport_id":viewport_id,
-                        "if_presentation_revision":revision,
-                        "sort":mode.storage_key(),
-                    }),
-                );
-            }
-        } else {
-            self.channel_sort_mode = mode;
+        if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+            self.submit_native_viewport_intent(
+                "viewer.viewports.channels.set_order",
+                serde_json::json!({
+                    "viewport_id":viewport_id,
+                    "if_presentation_revision":revision,
+                    "sort":mode.storage_key(),
+                }),
+            );
         }
     }
 
@@ -317,42 +313,30 @@ impl ChannelListHost for OmeZarrViewerApp {
     }
 
     fn set_channel_visible(&mut self, idx: usize, visible: bool) {
-        if self.native_viewport_actor_owned() {
-            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
-                self.submit_native_viewport_intent(
-                    "viewer.viewports.channels.set_visible",
-                    serde_json::json!({
-                        "viewport_id":viewport_id,
-                        "if_presentation_revision":revision,
-                        "channels":[idx],
-                        "mode":if visible { "show" } else { "hide" },
-                    }),
-                );
-            }
-        } else if let Some(ch) = self.channels.get_mut(idx) {
-            ch.visible = visible;
+        if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+            self.submit_native_viewport_intent(
+                "viewer.viewports.channels.set_visible",
+                serde_json::json!({
+                    "viewport_id":viewport_id,
+                    "if_presentation_revision":revision,
+                    "channels":[idx],
+                    "mode":if visible { "show" } else { "hide" },
+                }),
+            );
         }
     }
 
     fn set_channels_visible(&mut self, indices: &[usize], visible: bool) {
-        if self.native_viewport_actor_owned() {
-            if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
-                self.submit_native_viewport_intent(
-                    "viewer.viewports.channels.set_visible",
-                    serde_json::json!({
-                        "viewport_id":viewport_id,
-                        "if_presentation_revision":revision,
-                        "channels":indices,
-                        "mode":if visible { "show" } else { "hide" },
-                    }),
-                );
-            }
-        } else {
-            for &idx in indices {
-                if let Some(channel) = self.channels.get_mut(idx) {
-                    channel.visible = visible;
-                }
-            }
+        if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
+            self.submit_native_viewport_intent(
+                "viewer.viewports.channels.set_visible",
+                serde_json::json!({
+                    "viewport_id":viewport_id,
+                    "if_presentation_revision":revision,
+                    "channels":indices,
+                    "mode":if visible { "show" } else { "hide" },
+                }),
+            );
         }
     }
 

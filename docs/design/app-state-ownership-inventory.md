@@ -345,6 +345,10 @@ increments actor-owned navigation/presentation revisions or copies linked naviga
 viewports. Camera fit and committed plane changes always queue typed actor commands; query-only
 renderer fixtures restore the active frame state without writing their observation into the
 workspace projection.
+Channel visibility/order controls, active-channel stepping, contrast, RGB presets, and channel
+groups now follow the same command-only rule before and after the first projection. Renderer
+channel values are consumed projection data; the deleted readiness branches can no longer treat
+them as a startup semantic authority.
 
 ## Native cutover status
 

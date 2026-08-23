@@ -1,10 +1,6 @@
 use super::*;
 
 impl OmeZarrViewerApp {
-    pub(super) fn native_viewport_actor_owned(&self) -> bool {
-        self.control_actor_workspace_revision > 0
-    }
-
     pub(super) fn submit_native_viewport_intent(
         &mut self,
         method: &'static str,

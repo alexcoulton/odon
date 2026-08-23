@@ -359,9 +359,7 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn commit_current_channel_groups(&mut self, groups: ProjectLayerGroups) -> bool {
-        if self.native_viewport_actor_owned()
-            && let Some((viewport_id, revision)) = self.active_viewport_command_scope()
-        {
+        if let Some((viewport_id, revision)) = self.active_viewport_command_scope() {
             self.submit_native_viewport_intent(
                 "viewer.viewports.channels.set_group",
                 serde_json::json!({
@@ -374,7 +372,6 @@ impl OmeZarrViewerApp {
             self.persist_current_layer_groups(groups);
             true
         } else {
-            self.set_current_layer_groups(groups);
             false
         }
     }

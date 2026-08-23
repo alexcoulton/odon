@@ -132,7 +132,7 @@
         "projection_source": "viewport navigation and presentation projection",
         "renderer_consumers": "canvas and channel panels; plane controls have no direct semantic mutation fallback",
         "persistence_consumers": "project workspace and saved views",
-        "native_commit_point": "typed plane/channel/rendering command",
+        "native_commit_point": "typed plane/channel/rendering command; plane and channel controls have no projection-readiness fallback",
         "milestone": 3
       },
       {

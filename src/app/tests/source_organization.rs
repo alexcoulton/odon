@@ -1190,6 +1190,19 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(!update.contains("set_view_plane_mode("));
     assert!(!update.contains("set_active_view_slice_level0("));
     assert!(!source(app_dir.join("image_runtime.rs")).contains("fn set_view_plane_mode("));
+    for actor_only_channel_source in [
+        "mod.rs",
+        "datasets.rs",
+        "layer_runtime/contrast.rs",
+        "projects.rs",
+        "viewport_runtime.rs",
+    ] {
+        assert!(
+            !source(app_dir.join(actor_only_channel_source))
+                .contains("native_viewport_actor_owned"),
+            "native channel controls must not regain projection-readiness mutation fallbacks: {actor_only_channel_source}"
+        );
+    }
 
     let root = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app.rs"));
     assert!(root.contains("app.control_renderer_observation_snapshot()"));

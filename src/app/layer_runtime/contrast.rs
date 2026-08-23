@@ -130,43 +130,27 @@ impl OmeZarrViewerApp {
         } else {
             (lo, hi)
         };
-        if self.native_viewport_actor_owned() {
-            let targets = indices.iter().copied().collect::<HashSet<_>>();
-            let mut state = self.control_native_layer_snapshot_list();
-            let mut changed = false;
-            for layer in state.as_array_mut().into_iter().flatten() {
-                let Some(_) = layer
-                    .get("layer_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|id| id.strip_prefix("channel:"))
-                    .and_then(|index| index.parse::<usize>().ok())
-                    .filter(|index| targets.contains(index))
-                else {
-                    continue;
-                };
-                let window = serde_json::json!({"min":lo,"max":hi});
-                if layer["presentation"]["window"] != window {
-                    layer["presentation"]["window"] = window;
-                    changed = true;
-                }
-            }
-            if changed {
-                self.submit_native_layer_state_replace(state);
-            }
-            return;
-        }
+        let targets = indices.iter().copied().collect::<HashSet<_>>();
+        let mut state = self.control_native_layer_snapshot_list();
         let mut changed = false;
-        for &idx in indices {
-            if let Some(dst) = self.channels.get_mut(idx) {
-                dst.window = Some((lo, hi));
-                self.channel_window_overrides
-                    .insert(dst.name.clone(), (lo, hi));
+        for layer in state.as_array_mut().into_iter().flatten() {
+            let Some(_) = layer
+                .get("layer_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.strip_prefix("channel:"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .filter(|index| targets.contains(index))
+            else {
+                continue;
+            };
+            let window = serde_json::json!({"min":lo,"max":hi});
+            if layer["presentation"]["window"] != window {
+                layer["presentation"]["window"] = window;
                 changed = true;
             }
         }
         if changed {
-            self.hist_dirty = true;
-            self.bump_render_id();
+            self.submit_native_layer_state_replace(state);
         }
     }
 
@@ -176,68 +160,37 @@ impl OmeZarrViewerApp {
         }
         let rgb = [[255, 0, 0], [0, 255, 0], [0, 0, 255]];
         let hi = self.dataset.abs_max.clamp(1.0, 255.0);
-        if self.native_viewport_actor_owned() {
-            let mut state = self.control_native_layer_snapshot_list();
-            for layer in state.as_array_mut().into_iter().flatten() {
-                let Some(index) = layer
-                    .get("layer_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|id| id.strip_prefix("channel:"))
-                    .and_then(|index| index.parse::<usize>().ok())
-                    .filter(|index| *index < 3)
-                else {
-                    layer["active"] = serde_json::json!(false);
-                    continue;
-                };
-                layer["visible"] = serde_json::json!(true);
-                layer["active"] = serde_json::json!(index == 0);
-                layer["presentation"]["visible"] = serde_json::json!(true);
-                layer["presentation"]["color_rgb"] = serde_json::json!(rgb[index]);
-                layer["presentation"]["window"] = serde_json::json!({"min":0.0,"max":hi});
-            }
-            let mut groups = self.current_layer_groups();
-            for channel in &self.channels {
-                if let Some(member) = groups.channel_members.get_mut(&channel.name) {
-                    member.inherit_color = false;
-                }
-            }
-            self.persist_current_layer_groups(groups.clone());
-            self.selected_channel_layers.extend(0..3);
-            self.memory_selected_channels.extend(0..3);
-            self.channel_select_anchor_idx = Some(0);
-            self.selected_channel_group_id = None;
-            self.set_status("Applying RGB preset to channels 0-2...");
-            return self.submit_native_layer_state_replace_with_groups(state, &groups);
-        }
-        let mut changed = false;
-        for (idx, color) in rgb.into_iter().enumerate() {
-            let Some(channel) = self.channels.get_mut(idx) else {
+        let mut state = self.control_native_layer_snapshot_list();
+        for layer in state.as_array_mut().into_iter().flatten() {
+            let Some(index) = layer
+                .get("layer_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.strip_prefix("channel:"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .filter(|index| *index < 3)
+            else {
+                layer["active"] = serde_json::json!(false);
                 continue;
             };
-            changed |= channel.color_rgb != color;
-            channel.color_rgb = color;
-            changed |= !channel.visible;
-            channel.visible = true;
-            let window = (0.0, hi);
-            changed |= channel.window != Some(window);
-            channel.window = Some(window);
-            self.channel_window_overrides
-                .insert(channel.name.clone(), window);
-            self.selected_channel_layers.insert(idx);
-            self.memory_selected_channels.insert(idx);
-            self.set_channel_group_color_inheritance(idx, false);
+            layer["visible"] = serde_json::json!(true);
+            layer["active"] = serde_json::json!(index == 0);
+            layer["presentation"]["visible"] = serde_json::json!(true);
+            layer["presentation"]["color_rgb"] = serde_json::json!(rgb[index]);
+            layer["presentation"]["window"] = serde_json::json!({"min":0.0,"max":hi});
         }
-        if !changed {
-            return false;
+        let mut groups = self.current_layer_groups();
+        for channel in &self.channels {
+            if let Some(member) = groups.channel_members.get_mut(&channel.name) {
+                member.inherit_color = false;
+            }
         }
-        self.selected_channel = 0;
-        self.active_layer = LayerId::Channel(0);
-        self.selected_channel_group_id = None;
+        self.persist_current_layer_groups(groups.clone());
+        self.selected_channel_layers.extend(0..3);
+        self.memory_selected_channels.extend(0..3);
         self.channel_select_anchor_idx = Some(0);
-        self.hist_dirty = true;
-        self.bump_render_id();
-        self.set_status("Applied RGB preset to channels 0-2.");
-        true
+        self.selected_channel_group_id = None;
+        self.set_status("Applying RGB preset to channels 0-2...");
+        self.submit_native_layer_state_replace_with_groups(state, &groups)
     }
 
     pub(in crate::app) fn ui_top_bar_quick_contrast(&mut self, ui: &mut egui::Ui) {

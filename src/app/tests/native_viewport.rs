@@ -63,6 +63,28 @@ fn native_camera_fit_queues_before_first_projection_without_mutating_renderer_st
 }
 
 #[test]
+fn native_channel_controls_queue_before_first_projection_without_mutating_renderer_state() {
+    let mut app = fixture_app();
+    app.control_actor_workspace_revision = 0;
+    let visible_before = app.channels[0].visible;
+    let window_before = app.channels[0].window;
+
+    <OmeZarrViewerApp as channels_panel::ChannelListHost>::set_channel_visible(
+        &mut app,
+        0,
+        !visible_before,
+    );
+    let visibility = take_one(&mut app, "viewer.viewports.channels.set_visible");
+    assert_eq!(visibility.params["if_presentation_revision"], 1);
+    assert_eq!(app.channels[0].visible, visible_before);
+
+    app.apply_channel_window_to_indices(&[0], 10.0, 80.0);
+    let contrast = take_one(&mut app, "viewer.viewports.layers.state.replace");
+    assert_eq!(contrast.params["if_presentation_revision"], 1);
+    assert_eq!(app.channels[0].window, window_before);
+}
+
+#[test]
 fn detached_workspace_retains_the_explicit_native_command_scope() {
     let mut app = fixture_app();
     let _workspace = app.viewport_workspace.take().expect("fixture workspace");

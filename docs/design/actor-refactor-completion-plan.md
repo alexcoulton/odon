@@ -197,7 +197,10 @@ observation payload; actor-owned workspace, navigation, channel, layer, panel, a
 are absent from that path. Renderer frames no longer advance navigation/presentation revisions or
 propagate linked camera/plane state, and native camera-fit and plane controls have no direct
 semantic fallback. Project compatibility restoration and the mutable per-frame viewport state
-container remain to be narrowed before the first ownership slice is closed.
+container remain to be narrowed before the first ownership slice is closed. Native channel
+visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
+queue actor commands without a projection-readiness fallback; channel projection fields remain in
+the renderer only as the current paint/UI input.
 
 Ownership slices, in order:
 
