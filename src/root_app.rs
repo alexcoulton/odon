@@ -682,6 +682,7 @@ impl RootApp {
                     return self.apply_control_projection_workspace(
                         projection.workspace.as_ref(),
                         projection.object_resource.as_ref(),
+                        projection.segmentation_geojson_resource.as_ref(),
                         projection.label_resource.as_ref(),
                     );
                 }
@@ -864,6 +865,7 @@ impl RootApp {
         self.apply_control_projection_workspace(
             projection.workspace.as_ref(),
             projection.object_resource.as_ref(),
+            projection.segmentation_geojson_resource.as_ref(),
             projection.label_resource.as_ref(),
         )
     }
@@ -932,6 +934,9 @@ impl RootApp {
         &mut self,
         workspace: Option<&serde_json::Value>,
         object_resource: Option<&Arc<odon::model::ControlObjectResource>>,
+        segmentation_geojson_resource: Option<
+            &Arc<odon::model::ControlSegmentationGeoJsonResource>,
+        >,
         label_resource: Option<&Arc<odon::model::ControlLabelResource>>,
     ) -> bool {
         let Some(workspace) = workspace else {
@@ -968,6 +973,15 @@ impl RootApp {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             app.install_control_actor_object_resource(generation, resource);
+        }
+        if let Some(state) = workspace.get("segmentation_geojson")
+            && let Err(error) = app.install_control_actor_segmentation_geojson_resource(
+                state,
+                segmentation_geojson_resource.map(AsRef::as_ref),
+            )
+        {
+            log_warn!("actor segmentation GeoJSON resource could not be installed: {error}");
+            return false;
         }
         if workspace
             .get("labels")

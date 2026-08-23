@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 189 | 119 | 46 | 24 | 0 |
+| `OmeZarrViewerApp` | 189 | 120 | 45 | 24 | 0 |
 | `RootApp` | 42 | 16 | 18 | 8 | 0 |
-| `MosaicViewerApp` | 78 | 46 | 28 | 4 | 0 |
-| **Total** | **309** | **181** | **92** | **36** | **0** |
+| `MosaicViewerApp` | 78 | 47 | 27 | 4 | 0 |
+| **Total** | **309** | **183** | **90** | **36** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and

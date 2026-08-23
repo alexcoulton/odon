@@ -202,7 +202,10 @@ pub(super) fn dispatch_request(
         begin_mosaic_open(model, remote_session, request, load_job_tx, diagnostics);
         return;
     }
-    if request.command.method() == "mosaic.objects.load_selected" {
+    if matches!(
+        request.command.method(),
+        "mosaic.objects.load" | "mosaic.objects.load_selected"
+    ) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         if begin_mosaic_object_load(model, request, load_job_tx, diagnostics) {
             publish_projection(
@@ -494,6 +497,23 @@ pub(super) fn dispatch_request(
     ) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_object_resource_load(model, request, load_job_tx, diagnostics);
+        return;
+    }
+    if matches!(
+        request.command.method(),
+        "viewer.segmentation_geojson.source.load" | "viewer.segmentation_geojson.source.reload"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        if begin_segmentation_geojson_load(model, request, load_job_tx, diagnostics) {
+            publish_projection(
+                model,
+                render_document.clone(),
+                presentation_tx,
+                presentation_coalesce_rx,
+                wake_ui,
+                diagnostics,
+            );
+        }
         return;
     }
     if request.command.method() == "viewer.labels.load"

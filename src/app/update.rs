@@ -66,7 +66,6 @@ impl eframe::App for OmeZarrViewerApp {
         self.drain_screenshots();
         self.drain_histogram();
         self.drain_channel_maxes();
-        self.seg_geojson.tick();
         let seg_objects_was_loading = self.seg_objects.is_loading();
         self.seg_objects.tick();
         if seg_objects_was_loading

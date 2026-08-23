@@ -140,6 +140,10 @@ impl AppModel {
                 | "viewer.objects.rendering.set_fast"
                 | "viewer.objects.source.clear"
                 | "viewer.objects.source.cancel_load"
+                | "viewer.segmentation_geojson.source.get"
+                | "viewer.segmentation_geojson.source.load"
+                | "viewer.segmentation_geojson.source.reload"
+                | "viewer.segmentation_geojson.source.clear"
                 | "viewer.objects.properties.list"
                 | "viewer.objects.properties.load"
                 | "viewer.objects.properties.values"
@@ -675,6 +679,12 @@ impl AppModel {
                 }
                 "viewer.objects.source.clear" => self.clear_object_resource()?,
                 "viewer.objects.source.cancel_load" => self.cancel_object_resource_load(),
+                "viewer.segmentation_geojson.source.get" => self.segmentation_geojson_snapshot()?,
+                "viewer.segmentation_geojson.source.load"
+                | "viewer.segmentation_geojson.source.reload" => {
+                    unreachable!("segmentation GeoJSON loading uses the bounded worker dispatcher")
+                }
+                "viewer.segmentation_geojson.source.clear" => self.clear_segmentation_geojson()?,
                 "viewer.objects.properties.list" => self.object_properties_list(params)?,
                 "viewer.objects.properties.load" => self.object_property_load(params)?,
                 "viewer.objects.properties.values" => self.object_property_values(params)?,
@@ -864,6 +874,7 @@ impl AppModel {
                 | "viewer.objects.get_visibility"
                 | "viewer.objects.style.get"
                 | "viewer.objects.rendering.get_fast"
+                | "viewer.segmentation_geojson.source.get"
                 | "viewer.objects.properties.list"
                 | "viewer.objects.properties.load"
                 | "viewer.objects.properties.values"

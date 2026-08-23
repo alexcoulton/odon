@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 3 complete; Milestone 4 object ownership in progress
+Status: in progress — Milestones 0 through 4 complete; Milestone 5 project/resource ownership next
 
 Date: 2026-08-23
 
@@ -268,7 +268,7 @@ Exit criteria:
 
 Purpose: establish one semantic owner while preserving renderer-efficient large resources.
 
-Status: in progress. Native primary and secondary object selection commits now enter targeted typed
+Status: complete on 2026-08-23. Native primary and secondary object selection commits now enter targeted typed
 actor commands with no renderer-selection fallback. Object analysis editors restore their local
 preview after each UI transaction and submit the committed configuration through
 `viewer.analysis.set`. Analysis configuration, warmup state, and generations are now target-scoped
@@ -291,9 +291,13 @@ annotation truth from those adapters.
 Mosaic ROI focus and selection are confirmed projection-only. Mosaic object appearance, legend
 configuration, and per-ROI object selections now also commit through typed actor methods; native
 hit testing computes a proposed selection without mutating the renderer, and the renderer installs
-the resulting actor projection. The remaining Milestone 4 resource work is now isolated to the
-legacy single-view GeoJSON line loader and mosaic's frame-driven fallback loading of segmentation
-resources.
+the resulting actor projection. The final resource adapters are now actor-owned. Single-view
+segmentation GeoJSON source identity, readiness, parsing, and immutable polylines live in the actor
+and bounded worker service; the renderer retains only line bins and GPU state. Mosaic visible-item
+discovery submits explicit item IDs through `mosaic.objects.load`, after which the task progresses
+without frames. The former renderer GeoJSON thread, mosaic frame-driven object loader, and
+transformed-object loader entry point have been deleted. Every Milestone 4 ownership-ledger row is
+now retained and closed.
 
 Work:
 
@@ -456,16 +460,13 @@ advance this plan.
 
 From the present checkpoint, work proceeds in this order:
 
-1. Complete Milestone 4 in independently testable slices: object resources and filters, selection,
-   masks and undo, then annotations and editing. Each slice replaces renderer semantics with an
-   actor model plus generation-tagged shared resources.
-2. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
+1. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
    settings, and application state behind immutable actor snapshots and bounded workers.
-3. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
+2. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
    projection consumption, renderer orchestration, and explicit platform effects only.
-4. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
+3. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
    completion point and proving cancellation, responsiveness, and generation-specific waiting.
-5. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
+4. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
    generated contracts and documentation, close the ownership ledger, and record final sign-off.
 
 No later step may be used to declare an earlier ownership gate complete. In particular, passing

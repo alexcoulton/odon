@@ -398,7 +398,7 @@ impl OmeZarrViewerApp {
         self.seg_labels_offset_world = egui::Vec2::ZERO;
         self.seg_geojson_offset_world = egui::Vec2::ZERO;
         self.seg_objects_offset_world = egui::Vec2::ZERO;
-        self.seg_geojson.clear();
+        self.seg_geojson.reset_renderer_resource();
         self.seg_objects.clear();
         self.spatial_layers.clear();
         self.spatial_root = None;

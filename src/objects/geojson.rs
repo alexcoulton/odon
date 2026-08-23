@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crossbeam_channel::Receiver;
 use eframe::egui;
 use rfd::FileDialog;
 
-use crate::geometry::geojson::{PolygonRingMode, load_geojson_polylines_world};
 use crate::render::line_bins::LineSegmentsBins;
 use crate::render::line_bins_gl::{LineBinsGlDrawData, LineBinsGlDrawParams, LineBinsGlRenderer};
 
@@ -23,15 +21,15 @@ pub struct GeoJsonSegmentationLayer {
     generation: u64,
     gl: LineBinsGlRenderer,
 
-    load_rx: Option<Receiver<LoadResult>>,
+    resource_generation: u64,
+    pending: bool,
     status: String,
 }
 
-#[derive(Debug)]
-struct LoadResult {
-    path: PathBuf,
-    downsample_factor: f32,
-    bins: Arc<LineSegmentsBins>,
+#[derive(Debug, Clone)]
+pub enum GeoJsonSourceAction {
+    Load(PathBuf, f32),
+    Clear,
 }
 
 impl Default for GeoJsonSegmentationLayer {
@@ -46,75 +44,101 @@ impl Default for GeoJsonSegmentationLayer {
             bins: None,
             generation: 1,
             gl: LineBinsGlRenderer::new(512),
-            load_rx: None,
+            resource_generation: 0,
+            pending: false,
             status: String::new(),
         }
     }
 }
 
 impl GeoJsonSegmentationLayer {
-    pub fn open_dialog(&mut self, default_dir: &Path) {
+    pub fn reset_renderer_resource(&mut self) {
+        self.bins = None;
+        self.loaded_geojson = None;
+        self.resource_generation = 0;
+        self.pending = false;
+        self.status.clear();
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
+    pub fn open_dialog(&self, default_dir: &Path) -> Option<PathBuf> {
         let start_dir = self
             .loaded_geojson
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or(default_dir);
-        if let Some(path) = FileDialog::new()
+        FileDialog::new()
             .add_filter("GeoJSON", &["geojson", "json"])
             .set_title("Open Segmentation GeoJSON")
             .set_directory(start_dir)
             .pick_file()
-        {
-            self.request_load(path, self.downsample_factor);
-        }
     }
 
-    pub fn tick(&mut self) {
-        use crossbeam_channel::TryRecvError;
-
-        let Some(rx) = self.load_rx.as_ref() else {
-            return;
-        };
-
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    self.bins = Some(msg.bins);
-                    self.loaded_geojson = Some(msg.path);
-                    self.downsample_factor = msg.downsample_factor.max(1e-6);
-                    self.visible = true;
-                    self.generation = self.generation.wrapping_add(1).max(1);
-                    let segs = self.bins.as_ref().map(|b| b.segments.len()).unwrap_or(0);
-                    self.status = format!("Loaded {segs} segments.");
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.load_rx = None;
-                    break;
-                }
-            }
+    pub fn install_control_resource(
+        &mut self,
+        generation: u64,
+        resource: Option<&odon::model::ControlSegmentationGeoJsonResource>,
+        state: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.pending = state
+            .get("pending")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        self.status = state
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.downsample_factor = state
+            .get("downsample_factor")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        self.loaded_geojson = state
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from);
+        if generation <= self.resource_generation {
+            return Ok(());
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.bins = None;
-        self.loaded_geojson = None;
-        self.status.clear();
-        self.visible = false;
-        self.load_rx = None;
+        self.resource_generation = generation;
         self.generation = self.generation.wrapping_add(1).max(1);
+        self.bins = resource
+            .map(|resource| {
+                let polylines = resource
+                    .polylines
+                    .iter()
+                    .map(|line| {
+                        line.iter()
+                            .map(|point| egui::pos2(point[0], point[1]))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                LineSegmentsBins::build_from_polylines(&polylines, 2048.0)
+                    .map(Arc::new)
+                    .ok_or_else(|| "segmentation GeoJSON has no valid segments".to_string())
+            })
+            .transpose()?;
+        Ok(())
     }
 
-    pub fn ui_topbar(&mut self, ui: &mut egui::Ui, default_dir: &Path) {
+    pub fn ui_topbar(&self, ui: &mut egui::Ui, default_dir: &Path) -> Option<GeoJsonSourceAction> {
         if ui.button("Load Seg GeoJSON...").clicked() {
-            self.open_dialog(default_dir);
+            return self
+                .open_dialog(default_dir)
+                .map(|path| GeoJsonSourceAction::Load(path, self.downsample_factor));
         }
+        None
     }
 
-    pub fn ui_properties(&mut self, ui: &mut egui::Ui, default_dir: &Path) {
+    pub fn ui_properties(
+        &mut self,
+        ui: &mut egui::Ui,
+        default_dir: &Path,
+    ) -> Option<GeoJsonSourceAction> {
+        let mut action = None;
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.visible, "Visible");
-            self.ui_topbar(ui, default_dir);
+            action = self.ui_topbar(ui, default_dir);
         });
         ui.add(
             egui::Slider::new(&mut self.opacity, 0.0..=1.0)
@@ -139,14 +163,14 @@ impl GeoJsonSegmentationLayer {
                 .clicked()
             {
                 if let Some(path) = self.loaded_geojson.clone() {
-                    self.request_load(path, self.downsample_factor);
+                    action = Some(GeoJsonSourceAction::Load(path, self.downsample_factor));
                 }
             }
             if ui
                 .add_enabled(self.loaded_geojson.is_some(), egui::Button::new("Clear"))
                 .clicked()
             {
-                self.clear();
+                action = Some(GeoJsonSourceAction::Clear);
             }
         });
         if let Some(path) = self.loaded_geojson.as_ref() {
@@ -157,25 +181,11 @@ impl GeoJsonSegmentationLayer {
         if !self.status.is_empty() {
             ui.label(self.status.clone());
         }
+        action
     }
 
     pub fn is_busy(&self) -> bool {
-        self.load_rx.is_some()
-    }
-
-    fn request_load(&mut self, path: PathBuf, downsample_factor: f32) {
-        let (tx, rx) = crossbeam_channel::bounded::<LoadResult>(1);
-        self.load_rx = Some(rx);
-        self.status = format!("Loading: {}", path.to_string_lossy());
-
-        std::thread::Builder::new()
-            .name("seg-geojson-loader".to_string())
-            .spawn(move || {
-                if let Ok(msg) = load_in_thread(path, downsample_factor) {
-                    let _ = tx.send(msg);
-                }
-            })
-            .ok();
+        self.pending
     }
 
     pub fn draw(
@@ -244,17 +254,4 @@ impl GeoJsonSegmentationLayer {
             }
         }
     }
-}
-
-fn load_in_thread(path: PathBuf, downsample_factor: f32) -> anyhow::Result<LoadResult> {
-    let polylines_world =
-        load_geojson_polylines_world(&path, downsample_factor, PolygonRingMode::ExteriorOnly)?;
-    let Some(bins) = LineSegmentsBins::build_from_polylines(&polylines_world, 2048.0) else {
-        anyhow::bail!("no valid segments after parsing");
-    };
-    Ok(LoadResult {
-        path,
-        downsample_factor,
-        bins: Arc::new(bins),
-    })
 }

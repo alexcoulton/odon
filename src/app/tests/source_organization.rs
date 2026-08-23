@@ -1564,6 +1564,31 @@ fn mosaic_object_style_and_selection_have_no_renderer_commit_fallback() {
 }
 
 #[test]
+fn segmentation_resources_have_no_frame_driven_filesystem_loader() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let single = source(root.join("src/objects/geojson.rs"));
+    let mosaic = source(root.join("src/mosaic/segmentation_geojson.rs"));
+    let canvas = source(root.join("src/mosaic/canvas.rs"));
+    let actor = source(root.join("src/control/actor/worker.rs"));
+
+    for forbidden in [
+        "load_rx",
+        "seg-geojson-loader",
+        "load_in_thread",
+        "ensure_visible_items_loading",
+        "load_objects_with_transform",
+    ] {
+        assert!(
+            !single.contains(forbidden) && !mosaic.contains(forbidden),
+            "segmentation renderer reintroduced frame-driven resource work: {forbidden}"
+        );
+    }
+    assert!(canvas.contains("\"mosaic.objects.load\""));
+    assert!(actor.contains("LoadJob::SegmentationGeoJson"));
+    assert!(actor.contains("load_geojson_polyline_coordinates_world"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));

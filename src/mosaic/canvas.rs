@@ -259,27 +259,18 @@ impl MosaicViewerApp {
                                 visible_items.push((it.id, r, it.offset, it.scale));
                             }
                         }
-                        let mut load_items = visible_items.clone();
-                        for item in &self.items {
-                            if self.pending_object_load_ids.contains(&item.id)
-                                && !load_items.iter().any(|entry| entry.0 == item.id)
-                            {
-                                load_items.push((
-                                    item.id,
-                                    item_rect(item),
-                                    item.offset,
-                                    item.scale,
-                                ));
-                            }
-                        }
-                        let load_world = if self.pending_object_load_ids.is_empty() {
-                            visible_world
-                        } else {
-                            egui::Rect::EVERYTHING
-                        };
-                        self.seg_geojson_pending_visible = self
+                        let requested = self
                             .seg_geojson
-                            .ensure_visible_items_loading(&load_items, load_world);
+                            .request_actor_load_for_visible_items(&visible_items, visible_world);
+                        if !requested.is_empty() {
+                            self.submit_native_control_intent(
+                                "mosaic.objects.load",
+                                serde_json::json!({
+                                    "item_ids":requested,
+                                    "downsample_factor":self.seg_geojson.downsample_factor,
+                                }),
+                            );
+                        }
                         let pending_gpu = self.seg_geojson.paint(
                             ui,
                             &self.camera,

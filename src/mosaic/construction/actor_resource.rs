@@ -486,6 +486,8 @@ impl MosaicViewerApp {
             .filter_map(|item| item["item_id"].as_u64())
             .map(|item_id| item_id as usize)
             .collect();
+        self.seg_geojson
+            .reconcile_actor_load_state(&state["objects"]);
         self.pinned_levels.replace_control_resources(pinned_levels);
         self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
         self.last_tile_request_signature = None;

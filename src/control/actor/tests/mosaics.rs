@@ -347,6 +347,13 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
     let objects = call(&channels, "mosaic.objects.get_state", json!({}));
     assert_eq!(objects["objects"]["loaded_count"], 2);
     assert_eq!(objects["objects"]["settled"], true);
+    let explicit = call(
+        &channels,
+        "mosaic.objects.load",
+        json!({"roi_ids":["ROI-A"],"downsample_factor":2.0}),
+    );
+    assert_eq!(explicit["settled"], true);
+    assert_eq!(explicit["loaded"], 1);
     let style = call(
         &channels,
         "mosaic.objects.style.set",

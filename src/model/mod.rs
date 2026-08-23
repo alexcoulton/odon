@@ -15,6 +15,7 @@ mod project;
 mod project_preload;
 mod readiness;
 mod screenshot;
+mod segmentation_geojson;
 mod selection;
 mod threshold;
 
@@ -61,6 +62,8 @@ pub use project_preload::{
 pub(crate) use readiness::{OperationKind, ReadinessModel};
 pub use screenshot::ScreenshotPreferences;
 pub(crate) use screenshot::default_screenshot_filename;
+pub use segmentation_geojson::ControlSegmentationGeoJsonResource;
+pub(crate) use segmentation_geojson::{SegmentationGeoJsonLoadSpec, SegmentationGeoJsonModel};
 pub(crate) use selection::{ObjectSelectionModel, parse_world_points, parse_world_rect};
 pub(crate) use threshold::ThresholdPreviewModel;
 pub use threshold::{ControlThresholdPreviewResource, ThresholdScope};

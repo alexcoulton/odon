@@ -411,7 +411,7 @@ impl AppModel {
             .get("downsample_factor")
             .and_then(Value::as_f64)
             .unwrap_or(1.0) as f32;
-        let spec = self.mosaic.prepare_object_load(downsample_factor)?;
+        let spec = self.mosaic.prepare_object_load(params, downsample_factor)?;
         self.readiness.begin(
             OperationKind::MosaicObjects,
             spec.operation_generation,

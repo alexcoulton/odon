@@ -176,7 +176,10 @@ pub(super) fn start_task(
                         &tasks,
                         &task_id,
                     )
-                } else if operation_method == "mosaic.objects.load_selected" {
+                } else if matches!(
+                    operation_method.as_str(),
+                    "mosaic.objects.load" | "mosaic.objects.load_selected"
+                ) {
                     let _ = tasks.progress(&task_id, None, "loading selected mosaic objects");
                     wait_for_mosaic_object_load(
                         &app_tx,

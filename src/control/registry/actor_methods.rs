@@ -207,6 +207,10 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "viewer.objects.source.reload",
     "viewer.objects.source.clear",
     "viewer.objects.source.cancel_load",
+    "viewer.segmentation_geojson.source.get",
+    "viewer.segmentation_geojson.source.load",
+    "viewer.segmentation_geojson.source.reload",
+    "viewer.segmentation_geojson.source.clear",
     "viewer.objects.properties.list",
     "viewer.objects.properties.load",
     "viewer.objects.properties.values",
@@ -293,5 +297,6 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "mosaic.objects.selection.replace",
     "mosaic.objects.selection.clear",
     "mosaic.objects.load_selected",
+    "mosaic.objects.load",
     "mosaic.objects.cancel_load",
 ];

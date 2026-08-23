@@ -12,6 +12,86 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         ..
     } = context;
     match completion {
+        LoadCompletion::SegmentationGeoJson {
+            request,
+            spec,
+            result,
+        } => {
+            if request_is_cancelled(&request) {
+                model.fail_segmentation_geojson_load(
+                    &spec,
+                    "Segmentation GeoJSON loading was cancelled",
+                );
+                publish_projection(
+                    model,
+                    render_document.clone(),
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                );
+                reject_cancelled_request(request, diagnostics, "segmentation GeoJSON loading");
+                return;
+            }
+            match result {
+                Ok(resource) => {
+                    if let Some(response) = model.finish_segmentation_geojson_load(&spec, resource)
+                    {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        finish_request(request, response, diagnostics);
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "segmentation GeoJSON loading was superseded",
+                            ),
+                        );
+                    }
+                }
+                Err(error) => {
+                    let message = format!("failed to load segmentation GeoJSON: {error}");
+                    if model.fail_segmentation_geojson_load(&spec, &message) {
+                        publish_projection(
+                            model,
+                            render_document.clone(),
+                            presentation_tx,
+                            presentation_coalesce_rx,
+                            wake_ui,
+                            diagnostics,
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        diagnostics
+                            .stale_worker_completions
+                            .fetch_add(1, Ordering::Relaxed);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(
+                                ControlErrorKind::Conflict,
+                                "segmentation GeoJSON loading was superseded",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         LoadCompletion::ObjectResource {
             document_generation,
             resource_generation,

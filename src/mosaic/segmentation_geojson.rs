@@ -45,7 +45,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     items: HashMap<usize, ItemState>,
     color_property_key: String,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
-    max_concurrent_loads: usize,
+    actor_load_requested: BTreeSet<usize>,
     force_repaint_frames: u32,
     primary_selected_item_id: Option<usize>,
 }
@@ -66,7 +66,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             items: HashMap::new(),
             color_property_key: String::new(),
             color_level_overrides: HashMap::new(),
-            max_concurrent_loads: 1,
+            actor_load_requested: BTreeSet::new(),
             force_repaint_frames: 0,
             primary_selected_item_id: None,
         }
@@ -288,6 +288,7 @@ impl MosaicGeoJsonSegmentationOverlay {
         layer.install_preloaded(preloaded);
         state.status = format!("Using actor-loaded objects: {}", resource.source.display());
         state.layer = Some(layer);
+        self.actor_load_requested.remove(&item_id);
         self.visible = true;
         self.force_repaint_frames = self.force_repaint_frames.max(4);
         true
@@ -383,15 +384,6 @@ impl MosaicGeoJsonSegmentationOverlay {
                         ui.selectable_value(&mut self.color_property_key, key.clone(), key);
                     }
                 });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Load");
-            ui.add(
-                egui::DragValue::new(&mut self.max_concurrent_loads)
-                    .range(1..=8)
-                    .speed(1),
-            )
-            .on_hover_text("Maximum number of segmentation files to load concurrently.");
         });
         ui.horizontal(|ui| {
             ui.add(
@@ -511,76 +503,51 @@ impl MosaicGeoJsonSegmentationOverlay {
         self.update_primary_selection();
     }
 
-    pub fn ensure_visible_items_loading(
+    pub fn request_actor_load_for_visible_items(
         &mut self,
         items: &[(usize, egui::Rect, egui::Vec2, f32)],
         visible_world: egui::Rect,
-    ) -> bool {
-        if !self.visible {
-            return false;
+    ) -> Vec<usize> {
+        if !self.visible || !self.actor_load_requested.is_empty() {
+            return Vec::new();
         }
-
-        let mut pending_any = false;
-        let style = self.shared_style();
-        let color_level_overrides = self.current_color_level_overrides().clone();
-        let mut in_flight = 0usize;
-        for st in self.items.values() {
-            if st.layer.as_ref().is_some_and(ObjectsLayer::is_loading) {
-                in_flight += 1;
-            }
-        }
-        let mut budget = self.max_concurrent_loads.saturating_sub(in_flight);
-
-        for (id, world_rect, offset, scale) in items {
-            if !world_rect.intersects(visible_world) {
-                continue;
-            }
-            let Some(st) = self.items.get_mut(id) else {
-                continue;
-            };
-            let transform = mosaic_transform(*offset, *scale);
-            if let Some(layer) = st.layer.as_mut() {
-                layer.set_display_transform(transform);
-                apply_style(
-                    layer,
-                    style,
-                    Some(self.color_property_key.as_str()),
-                    &color_level_overrides,
-                );
-                if layer.is_loading() {
-                    pending_any = true;
+        let requested = items
+            .iter()
+            .filter_map(|(id, world_rect, _, _)| {
+                if !world_rect.intersects(visible_world) {
+                    return None;
                 }
-                continue;
-            }
+                let state = self.items.get(id)?;
+                (state.seg_path.is_some() && state.layer.is_none()).then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        self.actor_load_requested.extend(requested.iter().copied());
+        requested
+    }
 
-            let Some(path) = st.seg_path.clone() else {
+    pub fn reconcile_actor_load_state(&mut self, state: &serde_json::Value) {
+        let Some(items) = state.get("items").and_then(serde_json::Value::as_array) else {
+            return;
+        };
+        for item in items {
+            let Some(id) = item
+                .get("item_id")
+                .and_then(serde_json::Value::as_u64)
+                .map(|id| id as usize)
+            else {
                 continue;
             };
-            if !path.exists() {
-                st.status = "Missing object segmentation".to_string();
-                st.seg_path = None;
-                continue;
+            if item.get("loaded").and_then(serde_json::Value::as_bool) == Some(true) {
+                self.actor_load_requested.remove(&id);
+            } else if let Some(error) = item.get("error").and_then(serde_json::Value::as_str) {
+                if let Some(local) = self.items.get_mut(&id) {
+                    local.status = error.to_string();
+                }
             }
-            if budget == 0 {
-                pending_any = true;
-                continue;
-            }
-
-            let mut layer = ObjectsLayer::default();
-            apply_style(
-                &mut layer,
-                style,
-                Some(self.color_property_key.as_str()),
-                &color_level_overrides,
-            );
-            layer.load_objects_with_transform(path.clone(), self.downsample_factor, transform);
-            st.status = format!("Loading objects: {}", path.to_string_lossy());
-            st.layer = Some(layer);
-            budget = budget.saturating_sub(1);
-            pending_any = true;
         }
-
-        pending_any
+        if state.get("settled").and_then(serde_json::Value::as_bool) == Some(true) {
+            self.actor_load_requested.clear();
+        }
     }
 
     pub fn paint(

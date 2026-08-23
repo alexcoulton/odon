@@ -1091,6 +1091,46 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Empty
         ),
         method!(
+            "viewer.segmentation_geojson.source.get",
+            "Get the actor-owned segmentation GeoJSON line source and readiness state.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.segmentation_geojson.source.load",
+            "Load a segmentation GeoJSON line source on the bounded actor worker service.",
+            "viewer.objects.write",
+            true,
+            true,
+            Some("viewer.segmentation_geojson.source.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
+            "viewer.segmentation_geojson.source.reload",
+            "Reload the configured segmentation GeoJSON line source on an actor worker.",
+            "viewer.objects.write",
+            true,
+            true,
+            Some("viewer.segmentation_geojson.source.changed"),
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
+            "viewer.segmentation_geojson.source.clear",
+            "Clear the actor-owned segmentation GeoJSON line source and shared resource.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("viewer.segmentation_geojson.source.changed"),
+            SINGLE_MODE,
+            Empty
+        ),
+        method!(
             "viewer.objects.style.get",
             "Get complete object appearance, color-property, and bounded legend state.",
             "viewer.objects.read",
@@ -2737,6 +2777,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             false,
             Some("mosaic.objects.selection.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
+            "mosaic.objects.load",
+            "Load object segmentations for explicit mosaic items, ROI IDs, the selection, or all available ROIs.",
+            "viewer.objects.write",
+            true,
+            true,
+            Some("mosaic.objects.changed"),
             MOSAIC_MODE,
             Object
         ),

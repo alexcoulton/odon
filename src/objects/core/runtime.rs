@@ -1100,50 +1100,6 @@ impl ObjectsLayer {
         true
     }
 
-    pub fn load_objects_with_transform(
-        &mut self,
-        path: PathBuf,
-        downsample_factor: f32,
-        display_transform: SpatialDataTransform2,
-    ) {
-        self.cancel_current_load();
-        self.object_load_request_id = self.object_load_request_id.wrapping_add(1).max(1);
-        let request_id = self.object_load_request_id;
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_worker = cancel.clone();
-        let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
-        self.object_load_cancel = Some(cancel);
-        self.load_rx = Some(rx);
-        self.property_load_rx = None;
-        self.property_load_key = None;
-        self.status = format!("Loading objects: {}", path.to_string_lossy());
-
-        std::thread::Builder::new()
-            .name("seg-objects-transform-loader".to_string())
-            .spawn(move || {
-                let load_options = if is_parquet_objects_path(&path) {
-                    minimal_parquet_load_options(&path)
-                        .ok()
-                        .map(ObjectLoadOptions::Parquet)
-                } else {
-                    None
-                };
-                let msg = load_in_thread(
-                    path,
-                    downsample_factor,
-                    load_options,
-                    request_id,
-                    &cancel_worker,
-                )
-                .map(|mut msg| {
-                    msg.display_transform = display_transform;
-                    msg
-                });
-                let _ = tx.send(msg.map_err(|error| error.to_string()));
-            })
-            .ok();
-    }
-
     pub fn load_spatialdata_shapes(
         &mut self,
         path: PathBuf,

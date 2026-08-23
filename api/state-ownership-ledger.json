@@ -426,13 +426,13 @@
       {
         "id": "viewer.object_spatial_resources",
         "fields": ["seg_geojson"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "legacy renderer GeoJSON line resource and actor native-layer presentation",
-        "projection_source": "native-layer presentation projection; renderer-local line resource",
-        "renderer_consumers": "legacy GeoJSON line renderer",
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor segmentation GeoJSON source model and bounded resource worker",
+        "projection_source": "generation-tagged ControlSegmentationGeoJsonResource shared handle plus native-layer presentation projection",
+        "renderer_consumers": "line bin builder, GPU cache, and segmentation GeoJSON properties UI",
         "persistence_consumers": "native layer presentation",
-        "native_commit_point": "pending typed GeoJSON line-resource command",
+        "native_commit_point": "typed segmentation GeoJSON load, reload, clear, visibility, and style commands",
         "milestone": 4
       },
       {
@@ -994,13 +994,13 @@
       {
         "id": "mosaic.segmentation",
         "fields": ["seg_geojson"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
+        "current_class": "shared_resource",
+        "disposition": "retain",
         "canonical_writer": "ControlActor mosaic object/resource presentation model",
         "projection_source": "mosaic object resource generation",
         "renderer_consumers": "mosaic segmentation renderer",
         "persistence_consumers": "project mosaic state",
-        "native_commit_point": "typed mosaic object visibility command",
+        "native_commit_point": "typed mosaic object load, visibility, style, and selection commands",
         "milestone": 4
       },
       {

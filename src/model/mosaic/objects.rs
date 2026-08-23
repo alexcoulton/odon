@@ -177,6 +177,7 @@ impl MosaicModel {
 
     pub(crate) fn prepare_object_load(
         &mut self,
+        params: &Value,
         downsample_factor: f32,
     ) -> Result<MosaicObjectLoadSpec, ControlError> {
         self.require_resource()?;
@@ -185,13 +186,58 @@ impl MosaicModel {
                 "downsample_factor must be finite and greater than zero",
             ));
         }
-        if self.selected_ids.is_empty() {
-            return Err(invalid("Select at least one mosaic ROI first."));
+        let explicit_item_ids = params
+            .get("item_ids")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_u64()
+                            .and_then(|value| usize::try_from(value).ok())
+                            .ok_or_else(|| invalid("item_ids must contain non-negative integers"))
+                    })
+                    .collect::<Result<HashSet<_>, _>>()
+            })
+            .transpose()?;
+        let explicit_roi_ids = params
+            .get("roi_ids")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .ok_or_else(|| invalid("roi_ids must contain strings"))
+                    })
+                    .collect::<Result<HashSet<_>, _>>()
+            })
+            .transpose()?;
+        let scope = params.get("scope").and_then(Value::as_str);
+        if scope.is_some_and(|scope| !matches!(scope, "selected" | "all")) {
+            return Err(invalid("scope must be 'selected' or 'all'"));
         }
+        let scope_all = scope == Some("all");
+        let selected = |item: &&MosaicItemModel| {
+            scope_all
+                || explicit_item_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&item.id))
+                || explicit_roi_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&item.roi_id))
+                || (explicit_item_ids.is_none()
+                    && explicit_roi_ids.is_none()
+                    && !scope_all
+                    && self.selected_ids.contains(&item.id))
+        };
         let items = self
             .items
             .iter()
-            .filter(|item| self.selected_ids.contains(&item.id))
+            .filter(selected)
             .filter_map(|item| {
                 item.segmentation_path
                     .as_ref()
@@ -201,7 +247,7 @@ impl MosaicModel {
         if items.is_empty() {
             return Err(ControlError::new(
                 ControlErrorKind::NotReady,
-                "None of the selected mosaic ROIs has an object segmentation source.",
+                "None of the requested mosaic ROIs has an object segmentation source.",
             ));
         }
         self.cancel_object_load("Superseded by a newer mosaic object load");

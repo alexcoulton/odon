@@ -2180,6 +2180,38 @@ class Objects:
             "viewer.objects.source.cancel_load", _with_revision({}, if_revision)
         )
 
+    def get_segmentation_geojson_source(self) -> Any:
+        return self._client.call("viewer.segmentation_geojson.source.get")
+
+    def load_segmentation_geojson(
+        self,
+        path: str | Path,
+        *,
+        downsample_factor: float = 1.0,
+        if_revision: int | None = None,
+    ) -> Any:
+        return self._client.tasks.start(
+            "viewer.segmentation_geojson.source.load",
+            _with_revision(
+                {"path": str(path), "downsample_factor": downsample_factor},
+                if_revision,
+            ),
+            label=f"Load segmentation GeoJSON from {path}",
+        )
+
+    def reload_segmentation_geojson(self, *, if_revision: int | None = None) -> Any:
+        return self._client.tasks.start(
+            "viewer.segmentation_geojson.source.reload",
+            _with_revision({}, if_revision),
+            label="Reload segmentation GeoJSON",
+        )
+
+    def clear_segmentation_geojson(self, *, if_revision: int | None = None) -> Any:
+        return self._client.call(
+            "viewer.segmentation_geojson.source.clear",
+            _with_revision({}, if_revision),
+        )
+
     def get_style(self, **selector: Any) -> Any:
         return self._client.call("viewer.objects.style.get", selector)
 
@@ -3280,6 +3312,31 @@ class Mosaic:
             "mosaic.objects.load_selected",
             _with_revision({}, if_revision),
             label="Load selected mosaic objects",
+        )
+
+    def load_objects(
+        self,
+        *,
+        item_ids: Sequence[int] | None = None,
+        roi_ids: Sequence[str] | None = None,
+        scope: str | None = None,
+        downsample_factor: float = 1.0,
+        if_revision: int | None = None,
+    ) -> Any:
+        return self._client.tasks.start(
+            "mosaic.objects.load",
+            _with_revision(
+                _compact(
+                    {
+                        "item_ids": list(item_ids) if item_ids is not None else None,
+                        "roi_ids": list(roi_ids) if roi_ids is not None else None,
+                        "scope": scope,
+                        "downsample_factor": downsample_factor,
+                    }
+                ),
+                if_revision,
+            ),
+            label="Load mosaic objects",
         )
 
     def cancel_object_load(self, *, if_revision: int | None = None) -> Any:

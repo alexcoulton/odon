@@ -16,6 +16,7 @@ impl AppModel {
                 || self.object_resource_state(),
                 |resource| resource.descriptor_json(self.installed_object_resource_generation),
             ),
+            "segmentation_geojson":dataset.segmentation_geojson.snapshot(),
             "labels": self.labels_snapshot()?,
             "masks": dataset.masks.projection_json(),
             "object_selection": dataset.object_selection.projection_json(),

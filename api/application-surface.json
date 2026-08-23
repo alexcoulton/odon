@@ -661,13 +661,13 @@
       "phase": "C",
       "status": "covered",
       "native_entry_points": ["Mosaic segmentation overlay", "Load selected objects"],
-      "methods": ["mosaic.objects.get_state", "mosaic.objects.style.get", "mosaic.objects.style.set", "mosaic.objects.selection.get", "mosaic.objects.selection.replace", "mosaic.objects.selection.clear", "mosaic.objects.load_selected", "mosaic.objects.cancel_load"],
+      "methods": ["mosaic.objects.get_state", "mosaic.objects.style.get", "mosaic.objects.style.set", "mosaic.objects.selection.get", "mosaic.objects.selection.replace", "mosaic.objects.selection.clear", "mosaic.objects.load", "mosaic.objects.load_selected", "mosaic.objects.cancel_load"],
       "events": ["mosaic.objects.changed", "mosaic.objects.selection.changed"],
       "permissions": ["viewer.objects.read", "viewer.objects.write"],
-      "python_sync": ["odon.resources:Mosaic.get_object_state", "odon.resources:Mosaic.get_object_style", "odon.resources:Mosaic.set_object_style", "odon.resources:Mosaic.get_object_selection", "odon.resources:Mosaic.replace_object_selection", "odon.resources:Mosaic.clear_object_selection", "odon.resources:Mosaic.load_selected_objects", "odon.resources:Mosaic.cancel_object_load"],
-      "python_async": ["odon.async_resources:AsyncMosaic.get_object_state", "odon.async_resources:AsyncMosaic.get_object_style", "odon.async_resources:AsyncMosaic.set_object_style", "odon.async_resources:AsyncMosaic.get_object_selection", "odon.async_resources:AsyncMosaic.replace_object_selection", "odon.async_resources:AsyncMosaic.clear_object_selection", "odon.async_resources:AsyncMosaic.load_selected_objects", "odon.async_resources:AsyncMosaic.cancel_object_load"],
+      "python_sync": ["odon.resources:Mosaic.get_object_state", "odon.resources:Mosaic.get_object_style", "odon.resources:Mosaic.set_object_style", "odon.resources:Mosaic.get_object_selection", "odon.resources:Mosaic.replace_object_selection", "odon.resources:Mosaic.clear_object_selection", "odon.resources:Mosaic.load_objects", "odon.resources:Mosaic.load_selected_objects", "odon.resources:Mosaic.cancel_object_load"],
+      "python_async": ["odon.async_resources:AsyncMosaic.get_object_state", "odon.async_resources:AsyncMosaic.get_object_style", "odon.async_resources:AsyncMosaic.set_object_style", "odon.async_resources:AsyncMosaic.get_object_selection", "odon.async_resources:AsyncMosaic.replace_object_selection", "odon.async_resources:AsyncMosaic.clear_object_selection", "odon.async_resources:AsyncMosaic.load_objects", "odon.async_resources:AsyncMosaic.load_selected_objects", "odon.async_resources:AsyncMosaic.cancel_object_load"],
       "tests": ["python:test_mosaic_object_wrappers"],
-      "notes": "Selected-ROI loading is task-based and cancellation stops queued scheduling while allowing an in-flight disk read to finish. Shared focused/item/all-ROI memory controls are classified under PERF-03."
+      "notes": "Explicit-item, selected-ROI, and all-ROI loading is task-based on the actor worker service; cancellation stops queued scheduling while allowing an in-flight disk read to finish. Shared focused/item/all-ROI memory controls are classified under PERF-03."
     },
     {
       "id": "DATA-01.local-inspection",
@@ -756,13 +756,13 @@
       "phase": "D",
       "status": "covered",
       "native_entry_points": ["Load Seg Objects", "object file drop"],
-      "methods": ["viewer.objects.source.load"],
-      "events": ["viewer.objects.source.changed"],
-      "permissions": ["viewer.objects.write"],
-      "python_sync": ["odon.resources:Objects.load"],
-      "python_async": ["odon.async_resources:AsyncObjects.load"],
-      "tests": ["rust:object_load_errors_are_reported", "python:test_object_source_wrappers"],
-      "notes": "Format is inferred from the path; CSV coordinate columns are deterministically inferred and Parquet properties remain lazy."
+      "methods": ["viewer.objects.source.load", "viewer.segmentation_geojson.source.get", "viewer.segmentation_geojson.source.load", "viewer.segmentation_geojson.source.reload", "viewer.segmentation_geojson.source.clear"],
+      "events": ["viewer.objects.source.changed", "viewer.segmentation_geojson.source.changed"],
+      "permissions": ["viewer.objects.read", "viewer.objects.write"],
+      "python_sync": ["odon.resources:Objects.load", "odon.resources:Objects.get_segmentation_geojson_source", "odon.resources:Objects.load_segmentation_geojson", "odon.resources:Objects.reload_segmentation_geojson", "odon.resources:Objects.clear_segmentation_geojson"],
+      "python_async": ["odon.async_resources:AsyncObjects.load", "odon.async_resources:AsyncObjects.get_segmentation_geojson_source", "odon.async_resources:AsyncObjects.load_segmentation_geojson", "odon.async_resources:AsyncObjects.reload_segmentation_geojson", "odon.async_resources:AsyncObjects.clear_segmentation_geojson"],
+      "tests": ["rust:segmentation_geojson_loads_without_a_ui_frame", "python:test_object_source_wrappers", "python:test_segmentation_geojson_source_wrappers"],
+      "notes": "Format is inferred for object sources; the legacy segmentation-line GeoJSON source now uses the same actor worker and immutable-resource boundary rather than a renderer thread."
     },
     {"id":"LABEL-01.target","feature_id":"LABEL-01","domain":"viewer.labels","title":"NGFF label discovery and rendering state","phase":"B","status":"covered",
       "native_entry_points":["Load labels prompt","Segmentation Labels overlay"],

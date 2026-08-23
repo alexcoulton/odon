@@ -48,16 +48,17 @@ use crate::model::{
     AnalysisResourceSpec, AnnotationLoadResult, AnnotationLoadSpec, AppModel, ChannelIntensitySpec,
     ControlLabelResource, ControlMosaicItemResource, ControlMosaicResource,
     ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
-    ControlThresholdPreviewResource, DeepLinkApplyGuard, DeepLinkCurrentResources,
-    LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec, ModelMode,
-    MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult, MosaicObjectLoadSpec,
-    ObjectExportFormat, ObjectExportResult, ObjectExportSpec, ObjectResourceLoader, ObjectTarget,
-    ProjectModelSnapshot, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
-    ProjectObjectPreloadSource, ProjectViewApplySpec, ScreenshotPreferences,
-    SettingsMutationOutcome, SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec,
-    ThresholdPreviewLoadSpec, ThresholdPreviewRecomputeSpec, TileLoadingPolicy,
-    discover_label_names_local, extract_threshold_mask, project_roi_segmentation_path,
-    threshold_mask_polygons, write_object_export,
+    ControlSegmentationGeoJsonResource, ControlThresholdPreviewResource, DeepLinkApplyGuard,
+    DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec,
+    ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult,
+    MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult, ObjectExportSpec,
+    ObjectResourceLoader, ObjectTarget, ProjectModelSnapshot, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ProjectViewApplySpec,
+    ScreenshotPreferences, SegmentationGeoJsonLoadSpec, SettingsMutationOutcome,
+    SystemMemorySnapshot, ThresholdMask, ThresholdPreviewApplySpec, ThresholdPreviewLoadSpec,
+    ThresholdPreviewRecomputeSpec, TileLoadingPolicy, discover_label_names_local,
+    extract_threshold_mask, project_roi_segmentation_path, threshold_mask_polygons,
+    write_object_export,
 };
 use crate::settings::AppSettings;
 
@@ -164,7 +165,7 @@ use remote::{
     begin_remote_list, begin_remote_s3_open,
 };
 use request::{expand_path, finish_request, reject_worker_submission};
-use resources::{begin_label_load, begin_object_resource_load};
+use resources::{begin_label_load, begin_object_resource_load, begin_segmentation_geojson_load};
 pub use routing::execution_diagnostics;
 pub use runtime::{
     ActorModelUpdate, ControlActorChannels, spawn_control_actor,

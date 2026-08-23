@@ -150,6 +150,20 @@ class ObjectResourceTests(unittest.TestCase):
             client.calls[3], ("viewer.objects.source.clear", {"if_revision": 4})
         )
 
+    def test_segmentation_geojson_source_wrappers(self) -> None:
+        client = RecordingClient()
+        objects = Objects(client)  # type: ignore[arg-type]
+
+        objects.get_segmentation_geojson_source()
+        objects.load_segmentation_geojson("outlines.geojson", downsample_factor=2.0)
+        objects.reload_segmentation_geojson(if_revision=3)
+        objects.clear_segmentation_geojson(if_revision=4)
+
+        self.assertEqual(client.calls[0][0], "viewer.segmentation_geojson.source.get")
+        self.assertEqual(client.calls[1][1]["downsample_factor"], 2.0)
+        self.assertEqual(client.calls[2][0], "viewer.segmentation_geojson.source.reload")
+        self.assertEqual(client.calls[3][1]["if_revision"], 4)
+
     def test_object_property_wrappers(self) -> None:
         client = RecordingClient()
         objects = Objects(client)  # type: ignore[arg-type]
@@ -245,6 +259,20 @@ class AsyncObjectResourceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls[0][0], "viewer.objects.source.load")
         self.assertEqual(client.calls[1][1]["if_revision"], 2)
+
+    async def test_async_segmentation_geojson_source_wrappers(self) -> None:
+        client = AsyncRecordingClient()
+        objects = AsyncObjects(client)  # type: ignore[arg-type]
+
+        await objects.get_segmentation_geojson_source()
+        await objects.load_segmentation_geojson("outlines.geojson")
+        await objects.reload_segmentation_geojson()
+        await objects.clear_segmentation_geojson()
+
+        self.assertEqual(client.calls[0][0], "viewer.segmentation_geojson.source.get")
+        self.assertEqual(client.calls[1][0], "viewer.segmentation_geojson.source.load")
+        self.assertEqual(client.calls[2][0], "viewer.segmentation_geojson.source.reload")
+        self.assertEqual(client.calls[3][0], "viewer.segmentation_geojson.source.clear")
 
     async def test_async_object_property_wrappers(self) -> None:
         client = AsyncRecordingClient()

@@ -25,15 +25,17 @@ use super::project::{ProjectModel, ProjectModelSnapshot};
 use super::{
     AnalysisModel, AnnotationModel, ControlAnnotationLayerProjection, ControlLabelResource,
     ControlMosaicResource, ControlObjectFilterResult, ControlObjectResource,
-    ControlPinnedLevelResource, ControlThresholdPreviewResource, LabelZarrDataset, MaskModel,
-    MeasurementMetric, MeasurementModel, MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec,
+    ControlPinnedLevelResource, ControlSegmentationGeoJsonResource,
+    ControlThresholdPreviewResource, LabelZarrDataset, MaskModel, MeasurementMetric,
+    MeasurementModel, MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec,
     ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
     ObjectSelectionModel, OperationKind, PinnedMemoryModel, ProjectObjectPreloadCatalog,
     ProjectObjectPreloadProjection, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
-    ProjectObjectPreloadSource, ReadinessModel, ScreenshotPreferences, SystemMemorySnapshot,
-    ThresholdPreviewModel, ThresholdScope, TileLoadingModel, TileLoadingPolicy,
-    default_screenshot_filename, object_export_columns, parse_world_points, parse_world_rect,
-    project_object_preload_candidates, project_roi_segmentation_path,
+    ProjectObjectPreloadSource, ReadinessModel, ScreenshotPreferences, SegmentationGeoJsonLoadSpec,
+    SegmentationGeoJsonModel, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
+    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, object_export_columns,
+    parse_world_points, parse_world_rect, project_object_preload_candidates,
+    project_roi_segmentation_path,
 };
 
 mod analysis;
@@ -51,6 +53,7 @@ mod project_views;
 mod projects;
 mod runtime;
 mod screenshots;
+mod segmentation_geojson;
 mod settings_deep_links;
 mod thresholds;
 mod viewport_commands;
@@ -287,6 +290,7 @@ struct DatasetModel {
     shared_resources: Value,
     performance: Value,
     object_resource: Option<std::sync::Arc<ControlObjectResource>>,
+    segmentation_geojson: SegmentationGeoJsonModel,
     label_available: Vec<String>,
     label_selected: String,
     label_loaded: Option<String>,

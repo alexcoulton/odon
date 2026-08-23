@@ -136,3 +136,43 @@ pub(super) fn begin_object_resource_load(
         }
     }
 }
+
+pub(super) fn begin_segmentation_geojson_load(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) -> bool {
+    if load_job_tx.is_full() {
+        reject_worker_submission(request, diagnostics);
+        return false;
+    }
+    let mut params = request.command.params().clone();
+    if let Some(path) = request.command.params().get("path").and_then(Value::as_str) {
+        params["path"] = json!(expand_path(path).to_string_lossy().into_owned());
+    }
+    let spec = match model.prepare_segmentation_geojson_load(&params) {
+        Ok(spec) => spec,
+        Err(error) => {
+            reject_actor_request(request, diagnostics, error);
+            return false;
+        }
+    };
+    match load_job_tx.try_send(LoadJob::SegmentationGeoJson { request, spec }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(error) => {
+            let LoadJob::SegmentationGeoJson { request, spec } = error.into_inner() else {
+                unreachable!("segmentation GeoJSON submission returns its own job")
+            };
+            model.fail_segmentation_geojson_load(
+                &spec,
+                "Segmentation GeoJSON worker queue is unavailable",
+            );
+            reject_worker_submission(request, diagnostics);
+            false
+        }
+    }
+}

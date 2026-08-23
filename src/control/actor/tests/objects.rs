@@ -1,4 +1,57 @@
 use super::*;
+
+#[test]
+fn segmentation_geojson_loads_without_a_ui_frame() {
+    let channels = spawn_test_actor();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let (open, open_rx) = request("datasets.open_ome_zarr", json!({"path":fixture}));
+    channels.request_tx.send(open).unwrap();
+    open_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+
+    let path = std::env::temp_dir().join(format!("odon-seg-lines-{}.geojson", std::process::id()));
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "type":"FeatureCollection",
+            "features":[{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,4],[0,0]]]}}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (load, load_rx) = request(
+        "viewer.segmentation_geojson.source.load",
+        json!({"path":path,"downsample_factor":2.0}),
+    );
+    channels.request_tx.send(load).unwrap();
+    let loaded = load_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded["source"]["loaded"], true);
+    assert_eq!(loaded["source"]["segment_count"], 4);
+    assert_eq!(loaded["source"]["downsample_factor"], 2.0);
+
+    let projection = channels.presentation_rx.try_iter().last().unwrap();
+    let resource = projection.segmentation_geojson_resource.unwrap();
+    assert_eq!(resource.segment_count, 4);
+    assert_eq!(resource.polylines[0][1], [8.0, 0.0]);
+
+    let (clear, clear_rx) = request("viewer.segmentation_geojson.source.clear", json!({}));
+    channels.request_tx.send(clear).unwrap();
+    assert_eq!(
+        clear_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap()["result"]["source"]["loaded"],
+        false
+    );
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn object_resources_load_and_clear_without_draining_the_ui_queue() {
     let channels = spawn_test_actor_with_objects();

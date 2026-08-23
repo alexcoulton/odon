@@ -1,6 +1,19 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub fn install_control_actor_segmentation_geojson_resource(
+        &mut self,
+        state: &serde_json::Value,
+        resource: Option<&odon::model::ControlSegmentationGeoJsonResource>,
+    ) -> Result<(), String> {
+        let generation = state
+            .get("generation")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        self.seg_geojson
+            .install_control_resource(generation, resource, state)
+    }
+
     pub fn apply_control_actor_object_export_state(
         &mut self,
         generation: u64,

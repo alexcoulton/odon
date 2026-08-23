@@ -7,4 +7,5 @@ pub mod point_bins;
 pub mod project_config;
 pub mod remote_store;
 pub mod samplesheet;
+pub mod segmentation_geojson;
 pub mod zarr_attrs;

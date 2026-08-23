@@ -862,6 +862,35 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::SegmentationGeoJson { request, spec } => {
+                            let result = crate::data::segmentation_geojson::load_geojson_polyline_coordinates_world(
+                                    &spec.path,
+                                    spec.downsample_factor,
+                                    crate::data::segmentation_geojson::PolygonRingMode::ExteriorOnly,
+                                )
+                                .map(|polylines| {
+                                    let segment_count = polylines
+                                        .iter()
+                                        .map(|line| line.len().saturating_sub(1))
+                                        .sum();
+                                    ControlSegmentationGeoJsonResource {
+                                        path: spec.path.clone(),
+                                        downsample_factor: spec.downsample_factor,
+                                        polylines: Arc::new(polylines),
+                                        segment_count,
+                                    }
+                                });
+                            if completions
+                                .send(LoadCompletion::SegmentationGeoJson {
+                                    request,
+                                    spec,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::Labels {
                             document_generation,
                             label_generation,

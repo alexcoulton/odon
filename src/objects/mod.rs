@@ -53,7 +53,7 @@ pub use self::core::{
     load_control_spatialdata_object_resource,
 };
 use self::filter_query::ObjectFilterQueryExpr;
-pub(crate) use self::geojson::GeoJsonSegmentationLayer;
+pub(crate) use self::geojson::{GeoJsonSegmentationLayer, GeoJsonSourceAction};
 use self::property_store::*;
 use self::render::property_scalar_value;
 

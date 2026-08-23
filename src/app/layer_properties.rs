@@ -528,7 +528,9 @@ impl OmeZarrViewerApp {
                     .local_path()
                     .and_then(|p| p.parent())
                     .unwrap_or_else(|| Path::new("."));
-                self.seg_geojson.ui_properties(ui, default_dir);
+                if let Some(action) = self.seg_geojson.ui_properties(ui, default_dir) {
+                    self.queue_segmentation_geojson_action(action);
+                }
             }
             LayerId::SegmentationObjects => {
                 let default_dir = self

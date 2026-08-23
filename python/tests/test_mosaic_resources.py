@@ -125,6 +125,7 @@ class MosaicResourceTests(unittest.TestCase):
         )
         mosaic.clear_object_selection()
         mosaic.load_selected_objects(if_revision=9)
+        mosaic.load_objects(item_ids=[1, 2], downsample_factor=2.0)
         mosaic.cancel_object_load(if_revision=10)
 
         self.assertEqual(client.calls[0], ("mosaic.objects.get_state", {}))
@@ -146,7 +147,12 @@ class MosaicResourceTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            client.calls[7],
+            client.calls[7][0],
+            "mosaic.objects.load",
+        )
+        self.assertEqual(client.calls[7][1]["item_ids"], [1, 2])
+        self.assertEqual(
+            client.calls[8],
             ("mosaic.objects.cancel_load", {"if_revision": 10}),
         )
 
@@ -207,6 +213,7 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         await mosaic.replace_object_selection(item_id=1, selected_indices=[2])
         await mosaic.clear_object_selection(roi_id="ROI-A")
         await mosaic.load_selected_objects()
+        await mosaic.load_objects(roi_ids=["ROI-A"])
         await mosaic.cancel_object_load()
 
         self.assertEqual(client.calls[0], ("mosaic.objects.get_state", {}))
@@ -216,7 +223,9 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[4][0], "mosaic.objects.selection.replace")
         self.assertEqual(client.calls[5][0], "mosaic.objects.selection.clear")
         self.assertEqual(client.calls[6][0], "mosaic.objects.load_selected")
-        self.assertEqual(client.calls[7], ("mosaic.objects.cancel_load", {}))
+        self.assertEqual(client.calls[7][0], "mosaic.objects.load")
+        self.assertEqual(client.calls[7][1]["roi_ids"], ["ROI-A"])
+        self.assertEqual(client.calls[8], ("mosaic.objects.cancel_load", {}))
 
     async def test_async_mosaic_presentation_wrappers(self) -> None:
         client = AsyncRecordingClient()

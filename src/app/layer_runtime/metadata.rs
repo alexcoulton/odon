@@ -83,7 +83,30 @@ impl OmeZarrViewerApp {
             .and_then(|p| p.parent())
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        self.seg_geojson.open_dialog(&default_dir);
+        if let Some(path) = self.seg_geojson.open_dialog(&default_dir) {
+            self.queue_segmentation_geojson_action(crate::objects::GeoJsonSourceAction::Load(
+                path,
+                self.seg_geojson.downsample_factor,
+            ));
+        }
+    }
+
+    pub(in crate::app) fn queue_segmentation_geojson_action(
+        &mut self,
+        action: crate::objects::GeoJsonSourceAction,
+    ) {
+        let (method, params) = match action {
+            crate::objects::GeoJsonSourceAction::Load(path, downsample_factor) => (
+                "viewer.segmentation_geojson.source.load",
+                serde_json::json!({"path":path,"downsample_factor":downsample_factor}),
+            ),
+            crate::objects::GeoJsonSourceAction::Clear => (
+                "viewer.segmentation_geojson.source.clear",
+                serde_json::json!({}),
+            ),
+        };
+        self.native_control_intents
+            .push(NativeControlIntent { method, params });
     }
 
     pub fn open_seg_objects_dialog(&mut self) {

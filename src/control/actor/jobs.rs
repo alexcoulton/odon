@@ -329,6 +329,11 @@ pub(super) enum LoadCompletion {
         downsample_factor: f32,
         result: anyhow::Result<ControlObjectResource>,
     },
+    SegmentationGeoJson {
+        request: OdonControlRequest,
+        spec: SegmentationGeoJsonLoadSpec,
+        result: anyhow::Result<ControlSegmentationGeoJsonResource>,
+    },
     Labels {
         document_generation: u64,
         label_generation: u64,
@@ -439,6 +444,7 @@ impl LoadCompletion {
             | Self::ProjectObjectPreload { .. } => CompletionDomain::Project,
             Self::ProjectViewApply { .. } => CompletionDomain::Project,
             Self::ObjectResource { .. }
+            | Self::SegmentationGeoJson { .. }
             | Self::Labels { .. }
             | Self::Annotations { .. }
             | Self::MemoryPin { .. }
@@ -683,6 +689,10 @@ pub(super) enum LoadJob {
         path: PathBuf,
         downsample_factor: f32,
         options: Option<Value>,
+    },
+    SegmentationGeoJson {
+        request: OdonControlRequest,
+        spec: SegmentationGeoJsonLoadSpec,
     },
     Labels {
         document_generation: u64,
