@@ -52,15 +52,6 @@ impl Default for GeoJsonSegmentationLayer {
 }
 
 impl GeoJsonSegmentationLayer {
-    pub fn reset_renderer_resource(&mut self) {
-        self.bins = None;
-        self.loaded_geojson = None;
-        self.resource_generation = 0;
-        self.pending = false;
-        self.status.clear();
-        self.generation = self.generation.wrapping_add(1).max(1);
-    }
-
     pub fn open_dialog(&self, default_dir: &Path) -> Option<PathBuf> {
         let start_dir = self
             .loaded_geojson

@@ -505,10 +505,6 @@ impl eframe::App for OmeZarrViewerApp {
             self.ui_viewport_workspace(ui, ctx);
         });
 
-        if self.remote_dialog_open {
-            self.ui_remote_dialog(ctx);
-        }
-
         self.ui_group_layers_dialog(ctx);
         self.ui_memory_load_dialog(ctx);
         self.ui_object_export_dialogs(ctx);

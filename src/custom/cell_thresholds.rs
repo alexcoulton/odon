@@ -199,31 +199,6 @@ impl CellThresholdsPanel {
         panel
     }
 
-    pub fn set_dataset_root(
-        &mut self,
-        dataset_root: &Path,
-        ome_multiscale_name: Option<&str>,
-        points_layer: &mut PointsLayer,
-    ) {
-        self.dataset_root = dataset_root.to_path_buf();
-        self.roi_label = infer_roi_label(dataset_root, ome_multiscale_name);
-
-        self.status = "Loading...".to_string();
-        self.last_loaded_key = None;
-        self.values_generation = self.values_generation.wrapping_add(1);
-        self.positions_world = Arc::new(Vec::new());
-        self.values = Arc::new(Vec::new());
-        self.values_min = 0.0;
-        self.values_max = 1.0;
-        self.positive_count = 0;
-        self.total_count = 0;
-        points_layer.points.clear();
-        points_layer.visible = false;
-        self.points_visible = points_layer.visible;
-
-        self.reload_config(dataset_root);
-    }
-
     pub fn tick(&mut self, points_layer: &mut PointsLayer) {
         // Keep panel state in sync with the global layer visibility toggle.
         self.points_visible = points_layer.visible;

@@ -316,18 +316,6 @@
         "milestone": 6
       },
       {
-        "id": "viewer.remote_dialog",
-        "fields": ["remote_dialog_open", "remote_mode", "remote_http_url", "remote_s3_endpoint", "remote_s3_region", "remote_s3_bucket", "remote_s3_prefix", "remote_s3_access_key", "remote_s3_secret_key", "remote_status", "remote_s3_browser"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "egui connection draft and actor-private remote session service",
-        "projection_source": "redacted remote-session/listing projection",
-        "renderer_consumers": "remote connection and browser dialog",
-        "persistence_consumers": "non-secret remote preferences only",
-        "native_commit_point": "typed remote session/list/open command",
-        "milestone": 5
-      },
-      {
         "id": "viewer.host_requests",
         "fields": ["pending_request"],
         "current_class": "platform_effect",
@@ -644,12 +632,12 @@
       {
         "id": "root.remote_dialog",
         "fields": ["remote_dialog_open", "remote_mode", "remote_http_url", "remote_s3_endpoint", "remote_s3_region", "remote_s3_bucket", "remote_s3_prefix", "remote_s3_access_key", "remote_s3_secret_key", "remote_status", "remote_s3_browser", "remote_control_pending"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "RootApp connection draft and actor-private remote service",
-        "projection_source": "redacted remote-session/listing projection and task reply",
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "RootApp connection draft and actor command reply consumer",
+        "projection_source": "redacted actor listing reply; secrets remain only in the local draft and actor-private session",
         "renderer_consumers": "remote dialogs and project import UI",
-        "persistence_consumers": "non-secret remote preferences only",
+        "persistence_consumers": "none",
         "native_commit_point": "typed remote command",
         "milestone": 5
       },

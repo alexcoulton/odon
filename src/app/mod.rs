@@ -39,10 +39,6 @@ use crate::data::ome::{ChannelInfo, Dims, OmeZarrDataset};
 use crate::data::project_config::{
     ProjectChannelGroup, ProjectChannelGroupMember, ProjectLayerGroups, ProjectRoi,
 };
-use crate::data::remote_store::{
-    S3BrowseEntry, S3BrowseListing, S3Browser, S3Store, build_http_store, build_s3_browser,
-    build_s3_store, list_s3_prefix,
-};
 use crate::geometry::threshold_regions::{ThresholdRegionMask, extract_threshold_region_mask};
 use crate::imaging::channel_max::{
     ChannelMaxLoaderHandle, ChannelMaxRequest, spawn_channel_max_loader,
@@ -134,7 +130,6 @@ mod overlay_rendering;
 mod project_integration;
 mod project_view;
 mod projects;
-mod remote;
 mod renderer_bridge;
 mod screenshots;
 mod selection;
@@ -640,23 +635,6 @@ fn default_threshold_full_level(
 }
 
 // Grouping dialog state lives in `ui_group_layers`.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RemoteMode {
-    Http,
-    S3,
-}
-
-struct RemoteS3BrowserState {
-    session: S3Browser,
-    signature: String,
-    current_prefix: String,
-    parent_prefix: Option<String>,
-    entries: Vec<S3BrowseEntry>,
-    current_is_dataset: bool,
-    selected_dataset_prefixes: HashSet<String>,
-    listing_cache: HashMap<String, S3BrowseListing>,
-}
 
 #[derive(Debug, Clone)]
 pub struct S3DatasetSelection {
@@ -1958,18 +1936,6 @@ pub struct OmeZarrViewerApp {
     threshold_preview_gl: Option<ThresholdPreviewGlRenderer>,
     tiles_gl: Option<TilesGl>,
     labels_gl: Option<LabelsGl>,
-    remote_dialog_open: bool,
-    remote_mode: RemoteMode,
-    remote_http_url: String,
-    remote_s3_endpoint: String,
-    remote_s3_region: String,
-    remote_s3_bucket: String,
-    remote_s3_prefix: String,
-    remote_s3_access_key: String,
-    remote_s3_secret_key: String,
-    remote_status: String,
-    remote_s3_browser: Option<RemoteS3BrowserState>,
-
     pending_request: Option<ViewerRequest>,
     native_control_intents: Vec<NativeControlIntent>,
     control_actor_object_generation: u64,
@@ -2093,7 +2059,7 @@ struct LayerTransformState {
 
 #[derive(Debug, Clone)]
 pub enum ViewerRequest {
-    OpenRemoteS3Mosaic(Vec<S3DatasetSelection>),
+    OpenRemoteDialog,
 }
 
 #[derive(Debug, Clone)]

@@ -80,8 +80,7 @@ impl OmeZarrViewerApp {
                 self.project_space.set_view_preset_draft(spec);
             }
             ProjectSpaceAction::OpenRemoteDialog => {
-                self.remote_dialog_open = true;
-                self.remote_status.clear();
+                self.pending_request = Some(ViewerRequest::OpenRemoteDialog);
             }
             ProjectSpaceAction::ShowHelp(topic) => {
                 self.active_help_topic = Some(topic);

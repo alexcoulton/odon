@@ -1646,6 +1646,41 @@ fn project_object_preload_is_one_actor_projection_adapter() {
 }
 
 #[test]
+fn remote_dataset_io_is_actor_backed_and_not_renderer_local() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let app = source(root.join("src/app/mod.rs"));
+    let viewer_project = source(root.join("src/app/project_integration.rs"));
+    let root_remote = source(root.join("src/root_app/remote.rs"));
+
+    assert!(!root.join("src/app/remote.rs").exists());
+    assert!(!app.contains("mod remote;"));
+    assert!(viewer_project.contains("ViewerRequest::OpenRemoteDialog"));
+    for method in [
+        "datasets.s3.configure_session",
+        "datasets.s3.list",
+        "datasets.open_http",
+        "datasets.open_s3",
+    ] {
+        assert!(
+            root_remote.contains(method),
+            "shared remote dialog must submit the actor command: {method}"
+        );
+    }
+    for forbidden in [
+        "build_http_store(",
+        "build_s3_store(",
+        "build_s3_browser(",
+        "list_s3_prefix(",
+        "OmeZarrDataset::open_with_store(",
+    ] {
+        assert!(
+            !root_remote.contains(forbidden),
+            "remote dialog must not perform dataset I/O locally: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1937,7 +1972,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 302,
+        total_fields, 291,
         "review the ownership ledger when host fields change"
     );
 }

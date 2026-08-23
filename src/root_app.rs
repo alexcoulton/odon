@@ -1908,6 +1908,7 @@ impl eframe::App for RootApp {
         let open_mosaic: Option<Vec<PathBuf>> = None;
         let mut open_remote_s3_mosaic: Option<(Vec<crate::app::S3DatasetSelection>, ProjectSpace)> =
             None;
+        let mut open_remote_dialog = false;
         let mut back_to_single = false;
         let mut native_menu_control_intents = Vec::new();
 
@@ -2204,10 +2205,7 @@ impl eframe::App for RootApp {
                 self.label_prompt_preference = app.label_prompt_preference();
                 if let Some(req) = app.take_request() {
                     match req {
-                        ViewerRequest::OpenRemoteS3Mosaic(datasets) => {
-                            let ps = app.take_project_space();
-                            open_remote_s3_mosaic = Some((datasets, ps));
-                        }
+                        ViewerRequest::OpenRemoteDialog => open_remote_dialog = true,
                     }
                 }
             }
@@ -2298,6 +2296,11 @@ impl eframe::App for RootApp {
                 ctx.request_repaint_after(Duration::from_millis(5));
                 break;
             }
+        }
+
+        if open_remote_dialog {
+            self.remote_dialog_open = true;
+            self.remote_status.clear();
         }
 
         if matches!(self.mode, Mode::Project { .. }) {
