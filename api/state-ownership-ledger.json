@@ -478,7 +478,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor viewport workspace model",
         "projection_source": "workspace projection",
-        "renderer_consumers": "read-only projected topology plus per-frame viewport swapping and paint planning; renderer history and interaction/cache drafts are nested in ViewportRenderState and ViewportTransientState while the combined container remains to be split",
+        "renderer_consumers": "read-only projected topology plus per-frame viewport swapping and paint planning; capture_runtime writes only camera preview, ViewportRenderState, and ViewportTransientState, never projected semantics",
         "persistence_consumers": "project workspace and saved views",
         "native_commit_point": "typed workspace command",
         "milestone": 3

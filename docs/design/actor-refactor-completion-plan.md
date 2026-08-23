@@ -212,7 +212,10 @@ drafts, slice drafts, overlay multi-selection, and object-filter caches are like
 `ViewportTransientState`, rather than appearing as projected semantic fields. Native channel
 visibility, ordering, active stepping, contrast, RGB presets, and channel-group commits likewise
 queue actor commands without a projection-readiness fallback; channel projection fields remain in
-the renderer only as the current paint/UI input.
+the renderer only as the current paint/UI input. Frame planning and renderer queries now write back
+only camera preview, render history, and transient state through `capture_runtime`; they cannot
+recapture channel, layer, object, panel, or other projected semantics. Native-layer topology is
+derived explicitly from each actor projection, rather than relying on a prior renderer capture.
 Generic native-layer activation, visibility, ordering, offsets, transforms, and property
 transactions now obey the same rule. Actor-owned panel toggles, right-tab selection, viewport
 rendering preferences, and the native scale-bar menu also remain unchanged locally until their

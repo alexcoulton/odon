@@ -48,6 +48,7 @@ fn layer_transforms_order_masks_and_ui_roundtrip_through_project_state() {
     assert_eq!(app.mask_layers[0].offset_world, egui::vec2(8.0, -4.0));
     assert!(!app.undo_last_edit(), "undo stack is exhausted");
 
+    sync_complete_state_to_active_viewport_for_test(&mut app);
     let source = app.dataset.source.clone();
     let project = app.take_project_space();
     let view = project.roi_view_state(&source).expect("saved ROI view");

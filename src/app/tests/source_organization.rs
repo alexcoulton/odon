@@ -1321,6 +1321,22 @@ fn viewport_render_history_is_explicitly_separated_from_projected_state() {
     assert!(projected_state.contains("transient: ViewportTransientState"));
     assert!(!projected_state.contains("draft_view_slice_level0:"));
     assert!(!projected_state.contains("object_filter_cache:"));
+
+    let viewport_ui =
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/viewport_ui.rs"));
+    let viewport_runtime =
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/viewport_runtime.rs"));
+    let actor_projection =
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app/actor_projection.rs"));
+    assert!(viewport_ui.contains("state.capture_runtime(self)"));
+    assert!(viewport_runtime.contains("state.capture_runtime(self)"));
+    assert!(actor_projection.contains("active.state.capture_runtime(self)"));
+    for frame_path in [&viewport_ui, &viewport_runtime] {
+        assert!(
+            !frame_path.contains("state = ViewerViewportState::capture(self)"),
+            "frame-driven workspace synchronization must not copy projected semantics from the renderer"
+        );
+    }
 }
 
 #[test]

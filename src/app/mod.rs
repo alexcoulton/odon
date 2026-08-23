@@ -869,6 +869,36 @@ struct ViewerViewportState {
 }
 
 impl ViewerViewportState {
+    /// Capture only state that the renderer is allowed to advance between actor projections.
+    /// Camera is included as the explicit optimistic navigation preview; its actor revision and
+    /// linked-camera semantics remain actor-owned.
+    fn capture_runtime(&mut self, app: &OmeZarrViewerApp) {
+        self.camera = app.camera.clone();
+        self.render = ViewportRenderState {
+            last_canvas_rect: app.last_canvas_rect,
+            active_render_id: app.active_render_id,
+            previous_render_id: app.previous_render_id,
+            active_render_smooth_pixels: app.active_render_smooth_pixels,
+            previous_render_smooth_pixels: app.previous_render_smooth_pixels,
+            previous_view_selection: app.previous_view_selection,
+            previous_displayed_view_selection: app.previous_displayed_view_selection,
+            last_render_view_selection: app.last_render_view_selection,
+            last_target_level: app.last_target_level,
+            fallback_ceiling_level: app.fallback_ceiling_level,
+            last_visible_world_tiles: app.last_visible_world_tiles,
+            zoom_out_floor_level: app.zoom_out_floor_level,
+            zoom_out_floor_until: app.zoom_out_floor_until,
+            zoom_out_floor_visible_world_tiles: app.zoom_out_floor_visible_world_tiles,
+        };
+        self.transient = ViewportTransientState {
+            draft_view_slice_level0: app.draft_view_slice_level0,
+            selected_channel_layers: app.selected_channel_layers.clone(),
+            selected_channel_group_id: app.selected_channel_group_id,
+            selected_overlay_layers: app.selected_overlay_layers.clone(),
+            object_filter_cache: app.seg_objects.viewport_filter_cache_state(),
+        };
+    }
+
     fn color_json(color: egui::Color32) -> serde_json::Value {
         serde_json::json!(color.to_array())
     }

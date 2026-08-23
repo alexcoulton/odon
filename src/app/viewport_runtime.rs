@@ -240,9 +240,9 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn sync_runtime_to_active_viewport(&mut self) {
-        let state = ViewerViewportState::capture(self);
-        if let Some(workspace) = self.viewport_workspace.as_mut() {
-            workspace.active_mut().state = state;
+        if let Some(mut workspace) = self.viewport_workspace.take() {
+            workspace.active_mut().state.capture_runtime(self);
+            self.viewport_workspace = Some(workspace);
         }
     }
 

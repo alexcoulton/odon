@@ -39,6 +39,13 @@ pub(super) fn workspace_topology(workspace: &serde_json::Value) -> serde_json::V
     })
 }
 
+pub(super) fn sync_complete_state_to_active_viewport_for_test(app: &mut OmeZarrViewerApp) {
+    let state = ViewerViewportState::capture(app);
+    if let Some(workspace) = app.viewport_workspace.as_mut() {
+        workspace.active_mut().state = state;
+    }
+}
+
 pub(super) struct ActorAppFixture {
     app: OmeZarrViewerApp,
     model: AppModel,

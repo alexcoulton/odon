@@ -9,7 +9,7 @@ impl OmeZarrViewerApp {
         };
         let active_id = workspace.active_id().clone();
         if let Some(active) = workspace.get_mut(&active_id) {
-            active.state = ViewerViewportState::capture(self);
+            active.state.capture_runtime(self);
         }
 
         let viewport_ids = workspace
@@ -341,10 +341,9 @@ impl OmeZarrViewerApp {
         );
         self.tool_mode = tool_mode;
 
-        let after = ViewerViewportState::capture(self);
         self.native_viewport_command_scope = None;
         if let Some(viewport) = workspace.get_mut(viewport_id) {
-            viewport.state = after;
+            viewport.state.capture_runtime(self);
         }
 
         if activate {

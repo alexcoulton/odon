@@ -617,7 +617,7 @@ impl OmeZarrViewerApp {
         if let Some(workspace) = current.as_mut() {
             let active_id = workspace.active_id().clone();
             if let Some(active) = workspace.get_mut(&active_id) {
-                active.state = ViewerViewportState::capture(self);
+                active.state.capture_runtime(self);
             }
         }
         let fallback = current
@@ -657,6 +657,7 @@ impl OmeZarrViewerApp {
                 .unwrap_or_else(|| fallback.clone());
             state.masks.clone_from(&projected_masks);
             Self::apply_actor_viewport_projection(&mut state, projected)?;
+            self.apply_actor_native_layer_topology(&mut state, projected)?;
             slots.push(ViewportSlot {
                 id,
                 title,
@@ -765,6 +766,49 @@ impl OmeZarrViewerApp {
         self.hist_navigation_dirty_since = Some(Instant::now());
         self.viewport_workspace = Some(workspace);
         self.control_actor_workspace_revision = revision.max(1);
+        Ok(())
+    }
+
+    fn apply_actor_native_layer_topology(
+        &self,
+        state: &mut ViewerViewportState,
+        projected: &serde_json::Value,
+    ) -> Result<(), String> {
+        let Some(layers) = projected
+            .get("native_layers")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(());
+        };
+        let mut overlays = Vec::new();
+        let mut active = None;
+        for layer in layers {
+            if layer.get("available").and_then(serde_json::Value::as_bool) == Some(false) {
+                continue;
+            }
+            let raw = layer
+                .get("layer_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "actor native layer has no layer_id".to_string())?;
+            let id = self
+                .parse_layer_id_storage_key(raw)
+                .ok_or_else(|| format!("unknown actor native layer '{raw}'"))?;
+            if layer.get("active").and_then(serde_json::Value::as_bool) == Some(true) {
+                active = Some(id);
+            }
+            if layer.get("stack").and_then(serde_json::Value::as_str) == Some("overlays") {
+                let order = layer
+                    .get("order")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(u64::MAX);
+                overlays.push((order, id));
+            }
+        }
+        overlays.sort_by_key(|(order, _)| *order);
+        state.overlay_layer_order = overlays.into_iter().map(|(_, id)| id).collect();
+        if let Some(active) = active {
+            state.active_layer = active;
+        }
         Ok(())
     }
 

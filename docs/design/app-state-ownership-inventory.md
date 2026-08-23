@@ -348,7 +348,9 @@ heavyweight project resource materialization is tracked in the resource mileston
 container split is in place: `ViewportRenderState` now isolates canvas geometry, render IDs,
 previous selections, level/fallback history, and zoom-out retention from projected viewport
 semantics. `ViewportTransientState` separately contains slice drafts, channel/group/overlay
-multi-selection, and object-filter cache state.
+multi-selection, and object-filter cache state. Frame-driven workspace synchronization uses
+`capture_runtime` and therefore cannot copy projected semantic fields back out of the live renderer;
+the actor projection explicitly supplies native-layer order and active-layer topology.
 Frame capture may retain an optimistic camera or slice preview for painting, but it no longer
 increments actor-owned navigation/presentation revisions or copies linked navigation to sibling
 viewports. Camera fit and committed plane changes always queue typed actor commands; query-only
