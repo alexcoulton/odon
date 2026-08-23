@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "in_progress",
+  "status": "complete",
   "owners": {
     "OmeZarrViewerApp": [
       {
@@ -652,15 +652,27 @@
         "milestone": 5
       },
       {
-        "id": "viewer.screenshots",
-        "fields": ["screenshot_settings", "screenshot_settings_open", "screenshot_worker", "screenshot_next_id", "screenshot_pending", "screenshot_in_flight", "screenshot_output_dir"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor presentation task and egui pixel-capture fulfiller",
-        "projection_source": "presentation request with required model/resource generation",
-        "renderer_consumers": "pixel readback and screenshot dialog",
-        "persistence_consumers": "screenshot preferences",
-        "native_commit_point": "typed screenshot task command",
+        "id": "viewer.screenshot_dialog",
+        "fields": ["screenshot_dialog"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "egui screenshot preferences dialog",
+        "projection_source": "actor-owned ScreenshotPreferences projection",
+        "renderer_consumers": "native screenshot preferences draft and folder picker",
+        "persistence_consumers": "none directly; commits use viewer.screenshot.settings.set",
+        "native_commit_point": "typed viewer.screenshot.settings.set command",
+        "milestone": 7
+      },
+      {
+        "id": "viewer.screenshot_capture_adapter",
+        "fields": ["screenshot_capture"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor PresentationCaptureManager",
+        "projection_source": "generation-specific PresentationCaptureRequest released after the projection barrier",
+        "renderer_consumers": "viewport-scoped GPU pixel readback and capture-ID acknowledgement",
+        "persistence_consumers": "none; the actor worker owns the output lifecycle",
+        "native_commit_point": "typed screenshot capture command",
         "milestone": 7
       },
       {
@@ -1113,7 +1125,7 @@
       },
       {
         "id": "mosaic.dialog_state",
-        "fields": ["group_layers_dialog", "screenshot_settings_open", "active_help_topic"],
+        "fields": ["group_layers_dialog", "active_help_topic"],
         "current_class": "transient_ui",
         "disposition": "retain",
         "canonical_writer": "egui interaction",
@@ -1136,15 +1148,27 @@
         "milestone": 3
       },
       {
-        "id": "mosaic.screenshots",
-        "fields": ["screenshot_settings", "screenshot_worker", "screenshot_next_id", "screenshot_pending", "screenshot_in_flight", "screenshot_output_dir"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor presentation task and egui pixel-capture fulfiller",
-        "projection_source": "presentation request with required generation",
-        "renderer_consumers": "pixel readback",
-        "persistence_consumers": "screenshot preferences",
-        "native_commit_point": "typed screenshot task command",
+        "id": "mosaic.screenshot_dialog",
+        "fields": ["screenshot_dialog"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "egui screenshot preferences dialog",
+        "projection_source": "actor-owned ScreenshotPreferences projection",
+        "renderer_consumers": "native screenshot preferences draft and folder picker",
+        "persistence_consumers": "none directly; commits use viewer.screenshot.settings.set",
+        "native_commit_point": "typed viewer.screenshot.settings.set command",
+        "milestone": 7
+      },
+      {
+        "id": "mosaic.screenshot_capture_adapter",
+        "fields": ["screenshot_capture"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor PresentationCaptureManager",
+        "projection_source": "generation-specific PresentationCaptureRequest released after the projection barrier",
+        "renderer_consumers": "mosaic GPU pixel readback and capture-ID acknowledgement",
+        "persistence_consumers": "none; the actor worker owns the output lifecycle",
+        "native_commit_point": "typed screenshot capture command",
         "milestone": 7
       },
       {

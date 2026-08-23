@@ -9,7 +9,6 @@ impl eframe::App for MosaicViewerApp {
         // viewport while progressively refining visible ROIs.
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
-        self.drain_screenshots();
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close
@@ -201,8 +200,7 @@ impl eframe::App for MosaicViewerApp {
             || self.seg_geojson.is_busy()
             || self.seg_geojson_pending_visible
             || self.projected_memory_running()
-            || self.screenshot_pending.is_some()
-            || self.screenshot_in_flight.is_some()
+            || self.screenshot_capture.pending.is_some()
         {
             repaint_control::request_repaint_busy(ctx);
         }

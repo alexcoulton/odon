@@ -1,10 +1,14 @@
 use super::*;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::completion::reject_cancelled_request;
 
+#[cfg(not(test))]
 const PRESENTATION_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(test)]
+const PRESENTATION_TIMEOUT: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresentationCaptureScope {
@@ -31,7 +35,34 @@ pub struct PresentationCaptureRequest {
     pub desired_projection_revision: u64,
     pub mode: ModelMode,
     pub scope: PresentationCaptureScope,
+    pub resource_generations: PresentationResourceGenerations,
     pub screenshot_preferences: ScreenshotPreferences,
+}
+
+/// Actor generations that the renderer must consume as part of a presentation capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PresentationResourceGenerations {
+    pub document: u64,
+    pub channel_compute: u64,
+    pub threshold_preview: u64,
+    pub analysis: u64,
+    pub measurement: u64,
+    pub object_export: u64,
+    pub mosaic_resource: u64,
+}
+
+impl PresentationResourceGenerations {
+    fn capture(model: &AppModel) -> Self {
+        Self {
+            document: model.document_generation(),
+            channel_compute: model.channel_compute_generation(),
+            threshold_preview: model.threshold_preview_generation(),
+            analysis: model.analysis_generation(),
+            measurement: model.measurement_generation(),
+            object_export: model.object_export_generation(),
+            mosaic_resource: model.mosaic_resource_generation(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -53,6 +84,7 @@ pub(super) struct ScreenshotWriteSpec {
     pub(super) desired_projection_revision: u64,
     pub(super) mode: ModelMode,
     pub(super) scope: PresentationCaptureScope,
+    pub(super) resource_generations: PresentationResourceGenerations,
     pub(super) screenshot_preferences: ScreenshotPreferences,
     pub(super) path: PathBuf,
     pub(super) overwrite: bool,
@@ -174,6 +206,20 @@ impl PresentationCaptureManager {
         self.next_id = self.next_id.wrapping_add(1).max(1);
         let capture_id = self.next_id;
         model.begin_presentation_capture(capture_id, "Waiting for screenshot presentation");
+        let desired_projection_revision = model.projection_revision().wrapping_add(1).max(1);
+        let resource_generations = PresentationResourceGenerations::capture(model);
+        if let Some(task_id) = request.task_id.as_deref() {
+            let _ = request.task_registry.progress_with_details(
+                task_id,
+                None,
+                "waiting_for_presentation",
+                Some(json!({
+                    "capture_id":capture_id,
+                    "desired_projection_revision":desired_projection_revision,
+                    "resource_generations":resource_generations,
+                })),
+            );
+        }
         publish_projection(
             model,
             render_document.clone(),
@@ -182,14 +228,7 @@ impl PresentationCaptureManager {
             wake_ui,
             diagnostics,
         );
-        let desired_projection_revision = model.projection_revision();
-        if let Some(task_id) = request.task_id.as_deref() {
-            let _ = request.task_registry.progress(
-                task_id,
-                None,
-                format!("waiting_for_presentation:projection:{desired_projection_revision}"),
-            );
-        }
+        debug_assert_eq!(model.projection_revision(), desired_projection_revision);
         self.pending.insert(
             capture_id,
             PendingCapture {
@@ -203,6 +242,7 @@ impl PresentationCaptureManager {
                         original_mode
                     },
                     scope,
+                    resource_generations,
                     screenshot_preferences: model.screenshot_preferences().clone(),
                     path,
                     overwrite,
@@ -232,6 +272,7 @@ impl PresentationCaptureManager {
                 desired_projection_revision: pending.spec.desired_projection_revision,
                 mode: pending.spec.mode,
                 scope: pending.spec.scope.clone(),
+                resource_generations: pending.spec.resource_generations,
                 screenshot_preferences: pending.spec.screenshot_preferences.clone(),
             };
             match capture_tx.try_send(request) {
@@ -279,10 +320,16 @@ impl PresentationCaptureManager {
             }
         };
         if let Some(task_id) = pending.request.task_id.as_deref() {
-            let _ = pending
-                .request
-                .task_registry
-                .progress(task_id, None, "writing screenshot PNG");
+            let _ = pending.request.task_registry.progress_with_details(
+                task_id,
+                None,
+                "writing_output",
+                Some(json!({
+                    "capture_id":pending.spec.capture_id,
+                    "path":pending.spec.path.to_string_lossy(),
+                    "format":"png",
+                })),
+            );
         }
         match load_job_tx.try_send(LoadJob::ScreenshotWrite {
             request: pending.request,
@@ -335,6 +382,7 @@ impl PresentationCaptureManager {
                     ControlError::new(ControlErrorKind::Timeout, message).with_data(json!({
                         "capture_id":id,
                         "waiting_for_projection":pending.spec.desired_projection_revision,
+                        "resource_generations":pending.spec.resource_generations,
                         "phase":"waiting_for_presentation",
                     })),
                 );
@@ -407,6 +455,7 @@ pub(super) fn screenshot_result(spec: &ScreenshotWriteSpec, bytes: u64) -> Value
         "bytes":bytes,
         "capture_id":spec.capture_id,
         "presented_projection_revision":spec.desired_projection_revision,
+        "resource_generations":spec.resource_generations,
     });
     match &spec.scope {
         PresentationCaptureScope::Viewer { viewport_id } => {

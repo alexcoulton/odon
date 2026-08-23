@@ -38,7 +38,7 @@ Access: `odon.connect()`. Synchronous connection and root resource container.
 | --- | --- | --- | --- |
 | `call(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, timeout: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Call. |
 | `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
-| `batch(operations: 'Sequence[tuple[str, Mapping[str, Any] \| None]]', *, atomic: 'bool' = False) -> 'Any'` | `system.batch` | protocol | Execute application commands in order. (mutates) |
+| `batch(operations: 'Sequence[tuple[str, Mapping[str, Any] \| None]]', *, atomic: 'bool' = False) -> 'Any'` | `system.batch` | protocol | Execute application commands in order. (mutates; completion: immediate_semantic) |
 | `closed (property)` | SDK-local/delegated | Inherited from delegated operation | Closed. |
 | `launched_process (property)` | SDK-local/delegated | Inherited from delegated operation | The ``subprocess.Popen`` handle when created by :func:`odon.launch`. |
 
@@ -48,26 +48,26 @@ Access: `app.application`. Application state, settings, navigation, lifecycle, a
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_state() -> 'Any'` | `app.get_state` | project, single, mosaic, transition | Get current application and viewer state. |
+| `get_state() -> 'Any'` | `app.get_state` | project, single, mosaic, transition | Get current application and viewer state. (completion: immediate_semantic) |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | The last state fetched by this resource, without network IO. |
-| `get_loading_state() -> 'Any'` | `app.get_loading_state` | project, single, mosaic, transition | Get loading diagnostics. |
-| `list_methods() -> 'Any'` | `system.describe_methods` | protocol | List control methods and request schemas. |
-| `describe_events() -> 'Any'` | `system.describe_events` | protocol | Describe initial event families and envelope fields. |
-| `get_application_surface() -> 'Any'` | `system.get_application_surface` | protocol | Return Odon's machine-readable native/API/Python parity manifest. |
-| `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. |
-| `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. |
-| `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. |
-| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; event: application.settings.changed) |
-| `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. |
-| `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; event: application.recent_projects.changed) |
-| `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; event: application.recent_projects.changed) |
-| `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. |
-| `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; event: application.close.requested) |
-| `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; event: application.quit.requested) |
-| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
-| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
-| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
-| `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; event: application.mode.changed) |
+| `get_loading_state() -> 'Any'` | `app.get_loading_state` | project, single, mosaic, transition | Get loading diagnostics. (completion: immediate_semantic) |
+| `list_methods() -> 'Any'` | `system.describe_methods` | protocol | List control methods and request schemas. (completion: immediate_semantic) |
+| `describe_events() -> 'Any'` | `system.describe_events` | protocol | Describe initial event families and envelope fields. (completion: immediate_semantic) |
+| `get_application_surface() -> 'Any'` | `system.get_application_surface` | protocol | Return Odon's machine-readable native/API/Python parity manifest. (completion: immediate_semantic) |
+| `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. (completion: immediate_semantic) |
+| `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. (completion: immediate_semantic) |
+| `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. (completion: immediate_semantic) |
+| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
+| `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. (completion: immediate_semantic) |
+| `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
+| `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
+| `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. (completion: immediate_semantic) |
+| `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; completion: immediate_semantic; event: application.close.requested) |
+| `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; completion: immediate_semantic; event: application.quit.requested) |
+| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; completion: immediate_semantic; event: application.mode.changed) |
 
 ### Datasets
 
@@ -75,13 +75,13 @@ Access: `app.datasets`. Dataset inspection and opening.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. |
+| `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. (completion: immediate_semantic) |
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
-| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
-| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
-| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
+| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### S3 datasets
 
@@ -89,11 +89,11 @@ Access: `app.datasets.s3`. Authenticated S3 session, listing, and opening.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_session() -> 'Any'` | `datasets.s3.get_session` | project, single, mosaic, transition | Inspect redacted session-only S3 connection metadata. |
-| `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; event: datasets.credentials.changed) |
-| `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; event: datasets.credentials.changed) |
-| `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task) |
-| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
+| `get_session() -> 'Any'` | `datasets.s3.get_session` | project, single, mosaic, transition | Inspect redacted session-only S3 connection metadata. (completion: immediate_semantic) |
+| `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; completion: immediate_semantic; event: datasets.credentials.changed) |
+| `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; completion: immediate_semantic; event: datasets.credentials.changed) |
+| `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task; completion: retained_background; cancellation: cooperative) |
+| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### Deep links
 
@@ -101,11 +101,11 @@ Access: `app.deep_links`. Parse, generate, resolve, and apply Odon deep links.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `parse(url: 'str') -> 'Any'` | `deep_links.parse` | project, single, mosaic, transition | Parse and validate an Odon deep link into its structured public model. |
-| `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. |
-| `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. |
-| `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. |
-| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; event: application.state.changed) |
+| `parse(url: 'str') -> 'Any'` | `deep_links.parse` | project, single, mosaic, transition | Parse and validate an Odon deep link into its structured public model. (completion: immediate_semantic) |
+| `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. (completion: immediate_semantic) |
+| `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. (completion: immediate_semantic) |
+| `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. (completion: immediate_semantic) |
+| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.state.changed) |
 
 ### Viewer
 
@@ -113,22 +113,22 @@ Access: `app.viewer`. Camera, rendering, panels, scale bar, and viewer UI state.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_camera() -> 'Any'` | `viewer.camera.get` | single, mosaic | Get camera state. |
+| `get_camera() -> 'Any'` | `viewer.camera.get` | single, mosaic | Get camera state. (completion: immediate_semantic) |
 | `get_state() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Get state. |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
-| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; event: viewer.camera.changed) |
-| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content, waiting for Rust to finish the first canvas layout if needed. (mutates; event: viewer.camera.changed) |
-| `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; event: viewer.camera.changed) |
-| `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; event: viewer.camera.changed) |
-| `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
-| `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. |
-| `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; event: viewer.rendering.changed) |
-| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; event: viewer.ui.changed) |
-| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; event: viewer.ui.changed) |
-| `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. |
-| `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; event: viewer.scale_bar.changed) |
-| `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. |
-| `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; event: viewer.panels.changed) |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content, waiting for Rust to finish the first canvas layout if needed. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. (completion: immediate_semantic) |
+| `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. (completion: immediate_semantic) |
+| `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; completion: immediate_semantic; event: viewer.rendering.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; completion: immediate_semantic; event: viewer.ui.changed) |
+| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; completion: immediate_semantic; event: viewer.ui.changed) |
+| `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. (completion: immediate_semantic) |
+| `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; completion: immediate_semantic; event: viewer.scale_bar.changed) |
+| `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. (completion: immediate_semantic) |
+| `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; completion: immediate_semantic; event: viewer.panels.changed) |
 
 ### Viewport workspace
 
@@ -136,12 +136,12 @@ Access: `app.viewer.workspace`. Native viewport layout and link configuration.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
-| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. |
-| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[Viewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; event: viewer.workspace.layout.changed) |
-| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; event: viewer.workspace.layout.changed) |
-| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. |
-| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; event: viewer.viewport_links.changed) |
+| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. (completion: immediate_semantic) |
+| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. (completion: immediate_semantic) |
+| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[Viewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; completion: immediate_semantic; event: viewer.workspace.layout.changed) |
+| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; completion: immediate_semantic; event: viewer.workspace.layout.changed) |
+| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. (completion: immediate_semantic) |
+| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
 
 ### Viewport links
 
@@ -149,10 +149,10 @@ Access: `app.viewer.viewport_links`. Canonical comparison navigation link-group 
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. |
-| `create(*, viewports: 'Iterable[Viewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; event: viewer.viewport_links.changed) |
-| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[Viewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; event: viewer.viewport_links.changed) |
-| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; event: viewer.viewport_links.changed) |
+| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. (completion: immediate_semantic) |
+| `create(*, viewports: 'Iterable[Viewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
+| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[Viewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
+| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
 
 ### Viewports
 
@@ -160,12 +160,12 @@ Access: `app.viewer.viewports`. Create, inspect, and address native viewports.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. |
+| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. (completion: immediate_semantic) |
 | `handle(viewport_id: 'str') -> 'Viewport'` | SDK-local/delegated | Inherited from delegated operation | Handle. |
-| `active() -> 'Viewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
-| `create(*, source: 'Viewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
-| `clone(source: 'Viewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; event: viewer.viewports.created) |
-| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'ViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+| `active() -> 'Viewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. (completion: immediate_semantic) |
+| `create(*, source: 'Viewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
+| `clone(source: 'Viewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'Viewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
+| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'ViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
 
 ### Viewport handle
 
@@ -173,38 +173,38 @@ Access: returned by `app.viewer.viewports`. Stable handle for one viewport's nav
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. |
-| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; event: viewer.viewports.active_changed) |
-| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
-| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
-| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image, waiting for Rust to lay out this viewport if needed. (mutates; event: viewer.viewports.navigation.changed) |
-| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
-| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |
-| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. |
-| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. |
-| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. |
-| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. |
-| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. |
-| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. |
-| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. (completion: immediate_semantic) |
+| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; completion: immediate_semantic; event: viewer.viewports.active_changed) |
+| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; completion: immediate_semantic; event: viewer.viewports.removed) |
+| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. (completion: immediate_semantic) |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image, waiting for Rust to lay out this viewport if needed. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. (completion: immediate_semantic) |
+| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. (completion: immediate_semantic) |
+| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. (completion: immediate_semantic) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. (completion: immediate_semantic) |
+| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
 
 ### Viewport objects
 
@@ -231,25 +231,25 @@ Access: `app.channels` or `app.viewer.channels`. Channel visibility, presentatio
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.channels.list` | project, single, mosaic | List channels. |
-| `list_visible() -> 'Any'` | `viewer.channels.list_visible` | project, single, mosaic | List visible channels. |
-| `get_active() -> 'Any'` | `viewer.channels.get_active` | project, single, mosaic | Get the active channel. |
-| `set_active(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_active` | single, mosaic | Set the active channel. (mutates; event: viewer.channels.changed) |
-| `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; event: viewer.channels.changed) |
-| `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. |
-| `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; event: viewer.channels.changed) |
-| `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; event: viewer.channels.changed) |
-| `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; event: viewer.channels.changed) |
-| `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. |
-| `set_transform(channel: 'str \| int', *, offset_world: 'Sequence[float] \| None' = None, scale: 'Sequence[float] \| None' = None, rotation_rad: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_transform` | single | Set a channel's translation, scale, and rotation. (mutates; event: viewer.channels.changed) |
-| `reset_transform(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.reset_transform` | single | Reset a channel transform to identity. (mutates; event: viewer.channels.changed) |
-| `set_order(channels: 'Iterable[str \| int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_order` | single, mosaic | Set channel ordering. (mutates; event: viewer.channels.changed) |
-| `get_presentation() -> 'Any'` | `viewer.channels.presentation.get` | single, mosaic | Inspect channel-list search, sort, and effective ordering. |
-| `set_presentation(*, search: 'str \| None' = None, sort: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.presentation.set` | single, mosaic | Set channel-list search and sort presentation state. (mutates; event: viewer.channels.changed) |
-| `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. |
-| `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; event: viewer.channels.changed) |
-| `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task) |
-| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; event: viewer.channels.changed) |
+| `list() -> 'Any'` | `viewer.channels.list` | project, single, mosaic | List channels. (completion: immediate_semantic) |
+| `list_visible() -> 'Any'` | `viewer.channels.list_visible` | project, single, mosaic | List visible channels. (completion: immediate_semantic) |
+| `get_active() -> 'Any'` | `viewer.channels.get_active` | project, single, mosaic | Get the active channel. (completion: immediate_semantic) |
+| `set_active(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_active` | single, mosaic | Set the active channel. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. (completion: immediate_semantic) |
+| `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. (completion: immediate_semantic) |
+| `set_transform(channel: 'str \| int', *, offset_world: 'Sequence[float] \| None' = None, scale: 'Sequence[float] \| None' = None, rotation_rad: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_transform` | single | Set a channel's translation, scale, and rotation. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `reset_transform(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.reset_transform` | single | Reset a channel transform to identity. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_order(channels: 'Iterable[str \| int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_order` | single, mosaic | Set channel ordering. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_presentation() -> 'Any'` | `viewer.channels.presentation.get` | single, mosaic | Inspect channel-list search, sort, and effective ordering. (completion: immediate_semantic) |
+| `set_presentation(*, search: 'str \| None' = None, sort: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.presentation.set` | single, mosaic | Set channel-list search and sort presentation state. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. (completion: immediate_semantic) |
+| `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task; completion: retained_background; cancellation: cooperative) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
 
 ### Planes
 
@@ -257,11 +257,11 @@ Access: `app.planes` or `app.viewer.planes`. Multidimensional orientation and sl
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.planes.get` | single | Get the active view plane, slice, extent, and supported orientations. |
-| `get_operation_availability() -> 'Any'` | `viewer.planes.operation_availability` | single | Describe XY-only operation safeguards for the active multidimensional view plane. |
-| `set(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.set` | single | Set the active view orientation and/or slice. (mutates; event: viewer.planes.changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.next` | single | Move forward through slices in the active view orientation. (mutates; event: viewer.planes.changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.previous` | single | Move backward through slices in the active view orientation. (mutates; event: viewer.planes.changed) |
+| `get() -> 'Any'` | `viewer.planes.get` | single | Get the active view plane, slice, extent, and supported orientations. (completion: immediate_semantic) |
+| `get_operation_availability() -> 'Any'` | `viewer.planes.operation_availability` | single | Describe XY-only operation safeguards for the active multidimensional view plane. (completion: immediate_semantic) |
+| `set(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.set` | single | Set the active view orientation and/or slice. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.next` | single | Move forward through slices in the active view orientation. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.previous` | single | Move backward through slices in the active view orientation. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
 
 ### Native layers
 
@@ -269,13 +269,13 @@ Access: `app.native_layers` or `app.viewer.native_layers`. Odon-owned image, cha
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.native_layers.list` | single, mosaic | List Odon-native layers in their channel and overlay stacks. |
-| `get(layer_id: 'str') -> 'Any'` | `viewer.native_layers.get` | single, mosaic | Get one Odon-native layer. |
-| `set_active(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_active` | single, mosaic | Set the active Odon-native layer. (mutates; event: viewer.layers.changed) |
-| `set_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_visibility` | single, mosaic | Set an Odon-native layer's visibility. (mutates; event: viewer.layers.changed) |
-| `set_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_order` | single, mosaic | Set the exact order of the native channel or overlay stack. (mutates; event: viewer.layers.changed) |
-| `set_offset(layer_id: 'str', offset_world: 'Sequence[float]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_offset` | single | Set an Odon-native layer's world translation. (mutates; event: viewer.layers.changed) |
-| `reset_offset(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.reset_offset` | single | Reset an Odon-native layer's world translation to its loaded baseline. (mutates; event: viewer.layers.changed) |
+| `list() -> 'Any'` | `viewer.native_layers.list` | single, mosaic | List Odon-native layers in their channel and overlay stacks. (completion: immediate_semantic) |
+| `get(layer_id: 'str') -> 'Any'` | `viewer.native_layers.get` | single, mosaic | Get one Odon-native layer. (completion: immediate_semantic) |
+| `set_active(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_active` | single, mosaic | Set the active Odon-native layer. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_visibility` | single, mosaic | Set an Odon-native layer's visibility. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_order` | single, mosaic | Set the exact order of the native channel or overlay stack. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_offset(layer_id: 'str', offset_world: 'Sequence[float]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_offset` | single | Set an Odon-native layer's world translation. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `reset_offset(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.reset_offset` | single | Reset an Odon-native layer's world translation to its loaded baseline. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
 
 ### Projects
 
@@ -283,14 +283,14 @@ Access: `app.projects`. Project creation, persistence, metadata, and ROI opening
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
-| `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. |
-| `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; event: application.mode.changed) |
-| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; event: application.mode.changed) |
-| `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; event: project.saved) |
-| `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; event: project.saved) |
-| `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; event: project.changed) |
-| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. (completion: immediate_semantic) |
+| `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. (completion: immediate_semantic) |
+| `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; completion: immediate_semantic; event: application.mode.changed) |
+| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; completion: resource_ready; event: project.saved) |
+| `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; completion: resource_ready; event: project.saved) |
+| `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; completion: immediate_semantic; event: project.changed) |
+| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.active_roi.changed) |
 
 ### Project samplesheets
 
@@ -298,10 +298,10 @@ Access: `app.projects.samplesheets`. Samplesheet inspection, validation, import,
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `inspect(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.inspect` | project, single, mosaic, transition | Parse and validate a samplesheet without changing the active project. |
-| `validate(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.validate` | project, single, mosaic, transition | Validate samplesheet identity, paths, and metadata without changing the project. |
-| `import_(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.import` | project, single, mosaic | Replace project ROIs from a validated samplesheet. (mutates; task; event: project.rois.changed) |
-| `export(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.export` | project, single, mosaic | Export local project ROIs and metadata to a samplesheet. (mutates; event: project.samplesheet.exported) |
+| `inspect(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.inspect` | project, single, mosaic, transition | Parse and validate a samplesheet without changing the active project. (completion: immediate_semantic) |
+| `validate(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.validate` | project, single, mosaic, transition | Validate samplesheet identity, paths, and metadata without changing the project. (completion: immediate_semantic) |
+| `import_(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.import` | project, single, mosaic | Replace project ROIs from a validated samplesheet. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.rois.changed) |
+| `export(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.export` | project, single, mosaic | Export local project ROIs and metadata to a samplesheet. (mutates; completion: immediate_semantic; event: project.samplesheet.exported) |
 
 ### Project discovery
 
@@ -309,7 +309,7 @@ Access: `app.projects.discovery`. Project search-root discovery.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `add_root(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.discovery.add_root` | project, single, mosaic | Discover OME-Zarr datasets recursively and add them as project ROIs. (mutates; task; event: project.rois.changed) |
+| `add_root(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.discovery.add_root` | project, single, mosaic | Discover OME-Zarr datasets recursively and add them as project ROIs. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.rois.changed) |
 
 ### Project object preload
 
@@ -317,10 +317,10 @@ Access: `app.projects.objects`. Project-wide object preload lifecycle.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_preload() -> 'Any'` | `project.objects.preload.get` | project, single, mosaic | Inspect available and cached project object segmentations. |
-| `list_preload_sources(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.objects.preload.list_sources` | project, single, mosaic | List preload-eligible project segmentation sources. |
-| `preload(*, mode: 'str' = 'full_geometry', lazy_properties: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.start` | project, single, mosaic | Preload project object geometry or centroids and wait for completion. (mutates; task; event: project.objects.preload.changed) |
-| `clear_preload(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.clear` | project, single, mosaic | Clear preloaded project objects from memory. (mutates; event: project.objects.preload.changed) |
+| `get_preload() -> 'Any'` | `project.objects.preload.get` | project, single, mosaic | Inspect available and cached project object segmentations. (completion: resource_ready) |
+| `list_preload_sources(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.objects.preload.list_sources` | project, single, mosaic | List preload-eligible project segmentation sources. (completion: resource_ready) |
+| `preload(*, mode: 'str' = 'full_geometry', lazy_properties: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.start` | project, single, mosaic | Preload project object geometry or centroids and wait for completion. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.objects.preload.changed) |
+| `clear_preload(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.clear` | project, single, mosaic | Clear preloaded project objects from memory. (mutates; completion: resource_ready; event: project.objects.preload.changed) |
 
 ### Project ROIs
 
@@ -328,19 +328,19 @@ Access: `app.projects.rois`. ROI CRUD, ordering, selection, focus, and opening.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
-| `get(roi_id: 'str') -> 'Any'` | `project.rois.get` | project, single, mosaic | Get one project ROI by stable ID. |
-| `add(roi_id: 'str', path: 'str \| Path', *, display_name: 'str \| None' = None, dataset: 'str \| None' = None, segmentation_path: 'str \| Path \| None' = None, metadata: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.add` | project, single, mosaic | Add a project ROI. (mutates; event: project.rois.changed) |
-| `update(roi_id: 'str', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.rois.update` | project, single, mosaic | Update a project ROI. (mutates; event: project.rois.changed) |
-| `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; event: project.rois.changed) |
-| `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; event: project.rois.changed) |
-| `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; event: project.rois.selection_changed) |
-| `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; event: project.rois.selection_changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; event: project.rois.selection_changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; event: project.rois.selection_changed) |
-| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
-| `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; event: application.mode.changed) |
+| `list() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. (completion: immediate_semantic) |
+| `get(roi_id: 'str') -> 'Any'` | `project.rois.get` | project, single, mosaic | Get one project ROI by stable ID. (completion: immediate_semantic) |
+| `add(roi_id: 'str', path: 'str \| Path', *, display_name: 'str \| None' = None, dataset: 'str \| None' = None, segmentation_path: 'str \| Path \| None' = None, metadata: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.add` | project, single, mosaic | Add a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `update(roi_id: 'str', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.rois.update` | project, single, mosaic | Update a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. (completion: immediate_semantic) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.active_roi.changed) |
+| `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### Project views
 
@@ -348,13 +348,13 @@ Access: `app.projects.views`. Saved view creation, capture, mutation, and applic
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. |
-| `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. |
-| `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; event: project.views.changed) |
-| `capture(name: 'str', *, viewport: 'Viewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
-| `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; event: project.views.changed) |
-| `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; event: project.views.changed) |
-| `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; event: project.views.applied) |
+| `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. (completion: immediate_semantic) |
+| `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. (completion: immediate_semantic) |
+| `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `capture(name: 'str', *, viewport: 'Viewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; completion: immediate_semantic; event: project.views.applied) |
 
 ### Screenshots
 
@@ -362,12 +362,12 @@ Access: `app.screenshots`. Viewer, window, and project screenshots plus retained
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `capture(path: 'str \| Path \| None' = None, *, viewport: 'Viewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; event: viewer.screenshot.completed) |
-| `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. |
-| `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; event: viewer.screenshot.settings.changed) |
+| `capture(path: 'str \| Path \| None' = None, *, viewport: 'Viewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. (completion: immediate_semantic) |
+| `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; completion: resource_ready; event: viewer.screenshot.settings.changed) |
 
 ### Labels
 
@@ -375,11 +375,11 @@ Access: `app.labels` or `app.viewer.labels`. OME-NGFF label discovery, loading, 
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.labels.list` | single | List discovered NGFF label groups and current render state. |
-| `get() -> 'Any'` | `viewer.labels.get` | single | Inspect current NGFF label selection, loading, visibility, and alignment state. |
-| `load(name: 'str \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.load` | single | Load one discovered NGFF label group into the shared label renderer. (mutates; event: viewer.labels.changed) |
-| `unload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.unload` | single | Unload the active NGFF label group and release its loader state. (mutates; event: viewer.labels.changed) |
-| `set_visibility(visible: 'bool', *, name: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.set_visibility` | single | Set NGFF label visibility, loading the selected group when necessary. (mutates; event: viewer.labels.changed) |
+| `list() -> 'Any'` | `viewer.labels.list` | single | List discovered NGFF label groups and current render state. (completion: immediate_semantic) |
+| `get() -> 'Any'` | `viewer.labels.get` | single | Inspect current NGFF label selection, loading, visibility, and alignment state. (completion: immediate_semantic) |
+| `load(name: 'str \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.load` | single | Load one discovered NGFF label group into the shared label renderer. (mutates; completion: resource_ready; event: viewer.labels.changed) |
+| `unload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.unload` | single | Unload the active NGFF label group and release its loader state. (mutates; completion: immediate_semantic; event: viewer.labels.changed) |
+| `set_visibility(visible: 'bool', *, name: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.set_visibility` | single | Set NGFF label visibility, loading the selected group when necessary. (mutates; completion: immediate_semantic; event: viewer.labels.changed) |
 
 ### Memory
 
@@ -387,12 +387,12 @@ Access: `app.memory` or `app.viewer.memory`. RAM pinning estimates and tile-load
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `memory.get` | single, mosaic | Inspect system RAM, selected channel estimates, and pinned-level lifecycle. |
-| `pin(level: 'int', *, channels: 'Sequence[str \| int] \| None' = None, scope: 'str \| None' = None, item: 'str \| int \| None' = None, force: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `memory.pin` | single, mosaic | Load selected channels from one pyramid level into CPU RAM. (mutates; task; event: memory.changed) |
-| `unpin(level: 'int', *, scope: 'str \| None' = None, item: 'str \| int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin` | single, mosaic | Unload one pinned pyramid level from CPU RAM. (mutates; event: memory.changed) |
-| `unpin_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin_all` | single, mosaic | Unload all pinned pyramid levels from CPU RAM. (mutates; event: memory.changed) |
-| `get_tile_loading() -> 'Any'` | `memory.tiles.get` | single | Inspect tile workers, cache occupancy, target level, and prefetch policy. |
-| `set_tile_loading(*, workers: 'int \| None' = None, prefetch_mode: 'str \| None' = None, prefetch_aggressiveness: 'str \| None' = None, prefer_pinned_finer_levels: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.tiles.set` | single | Set tile worker count, prefetch policy, and pinned-level fallback. (mutates; event: memory.tiles.changed) |
+| `get() -> 'Any'` | `memory.get` | single, mosaic | Inspect system RAM, selected channel estimates, and pinned-level lifecycle. (completion: immediate_semantic) |
+| `pin(level: 'int', *, channels: 'Sequence[str \| int] \| None' = None, scope: 'str \| None' = None, item: 'str \| int \| None' = None, force: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `memory.pin` | single, mosaic | Load selected channels from one pyramid level into CPU RAM. (mutates; task; completion: retained_background; cancellation: cooperative; event: memory.changed) |
+| `unpin(level: 'int', *, scope: 'str \| None' = None, item: 'str \| int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin` | single, mosaic | Unload one pinned pyramid level from CPU RAM. (mutates; completion: immediate_semantic; event: memory.changed) |
+| `unpin_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin_all` | single, mosaic | Unload all pinned pyramid levels from CPU RAM. (mutates; completion: immediate_semantic; event: memory.changed) |
+| `get_tile_loading() -> 'Any'` | `memory.tiles.get` | single | Inspect tile workers, cache occupancy, target level, and prefetch policy. (completion: immediate_semantic) |
+| `set_tile_loading(*, workers: 'int \| None' = None, prefetch_mode: 'str \| None' = None, prefetch_aggressiveness: 'str \| None' = None, prefer_pinned_finer_levels: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.tiles.set` | single | Set tile worker count, prefetch policy, and pinned-level fallback. (mutates; completion: immediate_semantic; event: memory.tiles.changed) |
 
 ### Objects
 
@@ -400,41 +400,41 @@ Access: `app.objects` or `app.viewer.objects`. Object source, styling, propertie
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_overlay_visibility(**selector: 'Any') -> 'Any'` | `viewer.objects.get_visibility` | single, mosaic | Get object overlay visibility. |
-| `get_state(**selector: 'Any') -> 'Any'` | `viewer.objects.get_state` | single | Get bounded object source, loading, rendering, styling, filter, and selection state. |
-| `load(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.load` | single | Load a CSV, GeoJSON, Parquet, or GeoParquet object source and settle when parsing finishes. (mutates; task; event: viewer.objects.source.changed) |
-| `reload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.reload` | single | Reload the current object source and settle when parsing finishes. (mutates; task; event: viewer.objects.source.changed) |
-| `clear(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.clear` | single | Clear the current object source and all derived object state. (mutates; event: viewer.objects.source.changed) |
-| `cancel_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.cancel_load` | single | Cooperatively cancel the current object-source load. (mutates; event: viewer.objects.source.changed) |
-| `get_segmentation_geojson_source() -> 'Any'` | `viewer.segmentation_geojson.source.get` | single | Get the actor-owned segmentation GeoJSON line source and readiness state. |
-| `load_segmentation_geojson(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.load` | single | Load a segmentation GeoJSON line source on the bounded actor worker service. (mutates; task; event: viewer.segmentation_geojson.source.changed) |
-| `reload_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.reload` | single | Reload the configured segmentation GeoJSON line source on an actor worker. (mutates; task; event: viewer.segmentation_geojson.source.changed) |
-| `clear_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.clear` | single | Clear the actor-owned segmentation GeoJSON line source and shared resource. (mutates; event: viewer.segmentation_geojson.source.changed) |
-| `get_style(**selector: 'Any') -> 'Any'` | `viewer.objects.style.get` | single | Get complete object appearance, color-property, and bounded legend state. |
-| `set_style(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.objects.style.set` | single | Set object visibility, stroke, fill, selection overlay, and color-property appearance. (mutates; event: viewer.objects.style.changed) |
-| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.legend.set` | single | Set visibility and color overrides for object color-property legend values. (mutates; event: viewer.objects.style.changed) |
-| `get_fast_rendering(**selector: 'Any') -> 'Any'` | `viewer.objects.rendering.get_fast` | single, mosaic | Get fast object-rendering mode. |
-| `set_fast_rendering(enabled: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.rendering.set_fast` | single, mosaic | Set fast object-rendering mode. (mutates; event: viewer.objects.rendering.changed) |
-| `list_properties(*, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.list` | single | List the object property schema with bounded pagination and lazy-load state. |
-| `load_property(property: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.load` | single | Load one lazy object property column and settle when its values are available. (mutates; task; event: viewer.objects.properties.changed) |
-| `get_property_values(property: 'str', *, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.values` | single | Read a bounded page of typed values for one loaded object property. |
-| `set_overlay_visibility(visible: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_visibility` | single, mosaic | Set object overlay visibility. (mutates; event: viewer.layers.changed) |
-| `get_selection(**selector: 'Any') -> 'Any'` | `viewer.objects.get_selection` | single | Get selected objects. |
-| `query_rect(rect: 'Sequence[float]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_rect` | single | Query objects in a rectangle. |
-| `query_view(**selector: 'Any') -> 'Any'` | `viewer.objects.query_view` | single | Query objects in the viewport. |
-| `query_lasso(points: 'Iterable[Sequence[float]]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_lasso` | single | Query objects intersecting a world-coordinate lasso with bounded results. |
-| `select_rect(rect: 'Sequence[float]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_rect` | single | Select objects in a rectangle. (mutates; event: viewer.selection.changed) |
-| `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; event: viewer.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; event: viewer.selection.changed) |
-| `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; event: viewer.selection.changed) |
-| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; event: viewer.selection.changed) |
-| `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; event: viewer.objects.focus.changed) |
-| `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; event: viewer.objects.focus.changed) |
-| `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. |
-| `get_filter_revision(**selector: 'Any') -> 'Any'` | `viewer.objects.filters.get_revision` | single | Get the monotonic object-filter revision and bounded visible/hidden counts shared by downstream consumers. |
-| `set_filter(query: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_filter` | single | Set an object filter query. (mutates; event: viewer.layers.changed) |
-| `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; event: viewer.objects.filter.changed) |
-| `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; event: viewer.layers.changed) |
+| `get_overlay_visibility(**selector: 'Any') -> 'Any'` | `viewer.objects.get_visibility` | single, mosaic | Get object overlay visibility. (completion: immediate_semantic) |
+| `get_state(**selector: 'Any') -> 'Any'` | `viewer.objects.get_state` | single | Get bounded object source, loading, rendering, styling, filter, and selection state. (completion: immediate_semantic) |
+| `load(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.load` | single | Load a CSV, GeoJSON, Parquet, or GeoParquet object source and settle when parsing finishes. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.source.changed) |
+| `reload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.reload` | single | Reload the current object source and settle when parsing finishes. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.source.changed) |
+| `clear(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.clear` | single | Clear the current object source and all derived object state. (mutates; completion: immediate_semantic; event: viewer.objects.source.changed) |
+| `cancel_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.cancel_load` | single | Cooperatively cancel the current object-source load. (mutates; completion: immediate_semantic; event: viewer.objects.source.changed) |
+| `get_segmentation_geojson_source() -> 'Any'` | `viewer.segmentation_geojson.source.get` | single | Get the actor-owned segmentation GeoJSON line source and readiness state. (completion: immediate_semantic) |
+| `load_segmentation_geojson(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.load` | single | Load a segmentation GeoJSON line source on the bounded actor worker service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.segmentation_geojson.source.changed) |
+| `reload_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.reload` | single | Reload the configured segmentation GeoJSON line source on an actor worker. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.segmentation_geojson.source.changed) |
+| `clear_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.clear` | single | Clear the actor-owned segmentation GeoJSON line source and shared resource. (mutates; completion: immediate_semantic; event: viewer.segmentation_geojson.source.changed) |
+| `get_style(**selector: 'Any') -> 'Any'` | `viewer.objects.style.get` | single | Get complete object appearance, color-property, and bounded legend state. (completion: immediate_semantic) |
+| `set_style(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.objects.style.set` | single | Set object visibility, stroke, fill, selection overlay, and color-property appearance. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
+| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.legend.set` | single | Set visibility and color overrides for object color-property legend values. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
+| `get_fast_rendering(**selector: 'Any') -> 'Any'` | `viewer.objects.rendering.get_fast` | single, mosaic | Get fast object-rendering mode. (completion: immediate_semantic) |
+| `set_fast_rendering(enabled: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.rendering.set_fast` | single, mosaic | Set fast object-rendering mode. (mutates; completion: immediate_semantic; event: viewer.objects.rendering.changed) |
+| `list_properties(*, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.list` | single | List the object property schema with bounded pagination and lazy-load state. (completion: immediate_semantic) |
+| `load_property(property: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.load` | single | Load one lazy object property column and settle when its values are available. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.properties.changed) |
+| `get_property_values(property: 'str', *, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.values` | single | Read a bounded page of typed values for one loaded object property. (completion: immediate_semantic) |
+| `set_overlay_visibility(visible: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_visibility` | single, mosaic | Set object overlay visibility. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `get_selection(**selector: 'Any') -> 'Any'` | `viewer.objects.get_selection` | single | Get selected objects. (completion: immediate_semantic) |
+| `query_rect(rect: 'Sequence[float]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_rect` | single | Query objects in a rectangle. (completion: immediate_semantic) |
+| `query_view(**selector: 'Any') -> 'Any'` | `viewer.objects.query_view` | single | Query objects in the viewport. (completion: immediate_semantic) |
+| `query_lasso(points: 'Iterable[Sequence[float]]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_lasso` | single | Query objects intersecting a world-coordinate lasso with bounded results. (completion: immediate_semantic) |
+| `select_rect(rect: 'Sequence[float]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_rect` | single | Select objects in a rectangle. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; completion: immediate_semantic; event: viewer.objects.focus.changed) |
+| `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; completion: immediate_semantic; event: viewer.objects.focus.changed) |
+| `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. (completion: immediate_semantic) |
+| `get_filter_revision(**selector: 'Any') -> 'Any'` | `viewer.objects.filters.get_revision` | single | Get the monotonic object-filter revision and bounded visible/hidden counts shared by downstream consumers. (completion: immediate_semantic) |
+| `set_filter(query: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_filter` | single | Set an object filter query. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; completion: immediate_semantic; event: viewer.objects.filter.changed) |
+| `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
 
 ### Annotations
 
@@ -442,15 +442,15 @@ Access: `app.annotations` or `app.viewer.annotations`. Actor-owned point annotat
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. |
-| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. |
-| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; event: viewer.annotations.changed) |
-| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; event: viewer.annotations.changed) |
-| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; event: viewer.annotations.changed) |
-| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; event: viewer.annotations.changed) |
-| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; event: viewer.annotations.changed) |
-| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; event: viewer.annotations.changed) |
-| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; event: viewer.annotations.changed) |
+| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. (completion: immediate_semantic) |
+| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
 
 ### Masks
 
@@ -458,24 +458,24 @@ Access: `app.masks` or `app.viewer.masks`. Mask layer and polygon editing, selec
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_layers() -> 'Any'` | `viewer.masks.layers.list` | single | List editable and read-only mask layers with complete presentation state. |
-| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.masks.layers.get` | single | Get one mask layer by stable ID. |
-| `create_layer(name: 'str \| None' = None, *, editable: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.create` | single | Create an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.masks.layers.update` | single | Update mask layer name, presentation, editability, or offset. (mutates; event: viewer.masks.changed) |
-| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.delete` | single | Delete a mask layer and its polygons. (mutates; event: viewer.masks.changed) |
-| `list_polygons(layer_id: 'int', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `viewer.masks.polygons.list` | single | List a bounded page of mask polygons in local and world coordinates. |
-| `add_polygon(layer_id: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.add` | single | Add a closed polygon to an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `update_polygon(layer_id: 'int', index: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.update` | single | Replace the vertices of one editable mask polygon. (mutates; event: viewer.masks.changed) |
-| `remove_polygon(layer_id: 'int', index: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.remove` | single | Remove one polygon from an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `get_selection() -> 'Any'` | `viewer.masks.selection.get` | single | Get the selected mask polygon and optional selected vertex. |
-| `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; event: viewer.masks.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; event: viewer.masks.selection.changed) |
-| `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; event: viewer.masks.changed) |
-| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
-| `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. |
-| `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. |
-| `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; event: viewer.masks.changed) |
-| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; event: viewer.masks.changed) |
+| `list_layers() -> 'Any'` | `viewer.masks.layers.list` | single | List editable and read-only mask layers with complete presentation state. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.masks.layers.get` | single | Get one mask layer by stable ID. (completion: immediate_semantic) |
+| `create_layer(name: 'str \| None' = None, *, editable: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.create` | single | Create an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.masks.layers.update` | single | Update mask layer name, presentation, editability, or offset. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.delete` | single | Delete a mask layer and its polygons. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `list_polygons(layer_id: 'int', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `viewer.masks.polygons.list` | single | List a bounded page of mask polygons in local and world coordinates. (completion: immediate_semantic) |
+| `add_polygon(layer_id: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.add` | single | Add a closed polygon to an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `update_polygon(layer_id: 'int', index: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.update` | single | Replace the vertices of one editable mask polygon. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `remove_polygon(layer_id: 'int', index: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.remove` | single | Remove one polygon from an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `get_selection() -> 'Any'` | `viewer.masks.selection.get` | single | Get the selected mask polygon and optional selected vertex. (completion: immediate_semantic) |
+| `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; completion: immediate_semantic; event: viewer.masks.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; completion: immediate_semantic; event: viewer.masks.selection.changed) |
+| `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. (completion: immediate_semantic) |
+| `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. (completion: immediate_semantic) |
+| `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
 
 ### Thresholds
 
@@ -483,13 +483,13 @@ Access: `app.thresholds` or `app.viewer.thresholds`. Threshold preview configura
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_levels() -> 'Any'` | `viewer.thresholds.levels.list` | single | List image levels and whole-image threshold safety limits. |
-| `get_preview() -> 'Any'` | `viewer.thresholds.preview.get` | single | Get threshold-preview configuration, source extent, and bounded summary statistics. |
-| `configure(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.configure` | single | Configure threshold scope, level, channel, value, and component filtering. (mutates; event: viewer.thresholds.preview.changed) |
-| `start_preview(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.start` | single | Read the selected channel region and start an interactive threshold preview. (mutates; task; event: viewer.thresholds.preview.changed) |
-| `refresh_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.refresh` | single | Reload source pixels for the active threshold preview. (mutates; task; event: viewer.thresholds.preview.changed) |
-| `apply_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.apply` | single | Filter components, polygonize the preview, and create an editable mask layer. (mutates; task; event: viewer.masks.changed) |
-| `cancel_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.cancel` | single | Cancel and clear the active threshold preview. (mutates; event: viewer.thresholds.preview.changed) |
+| `list_levels() -> 'Any'` | `viewer.thresholds.levels.list` | single | List image levels and whole-image threshold safety limits. (completion: immediate_semantic) |
+| `get_preview() -> 'Any'` | `viewer.thresholds.preview.get` | single | Get threshold-preview configuration, source extent, and bounded summary statistics. (completion: immediate_semantic) |
+| `configure(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.configure` | single | Configure threshold scope, level, channel, value, and component filtering. (mutates; completion: immediate_semantic; event: viewer.thresholds.preview.changed) |
+| `start_preview(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.start` | single | Read the selected channel region and start an interactive threshold preview. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.thresholds.preview.changed) |
+| `refresh_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.refresh` | single | Reload source pixels for the active threshold preview. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.thresholds.preview.changed) |
+| `apply_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.apply` | single | Filter components, polygonize the preview, and create an editable mask layer. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.masks.changed) |
+| `cancel_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.cancel` | single | Cancel and clear the active threshold preview. (mutates; completion: immediate_semantic; event: viewer.thresholds.preview.changed) |
 
 ### Analysis
 
@@ -497,14 +497,14 @@ Access: `app.analysis` or `app.viewer.analysis`. Object analysis state, histogra
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. |
-| `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; event: viewer.analysis.changed) |
-| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
-| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
-| `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. |
-| `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; event: viewer.analysis.warmup.changed) |
-| `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; event: viewer.analysis.changed) |
-| `export_preset(path: 'str \| Path', *, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.export` | single | Export calls as a reusable preset JSON file. |
+| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. (completion: immediate_semantic) |
+| `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; completion: immediate_semantic; event: viewer.analysis.changed) |
+| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. (completion: immediate_semantic) |
+| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. (completion: immediate_semantic) |
+| `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. (completion: resource_ready) |
+| `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.analysis.warmup.changed) |
+| `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; completion: immediate_semantic; event: viewer.analysis.changed) |
+| `export_preset(path: 'str \| Path', *, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.export` | single | Export calls as a reusable preset JSON file. (completion: immediate_semantic) |
 
 ### Measurements
 
@@ -512,11 +512,11 @@ Access: `app.measurements` or `app.viewer.measurements`. Polygon intensity measu
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. |
-| `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; event: viewer.measurements.changed) |
-| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
-| `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; event: viewer.measurements.changed) |
-| `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. |
+| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. (completion: resource_ready) |
+| `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; completion: resource_ready; event: viewer.measurements.changed) |
+| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.measurements.changed) |
+| `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; completion: resource_ready; event: viewer.measurements.changed) |
+| `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. (completion: resource_ready) |
 
 ### Object exports
 
@@ -524,11 +524,11 @@ Access: `app.object_exports` or `app.objects.exports`. Column discovery and scop
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. |
-| `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. |
-| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
-| `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; event: exports.objects.changed) |
-| `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; event: exports.objects.changed) |
+| `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. (completion: resource_ready) |
+| `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. (completion: resource_ready) |
+| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
+| `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
+| `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
 
 ### Mosaic
 
@@ -536,33 +536,33 @@ Access: `app.mosaic`. Mosaic items, layout, selection, focus, object loading, an
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `configure_layout(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `mosaic.layout.configure` | mosaic | Configure mosaic layout. (mutates; event: mosaic.layout.changed) |
-| `get_state() -> 'Any'` | `mosaic.get_state` | mosaic | Get complete mosaic layout, ROI, and focus state. |
-| `list_items(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `mosaic.items.list` | mosaic | List positioned mosaic items with stable ordering and pagination. |
-| `get_selection() -> 'Any'` | `mosaic.selection.get` | mosaic | Get selected mosaic ROIs. |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `select_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `select_range(start: 'str', end: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.clear` | mosaic | Clear the mosaic ROI selection. (mutates; event: mosaic.selection.changed) |
-| `get_focus() -> 'Any'` | `mosaic.focus.get` | mosaic | Get the focused mosaic ROI. |
-| `set_focus(roi: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.set` | mosaic | Focus a mosaic ROI by stable ROI ID or index. (mutates; event: mosaic.focus.changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.next` | mosaic | Focus the next mosaic ROI. (mutates; event: mosaic.focus.changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.previous` | mosaic | Focus the previous mosaic ROI. (mutates; event: mosaic.focus.changed) |
-| `fit_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.fit` | mosaic | Fit the focused mosaic ROI to the viewport. (mutates; event: viewer.camera.changed) |
-| `clear_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.clear` | mosaic | Clear focused mosaic ROI without changing selection. (mutates; event: mosaic.focus.changed) |
-| `fit_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.fit_all` | mosaic | Fit all mosaic items to the viewport. (mutates; event: viewer.camera.changed) |
-| `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. |
-| `get_object_style() -> 'Any'` | `mosaic.objects.style.get` | mosaic | Get actor-owned global mosaic object presentation and legend style. |
-| `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; event: mosaic.objects.changed) |
-| `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. |
-| `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; event: mosaic.objects.selection.changed) |
-| `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; event: mosaic.objects.selection.changed) |
-| `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; event: mosaic.objects.changed) |
-| `load_objects(*, item_ids: 'Sequence[int] \| None' = None, roi_ids: 'Sequence[str] \| None' = None, scope: 'str \| None' = None, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load` | mosaic | Load object segmentations for explicit mosaic items, ROI IDs, the selection, or all available ROIs. (mutates; task; event: mosaic.objects.changed) |
-| `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; event: mosaic.objects.changed) |
-| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; event: mosaic.ui.changed) |
-| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; event: viewer.rendering.changed) |
-| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; event: mosaic.ui.changed) |
+| `configure_layout(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `mosaic.layout.configure` | mosaic | Configure mosaic layout. (mutates; completion: immediate_semantic; event: mosaic.layout.changed) |
+| `get_state() -> 'Any'` | `mosaic.get_state` | mosaic | Get complete mosaic layout, ROI, and focus state. (completion: immediate_semantic) |
+| `list_items(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `mosaic.items.list` | mosaic | List positioned mosaic items with stable ordering and pagination. (completion: immediate_semantic) |
+| `get_selection() -> 'Any'` | `mosaic.selection.get` | mosaic | Get selected mosaic ROIs. (completion: immediate_semantic) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `select_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `select_range(start: 'str', end: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.clear` | mosaic | Clear the mosaic ROI selection. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `get_focus() -> 'Any'` | `mosaic.focus.get` | mosaic | Get the focused mosaic ROI. (completion: immediate_semantic) |
+| `set_focus(roi: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.set` | mosaic | Focus a mosaic ROI by stable ROI ID or index. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.next` | mosaic | Focus the next mosaic ROI. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.previous` | mosaic | Focus the previous mosaic ROI. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `fit_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.fit` | mosaic | Fit the focused mosaic ROI to the viewport. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `clear_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.clear` | mosaic | Clear focused mosaic ROI without changing selection. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `fit_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.fit_all` | mosaic | Fit all mosaic items to the viewport. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. (completion: immediate_semantic) |
+| `get_object_style() -> 'Any'` | `mosaic.objects.style.get` | mosaic | Get actor-owned global mosaic object presentation and legend style. (completion: immediate_semantic) |
+| `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
+| `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. (completion: immediate_semantic) |
+| `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
+| `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
+| `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; completion: retained_background; cancellation: cooperative; event: mosaic.objects.changed) |
+| `load_objects(*, item_ids: 'Sequence[int] \| None' = None, roi_ids: 'Sequence[str] \| None' = None, scope: 'str \| None' = None, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load` | mosaic | Load object segmentations for explicit mosaic items, ROI IDs, the selection, or all available ROIs. (mutates; task; completion: retained_background; cancellation: cooperative; event: mosaic.objects.changed) |
+| `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; completion: immediate_semantic; event: mosaic.ui.changed) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; completion: immediate_semantic; event: viewer.rendering.changed) |
+| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; completion: immediate_semantic; event: mosaic.ui.changed) |
 
 ### Data resources
 
@@ -570,11 +570,11 @@ Access: `app.data`. Register and manage large external data by reference.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates) |
+| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
 | `register_numpy(array: 'Any', *, axes: 'Sequence[str]', units: 'Sequence[str]' = (), scale: 'Sequence[float]' = (), translation: 'Sequence[float]' = (), provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | SDK-local/delegated | Inherited from delegated operation | Write an array to session-scoped Zarr and register it by reference. |
-| `get(resource_id: 'str') -> 'DataResource'` | `data.resources.get` | protocol | Get an external data descriptor. |
-| `list() -> 'list[DataResource]'` | `data.resources.list` | protocol | List registered external data. |
-| `remove(resource_id: 'str') -> 'None'` | `data.resources.remove` | protocol | Remove an unreferenced data descriptor. (mutates) |
+| `get(resource_id: 'str') -> 'DataResource'` | `data.resources.get` | protocol | Get an external data descriptor. (completion: resource_ready) |
+| `list() -> 'list[DataResource]'` | `data.resources.list` | protocol | List registered external data. (completion: resource_ready) |
+| `remove(resource_id: 'str') -> 'None'` | `data.resources.remove` | protocol | Remove an unreferenced data descriptor. (mutates; completion: resource_ready) |
 
 ### Data resource handle
 
@@ -604,13 +604,13 @@ Access: `app.layers` or `app.viewer.layers`. Add and manage stable external view
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `add(data: 'DataResource \| str', *, name: 'str', kind: 'str', layer_id: 'str \| None' = None, visible: 'bool' = True, opacity: 'float' = 1.0, ownership: 'str' = 'session', style: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'Layer'` | `viewer.layers.add` | protocol | Add a referenced viewer layer. (mutates) |
-| `get(layer_id: 'str') -> 'Layer'` | `viewer.layers.get` | protocol | Get a referenced viewer layer. |
-| `list() -> 'list[Layer]'` | `viewer.layers.list` | protocol | List referenced viewer layers. |
-| `update(layer_id: 'str', **changes: 'Any') -> 'Layer'` | `viewer.layers.update` | protocol | Update layer state or style. (mutates) |
+| `add(data: 'DataResource \| str', *, name: 'str', kind: 'str', layer_id: 'str \| None' = None, visible: 'bool' = True, opacity: 'float' = 1.0, ownership: 'str' = 'session', style: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'Layer'` | `viewer.layers.add` | protocol | Add a referenced viewer layer. (mutates; completion: resource_ready) |
+| `get(layer_id: 'str') -> 'Layer'` | `viewer.layers.get` | protocol | Get a referenced viewer layer. (completion: resource_ready) |
+| `list() -> 'list[Layer]'` | `viewer.layers.list` | protocol | List referenced viewer layers. (completion: resource_ready) |
+| `update(layer_id: 'str', **changes: 'Any') -> 'Layer'` | `viewer.layers.update` | protocol | Update layer state or style. (mutates; completion: resource_ready) |
 | `replace_data(layer_id: 'str', data: 'DataResource \| str') -> 'Layer'` | SDK-local/delegated | Inherited from delegated operation | Replace data. |
-| `remove(layer_id: 'str') -> 'None'` | `viewer.layers.remove` | protocol | Remove a referenced layer. (mutates) |
-| `reorder(layers: 'Sequence[Layer \| str]') -> 'list[Layer]'` | `viewer.layers.reorder` | protocol | Set referenced layer order. (mutates) |
+| `remove(layer_id: 'str') -> 'None'` | `viewer.layers.remove` | protocol | Remove a referenced layer. (mutates; completion: resource_ready) |
+| `reorder(layers: 'Sequence[Layer \| str]') -> 'list[Layer]'` | `viewer.layers.reorder` | protocol | Set referenced layer order. (mutates; completion: resource_ready) |
 
 ### External layer handle
 
@@ -630,11 +630,11 @@ Access: `app.tasks`. Start, inspect, list, cancel, and forget retained work.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `start(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, label: 'str \| None' = None) -> 'Task'` | `tasks.start` | protocol | Run an application command as a retained task. (mutates; task) |
-| `get(task_id: 'str') -> 'Task'` | `tasks.get` | protocol | Get a task snapshot. |
-| `list(*, include_finished: 'bool' = True) -> 'list[Task]'` | `tasks.list` | protocol | List retained tasks. |
-| `cancel(task_id: 'str') -> 'Task'` | `tasks.cancel` | protocol | Cancel a queued task. (mutates) |
-| `forget(task_id: 'str') -> 'None'` | `tasks.forget` | protocol | Forget a terminal task. (mutates) |
+| `start(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, label: 'str \| None' = None) -> 'Task'` | `tasks.start` | protocol | Run an application command as a retained task. (mutates; task; completion: retained_background; cancellation: cooperative) |
+| `get(task_id: 'str') -> 'Task'` | `tasks.get` | protocol | Get a task snapshot. (completion: immediate_semantic) |
+| `list(*, include_finished: 'bool' = True) -> 'list[Task]'` | `tasks.list` | protocol | List retained tasks. (completion: immediate_semantic) |
+| `cancel(task_id: 'str') -> 'Task'` | `tasks.cancel` | protocol | Cancel a queued task. (mutates; completion: immediate_semantic) |
+| `forget(task_id: 'str') -> 'None'` | `tasks.forget` | protocol | Forget a terminal task. (mutates; completion: immediate_semantic) |
 
 ### Task handle
 
@@ -654,9 +654,9 @@ Access: `app.events`. Synchronous subscriptions, callbacks, and queued event con
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `subscribe(events: 'str \| Iterable[str]', callback: 'EventCallback \| None' = None) -> 'Mapping[str, Any]'` | `events.subscribe` | protocol | Subscribe to server-pushed event patterns. |
-| `unsubscribe(events: 'str \| Iterable[str] \| None' = None) -> 'Mapping[str, Any]'` | `events.unsubscribe` | protocol | Remove event subscriptions. |
-| `status() -> 'Mapping[str, Any]'` | `events.get_status` | protocol | Inspect event queue diagnostics. |
+| `subscribe(events: 'str \| Iterable[str]', callback: 'EventCallback \| None' = None) -> 'Mapping[str, Any]'` | `events.subscribe` | protocol | Subscribe to server-pushed event patterns. (completion: immediate_semantic) |
+| `unsubscribe(events: 'str \| Iterable[str] \| None' = None) -> 'Mapping[str, Any]'` | `events.unsubscribe` | protocol | Remove event subscriptions. (completion: immediate_semantic) |
+| `status() -> 'Mapping[str, Any]'` | `events.get_status` | protocol | Inspect event queue diagnostics. (completion: immediate_semantic) |
 | `remove_callback(callback: 'EventCallback') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove callback. |
 | `next(timeout: 'float \| None' = None) -> 'Event'` | SDK-local/delegated | Inherited from delegated operation | Block until the next event arrives, or raise ``queue.Empty``. |
 | `iter(timeout: 'float \| None' = None) -> 'Iterator[Event]'` | SDK-local/delegated | Inherited from delegated operation | Iter. |
@@ -669,10 +669,10 @@ Constructor: `Ui(client: "'Client'") -> 'None'`
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'Extension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates) |
-| `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. |
-| `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. |
-| `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. |
+| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'Extension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
+| `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. (completion: immediate_semantic) |
+| `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. (completion: immediate_semantic) |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. (completion: immediate_semantic) |
 
 ### UI extension handle
 
@@ -684,8 +684,8 @@ Constructor: `Extension(ui: "'Ui'", snapshot: 'Mapping[str, Any]') -> 'None'`
 | --- | --- | --- | --- |
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
 | `granted_capabilities (property)` | SDK-local/delegated | Inherited from delegated operation | Granted capabilities. |
-| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'Contribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates) |
-| `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates) |
+| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'Contribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates; completion: immediate_semantic) |
 
 ### UI contribution handle
 
@@ -697,8 +697,8 @@ Constructor: `Contribution(extension: "'Extension'", snapshot: 'Mapping[str, Any
 | --- | --- | --- | --- |
 | `contribution_id (property)` | SDK-local/delegated | Inherited from delegated operation | Contribution id. |
 | `revision (property)` | SDK-local/delegated | Inherited from delegated operation | Revision. |
-| `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'Contribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates) |
-| `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates) |
+| `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'Contribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
+| `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
 
 ### UI component base
 
@@ -815,10 +815,10 @@ Access: `await odon.connect_async()`. Async connection and root resource contain
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `connect(host: 'str \| None' = None, port: 'int \| None' = None, *, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, timeout: 'float' = 10.0, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> "'AsyncClient'"` | `system.hello` | protocol | Authenticate and negotiate a control protocol version. |
+| `connect(host: 'str \| None' = None, port: 'int \| None' = None, *, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, timeout: 'float' = 10.0, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> "'AsyncClient'"` | `system.hello` | protocol | Authenticate and negotiate a control protocol version. (completion: immediate_semantic) |
 | `call(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, timeout: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Call. |
 | `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
-| `batch(operations: 'Sequence[tuple[str, Mapping[str, Any] \| None]]', *, atomic: 'bool' = False) -> 'Any'` | `system.batch` | protocol | Execute application commands in order. (mutates) |
+| `batch(operations: 'Sequence[tuple[str, Mapping[str, Any] \| None]]', *, atomic: 'bool' = False) -> 'Any'` | `system.batch` | protocol | Execute application commands in order. (mutates; completion: immediate_semantic) |
 | `closed (property)` | SDK-local/delegated | Inherited from delegated operation | Closed. |
 | `launched_process (property)` | SDK-local/delegated | Inherited from delegated operation | Launched process. |
 
@@ -828,26 +828,26 @@ Access: `app.application`. Async application resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_state() -> 'Any'` | `app.get_state` | project, single, mosaic, transition | Get current application and viewer state. |
+| `get_state() -> 'Any'` | `app.get_state` | project, single, mosaic, transition | Get current application and viewer state. (completion: immediate_semantic) |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
-| `get_loading_state() -> 'Any'` | `app.get_loading_state` | project, single, mosaic, transition | Get loading diagnostics. |
-| `list_methods() -> 'Any'` | `system.describe_methods` | protocol | List control methods and request schemas. |
-| `describe_events() -> 'Any'` | `system.describe_events` | protocol | Describe initial event families and envelope fields. |
-| `get_application_surface() -> 'Any'` | `system.get_application_surface` | protocol | Return Odon's machine-readable native/API/Python parity manifest. |
-| `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. |
-| `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. |
-| `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. |
-| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; event: application.settings.changed) |
-| `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. |
-| `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; event: application.recent_projects.changed) |
-| `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; event: application.recent_projects.changed) |
-| `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. |
-| `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; event: application.close.requested) |
-| `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; event: application.quit.requested) |
-| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; event: application.mode.changed) |
-| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; event: application.mode.changed) |
-| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; event: application.mode.changed) |
-| `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; event: application.mode.changed) |
+| `get_loading_state() -> 'Any'` | `app.get_loading_state` | project, single, mosaic, transition | Get loading diagnostics. (completion: immediate_semantic) |
+| `list_methods() -> 'Any'` | `system.describe_methods` | protocol | List control methods and request schemas. (completion: immediate_semantic) |
+| `describe_events() -> 'Any'` | `system.describe_events` | protocol | Describe initial event families and envelope fields. (completion: immediate_semantic) |
+| `get_application_surface() -> 'Any'` | `system.get_application_surface` | protocol | Return Odon's machine-readable native/API/Python parity manifest. (completion: immediate_semantic) |
+| `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. (completion: immediate_semantic) |
+| `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. (completion: immediate_semantic) |
+| `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. (completion: immediate_semantic) |
+| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
+| `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. (completion: immediate_semantic) |
+| `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
+| `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
+| `get_lifecycle() -> 'Any'` | `app.lifecycle.get` | project, single, mosaic, transition | Inspect dirty state and safe close options. (completion: immediate_semantic) |
+| `request_close(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_close` | project, single, mosaic | Request that the Odon window close with an explicit save decision. (mutates; completion: immediate_semantic; event: application.close.requested) |
+| `request_quit(*, save: 'str' = 'prompt', if_revision: 'int \| None' = None) -> 'Any'` | `app.lifecycle.request_quit` | project, single, mosaic | Request that Odon quit with an explicit save decision. (mutates; completion: immediate_semantic; event: application.quit.requested) |
+| `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_ome_zarr` | project, single, mosaic, transition | Open an OME-Zarr dataset. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_tiff` | project, single, mosaic, transition | Open a TIFF dataset. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_mosaic_samplesheet` | project, single, mosaic, transition | Open a mosaic samplesheet. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `show_project_page(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.navigation.show_project` | project, single, mosaic | Show the project page. (mutates; completion: immediate_semantic; event: application.mode.changed) |
 
 ### Async datasets
 
@@ -855,13 +855,13 @@ Access: `app.datasets`. Async dataset resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. |
+| `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. (completion: immediate_semantic) |
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
-| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; event: application.mode.changed) |
-| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; event: application.mode.changed) |
-| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; event: application.mode.changed) |
+| `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_xenium(path: 'str \| Path', *, imagery: 'str' = 'auto', load_cells: 'bool' = True, load_transcripts: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_xenium` | project, single, mosaic, transition | Open a Xenium experiment with explicit imagery and overlay choices. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `open_http(url: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_http` | project, single, mosaic, transition | Open a remote HTTP(S) OME-Zarr source. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### Async S3 datasets
 
@@ -869,11 +869,11 @@ Access: `app.datasets.s3`. Async S3 dataset resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_session() -> 'Any'` | `datasets.s3.get_session` | project, single, mosaic, transition | Inspect redacted session-only S3 connection metadata. |
-| `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; event: datasets.credentials.changed) |
-| `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; event: datasets.credentials.changed) |
-| `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task) |
-| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; event: application.mode.changed) |
+| `get_session() -> 'Any'` | `datasets.s3.get_session` | project, single, mosaic, transition | Inspect redacted session-only S3 connection metadata. (completion: immediate_semantic) |
+| `configure_session(*, endpoint: 'str', bucket: 'str', access_key: 'str', secret_key: 'str', region: 'str' = 'auto', if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.configure_session` | project, single, mosaic, transition | Configure session-only S3 credentials without persisting or returning secrets. (mutates; completion: immediate_semantic; event: datasets.credentials.changed) |
+| `clear_session(*, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.s3.clear_session` | project, single, mosaic, transition | Remove session-only S3 credentials from Odon memory. (mutates; completion: immediate_semantic; event: datasets.credentials.changed) |
+| `list(prefix: 'str' = '') -> 'Any'` | `datasets.s3.list` | project, single, mosaic, transition | List one S3 prefix using the configured session credentials. (task; completion: retained_background; cancellation: cooperative) |
+| `open(prefix: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_s3` | project, single, mosaic, transition | Open an S3 OME-Zarr prefix using session credentials. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### Async deep links
 
@@ -881,11 +881,11 @@ Access: `app.deep_links`. Async deep-link resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `parse(url: 'str') -> 'Any'` | `deep_links.parse` | project, single, mosaic, transition | Parse and validate an Odon deep link into its structured public model. |
-| `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. |
-| `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. |
-| `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. |
-| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; event: application.state.changed) |
+| `parse(url: 'str') -> 'Any'` | `deep_links.parse` | project, single, mosaic, transition | Parse and validate an Odon deep link into its structured public model. (completion: immediate_semantic) |
+| `resolve(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.resolve` | project, single, mosaic | Resolve a deep link against its project and return an unambiguous ROI without changing application state. (completion: immediate_semantic) |
+| `get_filters(value: 'str \| Mapping[str, Any]') -> 'Any'` | `deep_links.filters.get` | project, single, mosaic, transition | Extract the typed object-filter state carried by a deep link without applying it. (completion: immediate_semantic) |
+| `generate(request: 'Mapping[str, Any] \| None' = None, *, include_project: 'bool' = True, roi: 'str \| None' = None) -> 'Any'` | `deep_links.generate` | project, single, mosaic | Generate a canonical Odon deep link from structured or current viewer state. (completion: immediate_semantic) |
+| `apply(value: 'str \| Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> 'Any'` | `deep_links.apply` | project, single, mosaic, transition | Apply a validated deep link as an atomic actor transaction and settle after its model and resources are ready. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.state.changed) |
 
 ### Async viewer
 
@@ -893,22 +893,22 @@ Access: `app.viewer`. Async viewer resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_camera() -> 'Any'` | `viewer.camera.get` | single, mosaic | Get camera state. |
+| `get_camera() -> 'Any'` | `viewer.camera.get` | single, mosaic | Get camera state. (completion: immediate_semantic) |
 | `get_state() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Get state. |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
-| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; event: viewer.camera.changed) |
-| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content after Rust has completed the first canvas layout. (mutates; event: viewer.camera.changed) |
-| `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; event: viewer.camera.changed) |
-| `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; event: viewer.camera.changed) |
-| `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
-| `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. |
-| `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; event: viewer.rendering.changed) |
-| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; event: viewer.ui.changed) |
-| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; event: viewer.ui.changed) |
-| `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. |
-| `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; event: viewer.scale_bar.changed) |
-| `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. |
-| `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; event: viewer.panels.changed) |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content after Rust has completed the first canvas layout. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. (completion: immediate_semantic) |
+| `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. (completion: immediate_semantic) |
+| `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; completion: immediate_semantic; event: viewer.rendering.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; completion: immediate_semantic; event: viewer.ui.changed) |
+| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; completion: immediate_semantic; event: viewer.ui.changed) |
+| `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. (completion: immediate_semantic) |
+| `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; completion: immediate_semantic; event: viewer.scale_bar.changed) |
+| `get_side_panels() -> 'Any'` | `viewer.panels.get` | single, mosaic | Get side-panel visibility. (completion: immediate_semantic) |
+| `set_side_panels(*, left: 'bool \| None' = None, right: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.panels.set` | single, mosaic | Set side-panel visibility. (mutates; completion: immediate_semantic; event: viewer.panels.changed) |
 
 ### Async viewport workspace
 
@@ -916,12 +916,12 @@ Access: `app.viewer.workspace`. Async native viewport layout and link resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
-| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. |
-| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[AsyncViewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; event: viewer.workspace.layout.changed) |
-| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; event: viewer.workspace.layout.changed) |
-| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. |
-| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; event: viewer.viewport_links.changed) |
+| `get() -> 'Any'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. (completion: immediate_semantic) |
+| `get_layout() -> 'Any'` | `viewer.workspace.layout.get` | single | Get the current viewport workspace layout and ordered viewport IDs. (completion: immediate_semantic) |
+| `set_layout(layout: 'str \| None' = None, *, split: 'str \| None' = None, viewports: 'Iterable[AsyncViewport \| str] \| None' = None, ratio: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.layout.set` | single | Set the current single or two-viewport layout. (mutates; completion: immediate_semantic; event: viewer.workspace.layout.changed) |
+| `swap(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.swap` | single | Swap the two viewport positions in the current layout. (mutates; completion: immediate_semantic; event: viewer.workspace.layout.changed) |
+| `get_links() -> 'Any'` | `viewer.viewport_links.get` | single | Get camera, plane, and shared-selection links for the workspace. (completion: immediate_semantic) |
+| `set_links(*, camera: 'bool \| None' = None, plane: 'bool \| None' = None, selection: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.set` | single | Configure camera, plane, and shared-selection links between viewports. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
 
 ### Async viewport links
 
@@ -929,10 +929,10 @@ Access: `app.viewer.viewport_links`. Async comparison navigation link-group reso
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. |
-| `create(*, viewports: 'Iterable[AsyncViewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; event: viewer.viewport_links.changed) |
-| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[AsyncViewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; event: viewer.viewport_links.changed) |
-| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; event: viewer.viewport_links.changed) |
+| `list() -> 'Any'` | `viewer.viewport_links.list` | single | List the workspace's fixed comparison link group. (completion: immediate_semantic) |
+| `create(*, viewports: 'Iterable[AsyncViewport \| str]', fields: 'Iterable[str]' = ('camera', 'plane', 'selection'), link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.create` | single | Configure the fixed comparison link group for the two workspace viewports. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
+| `update(*, fields: 'Iterable[str]', viewports: 'Iterable[AsyncViewport \| str] \| None' = None, link_group_id: 'str' = 'comparison-navigation', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.update` | single | Update fields in the fixed comparison link group. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
+| `remove(link_group_id: 'str' = 'comparison-navigation', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewport_links.remove` | single | Disable optional navigation links while retaining document-shared selection. (mutates; completion: immediate_semantic; event: viewer.viewport_links.changed) |
 
 ### Async viewports
 
@@ -940,12 +940,12 @@ Access: `app.viewer.viewports`. Async native viewport collection.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. |
+| `list() -> 'Any'` | `viewer.viewports.list` | single | List native viewports and their navigation and presentation snapshots. (completion: immediate_semantic) |
 | `handle(viewport_id: 'str') -> 'AsyncViewport'` | SDK-local/delegated | Inherited from delegated operation | Handle. |
-| `active() -> 'AsyncViewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. |
-| `create(*, source: 'AsyncViewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
-| `clone(source: 'AsyncViewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; event: viewer.viewports.created) |
-| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'AsyncViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; event: viewer.viewports.created) |
+| `active() -> 'AsyncViewport'` | `viewer.workspace.get` | single | Get the current viewer workspace, layout, links, and viewport snapshots. (completion: immediate_semantic) |
+| `create(*, source: 'AsyncViewport \| str \| None' = None, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.create` | single | Clone a viewport into a horizontal or vertical comparison layout. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
+| `clone(source: 'AsyncViewport \| str', *, title: 'str \| None' = None, layout: 'str' = 'horizontal', ratio: 'float \| None' = None, activate: 'bool' = True, if_revision: 'int \| None' = None) -> 'AsyncViewport'` | `viewer.viewports.clone` | single | Clone an explicit viewport into the second workspace slot. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
+| `compare(*, layout: 'str' = 'horizontal', ratio: 'float' = 0.5, titles: 'Sequence[str]' = ('View 1', 'View 2'), linked: 'Iterable[str]' = ('camera', 'plane', 'selection'), if_revision: 'int \| None' = None) -> 'AsyncViewportComparison'` | `viewer.viewports.clone` | single | Clone an explicit viewport into a horizontal or vertical comparison layout. (mutates; completion: immediate_semantic; event: viewer.viewports.created) |
 
 ### Async viewport handle
 
@@ -953,38 +953,38 @@ Access: returned by `app.viewer.viewports`. Stable asynchronous viewport handle.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. |
-| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; event: viewer.viewports.active_changed) |
-| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; event: viewer.viewports.removed) |
-| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. |
-| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image after Rust has laid out this viewport. (mutates; event: viewer.viewports.navigation.changed) |
-| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. |
-| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; event: viewer.viewports.navigation.changed) |
-| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. |
-| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. |
-| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. |
-| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. |
-| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. |
-| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. |
-| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. |
-| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
-| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; event: viewer.viewports.presentation.changed) |
+| `get() -> 'Any'` | `viewer.viewports.get` | single | Get one viewport by stable ID. (completion: immediate_semantic) |
+| `set_active(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.set_active` | single | Set the active viewport used by native panels and legacy viewer methods. (mutates; completion: immediate_semantic; event: viewer.viewports.active_changed) |
+| `rename(title: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rename` | single | Rename a viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; completion: immediate_semantic; event: viewer.viewports.removed) |
+| `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. (completion: immediate_semantic) |
+| `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image after Rust has laid out this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. (completion: immediate_semantic) |
+| `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_visible_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_visible` | single | Set visible channels for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channels(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set` | single | Set the viewport's visible channel collection via the canonical API. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_active_channel(channel: 'str \| int', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_active` | single | Set the active channel in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_color(channel: 'str \| int', color_rgb: 'Iterable[int]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_color` | single | Set channel color in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_contrast(channel: 'str \| int', minimum: 'float', maximum: 'float', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_contrast` | single | Set channel contrast in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_channel_order(channels: 'Iterable[str \| int]', *, mode: 'str' = 'exact', if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_order` | single | Set channel order in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `list_channel_groups() -> 'Any'` | `viewer.viewports.channels.list_groups` | single | List channel-group presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_channel_group(channels: 'Iterable[str \| int]', *, group: 'str \| None' = None, group_id: 'int \| None' = None, color_rgb: 'Iterable[int] \| None' = None, inherit_color: 'bool' = True, replace_group_members: 'bool' = False, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.channels.set_group` | single | Set channel-group membership and color presentation in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_object_style() -> 'Any'` | `viewer.viewports.objects.style.get` | single | Get object presentation for an explicit viewport. (completion: immediate_semantic) |
+| `set_object_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | `viewer.viewports.objects.style.set` | single | Set independent object presentation for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_object_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.legend.set` | single | Set per-value colours/visibility for this viewport's object property. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_object_filter() -> 'Any'` | `viewer.viewports.objects.filter.get` | single | Get the independent segmentation-object filter for an explicit viewport. (completion: immediate_semantic) |
+| `set_object_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.set` | single | Set an independent segmentation-object filter for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `clear_object_filter(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.objects.filter.clear` | single | Clear the segmentation-object filter for an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `get_rendering() -> 'Any'` | `viewer.viewports.rendering.get` | single | Return this viewport's independent display preferences. (completion: immediate_semantic) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_scale_bar: 'bool \| None' = None, show_hud: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.rendering.set` | single | Set independent sampling and decoration preferences for this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `list_layers() -> 'Any'` | `viewer.viewports.layers.list` | single | List channels and overlays with presentation state for an explicit viewport. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'str') -> 'Any'` | `viewer.viewports.layers.get` | single | Return one layer and its presentation in this viewport. (completion: immediate_semantic) |
+| `set_layer(layer_id: 'str', presentation: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.viewports.layers.set` | single | Update one layer's independent presentation in this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_layer_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_visibility` | single | Set native-layer visibility in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_layer_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_order` | single | Set native-layer order in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
+| `set_active_layer(layer_id: 'str', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.layers.set_active` | single | Set the active native layer in an explicit viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.presentation.changed) |
 
 ### Async viewport objects
 
@@ -1011,25 +1011,25 @@ Access: `app.channels`. Async channel resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.channels.list` | project, single, mosaic | List channels. |
-| `list_visible() -> 'Any'` | `viewer.channels.list_visible` | project, single, mosaic | List visible channels. |
-| `get_active() -> 'Any'` | `viewer.channels.get_active` | project, single, mosaic | Get the active channel. |
-| `set_active(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_active` | single, mosaic | Set the active channel. (mutates; event: viewer.channels.changed) |
-| `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; event: viewer.channels.changed) |
-| `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. |
-| `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; event: viewer.channels.changed) |
-| `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; event: viewer.channels.changed) |
-| `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; event: viewer.channels.changed) |
-| `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. |
-| `set_transform(channel: 'str \| int', *, offset_world: 'Sequence[float] \| None' = None, scale: 'Sequence[float] \| None' = None, rotation_rad: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_transform` | single | Set a channel's translation, scale, and rotation. (mutates; event: viewer.channels.changed) |
-| `reset_transform(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.reset_transform` | single | Reset a channel transform to identity. (mutates; event: viewer.channels.changed) |
-| `set_order(channels: 'Iterable[str \| int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_order` | single, mosaic | Set channel ordering. (mutates; event: viewer.channels.changed) |
-| `get_presentation() -> 'Any'` | `viewer.channels.presentation.get` | single, mosaic | Inspect channel-list search, sort, and effective ordering. |
-| `set_presentation(*, search: 'str \| None' = None, sort: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.presentation.set` | single, mosaic | Set channel-list search and sort presentation state. (mutates; event: viewer.channels.changed) |
-| `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. |
-| `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; event: viewer.channels.changed) |
-| `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task) |
-| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; event: viewer.channels.changed) |
+| `list() -> 'Any'` | `viewer.channels.list` | project, single, mosaic | List channels. (completion: immediate_semantic) |
+| `list_visible() -> 'Any'` | `viewer.channels.list_visible` | project, single, mosaic | List visible channels. (completion: immediate_semantic) |
+| `get_active() -> 'Any'` | `viewer.channels.get_active` | project, single, mosaic | Get the active channel. (completion: immediate_semantic) |
+| `set_active(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_active` | single, mosaic | Set the active channel. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. (completion: immediate_semantic) |
+| `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. (completion: immediate_semantic) |
+| `set_transform(channel: 'str \| int', *, offset_world: 'Sequence[float] \| None' = None, scale: 'Sequence[float] \| None' = None, rotation_rad: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_transform` | single | Set a channel's translation, scale, and rotation. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `reset_transform(channel: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.reset_transform` | single | Reset a channel transform to identity. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_order(channels: 'Iterable[str \| int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_order` | single, mosaic | Set channel ordering. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `get_presentation() -> 'Any'` | `viewer.channels.presentation.get` | single, mosaic | Inspect channel-list search, sort, and effective ordering. (completion: immediate_semantic) |
+| `set_presentation(*, search: 'str \| None' = None, sort: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.presentation.set` | single, mosaic | Set channel-list search and sort presentation state. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. (completion: immediate_semantic) |
+| `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task; completion: retained_background; cancellation: cooperative) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
 
 ### Async planes
 
@@ -1037,11 +1037,11 @@ Access: `app.planes`. Async plane resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `viewer.planes.get` | single | Get the active view plane, slice, extent, and supported orientations. |
-| `get_operation_availability() -> 'Any'` | `viewer.planes.operation_availability` | single | Describe XY-only operation safeguards for the active multidimensional view plane. |
-| `set(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.set` | single | Set the active view orientation and/or slice. (mutates; event: viewer.planes.changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.next` | single | Move forward through slices in the active view orientation. (mutates; event: viewer.planes.changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.previous` | single | Move backward through slices in the active view orientation. (mutates; event: viewer.planes.changed) |
+| `get() -> 'Any'` | `viewer.planes.get` | single | Get the active view plane, slice, extent, and supported orientations. (completion: immediate_semantic) |
+| `get_operation_availability() -> 'Any'` | `viewer.planes.operation_availability` | single | Describe XY-only operation safeguards for the active multidimensional view plane. (completion: immediate_semantic) |
+| `set(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.set` | single | Set the active view orientation and/or slice. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.next` | single | Move forward through slices in the active view orientation. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.planes.previous` | single | Move backward through slices in the active view orientation. (mutates; completion: immediate_semantic; event: viewer.planes.changed) |
 
 ### Async native layers
 
@@ -1049,13 +1049,13 @@ Access: `app.native_layers`. Async native-layer resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.native_layers.list` | single, mosaic | List Odon-native layers in their channel and overlay stacks. |
-| `get(layer_id: 'str') -> 'Any'` | `viewer.native_layers.get` | single, mosaic | Get one Odon-native layer. |
-| `set_active(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_active` | single, mosaic | Set the active Odon-native layer. (mutates; event: viewer.layers.changed) |
-| `set_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_visibility` | single, mosaic | Set an Odon-native layer's visibility. (mutates; event: viewer.layers.changed) |
-| `set_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_order` | single, mosaic | Set the exact order of the native channel or overlay stack. (mutates; event: viewer.layers.changed) |
-| `set_offset(layer_id: 'str', offset_world: 'Sequence[float]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_offset` | single | Set an Odon-native layer's world translation. (mutates; event: viewer.layers.changed) |
-| `reset_offset(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.reset_offset` | single | Reset an Odon-native layer's world translation to its loaded baseline. (mutates; event: viewer.layers.changed) |
+| `list() -> 'Any'` | `viewer.native_layers.list` | single, mosaic | List Odon-native layers in their channel and overlay stacks. (completion: immediate_semantic) |
+| `get(layer_id: 'str') -> 'Any'` | `viewer.native_layers.get` | single, mosaic | Get one Odon-native layer. (completion: immediate_semantic) |
+| `set_active(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_active` | single, mosaic | Set the active Odon-native layer. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_visibility(layer_id: 'str', visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_visibility` | single, mosaic | Set an Odon-native layer's visibility. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_order(stack: 'str', layers: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_order` | single, mosaic | Set the exact order of the native channel or overlay stack. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_offset(layer_id: 'str', offset_world: 'Sequence[float]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.set_offset` | single | Set an Odon-native layer's world translation. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `reset_offset(layer_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.native_layers.reset_offset` | single | Reset an Odon-native layer's world translation to its loaded baseline. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
 
 ### Async projects
 
@@ -1063,14 +1063,14 @@ Access: `app.projects`. Async project resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
-| `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. |
-| `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; event: application.mode.changed) |
-| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; event: application.mode.changed) |
-| `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; event: project.saved) |
-| `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; event: project.saved) |
-| `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; event: project.changed) |
-| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
+| `list_rois() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. (completion: immediate_semantic) |
+| `get() -> 'Any'` | `project.get` | project, single, mosaic | Get project metadata and lifecycle state. (completion: immediate_semantic) |
+| `create(*, default_dataset: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.create` | project, single, mosaic | Create a new empty project workspace. (mutates; completion: immediate_semantic; event: application.mode.changed) |
+| `open(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.open` | project, single, mosaic, transition | Open a project. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
+| `save(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.save` | project, single, mosaic | Save the active project. (mutates; completion: resource_ready; event: project.saved) |
+| `save_as(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.save_as` | project, single, mosaic | Save the active project to an explicit path. (mutates; completion: resource_ready; event: project.saved) |
+| `update_metadata(*, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.update_metadata` | project, single, mosaic | Update supported project metadata and search roots. (mutates; completion: immediate_semantic; event: project.changed) |
+| `open_roi(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.active_roi.changed) |
 
 ### Async project samplesheets
 
@@ -1078,10 +1078,10 @@ Access: `app.projects.samplesheets`. Async samplesheet resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `inspect(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.inspect` | project, single, mosaic, transition | Parse and validate a samplesheet without changing the active project. |
-| `validate(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.validate` | project, single, mosaic, transition | Validate samplesheet identity, paths, and metadata without changing the project. |
-| `import_(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.import` | project, single, mosaic | Replace project ROIs from a validated samplesheet. (mutates; task; event: project.rois.changed) |
-| `export(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.export` | project, single, mosaic | Export local project ROIs and metadata to a samplesheet. (mutates; event: project.samplesheet.exported) |
+| `inspect(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.inspect` | project, single, mosaic, transition | Parse and validate a samplesheet without changing the active project. (completion: immediate_semantic) |
+| `validate(path: 'str \| Path', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.samplesheets.validate` | project, single, mosaic, transition | Validate samplesheet identity, paths, and metadata without changing the project. (completion: immediate_semantic) |
+| `import_(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.import` | project, single, mosaic | Replace project ROIs from a validated samplesheet. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.rois.changed) |
+| `export(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `project.samplesheets.export` | project, single, mosaic | Export local project ROIs and metadata to a samplesheet. (mutates; completion: immediate_semantic; event: project.samplesheet.exported) |
 
 ### Async project discovery
 
@@ -1089,7 +1089,7 @@ Access: `app.projects.discovery`. Async project discovery resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `add_root(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.discovery.add_root` | project, single, mosaic | Discover OME-Zarr datasets recursively and add them as project ROIs. (mutates; task; event: project.rois.changed) |
+| `add_root(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.discovery.add_root` | project, single, mosaic | Discover OME-Zarr datasets recursively and add them as project ROIs. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.rois.changed) |
 
 ### Async project object preload
 
@@ -1097,10 +1097,10 @@ Access: `app.projects.objects`. Async object preload resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_preload() -> 'Any'` | `project.objects.preload.get` | project, single, mosaic | Inspect available and cached project object segmentations. |
-| `list_preload_sources(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.objects.preload.list_sources` | project, single, mosaic | List preload-eligible project segmentation sources. |
-| `preload(*, mode: 'str' = 'full_geometry', lazy_properties: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.start` | project, single, mosaic | Preload project object geometry or centroids and wait for completion. (mutates; task; event: project.objects.preload.changed) |
-| `clear_preload(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.clear` | project, single, mosaic | Clear preloaded project objects from memory. (mutates; event: project.objects.preload.changed) |
+| `get_preload() -> 'Any'` | `project.objects.preload.get` | project, single, mosaic | Inspect available and cached project object segmentations. (completion: resource_ready) |
+| `list_preload_sources(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `project.objects.preload.list_sources` | project, single, mosaic | List preload-eligible project segmentation sources. (completion: resource_ready) |
+| `preload(*, mode: 'str' = 'full_geometry', lazy_properties: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.start` | project, single, mosaic | Preload project object geometry or centroids and wait for completion. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.objects.preload.changed) |
+| `clear_preload(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.objects.preload.clear` | project, single, mosaic | Clear preloaded project objects from memory. (mutates; completion: resource_ready; event: project.objects.preload.changed) |
 
 ### Async project ROIs
 
@@ -1108,19 +1108,19 @@ Access: `app.projects.rois`. Async ROI resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. |
-| `get(roi_id: 'str') -> 'Any'` | `project.rois.get` | project, single, mosaic | Get one project ROI by stable ID. |
-| `add(roi_id: 'str', path: 'str \| Path', *, display_name: 'str \| None' = None, dataset: 'str \| None' = None, segmentation_path: 'str \| Path \| None' = None, metadata: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.add` | project, single, mosaic | Add a project ROI. (mutates; event: project.rois.changed) |
-| `update(roi_id: 'str', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.rois.update` | project, single, mosaic | Update a project ROI. (mutates; event: project.rois.changed) |
-| `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; event: project.rois.changed) |
-| `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; event: project.rois.changed) |
-| `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; event: project.rois.selection_changed) |
-| `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; event: project.rois.selection_changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; event: project.rois.selection_changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; event: project.rois.selection_changed) |
-| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; event: project.active_roi.changed) |
-| `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; event: application.mode.changed) |
+| `list() -> 'Any'` | `project.rois.list` | project, single, mosaic | List project ROIs. (completion: immediate_semantic) |
+| `get(roi_id: 'str') -> 'Any'` | `project.rois.get` | project, single, mosaic | Get one project ROI by stable ID. (completion: immediate_semantic) |
+| `add(roi_id: 'str', path: 'str \| Path', *, display_name: 'str \| None' = None, dataset: 'str \| None' = None, segmentation_path: 'str \| Path \| None' = None, metadata: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.add` | project, single, mosaic | Add a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `update(roi_id: 'str', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `project.rois.update` | project, single, mosaic | Update a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; completion: immediate_semantic; event: project.rois.changed) |
+| `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. (completion: immediate_semantic) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `open(roi: 'str \| int', *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.rois.open` | project, single, mosaic, transition | Open a project ROI. (mutates; task; completion: retained_background; cancellation: cooperative; event: project.active_roi.changed) |
+| `open_selected_mosaic(*, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.open_selected_mosaic` | project, single, mosaic | Open selected project ROIs as a mosaic. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 
 ### Async project views
 
@@ -1128,13 +1128,13 @@ Access: `app.projects.views`. Async saved-view resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. |
-| `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. |
-| `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; event: project.views.changed) |
-| `capture(name: 'str', *, viewport: 'AsyncViewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; event: project.views.changed) |
-| `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; event: project.views.changed) |
-| `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; event: project.views.changed) |
-| `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; event: project.views.applied) |
+| `list() -> 'Any'` | `project.views.list` | project, single, mosaic | List saved project view presets. (completion: immediate_semantic) |
+| `get(view: 'str \| int') -> 'Any'` | `project.views.get` | project, single, mosaic | Get a saved project view preset. (completion: immediate_semantic) |
+| `create(name: 'str', spec: 'Mapping[str, Any] \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.create` | project, single, mosaic | Create or replace a saved project view preset from a specification. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `capture(name: 'str', *, viewport: 'AsyncViewport \| str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.capture` | single | Capture the current single-image viewer as a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `rename(view: 'str \| int', new_name: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.rename` | project, single, mosaic | Rename a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `delete(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.delete` | project, single, mosaic | Delete a saved project view preset. (mutates; completion: immediate_semantic; event: project.views.changed) |
+| `apply(view: 'str \| int', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.views.apply` | single | Apply a saved project view preset to the current single-image viewer. (mutates; completion: immediate_semantic; event: project.views.applied) |
 
 ### Async screenshots
 
@@ -1142,12 +1142,12 @@ Access: `app.screenshots`. Async screenshot resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `capture(path: 'str \| Path \| None' = None, *, viewport: 'AsyncViewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; event: viewer.screenshot.completed) |
-| `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; event: viewer.screenshot.completed) |
-| `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. |
-| `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; event: viewer.screenshot.settings.changed) |
+| `capture(path: 'str \| Path \| None' = None, *, viewport: 'AsyncViewport \| str \| None' = None, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.capture` | single, mosaic | Capture the viewer canvas. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_window(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `app.screenshot.capture` | project, single, mosaic | Capture the Odon window. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_workspace(path: 'str \| Path', *, overwrite: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.workspace.screenshot.capture` | single | Capture the composed multi-viewport canvas workspace. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `capture_project(path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `project.screenshot.capture` | project, single, mosaic | Capture the project page. (mutates; task; completion: presentation_dependent; cancellation: cooperative; event: viewer.screenshot.completed) |
+| `get_settings() -> 'Any'` | `viewer.screenshot.settings.get` | single, mosaic | Inspect canvas screenshot overlay, scaling, quick-save, and readiness settings. (completion: immediate_semantic) |
+| `set_settings(*, output_dir: 'str \| Path \| None' = None, clear_output_dir: 'bool' = False, include_scale_bar: 'bool \| None' = None, include_legend: 'bool \| None' = None, scale_bar_scale: 'float \| None' = None, legend_scale: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.screenshot.settings.set` | single, mosaic | Set canvas screenshot overlay, scaling, and quick-save folder options. (mutates; completion: resource_ready; event: viewer.screenshot.settings.changed) |
 
 ### Async labels
 
@@ -1155,11 +1155,11 @@ Access: `app.labels`. Async label resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list() -> 'Any'` | `viewer.labels.list` | single | List discovered NGFF label groups and current render state. |
-| `get() -> 'Any'` | `viewer.labels.get` | single | Inspect current NGFF label selection, loading, visibility, and alignment state. |
-| `load(name: 'str \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.load` | single | Load one discovered NGFF label group into the shared label renderer. (mutates; event: viewer.labels.changed) |
-| `unload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.unload` | single | Unload the active NGFF label group and release its loader state. (mutates; event: viewer.labels.changed) |
-| `set_visibility(visible: 'bool', *, name: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.set_visibility` | single | Set NGFF label visibility, loading the selected group when necessary. (mutates; event: viewer.labels.changed) |
+| `list() -> 'Any'` | `viewer.labels.list` | single | List discovered NGFF label groups and current render state. (completion: immediate_semantic) |
+| `get() -> 'Any'` | `viewer.labels.get` | single | Inspect current NGFF label selection, loading, visibility, and alignment state. (completion: immediate_semantic) |
+| `load(name: 'str \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.load` | single | Load one discovered NGFF label group into the shared label renderer. (mutates; completion: resource_ready; event: viewer.labels.changed) |
+| `unload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.unload` | single | Unload the active NGFF label group and release its loader state. (mutates; completion: immediate_semantic; event: viewer.labels.changed) |
+| `set_visibility(visible: 'bool', *, name: 'str \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.labels.set_visibility` | single | Set NGFF label visibility, loading the selected group when necessary. (mutates; completion: immediate_semantic; event: viewer.labels.changed) |
 
 ### Async memory
 
@@ -1167,12 +1167,12 @@ Access: `app.memory`. Async memory resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get() -> 'Any'` | `memory.get` | single, mosaic | Inspect system RAM, selected channel estimates, and pinned-level lifecycle. |
-| `pin(level: 'int', *, channels: 'Sequence[str \| int] \| None' = None, scope: 'str \| None' = None, item: 'str \| int \| None' = None, force: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `memory.pin` | single, mosaic | Load selected channels from one pyramid level into CPU RAM. (mutates; task; event: memory.changed) |
-| `unpin(level: 'int', *, scope: 'str \| None' = None, item: 'str \| int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin` | single, mosaic | Unload one pinned pyramid level from CPU RAM. (mutates; event: memory.changed) |
-| `unpin_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin_all` | single, mosaic | Unload all pinned pyramid levels from CPU RAM. (mutates; event: memory.changed) |
-| `get_tile_loading() -> 'Any'` | `memory.tiles.get` | single | Inspect tile workers, cache occupancy, target level, and prefetch policy. |
-| `set_tile_loading(*, workers: 'int \| None' = None, prefetch_mode: 'str \| None' = None, prefetch_aggressiveness: 'str \| None' = None, prefer_pinned_finer_levels: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.tiles.set` | single | Set tile worker count, prefetch policy, and pinned-level fallback. (mutates; event: memory.tiles.changed) |
+| `get() -> 'Any'` | `memory.get` | single, mosaic | Inspect system RAM, selected channel estimates, and pinned-level lifecycle. (completion: immediate_semantic) |
+| `pin(level: 'int', *, channels: 'Sequence[str \| int] \| None' = None, scope: 'str \| None' = None, item: 'str \| int \| None' = None, force: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `memory.pin` | single, mosaic | Load selected channels from one pyramid level into CPU RAM. (mutates; task; completion: retained_background; cancellation: cooperative; event: memory.changed) |
+| `unpin(level: 'int', *, scope: 'str \| None' = None, item: 'str \| int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin` | single, mosaic | Unload one pinned pyramid level from CPU RAM. (mutates; completion: immediate_semantic; event: memory.changed) |
+| `unpin_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `memory.unpin_all` | single, mosaic | Unload all pinned pyramid levels from CPU RAM. (mutates; completion: immediate_semantic; event: memory.changed) |
+| `get_tile_loading() -> 'Any'` | `memory.tiles.get` | single | Inspect tile workers, cache occupancy, target level, and prefetch policy. (completion: immediate_semantic) |
+| `set_tile_loading(*, workers: 'int \| None' = None, prefetch_mode: 'str \| None' = None, prefetch_aggressiveness: 'str \| None' = None, prefer_pinned_finer_levels: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `memory.tiles.set` | single | Set tile worker count, prefetch policy, and pinned-level fallback. (mutates; completion: immediate_semantic; event: memory.tiles.changed) |
 
 ### Async objects
 
@@ -1180,41 +1180,41 @@ Access: `app.objects`. Async object resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get_overlay_visibility(**selector: 'Any') -> 'Any'` | `viewer.objects.get_visibility` | single, mosaic | Get object overlay visibility. |
-| `get_state(**selector: 'Any') -> 'Any'` | `viewer.objects.get_state` | single | Get bounded object source, loading, rendering, styling, filter, and selection state. |
-| `load(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.load` | single | Load a CSV, GeoJSON, Parquet, or GeoParquet object source and settle when parsing finishes. (mutates; task; event: viewer.objects.source.changed) |
-| `reload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.reload` | single | Reload the current object source and settle when parsing finishes. (mutates; task; event: viewer.objects.source.changed) |
-| `clear(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.clear` | single | Clear the current object source and all derived object state. (mutates; event: viewer.objects.source.changed) |
-| `cancel_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.cancel_load` | single | Cooperatively cancel the current object-source load. (mutates; event: viewer.objects.source.changed) |
-| `get_segmentation_geojson_source() -> 'Any'` | `viewer.segmentation_geojson.source.get` | single | Get the actor-owned segmentation GeoJSON line source and readiness state. |
-| `load_segmentation_geojson(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.load` | single | Load a segmentation GeoJSON line source on the bounded actor worker service. (mutates; task; event: viewer.segmentation_geojson.source.changed) |
-| `reload_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.reload` | single | Reload the configured segmentation GeoJSON line source on an actor worker. (mutates; task; event: viewer.segmentation_geojson.source.changed) |
-| `clear_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.clear` | single | Clear the actor-owned segmentation GeoJSON line source and shared resource. (mutates; event: viewer.segmentation_geojson.source.changed) |
-| `get_style(**selector: 'Any') -> 'Any'` | `viewer.objects.style.get` | single | Get complete object appearance, color-property, and bounded legend state. |
-| `set_style(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.objects.style.set` | single | Set object visibility, stroke, fill, selection overlay, and color-property appearance. (mutates; event: viewer.objects.style.changed) |
-| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.legend.set` | single | Set visibility and color overrides for object color-property legend values. (mutates; event: viewer.objects.style.changed) |
-| `get_fast_rendering(**selector: 'Any') -> 'Any'` | `viewer.objects.rendering.get_fast` | single, mosaic | Get fast object-rendering mode. |
-| `set_fast_rendering(enabled: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.rendering.set_fast` | single, mosaic | Set fast object-rendering mode. (mutates; event: viewer.objects.rendering.changed) |
-| `list_properties(*, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.list` | single | List the object property schema with bounded pagination and lazy-load state. |
-| `load_property(property: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.load` | single | Load one lazy object property column and settle when its values are available. (mutates; task; event: viewer.objects.properties.changed) |
-| `get_property_values(property: 'str', *, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.values` | single | Read a bounded page of typed values for one loaded object property. |
-| `set_overlay_visibility(visible: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_visibility` | single, mosaic | Set object overlay visibility. (mutates; event: viewer.layers.changed) |
-| `get_selection(**selector: 'Any') -> 'Any'` | `viewer.objects.get_selection` | single | Get selected objects. |
-| `query_rect(rect: 'Sequence[float]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_rect` | single | Query objects in a rectangle. |
-| `query_view(**selector: 'Any') -> 'Any'` | `viewer.objects.query_view` | single | Query objects in the viewport. |
-| `query_lasso(points: 'Iterable[Sequence[float]]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_lasso` | single | Query objects intersecting a world-coordinate lasso with bounded results. |
-| `select_rect(rect: 'Sequence[float]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_rect` | single | Select objects in a rectangle. (mutates; event: viewer.selection.changed) |
-| `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; event: viewer.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; event: viewer.selection.changed) |
-| `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; event: viewer.selection.changed) |
-| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; event: viewer.selection.changed) |
-| `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; event: viewer.objects.focus.changed) |
-| `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; event: viewer.objects.focus.changed) |
-| `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. |
-| `get_filter_revision(**selector: 'Any') -> 'Any'` | `viewer.objects.filters.get_revision` | single | Get the monotonic object-filter revision and bounded visible/hidden counts shared by downstream consumers. |
-| `set_filter(query: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_filter` | single | Set an object filter query. (mutates; event: viewer.layers.changed) |
-| `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; event: viewer.objects.filter.changed) |
-| `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; event: viewer.layers.changed) |
+| `get_overlay_visibility(**selector: 'Any') -> 'Any'` | `viewer.objects.get_visibility` | single, mosaic | Get object overlay visibility. (completion: immediate_semantic) |
+| `get_state(**selector: 'Any') -> 'Any'` | `viewer.objects.get_state` | single | Get bounded object source, loading, rendering, styling, filter, and selection state. (completion: immediate_semantic) |
+| `load(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.load` | single | Load a CSV, GeoJSON, Parquet, or GeoParquet object source and settle when parsing finishes. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.source.changed) |
+| `reload(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.reload` | single | Reload the current object source and settle when parsing finishes. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.source.changed) |
+| `clear(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.clear` | single | Clear the current object source and all derived object state. (mutates; completion: immediate_semantic; event: viewer.objects.source.changed) |
+| `cancel_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.objects.source.cancel_load` | single | Cooperatively cancel the current object-source load. (mutates; completion: immediate_semantic; event: viewer.objects.source.changed) |
+| `get_segmentation_geojson_source() -> 'Any'` | `viewer.segmentation_geojson.source.get` | single | Get the actor-owned segmentation GeoJSON line source and readiness state. (completion: immediate_semantic) |
+| `load_segmentation_geojson(path: 'str \| Path', *, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.load` | single | Load a segmentation GeoJSON line source on the bounded actor worker service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.segmentation_geojson.source.changed) |
+| `reload_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.reload` | single | Reload the configured segmentation GeoJSON line source on an actor worker. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.segmentation_geojson.source.changed) |
+| `clear_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.clear` | single | Clear the actor-owned segmentation GeoJSON line source and shared resource. (mutates; completion: immediate_semantic; event: viewer.segmentation_geojson.source.changed) |
+| `get_style(**selector: 'Any') -> 'Any'` | `viewer.objects.style.get` | single | Get complete object appearance, color-property, and bounded legend state. (completion: immediate_semantic) |
+| `set_style(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.objects.style.set` | single | Set object visibility, stroke, fill, selection overlay, and color-property appearance. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
+| `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.legend.set` | single | Set visibility and color overrides for object color-property legend values. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
+| `get_fast_rendering(**selector: 'Any') -> 'Any'` | `viewer.objects.rendering.get_fast` | single, mosaic | Get fast object-rendering mode. (completion: immediate_semantic) |
+| `set_fast_rendering(enabled: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.rendering.set_fast` | single, mosaic | Set fast object-rendering mode. (mutates; completion: immediate_semantic; event: viewer.objects.rendering.changed) |
+| `list_properties(*, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.list` | single | List the object property schema with bounded pagination and lazy-load state. (completion: immediate_semantic) |
+| `load_property(property: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.load` | single | Load one lazy object property column and settle when its values are available. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.objects.properties.changed) |
+| `get_property_values(property: 'str', *, offset: 'int' = 0, limit: 'int' = 200, **selector: 'Any') -> 'Any'` | `viewer.objects.properties.values` | single | Read a bounded page of typed values for one loaded object property. (completion: immediate_semantic) |
+| `set_overlay_visibility(visible: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_visibility` | single, mosaic | Set object overlay visibility. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `get_selection(**selector: 'Any') -> 'Any'` | `viewer.objects.get_selection` | single | Get selected objects. (completion: immediate_semantic) |
+| `query_rect(rect: 'Sequence[float]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_rect` | single | Query objects in a rectangle. (completion: immediate_semantic) |
+| `query_view(**selector: 'Any') -> 'Any'` | `viewer.objects.query_view` | single | Query objects in the viewport. (completion: immediate_semantic) |
+| `query_lasso(points: 'Iterable[Sequence[float]]', **selector: 'Any') -> 'Any'` | `viewer.objects.query_lasso` | single | Query objects intersecting a world-coordinate lasso with bounded results. (completion: immediate_semantic) |
+| `select_rect(rect: 'Sequence[float]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_rect` | single | Select objects in a rectangle. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_lasso(points: 'Iterable[Sequence[float]]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.select_lasso` | single | Select objects intersecting a world-coordinate lasso with explicit set semantics. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_selection` | single | Clear object selection. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_ids(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_ids` | single | Select objects by stable IDs with replace, add, remove, or toggle semantics. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `select_filtered(*, mode: 'str' = 'replace', viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.selection.select_filtered` | single | Apply an explicitly sourced viewport filter or standalone query to selection. (mutates; completion: immediate_semantic; event: viewer.selection.changed) |
+| `focus(value: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.set` | single | Focus an object by stable ID or index and optionally fit it in the viewport. (mutates; completion: immediate_semantic; event: viewer.objects.focus.changed) |
+| `clear_focus(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.focus.clear` | single | Clear primary object focus without clearing the selection set. (mutates; completion: immediate_semantic; event: viewer.objects.focus.changed) |
+| `get_filter(**selector: 'Any') -> 'Any'` | `viewer.objects.get_filter` | single | Get object filter state. (completion: immediate_semantic) |
+| `get_filter_revision(**selector: 'Any') -> 'Any'` | `viewer.objects.filters.get_revision` | single | Get the monotonic object-filter revision and bounded visible/hidden counts shared by downstream consumers. (completion: immediate_semantic) |
+| `set_filter(query: 'str', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.set_filter` | single | Set an object filter query. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
+| `set_filter_model(*, mode: 'str' = 'simple', clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str' = 'all', query: 'str \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.filters.set_model` | single | Set the complete typed simple-clause or boolean-query object filter model. (mutates; completion: immediate_semantic; event: viewer.objects.filter.changed) |
+| `clear_filter(*, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.clear_filter` | single | Clear object filtering. (mutates; completion: immediate_semantic; event: viewer.layers.changed) |
 
 ### Async annotations
 
@@ -1222,15 +1222,15 @@ Access: `app.annotations`. Async point annotation resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. |
-| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. |
-| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; event: viewer.annotations.changed) |
-| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; event: viewer.annotations.changed) |
-| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; event: viewer.annotations.changed) |
-| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; event: viewer.annotations.changed) |
-| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; event: viewer.annotations.changed) |
-| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; event: viewer.annotations.changed) |
-| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; event: viewer.annotations.changed) |
+| `list_layers() -> 'Any'` | `viewer.annotations.layers.list` | single, mosaic | List actor-owned point annotation layers, status, schema, and bounded resource metadata. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.annotations.layers.get` | single, mosaic | Get one point annotation layer by stable numeric ID. (completion: immediate_semantic) |
+| `create_layer(name: 'str \| None' = None, *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.create` | single, mosaic | Create a point annotation layer. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **state: 'Any') -> 'Any'` | `viewer.annotations.layers.update` | single, mosaic | Update point annotation layer name, visibility, style, mapping, or offset. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.layers.delete` | single, mosaic | Delete a point annotation layer and release its loaded resource. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
+| `inspect(layer_id: 'int', path: 'str \| Path', *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.inspect` | single, mosaic | Inspect an annotation Parquet schema on the background resource service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `load(layer_id: 'int', path: 'str \| Path \| None' = None, *, if_revision: 'int \| None' = None, **columns: 'str') -> 'Any'` | `viewer.annotations.source.load` | single, mosaic | Load point annotations from Parquet on the background resource service. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `reload(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.reload` | single, mosaic | Reload a point annotation layer from its configured Parquet source. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.annotations.changed) |
+| `clear_source(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.annotations.source.clear` | single, mosaic | Clear an annotation source and loaded resource while retaining the layer. (mutates; completion: immediate_semantic; event: viewer.annotations.changed) |
 
 ### Async masks
 
@@ -1238,24 +1238,24 @@ Access: `app.masks`. Async mask resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_layers() -> 'Any'` | `viewer.masks.layers.list` | single | List editable and read-only mask layers with complete presentation state. |
-| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.masks.layers.get` | single | Get one mask layer by stable ID. |
-| `create_layer(name: 'str \| None' = None, *, editable: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.create` | single | Create an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.masks.layers.update` | single | Update mask layer name, presentation, editability, or offset. (mutates; event: viewer.masks.changed) |
-| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.delete` | single | Delete a mask layer and its polygons. (mutates; event: viewer.masks.changed) |
-| `list_polygons(layer_id: 'int', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `viewer.masks.polygons.list` | single | List a bounded page of mask polygons in local and world coordinates. |
-| `add_polygon(layer_id: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.add` | single | Add a closed polygon to an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `update_polygon(layer_id: 'int', index: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.update` | single | Replace the vertices of one editable mask polygon. (mutates; event: viewer.masks.changed) |
-| `remove_polygon(layer_id: 'int', index: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.remove` | single | Remove one polygon from an editable mask layer. (mutates; event: viewer.masks.changed) |
-| `get_selection() -> 'Any'` | `viewer.masks.selection.get` | single | Get the selected mask polygon and optional selected vertex. |
-| `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; event: viewer.masks.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; event: viewer.masks.selection.changed) |
-| `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; event: viewer.masks.changed) |
-| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; event: viewer.masks.changed) |
-| `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. |
-| `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. |
-| `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; event: viewer.masks.changed) |
-| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; event: viewer.masks.changed) |
+| `list_layers() -> 'Any'` | `viewer.masks.layers.list` | single | List editable and read-only mask layers with complete presentation state. (completion: immediate_semantic) |
+| `get_layer(layer_id: 'int') -> 'Any'` | `viewer.masks.layers.get` | single | Get one mask layer by stable ID. (completion: immediate_semantic) |
+| `create_layer(name: 'str \| None' = None, *, editable: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.create` | single | Create an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `update_layer(layer_id: 'int', *, if_revision: 'int \| None' = None, **changes: 'Any') -> 'Any'` | `viewer.masks.layers.update` | single | Update mask layer name, presentation, editability, or offset. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `delete_layer(layer_id: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.layers.delete` | single | Delete a mask layer and its polygons. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `list_polygons(layer_id: 'int', *, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `viewer.masks.polygons.list` | single | List a bounded page of mask polygons in local and world coordinates. (completion: immediate_semantic) |
+| `add_polygon(layer_id: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.add` | single | Add a closed polygon to an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `update_polygon(layer_id: 'int', index: 'int', vertices: 'Iterable[Sequence[float]]', *, coordinate_space: 'str' = 'world', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.update` | single | Replace the vertices of one editable mask polygon. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `remove_polygon(layer_id: 'int', index: 'int', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.polygons.remove` | single | Remove one polygon from an editable mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `get_selection() -> 'Any'` | `viewer.masks.selection.get` | single | Get the selected mask polygon and optional selected vertex. (completion: immediate_semantic) |
+| `select(layer_id: 'int', index: 'int', *, vertex_index: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.set` | single | Select one mask polygon and optional vertex by layer ID and index. (mutates; completion: immediate_semantic; event: viewer.masks.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.selection.clear` | single | Clear the selected mask polygon and vertex. (mutates; completion: immediate_semantic; event: viewer.masks.selection.changed) |
+| `undo(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.undo` | single | Undo the most recent mask or mask-offset edit. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `import_geojson(path: 'str \| Path', *, name: 'str \| None' = None, editable: 'bool' = True, downsample_factor: 'float' = 1.0, replace_layer_id: 'int \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.import_geojson` | single | Import GeoJSON polygon or line geometry as a mask layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `export_geojson(path: 'str \| Path', *, layer_id: 'int \| None' = None, overwrite: 'bool' = False) -> 'Any'` | `viewer.masks.export_geojson` | single | Export one mask layer or all mask layers as GeoJSON. (completion: immediate_semantic) |
+| `get_persistence() -> 'Any'` | `viewer.masks.persistence.get` | single | Inspect mask persistence state for the current dataset and project. (completion: immediate_semantic) |
+| `sync_to_project(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.sync` | single | Synchronize live mask layers into the current project in memory. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
+| `append_to_geojson(path: 'str \| Path', *, name: 'str' = 'Exclusion masks', downsample_factor: 'float' = 1.0, roi_root: 'str \| Path \| None' = None, expected_generation: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.masks.persistence.append_geojson` | single | Append editable non-file-backed masks to a project GeoJSON, clear only the saved polygons, and reload the read-only source layer. (mutates; completion: immediate_semantic; event: viewer.masks.changed) |
 
 ### Async thresholds
 
@@ -1263,13 +1263,13 @@ Access: `app.thresholds`. Async threshold resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_levels() -> 'Any'` | `viewer.thresholds.levels.list` | single | List image levels and whole-image threshold safety limits. |
-| `get_preview() -> 'Any'` | `viewer.thresholds.preview.get` | single | Get threshold-preview configuration, source extent, and bounded summary statistics. |
-| `configure(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.configure` | single | Configure threshold scope, level, channel, value, and component filtering. (mutates; event: viewer.thresholds.preview.changed) |
-| `start_preview(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.start` | single | Read the selected channel region and start an interactive threshold preview. (mutates; task; event: viewer.thresholds.preview.changed) |
-| `refresh_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.refresh` | single | Reload source pixels for the active threshold preview. (mutates; task; event: viewer.thresholds.preview.changed) |
-| `apply_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.apply` | single | Filter components, polygonize the preview, and create an editable mask layer. (mutates; task; event: viewer.masks.changed) |
-| `cancel_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.cancel` | single | Cancel and clear the active threshold preview. (mutates; event: viewer.thresholds.preview.changed) |
+| `list_levels() -> 'Any'` | `viewer.thresholds.levels.list` | single | List image levels and whole-image threshold safety limits. (completion: immediate_semantic) |
+| `get_preview() -> 'Any'` | `viewer.thresholds.preview.get` | single | Get threshold-preview configuration, source extent, and bounded summary statistics. (completion: immediate_semantic) |
+| `configure(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.configure` | single | Configure threshold scope, level, channel, value, and component filtering. (mutates; completion: immediate_semantic; event: viewer.thresholds.preview.changed) |
+| `start_preview(*, scope: 'str \| None' = None, level: 'int \| None' = None, channel: 'int \| str \| None' = None, threshold: 'int \| None' = None, min_component_pixels: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.start` | single | Read the selected channel region and start an interactive threshold preview. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.thresholds.preview.changed) |
+| `refresh_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.refresh` | single | Reload source pixels for the active threshold preview. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.thresholds.preview.changed) |
+| `apply_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.apply` | single | Filter components, polygonize the preview, and create an editable mask layer. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.masks.changed) |
+| `cancel_preview(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.thresholds.preview.cancel` | single | Cancel and clear the active threshold preview. (mutates; completion: immediate_semantic; event: viewer.thresholds.preview.changed) |
 
 ### Async analysis
 
@@ -1277,14 +1277,14 @@ Access: `app.analysis`. Async analysis resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. |
-| `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; event: viewer.analysis.changed) |
-| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. |
-| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. |
-| `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. |
-| `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; event: viewer.analysis.warmup.changed) |
-| `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; event: viewer.analysis.changed) |
-| `export_preset(path: 'str \| Path', *, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.export` | single | Export calls as a reusable preset JSON file. |
+| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.get` | single | Get persisted calls, named selections, channel mappings, and analysis readiness. (completion: immediate_semantic) |
+| `set(state: 'Mapping[str, Any]', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.set` | single | Atomically replace calls, named selections, mappings, and live-analysis options. (mutates; completion: immediate_semantic; event: viewer.analysis.changed) |
+| `histogram(property: 'str', *, bins: 'int' = 128, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.histogram` | single | Compute a bounded histogram for a numeric property over the active filtered set. (completion: immediate_semantic) |
+| `suggest_thresholds(property: 'str', *, method: 'str' = 'quantiles', count: 'int' = 3, transform: 'str' = 'none', target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False) -> 'Any'` | `viewer.analysis.suggest_thresholds` | single | Suggest quantile or one-dimensional K-means thresholds for a numeric property. (completion: immediate_semantic) |
+| `get_warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.get` | single | Inspect project-linked property-analysis cache warmup progress. (completion: resource_ready) |
+| `warmup(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.warmup.start` | single | Start project-linked property-analysis cache warmup. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.analysis.warmup.changed) |
+| `import_preset(path: 'str \| Path', *, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.import` | single | Import a call preset JSON file. (mutates; completion: immediate_semantic; event: viewer.analysis.changed) |
+| `export_preset(path: 'str \| Path', *, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.analysis.presets.export` | single | Export calls as a reusable preset JSON file. (completion: immediate_semantic) |
 
 ### Async measurements
 
@@ -1292,11 +1292,11 @@ Access: `app.measurements`. Async measurement resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. |
-| `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; event: viewer.measurements.changed) |
-| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; event: viewer.measurements.changed) |
-| `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; event: viewer.measurements.changed) |
-| `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. |
+| `get(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.get` | single | Inspect polygon intensity measurement configuration and progress. (completion: resource_ready) |
+| `configure(*, metric: 'str \| None' = None, level: 'int \| None' = None, concurrency: 'int \| None' = None, filtered_only: 'bool \| None' = None, prefix: 'str \| None' = None, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.configure` | single | Configure metric, image level, filtered scope, concurrency, and output prefix. (mutates; completion: resource_ready; event: viewer.measurements.changed) |
+| `start(*, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None, **configuration: 'Any') -> 'Any'` | `viewer.measurements.start` | single | Start background mean or exact-median polygon intensity measurement. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.measurements.changed) |
+| `cancel(*, target: 'str' = 'objects', layer_id: 'int \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.measurements.cancel` | single | Cooperatively cancel the active polygon intensity measurement. (mutates; completion: resource_ready; event: viewer.measurements.changed) |
+| `list_generated_properties(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `viewer.measurements.properties.list` | single | List numeric properties generated by the configured measurement prefix. (completion: resource_ready) |
 
 ### Async object exports
 
@@ -1304,11 +1304,11 @@ Access: `app.object_exports`. Async object-export resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. |
-| `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. |
-| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; event: exports.objects.changed) |
-| `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; event: exports.objects.changed) |
-| `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; event: exports.objects.changed) |
+| `list_columns(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.columns` | single | List source, geometry, measurement, call, and named-selection export columns. (completion: resource_ready) |
+| `get_state(*, target: 'str' = 'objects', layer_id: 'int \| None' = None) -> 'Any'` | `exports.objects.get_state` | single | Inspect enriched object export progress and status. (completion: resource_ready) |
+| `export(path: 'str \| Path', *, format: 'str \| None' = None, scope: 'str' = 'all', columns: 'Iterable[str] \| None' = None, overwrite: 'bool' = False, target: 'str' = 'objects', layer_id: 'int \| None' = None, viewport_id: 'str \| None' = None, filter_query: 'str \| None' = None, use_all_objects: 'bool' = False, use_active_viewport_filter: 'bool' = False, if_revision: 'int \| None' = None) -> 'Any'` | `exports.objects.start` | single | Export all, filtered, or selected objects to enriched CSV or GeoParquet. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
+| `export_csv(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_csv` | single | Export all, filtered, or selected objects and derived columns to CSV. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
+| `export_geoparquet(path: 'str \| Path', **options: 'Any') -> 'Any'` | `exports.objects.export_geoparquet` | single | Export all, filtered, or selected objects with WKB geometry and GeoParquet metadata. (mutates; task; completion: retained_background; cancellation: cooperative; event: exports.objects.changed) |
 
 ### Async mosaic
 
@@ -1316,33 +1316,33 @@ Access: `app.mosaic`. Async mosaic resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `configure_layout(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `mosaic.layout.configure` | mosaic | Configure mosaic layout. (mutates; event: mosaic.layout.changed) |
-| `get_state() -> 'Any'` | `mosaic.get_state` | mosaic | Get complete mosaic layout, ROI, and focus state. |
-| `list_items(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `mosaic.items.list` | mosaic | List positioned mosaic items with stable ordering and pagination. |
-| `get_selection() -> 'Any'` | `mosaic.selection.get` | mosaic | Get selected mosaic ROIs. |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `select_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `select_range(start: 'str', end: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; event: mosaic.selection.changed) |
-| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.clear` | mosaic | Clear the mosaic ROI selection. (mutates; event: mosaic.selection.changed) |
-| `get_focus() -> 'Any'` | `mosaic.focus.get` | mosaic | Get the focused mosaic ROI. |
-| `set_focus(roi: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.set` | mosaic | Focus a mosaic ROI by stable ROI ID or index. (mutates; event: mosaic.focus.changed) |
-| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.next` | mosaic | Focus the next mosaic ROI. (mutates; event: mosaic.focus.changed) |
-| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.previous` | mosaic | Focus the previous mosaic ROI. (mutates; event: mosaic.focus.changed) |
-| `fit_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.fit` | mosaic | Fit the focused mosaic ROI to the viewport. (mutates; event: viewer.camera.changed) |
-| `clear_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.clear` | mosaic | Clear focused mosaic ROI without changing selection. (mutates; event: mosaic.focus.changed) |
-| `fit_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.fit_all` | mosaic | Fit all mosaic items to the viewport. (mutates; event: viewer.camera.changed) |
-| `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. |
-| `get_object_style() -> 'Any'` | `mosaic.objects.style.get` | mosaic | Get actor-owned global mosaic object presentation and legend style. |
-| `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; event: mosaic.objects.changed) |
-| `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. |
-| `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; event: mosaic.objects.selection.changed) |
-| `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; event: mosaic.objects.selection.changed) |
-| `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; event: mosaic.objects.changed) |
-| `load_objects(*, item_ids: 'Sequence[int] \| None' = None, roi_ids: 'Sequence[str] \| None' = None, scope: 'str \| None' = None, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load` | mosaic | Load object segmentations for explicit mosaic items, ROI IDs, the selection, or all available ROIs. (mutates; task; event: mosaic.objects.changed) |
-| `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; event: mosaic.objects.changed) |
-| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; event: mosaic.ui.changed) |
-| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; event: viewer.rendering.changed) |
-| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; event: mosaic.ui.changed) |
+| `configure_layout(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `mosaic.layout.configure` | mosaic | Configure mosaic layout. (mutates; completion: immediate_semantic; event: mosaic.layout.changed) |
+| `get_state() -> 'Any'` | `mosaic.get_state` | mosaic | Get complete mosaic layout, ROI, and focus state. (completion: immediate_semantic) |
+| `list_items(*, offset: 'int' = 0, limit: 'int' = 200) -> 'Any'` | `mosaic.items.list` | mosaic | List positioned mosaic items with stable ordering and pagination. (completion: immediate_semantic) |
+| `get_selection() -> 'Any'` | `mosaic.selection.get` | mosaic | Get selected mosaic ROIs. (completion: immediate_semantic) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `select_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `select_range(start: 'str', end: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.set` | mosaic | Select mosaic ROIs using stable IDs and replace, add, remove, toggle, all, or range semantics. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `clear_selection(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.selection.clear` | mosaic | Clear the mosaic ROI selection. (mutates; completion: immediate_semantic; event: mosaic.selection.changed) |
+| `get_focus() -> 'Any'` | `mosaic.focus.get` | mosaic | Get the focused mosaic ROI. (completion: immediate_semantic) |
+| `set_focus(roi: 'str \| int', *, fit: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.set` | mosaic | Focus a mosaic ROI by stable ROI ID or index. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.next` | mosaic | Focus the next mosaic ROI. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.previous` | mosaic | Focus the previous mosaic ROI. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `fit_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.fit` | mosaic | Fit the focused mosaic ROI to the viewport. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `clear_focus(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.focus.clear` | mosaic | Clear focused mosaic ROI without changing selection. (mutates; completion: immediate_semantic; event: mosaic.focus.changed) |
+| `fit_all(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.fit_all` | mosaic | Fit all mosaic items to the viewport. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. (completion: immediate_semantic) |
+| `get_object_style() -> 'Any'` | `mosaic.objects.style.get` | mosaic | Get actor-owned global mosaic object presentation and legend style. (completion: immediate_semantic) |
+| `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
+| `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. (completion: immediate_semantic) |
+| `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
+| `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
+| `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; completion: retained_background; cancellation: cooperative; event: mosaic.objects.changed) |
+| `load_objects(*, item_ids: 'Sequence[int] \| None' = None, roi_ids: 'Sequence[str] \| None' = None, scope: 'str \| None' = None, downsample_factor: 'float' = 1.0, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load` | mosaic | Load object segmentations for explicit mosaic items, ROI IDs, the selection, or all available ROIs. (mutates; task; completion: retained_background; cancellation: cooperative; event: mosaic.objects.changed) |
+| `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; completion: immediate_semantic; event: mosaic.ui.changed) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; completion: immediate_semantic; event: viewer.rendering.changed) |
+| `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; completion: immediate_semantic; event: mosaic.ui.changed) |
 
 ### Async data resources
 
@@ -1350,10 +1350,10 @@ Access: `app.data`. Async external-data resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncDataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates) |
-| `get(resource_id: 'str') -> 'AsyncDataResource'` | `data.resources.get` | protocol | Get an external data descriptor. |
-| `list() -> 'list[AsyncDataResource]'` | `data.resources.list` | protocol | List registered external data. |
-| `remove(resource_id: 'str') -> 'None'` | `data.resources.remove` | protocol | Remove an unreferenced data descriptor. (mutates) |
+| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncDataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
+| `get(resource_id: 'str') -> 'AsyncDataResource'` | `data.resources.get` | protocol | Get an external data descriptor. (completion: resource_ready) |
+| `list() -> 'list[AsyncDataResource]'` | `data.resources.list` | protocol | List registered external data. (completion: resource_ready) |
+| `remove(resource_id: 'str') -> 'None'` | `data.resources.remove` | protocol | Remove an unreferenced data descriptor. (mutates; completion: resource_ready) |
 | `register_numpy(array: 'Any', *, axes: 'Sequence[str]', units: 'Sequence[str]' = (), scale: 'Sequence[float]' = (), translation: 'Sequence[float]' = (), provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncDataResource'` | SDK-local/delegated | Inherited from delegated operation | Register numpy. |
 
 ### Async data handle
@@ -1372,13 +1372,13 @@ Access: `app.layers`. Async external-layer resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `add(data: 'AsyncDataResource \| str', *, name: 'str', kind: 'str', layer_id: 'str \| None' = None, visible: 'bool' = True, opacity: 'float' = 1.0, ownership: 'str' = 'session', style: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncLayer'` | `viewer.layers.add` | protocol | Add a referenced viewer layer. (mutates) |
-| `get(layer_id: 'str') -> 'AsyncLayer'` | `viewer.layers.get` | protocol | Get a referenced viewer layer. |
-| `list() -> 'list[AsyncLayer]'` | `viewer.layers.list` | protocol | List referenced viewer layers. |
-| `update(layer_id: 'str', **changes: 'Any') -> 'AsyncLayer'` | `viewer.layers.update` | protocol | Update layer state or style. (mutates) |
+| `add(data: 'AsyncDataResource \| str', *, name: 'str', kind: 'str', layer_id: 'str \| None' = None, visible: 'bool' = True, opacity: 'float' = 1.0, ownership: 'str' = 'session', style: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncLayer'` | `viewer.layers.add` | protocol | Add a referenced viewer layer. (mutates; completion: resource_ready) |
+| `get(layer_id: 'str') -> 'AsyncLayer'` | `viewer.layers.get` | protocol | Get a referenced viewer layer. (completion: resource_ready) |
+| `list() -> 'list[AsyncLayer]'` | `viewer.layers.list` | protocol | List referenced viewer layers. (completion: resource_ready) |
+| `update(layer_id: 'str', **changes: 'Any') -> 'AsyncLayer'` | `viewer.layers.update` | protocol | Update layer state or style. (mutates; completion: resource_ready) |
 | `replace_data(layer_id: 'str', data: 'AsyncDataResource \| str') -> 'AsyncLayer'` | SDK-local/delegated | Inherited from delegated operation | Replace data. |
-| `remove(layer_id: 'str') -> 'None'` | `viewer.layers.remove` | protocol | Remove a referenced layer. (mutates) |
-| `reorder(layers: 'Sequence[AsyncLayer \| str]') -> 'list[AsyncLayer]'` | `viewer.layers.reorder` | protocol | Set referenced layer order. (mutates) |
+| `remove(layer_id: 'str') -> 'None'` | `viewer.layers.remove` | protocol | Remove a referenced layer. (mutates; completion: resource_ready) |
+| `reorder(layers: 'Sequence[AsyncLayer \| str]') -> 'list[AsyncLayer]'` | `viewer.layers.reorder` | protocol | Set referenced layer order. (mutates; completion: resource_ready) |
 
 ### Async external layer handle
 
@@ -1398,11 +1398,11 @@ Access: `app.tasks`. Async retained-task collection.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `start(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, label: 'str \| None' = None) -> 'AsyncTask'` | `tasks.start` | protocol | Run an application command as a retained task. (mutates; task) |
-| `get(task_id: 'str') -> 'AsyncTask'` | `tasks.get` | protocol | Get a task snapshot. |
-| `list(*, include_finished: 'bool' = True) -> 'list[AsyncTask]'` | `tasks.list` | protocol | List retained tasks. |
-| `cancel(task_id: 'str') -> 'AsyncTask'` | `tasks.cancel` | protocol | Cancel a queued task. (mutates) |
-| `forget(task_id: 'str') -> 'None'` | `tasks.forget` | protocol | Forget a terminal task. (mutates) |
+| `start(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, label: 'str \| None' = None) -> 'AsyncTask'` | `tasks.start` | protocol | Run an application command as a retained task. (mutates; task; completion: retained_background; cancellation: cooperative) |
+| `get(task_id: 'str') -> 'AsyncTask'` | `tasks.get` | protocol | Get a task snapshot. (completion: immediate_semantic) |
+| `list(*, include_finished: 'bool' = True) -> 'list[AsyncTask]'` | `tasks.list` | protocol | List retained tasks. (completion: immediate_semantic) |
+| `cancel(task_id: 'str') -> 'AsyncTask'` | `tasks.cancel` | protocol | Cancel a queued task. (mutates; completion: immediate_semantic) |
+| `forget(task_id: 'str') -> 'None'` | `tasks.forget` | protocol | Forget a terminal task. (mutates; completion: immediate_semantic) |
 
 ### Async task handle
 
@@ -1422,9 +1422,9 @@ Access: `app.events`. Async subscriptions and iteration.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `subscribe(events: 'str \| Iterable[str]', callback: 'AsyncEventCallback \| None' = None) -> 'Mapping[str, Any]'` | `events.subscribe` | protocol | Subscribe to server-pushed event patterns. |
-| `unsubscribe(events: 'str \| Iterable[str] \| None' = None) -> 'Mapping[str, Any]'` | `events.unsubscribe` | protocol | Remove event subscriptions. |
-| `status() -> 'Mapping[str, Any]'` | `events.get_status` | protocol | Inspect event queue diagnostics. |
+| `subscribe(events: 'str \| Iterable[str]', callback: 'AsyncEventCallback \| None' = None) -> 'Mapping[str, Any]'` | `events.subscribe` | protocol | Subscribe to server-pushed event patterns. (completion: immediate_semantic) |
+| `unsubscribe(events: 'str \| Iterable[str] \| None' = None) -> 'Mapping[str, Any]'` | `events.unsubscribe` | protocol | Remove event subscriptions. (completion: immediate_semantic) |
+| `status() -> 'Mapping[str, Any]'` | `events.get_status` | protocol | Inspect event queue diagnostics. (completion: immediate_semantic) |
 | `remove_callback(callback: 'AsyncEventCallback') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove callback. |
 | `next(timeout: 'float \| None' = None) -> 'Event'` | SDK-local/delegated | Inherited from delegated operation | Next. |
 | `iter() -> 'AsyncIterator[Event]'` | SDK-local/delegated | Inherited from delegated operation | Iter. |
@@ -1435,10 +1435,10 @@ Access: `app.ui`. Async declarative UI registry.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'AsyncExtension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates) |
-| `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. |
-| `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. |
-| `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. |
+| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'AsyncExtension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
+| `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. (completion: immediate_semantic) |
+| `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. (completion: immediate_semantic) |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. (completion: immediate_semantic) |
 
 ### Async UI extension
 
@@ -1447,8 +1447,8 @@ Access: returned by `app.ui.register_extension()`. Async UI extension handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
-| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates) |
-| `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates) |
+| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates; completion: immediate_semantic) |
 
 ### Async UI contribution
 
@@ -1457,8 +1457,8 @@ Access: returned by `extension.register()`. Async UI contribution handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `contribution_id (property)` | SDK-local/delegated | Inherited from delegated operation | Contribution id. |
-| `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'AsyncContribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates) |
-| `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates) |
+| `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'AsyncContribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
+| `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
 
 ## Error classes
 

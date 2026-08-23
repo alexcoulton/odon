@@ -829,10 +829,9 @@ impl OmeZarrViewerApp {
         {
             self.cancel_viewport_transient_gestures();
         }
-        self.screenshot_pending
+        self.screenshot_capture
+            .pending
             .retain(|pending| projected_viewport_ids.contains(&pending.viewport_id));
-        self.screenshot_in_flight
-            .retain(|_, viewport_id| projected_viewport_ids.contains(viewport_id));
         let layout = projection
             .get("layout")
             .and_then(serde_json::Value::as_str)

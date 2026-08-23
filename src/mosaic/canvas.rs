@@ -224,7 +224,7 @@ impl MosaicViewerApp {
             callback: Arc::new(cb),
         });
 
-        let screenshot = self.screenshot_pending.take();
+        let screenshot = self.screenshot_capture.pending.take();
         let screenshot_active = screenshot.is_some();
 
         // Overlay layers (in the user-controlled order).
@@ -407,10 +407,7 @@ impl MosaicViewerApp {
         }
 
         if let Some(spec) = screenshot {
-            let tx = self.screenshot_worker.tx.clone();
-            let id = spec.id;
-            let path = spec.path.clone();
-            let presentation = spec.presentation.clone();
+            let presentation = spec.presentation;
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
                 let viewport = info.viewport_in_pixels();
                 let x_px = viewport.left_px;
@@ -419,15 +416,13 @@ impl MosaicViewerApp {
                 let h_px = viewport.height_px;
 
                 if w_px <= 0 || h_px <= 0 {
-                    if let Some(reply) = presentation.as_ref() {
-                        let _ =
-                            reply
-                                .tx
-                                .send(odon::control::actor::PresentationCaptureCompletion {
-                                    capture_id: reply.capture_id,
-                                    result: Err("mosaic capture rectangle is empty".to_string()),
-                                });
-                    }
+                    let _ =
+                        presentation
+                            .tx
+                            .send(odon::control::actor::PresentationCaptureCompletion {
+                                capture_id: presentation.capture_id,
+                                result: Err("mosaic capture rectangle is empty".to_string()),
+                            });
                     return;
                 }
 
@@ -446,27 +441,17 @@ impl MosaicViewerApp {
                         glow::PixelPackData::Slice(Some(rgba.as_mut_slice())),
                     );
                 }
-                if let Some(reply) = presentation.as_ref() {
-                    let _ = reply
-                        .tx
-                        .send(odon::control::actor::PresentationCaptureCompletion {
-                            capture_id: reply.capture_id,
-                            result: Ok(odon::control::actor::PresentationPixels {
-                                width: w_px as usize,
-                                height: h_px as usize,
-                                rgba,
-                                bottom_up: true,
-                            }),
-                        });
-                } else {
-                    let _ = tx.send(ScreenshotWorkerMsg::SavePng {
-                        id,
-                        path: path.clone(),
-                        width: w_px as usize,
-                        height: h_px as usize,
-                        rgba_bottom_up: rgba,
+                let _ = presentation
+                    .tx
+                    .send(odon::control::actor::PresentationCaptureCompletion {
+                        capture_id: presentation.capture_id,
+                        result: Ok(odon::control::actor::PresentationPixels {
+                            width: w_px as usize,
+                            height: h_px as usize,
+                            rgba,
+                            bottom_up: true,
+                        }),
                     });
-                }
             });
             ui.painter().add(egui::PaintCallback {
                 rect,

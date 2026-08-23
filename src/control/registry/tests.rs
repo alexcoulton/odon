@@ -39,6 +39,16 @@ fn every_method_has_introspection_metadata() {
             descriptor.name
         );
         assert!(request_schema_for(descriptor).is_object());
+        assert!(
+            !descriptor
+                .completion_contract()
+                .completion_point()
+                .is_empty()
+        );
+        assert!(matches!(
+            descriptor.cancellation_contract(),
+            "cooperative" | "not_applicable"
+        ));
     }
     assert_eq!(
         method("viewer.viewports.camera.fit")
@@ -54,9 +64,37 @@ fn every_method_has_introspection_metadata() {
         method("viewer.screenshot.capture").unwrap().execution_class,
         ExecutionClass::Presentation
     );
+    assert_eq!(
+        method("viewer.screenshot.capture")
+            .unwrap()
+            .completion_contract(),
+        CompletionContract::PresentationDependent
+    );
+    assert_eq!(
+        method("datasets.open_ome_zarr")
+            .unwrap()
+            .completion_contract(),
+        CompletionContract::RetainedBackground
+    );
+    assert_eq!(
+        method("viewer.screenshot.settings.set")
+            .unwrap()
+            .completion_contract(),
+        CompletionContract::ResourceReady
+    );
+    assert_eq!(
+        method("viewer.screenshot.settings.get")
+            .unwrap()
+            .completion_contract(),
+        CompletionContract::ImmediateSemantic
+    );
     let catalog = catalog_json();
     assert!(catalog.as_array().unwrap().iter().all(|entry| {
-        entry.get("execution_route").is_some() && entry["execution_route"]["by_mode"].is_object()
+        entry.get("execution_route").is_some()
+            && entry["execution_route"]["by_mode"].is_object()
+            && entry["completion_contract"].is_string()
+            && entry["completion_point"].is_string()
+            && entry["cancellation"].is_string()
     }));
 }
 

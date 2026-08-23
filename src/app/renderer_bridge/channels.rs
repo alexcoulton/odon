@@ -107,8 +107,7 @@ impl OmeZarrViewerApp {
         let workspace_canvas_ready = self.control_workspace_canvas_ready();
         let busy = self.is_loading_scene()
             || !async_reasons.is_empty()
-            || !self.screenshot_pending.is_empty()
-            || !self.screenshot_in_flight.is_empty();
+            || !self.screenshot_capture.pending.is_empty();
         serde_json::json!({
             "busy": busy,
             "canvas_ready": workspace_canvas_ready,
@@ -137,10 +136,10 @@ impl OmeZarrViewerApp {
             },
             "pinned_levels_loading": self.projected_memory_running(),
             "screenshot": {
-                "pending": !self.screenshot_pending.is_empty(),
-                "pending_count": self.screenshot_pending.len(),
-                "in_flight": !self.screenshot_in_flight.is_empty(),
-                "in_flight_count": self.screenshot_in_flight.len(),
+                "pending": !self.screenshot_capture.pending.is_empty(),
+                "pending_count": self.screenshot_capture.pending.len(),
+                "in_flight": false,
+                "in_flight_count": 0,
             },
         })
     }

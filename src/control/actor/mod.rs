@@ -145,7 +145,7 @@ use object_exports::begin_object_export;
 use objects::{begin_object_filter_evaluation, begin_object_selection_filter_evaluation};
 pub use presentation::{
     PresentationCaptureCompletion, PresentationCaptureRequest, PresentationCaptureScope,
-    PresentationPixels,
+    PresentationPixels, PresentationResourceGenerations,
 };
 use presentation::{PresentationCaptureManager, ScreenshotWriteSpec};
 use project_io::{

@@ -25,8 +25,7 @@ use crate::app_support::memory::{
 };
 use crate::app_support::repaint as repaint_control;
 use crate::app_support::screenshot::{
-    ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
-    next_numbered_screenshot_path,
+    RendererScreenshotRequest, ScreenshotDialogState, ScreenshotSettings,
 };
 use crate::camera::Camera;
 use crate::custom::cell_thresholds::CellThresholdPointsAdapter;
@@ -727,7 +726,12 @@ struct SpatialImageViewportPresentation {
 #[derive(Debug, Clone)]
 struct PendingViewportScreenshot {
     viewport_id: ViewportId,
-    request: ScreenshotRequest,
+    request: RendererScreenshotRequest,
+}
+
+#[derive(Debug, Default)]
+struct ViewerScreenshotCaptureAdapter {
+    pending: VecDeque<PendingViewportScreenshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -1999,13 +2003,8 @@ pub struct OmeZarrViewerApp {
     layer_transform: Option<LayerTransformState>,
     tiff_plane_state: Option<TiffPlaneState>,
     tiff_plane_draft: Option<TiffPlaneDraft>,
-    screenshot_settings: ScreenshotSettings,
-    screenshot_settings_open: bool,
-    screenshot_worker: ScreenshotWorkerHandle,
-    screenshot_next_id: u64,
-    screenshot_pending: VecDeque<PendingViewportScreenshot>,
-    screenshot_in_flight: HashMap<u64, ViewportId>,
-    screenshot_output_dir: Option<PathBuf>,
+    screenshot_dialog: ScreenshotDialogState,
+    screenshot_capture: ViewerScreenshotCaptureAdapter,
     viewport_workspace: Option<ViewportWorkspace<ViewerViewportState>>,
     native_viewport_command_scope: Option<NativeViewportCommandScope>,
     viewport_layer_groups: ProjectLayerGroups,

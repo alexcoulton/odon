@@ -154,11 +154,15 @@ fn json_rpc_requires_hello_and_exposes_introspection() {
         &mut state,
     )
     .expect("method response");
-    assert!(
-        methods["result"]["methods"]
-            .as_array()
-            .is_some_and(|methods| methods.iter().any(|method| method["name"] == "get_camera"))
-    );
+    let catalog = methods["result"]["methods"].as_array().unwrap();
+    assert!(catalog.iter().any(|method| method["name"] == "get_camera"));
+    let screenshot = catalog
+        .iter()
+        .find(|method| method["name"] == "viewer.screenshot.capture")
+        .expect("screenshot completion contract");
+    assert_eq!(screenshot["completion_contract"], "presentation_dependent");
+    assert_eq!(screenshot["cancellation"], "cooperative");
+    assert!(screenshot["completion_point"].is_string());
 }
 
 #[test]

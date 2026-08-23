@@ -1,4 +1,5 @@
 use super::*;
+use crate::control::actor::worker::write_screenshot_on_worker;
 use image::GenericImageView;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -148,10 +149,16 @@ fn viewer_capture_waits_for_presentation_but_does_not_block_the_actor() {
     open_fixture(&channels);
     acknowledge_latest_projection(&channels);
 
-    let (capture, capture_rx) = request(
+    let (mut capture, capture_rx) = request(
         "viewer.screenshot.capture",
         json!({"path":path,"overwrite":false}),
     );
+    let task = capture
+        .task_registry
+        .create("capture", "test", true)
+        .unwrap();
+    capture.task_id = Some(task.task_id.clone());
+    let task_registry = Arc::clone(&capture.task_registry);
     channels.request_tx.send(capture).unwrap();
     let projection = channels
         .presentation_rx
@@ -159,6 +166,16 @@ fn viewer_capture_waits_for_presentation_but_does_not_block_the_actor() {
         .expect("capture projection");
     assert!(channels.presentation_capture_rx.try_recv().is_err());
     assert!(capture_rx.try_recv().is_err());
+    let waiting = task_registry.get(&task.task_id).unwrap();
+    assert_eq!(waiting.phase, "waiting_for_presentation");
+    assert_eq!(
+        waiting.phase_details.as_ref().unwrap()["desired_projection_revision"],
+        projection.revision
+    );
+    assert_eq!(
+        waiting.phase_details.as_ref().unwrap()["resource_generations"]["document"],
+        projection.document_generation
+    );
 
     let (state, state_rx) = request("app.get_state", json!({}));
     channels.request_tx.send(state).unwrap();
@@ -193,6 +210,14 @@ fn viewer_capture_waits_for_presentation_but_does_not_block_the_actor() {
         projection.revision
     );
     assert_eq!(render_request.mode, ModelMode::Single);
+    assert_eq!(
+        render_request.resource_generations.document,
+        projection.document_generation
+    );
+    assert_eq!(
+        render_request.resource_generations.mosaic_resource,
+        projection.mosaic_resource_generation
+    );
     assert!(matches!(
         render_request.scope,
         PresentationCaptureScope::Viewer { .. }
@@ -222,6 +247,10 @@ fn viewer_capture_waits_for_presentation_but_does_not_block_the_actor() {
         projection.revision
     );
     assert!(response["screenshot"]["bytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        response["screenshot"]["resource_generations"]["document"],
+        projection.document_generation
+    );
     mutation_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("deferred mutation settles after pixel readback")
@@ -268,6 +297,158 @@ fn cancelled_capture_is_removed_while_waiting_for_presentation() {
     assert_eq!(error.kind, ControlErrorKind::Cancelled);
     assert!(!path.exists());
     assert!(channels.presentation_capture_rx.try_recv().is_err());
+}
+
+#[test]
+fn covered_capture_times_out_with_presentation_phase_details() {
+    let directory = ScreenshotTestDir::new("timeout");
+    let path = directory.0.join("timed-out.png");
+    let channels = spawn_test_actor();
+    open_fixture(&channels);
+    acknowledge_latest_projection(&channels);
+
+    let (capture, capture_rx) = request(
+        "viewer.screenshot.capture",
+        json!({"path":path,"overwrite":false}),
+    );
+    channels.request_tx.send(capture).unwrap();
+    let projection = channels
+        .presentation_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture projection remains unacknowledged");
+    let error = capture_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("presentation wait timeout")
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::Timeout);
+    let details = error.data.expect("structured timeout details");
+    assert_eq!(details["phase"], "waiting_for_presentation");
+    assert_eq!(details["waiting_for_projection"], projection.revision);
+    assert_eq!(
+        details["resource_generations"]["document"],
+        projection.document_generation
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn existing_destination_is_rejected_before_renderer_capture() {
+    let directory = ScreenshotTestDir::new("no-clobber");
+    let path = directory.0.join("existing.png");
+    fs::write(&path, b"original").unwrap();
+    let channels = spawn_test_actor();
+    open_fixture(&channels);
+    acknowledge_latest_projection(&channels);
+
+    let (capture, capture_rx) = request(
+        "viewer.screenshot.capture",
+        json!({"path":path,"overwrite":false}),
+    );
+    channels.request_tx.send(capture).unwrap();
+    let error = capture_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("capture rejects existing output")
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::Conflict);
+    assert_eq!(fs::read(&path).unwrap(), b"original");
+    assert!(channels.presentation_capture_rx.try_recv().is_err());
+}
+
+#[test]
+fn screenshot_writer_removes_temporary_output_after_commit_failure() {
+    let directory = ScreenshotTestDir::new("partial-cleanup");
+    let path = directory.0.join("output.png");
+    fs::create_dir(&path).unwrap();
+    let (request, _response) = request("viewer.screenshot.capture", json!({}));
+    let spec = ScreenshotWriteSpec {
+        capture_id: 91,
+        desired_projection_revision: 7,
+        mode: ModelMode::Single,
+        scope: PresentationCaptureScope::Viewer { viewport_id: None },
+        resource_generations: PresentationResourceGenerations {
+            document: 1,
+            channel_compute: 0,
+            threshold_preview: 0,
+            analysis: 0,
+            measurement: 0,
+            object_export: 0,
+            mosaic_resource: 0,
+        },
+        screenshot_preferences: ScreenshotPreferences::default(),
+        path: path.clone(),
+        overwrite: true,
+        project_transition: None,
+    };
+    let error = write_screenshot_on_worker(
+        &request,
+        &spec,
+        PresentationPixels {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+            bottom_up: false,
+        },
+    )
+    .expect_err("a file cannot replace an existing directory");
+    assert!(!error.to_string().is_empty());
+    assert!(path.is_dir());
+    let partials = fs::read_dir(&directory.0)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(".output.png.odon-") && name.ends_with(".tmp"))
+        .collect::<Vec<_>>();
+    assert!(partials.is_empty(), "partial outputs remain: {partials:?}");
+}
+
+#[test]
+fn stale_renderer_acknowledgement_cannot_complete_a_new_capture() {
+    let directory = ScreenshotTestDir::new("stale-ack");
+    let channels = spawn_test_actor();
+    open_fixture(&channels);
+    acknowledge_latest_projection(&channels);
+
+    let (first, first_rx, _) = receive_capture_effect(
+        &channels,
+        "viewer.screenshot.capture",
+        &directory.0.join("first.png"),
+    );
+    let stale_capture_id = first.capture_id;
+    reject_test_capture(&channels, first, first_rx);
+
+    let (second_request, second_rx) = request(
+        "viewer.screenshot.capture",
+        json!({"path":directory.0.join("second.png"),"overwrite":false}),
+    );
+    channels.request_tx.send(second_request).unwrap();
+    let second_projection = channels
+        .presentation_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second capture projection");
+    channels
+        .presentation_completion_tx
+        .send(PresentationCaptureCompletion {
+            capture_id: stale_capture_id,
+            result: Err("stale renderer acknowledgement".to_string()),
+        })
+        .unwrap();
+    assert!(second_rx.try_recv().is_err());
+    channels
+        .model_tx
+        .send(ActorModelUpdate::PresentationApplied(
+            second_projection.revision,
+        ))
+        .unwrap();
+    let second = channels
+        .presentation_capture_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second capture remains pending");
+    assert_ne!(second.capture_id, stale_capture_id);
+    reject_test_capture(&channels, second, second_rx);
+    assert_eq!(
+        channels.diagnostics.snapshot()["workers"]["stale_completions"],
+        1
+    );
 }
 
 fn receive_capture_effect(

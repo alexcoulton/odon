@@ -31,6 +31,8 @@ pub struct TaskSnapshot {
     pub state: TaskState,
     pub progress: Option<f64>,
     pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_details: Option<Value>,
     pub result: Option<Value>,
     pub error: Option<Value>,
     pub created_at_unix_ms: u128,
@@ -82,6 +84,7 @@ pub(crate) enum TaskServiceRequest {
         task_id: String,
         progress: Option<f64>,
         phase: String,
+        phase_details: Option<Value>,
         reply: Sender<Result<TaskSnapshot, ControlError>>,
     },
     Forget {
@@ -186,10 +189,21 @@ impl TaskServiceHandle {
         progress: Option<f64>,
         phase: impl Into<String>,
     ) -> Result<TaskSnapshot, ControlError> {
+        self.progress_with_details(task_id, progress, phase, None)
+    }
+
+    pub fn progress_with_details(
+        &self,
+        task_id: &str,
+        progress: Option<f64>,
+        phase: impl Into<String>,
+        phase_details: Option<Value>,
+    ) -> Result<TaskSnapshot, ControlError> {
         self.call(|reply| TaskServiceRequest::Progress {
             task_id: task_id.to_string(),
             progress,
             phase: phase.into(),
+            phase_details,
             reply,
         })
     }
@@ -241,6 +255,7 @@ impl TaskRegistry {
             state: TaskState::Queued,
             progress: Some(0.0),
             phase: "queued".into(),
+            phase_details: None,
             result: None,
             error: None,
             created_at_unix_ms: now_unix_ms(),
@@ -287,6 +302,7 @@ impl TaskRegistry {
                 }
                 task.state = TaskState::Running;
                 task.phase = "running".into();
+                task.phase_details = None;
                 task.progress = None;
             },
             "tasks.progress",
@@ -302,6 +318,7 @@ impl TaskRegistry {
                 }
                 task.state = TaskState::Completed;
                 task.phase = "completed".into();
+                task.phase_details = None;
                 task.progress = Some(1.0);
                 task.result = Some(result);
                 task.completed_at_unix_ms = Some(now_unix_ms());
@@ -319,6 +336,7 @@ impl TaskRegistry {
                 }
                 task.state = TaskState::Failed;
                 task.phase = "failed".into();
+                task.phase_details = None;
                 task.progress = None;
                 task.error = Some(error.to_json_rpc_error());
                 task.completed_at_unix_ms = Some(now_unix_ms());
@@ -334,6 +352,7 @@ impl TaskRegistry {
                 if !task.state.terminal() && task.cancellation_supported {
                     task.state = TaskState::Cancelled;
                     task.phase = "cancelled".into();
+                    task.phase_details = None;
                     task.progress = None;
                     task.completed_at_unix_ms = Some(now_unix_ms());
                 }
@@ -359,6 +378,16 @@ impl TaskRegistry {
         progress: Option<f64>,
         phase: impl Into<String>,
     ) -> Result<TaskSnapshot, ControlError> {
+        self.progress_with_details(task_id, progress, phase, None)
+    }
+
+    pub fn progress_with_details(
+        &self,
+        task_id: &str,
+        progress: Option<f64>,
+        phase: impl Into<String>,
+        phase_details: Option<Value>,
+    ) -> Result<TaskSnapshot, ControlError> {
         let phase = phase.into();
         self.update(
             task_id,
@@ -366,6 +395,7 @@ impl TaskRegistry {
                 if task.state == TaskState::Running {
                     task.progress = progress.map(|value| value.clamp(0.0, 1.0));
                     task.phase = phase;
+                    task.phase_details = phase_details;
                 }
             },
             "tasks.progress",
@@ -458,9 +488,15 @@ impl TaskRegistry {
                 task_id,
                 progress,
                 phase,
+                phase_details,
                 reply,
             } => {
-                let _ = reply.send(self.progress(&task_id, progress, phase));
+                let _ = reply.send(self.progress_with_details(
+                    &task_id,
+                    progress,
+                    phase,
+                    phase_details,
+                ));
             }
             TaskServiceRequest::Forget { task_id, reply } => {
                 let _ = reply.send(self.forget(&task_id));

@@ -9,10 +9,6 @@ impl MosaicViewerApp {
         self.pending_platform_effect.take()
     }
 
-    pub fn set_status(&mut self, status: impl Into<String>) {
-        self.renderer_status = status.into();
-    }
-
     pub fn set_fast_object_rendering(&mut self, enabled: bool) {
         self.submit_native_control_intent(
             "viewer.objects.rendering.set_fast",

@@ -1297,14 +1297,14 @@ impl RootApp {
             .save_file()
         {
             match &mut self.mode {
-                Mode::Single(app) => {
-                    app.request_screenshot_png(path);
+                Mode::Single(_) | Mode::Mosaic { .. } => {
+                    self.native_command_ingress.push(NativeControlIntent {
+                        method: "viewer.screenshot.capture",
+                        params: serde_json::json!({"path":path}),
+                    });
                 }
                 Mode::Project { project_space } => {
                     project_space.set_status("Save Screenshot: open a dataset first.".to_string());
-                }
-                Mode::Mosaic { mosaic, .. } => {
-                    mosaic.request_screenshot_png(path);
                 }
                 Mode::Transition => {}
             }
@@ -1316,9 +1316,10 @@ impl RootApp {
         match &mut self.mode {
             Mode::Single(app) => {
                 if app.screenshot_output_dir().is_some() {
-                    if let Err(err) = app.request_quick_screenshot_png() {
-                        app.set_status(format!("Quick screenshot failed: {err}"));
-                    }
+                    self.native_command_ingress.push(NativeControlIntent {
+                        method: "viewer.screenshot.capture",
+                        params: serde_json::json!({}),
+                    });
                 } else {
                     fallback_to_dialog = true;
                 }
@@ -1328,9 +1329,10 @@ impl RootApp {
             }
             Mode::Mosaic { mosaic, .. } => {
                 if mosaic.screenshot_output_dir().is_some() {
-                    if let Err(err) = mosaic.request_quick_screenshot_png() {
-                        mosaic.set_status(format!("Quick screenshot failed: {err}"));
-                    }
+                    self.native_command_ingress.push(NativeControlIntent {
+                        method: "viewer.screenshot.capture",
+                        params: serde_json::json!({}),
+                    });
                 } else {
                     fallback_to_dialog = true;
                 }

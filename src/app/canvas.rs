@@ -1051,17 +1051,12 @@ impl OmeZarrViewerApp {
         });
 
         let screenshot = self
-            .screenshot_pending
+            .screenshot_capture
+            .pending
             .iter()
             .position(|pending| pending.viewport_id == *viewport_id)
-            .and_then(|index| self.screenshot_pending.remove(index))
+            .and_then(|index| self.screenshot_capture.pending.remove(index))
             .map(|pending| pending.request);
-        if let Some(request) = screenshot.as_ref()
-            && request.presentation.is_none()
-        {
-            self.screenshot_in_flight
-                .insert(request.id, viewport_id.clone());
-        }
         let screenshot_active = screenshot.is_some();
 
         // HUD (disabled while capturing screenshots).
@@ -1179,10 +1174,7 @@ impl OmeZarrViewerApp {
 
         // Screenshot capture: read back the canvas pixels after overlays have been drawn.
         if let Some(spec) = screenshot {
-            let tx = self.screenshot_worker.tx.clone();
-            let id = spec.id;
-            let path = spec.path.clone();
-            let presentation = spec.presentation.clone();
+            let presentation = spec.presentation;
             let capture_rect = rect;
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
                 let viewport = info.viewport;
@@ -1200,16 +1192,15 @@ impl OmeZarrViewerApp {
                 let mut h_px = (capture_rect.height() * ppp).round().max(1.0) as i32;
 
                 if x_px >= viewport_w_px || y_px >= viewport_h_px {
-                    if let Some(reply) = presentation.as_ref() {
-                        let _ =
-                            reply
-                                .tx
-                                .send(odon::control::actor::PresentationCaptureCompletion {
-                                    capture_id: reply.capture_id,
-                                    result: Err("viewer capture rectangle is outside the viewport"
-                                        .to_string()),
-                                });
-                    }
+                    let _ =
+                        presentation
+                            .tx
+                            .send(odon::control::actor::PresentationCaptureCompletion {
+                                capture_id: presentation.capture_id,
+                                result: Err(
+                                    "viewer capture rectangle is outside the viewport".to_string()
+                                ),
+                            });
                     return;
                 }
                 if x_px + w_px > viewport_w_px {
@@ -1219,15 +1210,13 @@ impl OmeZarrViewerApp {
                     h_px = (viewport_h_px - y_px).max(1);
                 }
                 if w_px <= 0 || h_px <= 0 {
-                    if let Some(reply) = presentation.as_ref() {
-                        let _ =
-                            reply
-                                .tx
-                                .send(odon::control::actor::PresentationCaptureCompletion {
-                                    capture_id: reply.capture_id,
-                                    result: Err("viewer capture rectangle is empty".to_string()),
-                                });
-                    }
+                    let _ =
+                        presentation
+                            .tx
+                            .send(odon::control::actor::PresentationCaptureCompletion {
+                                capture_id: presentation.capture_id,
+                                result: Err("viewer capture rectangle is empty".to_string()),
+                            });
                     return;
                 }
 
@@ -1246,27 +1235,17 @@ impl OmeZarrViewerApp {
                         glow::PixelPackData::Slice(Some(rgba.as_mut_slice())),
                     );
                 }
-                if let Some(reply) = presentation.as_ref() {
-                    let _ = reply
-                        .tx
-                        .send(odon::control::actor::PresentationCaptureCompletion {
-                            capture_id: reply.capture_id,
-                            result: Ok(odon::control::actor::PresentationPixels {
-                                width: w_px as usize,
-                                height: h_px as usize,
-                                rgba,
-                                bottom_up: true,
-                            }),
-                        });
-                } else {
-                    let _ = tx.send(ScreenshotWorkerMsg::SavePng {
-                        id,
-                        path: path.clone(),
-                        width: w_px as usize,
-                        height: h_px as usize,
-                        rgba_bottom_up: rgba,
+                let _ = presentation
+                    .tx
+                    .send(odon::control::actor::PresentationCaptureCompletion {
+                        capture_id: presentation.capture_id,
+                        result: Ok(odon::control::actor::PresentationPixels {
+                            width: w_px as usize,
+                            height: h_px as usize,
+                            rgba,
+                            bottom_up: true,
+                        }),
                     });
-                }
             });
             ui.painter().add(egui::PaintCallback {
                 rect,

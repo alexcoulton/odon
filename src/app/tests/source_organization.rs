@@ -290,6 +290,36 @@ fn viewport_canvas_establishes_a_hard_clip_before_painting() {
 }
 
 #[test]
+fn screenshot_output_lifecycle_is_actor_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let support = source(root.join("src/app_support/screenshot.rs"));
+    let viewer = source(root.join("src/app/screenshots.rs"));
+    let mosaic = source(root.join("src/mosaic/control/screenshots.rs"));
+    let root_app = source(root.join("src/root_app.rs"));
+    let actor_output = source(root.join("src/control/actor/worker/outputs.rs"));
+
+    for renderer_boundary in [&support, &viewer, &mosaic, &root_app] {
+        for forbidden in [
+            "ScreenshotWorker",
+            "request_screenshot_png",
+            "next_numbered_screenshot_path",
+            "PngEncoder",
+        ] {
+            assert!(
+                !renderer_boundary.contains(forbidden),
+                "renderer screenshot boundary regained local output ownership: {forbidden}"
+            );
+        }
+    }
+    assert!(viewer.contains("fn request_actor_screenshot("));
+    assert!(mosaic.contains("fn request_actor_screenshot("));
+    assert!(root_app.contains("method: \"viewer.screenshot.capture\""));
+    assert!(actor_output.contains("fn write_screenshot_on_worker("));
+    assert!(actor_output.contains("fs::hard_link(&temporary_path, &spec.path)"));
+    assert!(actor_output.contains("fs::remove_file(&temporary_path)"));
+}
+
+#[test]
 fn root_app_source_stays_split_by_responsibility() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let facade_path = root.join("src/root_app.rs");
@@ -493,7 +523,7 @@ fn mosaic_app_stays_split_by_responsibility() {
             .contains("fn control_actor_semantic_snapshot(")
     );
     assert!(!snapshots.contains("fn request_screenshot_png("));
-    assert!(screenshots.contains("fn request_screenshot_png("));
+    assert!(!screenshots.contains("fn request_screenshot_png("));
     assert!(screenshots.contains("fn request_actor_screenshot("));
     assert!(host.contains("fn take_platform_effect("));
     assert!(host.contains("fn set_fast_object_rendering("));
@@ -2186,7 +2216,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 290,
+        total_fields, 280,
         "review the ownership ledger when host fields change"
     );
 }

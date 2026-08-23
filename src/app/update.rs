@@ -63,7 +63,6 @@ impl eframe::App for OmeZarrViewerApp {
         self.drain_tiles(ctx);
         self.drain_raw_tiles();
         self.drain_label_tiles();
-        self.drain_screenshots();
         let seg_objects_was_loading = self.seg_objects.is_loading();
         self.seg_objects.tick();
         if seg_objects_was_loading

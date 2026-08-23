@@ -16,11 +16,10 @@ impl OmeZarrViewerApp {
         let properties_hist_active = self.show_right_panel
             && self.right_tab == RightTab::Properties
             && matches!(self.active_layer, LayerId::Channel(_));
-        (properties_hist_active
+        properties_hist_active
             && (self.hist_dirty
                 || self.hist_request_pending
-                || self.hist_navigation_dirty_since.is_some()))
-            || !self.screenshot_in_flight.is_empty()
+                || self.hist_navigation_dirty_since.is_some())
     }
 
     pub(super) fn request_tiles_with_budget(
@@ -559,31 +558,6 @@ impl OmeZarrViewerApp {
         };
         while let Ok(msg) = loader.rx.try_recv() {
             labels_gl.insert_pending(msg);
-        }
-    }
-
-    pub(super) fn drain_screenshots(&mut self) {
-        while let Ok(resp) = self.screenshot_worker.rx.try_recv() {
-            match resp {
-                crate::app_support::screenshot::ScreenshotWorkerResp::Saved {
-                    id,
-                    path,
-                    result,
-                } => {
-                    self.screenshot_in_flight.remove(&id);
-                    match result {
-                        Ok(()) => {
-                            self.set_status(format!(
-                                "Saved screenshot -> {}",
-                                path.to_string_lossy()
-                            ));
-                        }
-                        Err(err) => {
-                            self.set_status(format!("Save screenshot failed: {err}"));
-                        }
-                    }
-                }
-            }
         }
     }
 }

@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 6 complete; Milestone 7 is next
+Status: in progress — Milestones 0 through 7 complete; Milestone 8 is next
 
 Date: 2026-08-23
 
@@ -41,9 +41,10 @@ The implementation starts this plan with the following evidence:
 - source-level modularity guards cover the actor, application, registry, bridge, models, renderers,
   and major resource adapters.
 
-The remaining gap is architectural rather than method-count based. `OmeZarrViewerApp`, `RootApp`,
-and renderer adapters still contain compatibility mirrors, snapshot assemblers, test-only command
-emulators, and mixed renderer/transient state that must be narrowed or deleted.
+The ownership and routing gap is now closed. `OmeZarrViewerApp`, `RootApp`, and
+`MosaicViewerApp` contain only classified renderer resources/observations, transient UI drafts,
+shared handles, and platform effects. The remaining work is final automated and native-window
+release evidence.
 
 The stabilized migration base, executable ownership ledger, renderer-emulator retirement,
 viewport/presentation migration, and object/mask/annotation migration are separately checkpointed
@@ -54,16 +55,16 @@ histogram and automatic-contrast workers, and renderer-local memory-pinning work
 
 ### Current measured checkpoint
 
-The executable ledger currently covers 290 concrete host fields. It has 277 retained fields and 13
-fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
+The executable ledger currently covers 280 concrete host fields. All 280 are retained in precise
+final roles. There are no open `narrow`, `replace`, or `delete` rows and no renderer semantic
 command emulators.
 
 | Milestone | Open rows | Open fields | Remaining ownership domains |
 | --- | ---: | ---: | --- |
 | 5 | 0 | 0 | complete |
 | 6 | 0 | 0 | complete |
-| 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
-| **Total** | **2** | **13** | |
+| 7 | 0 | 0 | complete |
+| **Total** | **0** | **0** | |
 
 `Retain` means the field has a valid final role as a renderer resource/observation, transient UI
 draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
@@ -596,7 +597,7 @@ Exit criteria:
 
 #### 7A — one actor-owned presentation-task model
 
-Open rows: `viewer.screenshots` and `mosaic.screenshots` (13 fields total).
+Closed rows: the former `viewer.screenshots` and `mosaic.screenshots` compatibility families.
 
 - move screenshot settings, task identity, output lifecycle, cancellation, and error state into a
   shared actor presentation-task model;
@@ -618,6 +619,16 @@ Open rows: `viewer.screenshots` and `mosaic.screenshots` (13 fields total).
 
 Commit gate for Milestone 7: both screenshot rows are closed, the ledger has no open field, and the
 completion contract is generated, tested, and identical across Python and MCP transports.
+
+Checkpoint evidence: the hosts now retain two explicit fields per renderer mode—a transient
+`screenshot_dialog` and a generation-specific `screenshot_capture` pixel adapter. Actor tests cover
+mailbox responsiveness, structured waiting phase details, timeout, cancellation, no-clobber output,
+partial-output cleanup, and stale acknowledgements. The registry publishes one of four completion
+contracts plus completion point and cancellation policy through the shared Python/MCP introspection
+path. Rust library tests passed 188/188, binary tests passed 203 with 4 fixture-dependent ignores,
+data-contract tests passed 10/10, and Python SDK tests passed 100/100. Formatting, all-target
+compilation, generated-reference, JSON-ledger, source-boundary, and application-surface checks
+passed on the same tree.
 
 ## Milestone 8 — final verification and sign-off
 
@@ -699,9 +710,10 @@ From the present checkpoint, work proceeds in this order:
    immutable resources feed renderer adapters, and the 5E cumulative gate passed.
 5. **6A–6C application shell — complete:** platform effects are narrow, shell mode is
    projection-only, and native commands use one bounded actor ingress.
-6. **7A presentation tasks — next:** unify screenshot state and generation-specific acknowledgement.
-7. **7B completion audit:** test and document every method's exact sync/async completion contract;
-   then checkpoint Milestone 7 with zero open ledger fields.
+6. **7A presentation tasks — complete:** screenshot semantics and output lifecycle are actor-owned;
+   renderers retain only generation-specific pixel adapters.
+7. **7B completion audit — complete:** every method exposes one central completion/cancellation
+   contract, sync/async wait distinctions are tested, and the ledger has zero open fields.
 8. **Milestone 8 automation:** run all Rust, Python, generated-contract, performance, allocation,
    queue-bound, and frame-planning checks on the exact release candidate.
 9. **Milestone 8 native acceptance:** run and archive visible, covered, minimized, and separate-Space

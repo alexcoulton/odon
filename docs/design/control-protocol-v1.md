@@ -81,7 +81,8 @@ reference a session-temporary resource.
 - `system.get_capabilities` returns the negotiated protocol version and
   capability names.
 - `system.list_methods` and `system.describe_methods` return method metadata,
-  request schemas, execution class, and readiness requirements.
+  request schemas, execution class, readiness requirements, completion contract,
+  exact completion point, and cancellation policy.
 - `system.get_diagnostics` reports actor health, bounded-work counters,
   per-method `actor`/`hybrid`/`legacy_ui`/`control_service` routing, and
   queue/model/reply/presentation timing independently.
@@ -92,6 +93,19 @@ Application methods are admitted and validated through the central Rust control
 registry. The Python SDK and MCP adapter both use this boundary; MCP retains
 only its client-specific tool descriptions and result formatting. Methods are
 currently provisional.
+
+Every canonical method is classified by the same registry value returned to
+both transports:
+
+| Completion contract | Response/task completion point |
+| --- | --- |
+| `immediate_semantic` | The serialized actor model commit has completed. |
+| `resource_ready` | Required resources or filesystem output are installed and generation-current. |
+| `retained_background` | The initial call returns a retained task; its terminal event carries the result. |
+| `presentation_dependent` | A matching projection has been presented and output commits atomically. |
+
+Task methods advertise cooperative cancellation. Non-task methods report
+`not_applicable`; timing out a client-side wait never implies server-side cancellation.
 
 An `actor` route is a no-frame execution guarantee, not merely a preferred
 dispatcher. If its model/resource prerequisites are unavailable during a

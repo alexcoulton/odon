@@ -2,12 +2,12 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(super) fn ui_screenshot_settings_dialog(&mut self, ctx: &egui::Context) {
-        if !self.screenshot_settings_open {
+        if !self.screenshot_dialog.open {
             return;
         }
-        let before_output_dir = self.screenshot_output_dir.clone();
-        let before_settings = self.screenshot_settings;
-        let mut open = self.screenshot_settings_open;
+        let before_output_dir = self.screenshot_dialog.output_dir.clone();
+        let before_settings = self.screenshot_dialog.settings;
+        let mut open = self.screenshot_dialog.open;
         egui::Window::new("Screenshot Settings")
             .collapsible(false)
             .resizable(false)
@@ -21,67 +21,74 @@ impl OmeZarrViewerApp {
                 ui.label("Quick-save folder");
                 ui.horizontal(|ui| {
                     let folder_text = self
-                        .screenshot_output_dir
+                        .screenshot_dialog
+                        .output_dir
                         .as_deref()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "Not set".to_string());
                     ui.monospace(folder_text);
                     if ui.button("Choose...").clicked() {
                         let mut dialog = FileDialog::new().set_title("Select Screenshot Folder");
-                        if let Some(dir) = self.screenshot_output_dir.as_deref() {
+                        if let Some(dir) = self.screenshot_dialog.output_dir.as_deref() {
                             dialog = dialog.set_directory(dir);
                         }
                         if let Some(dir) = dialog.pick_folder() {
-                            self.screenshot_output_dir = Some(dir);
+                            self.screenshot_dialog.output_dir = Some(dir);
                         }
                     }
                     if ui
                         .add_enabled(
-                            self.screenshot_output_dir.is_some(),
+                            self.screenshot_dialog.output_dir.is_some(),
                             egui::Button::new("Clear"),
                         )
                         .clicked()
                     {
-                        self.screenshot_output_dir = None;
+                        self.screenshot_dialog.output_dir = None;
                     }
                 });
                 ui.add_space(6.0);
                 ui.checkbox(
-                    &mut self.screenshot_settings.include_scale_bar,
+                    &mut self.screenshot_dialog.settings.include_scale_bar,
                     "Include scale bar",
                 );
                 ui.checkbox(
-                    &mut self.screenshot_settings.include_legend,
+                    &mut self.screenshot_dialog.settings.include_legend,
                     "Include legend (visible markers)",
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("Scale bar size");
                     ui.add(
-                        egui::Slider::new(&mut self.screenshot_settings.scale_bar_scale, 0.5..=3.0)
-                            .suffix("x"),
+                        egui::Slider::new(
+                            &mut self.screenshot_dialog.settings.scale_bar_scale,
+                            0.5..=3.0,
+                        )
+                        .suffix("x"),
                     );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Legend size");
                     ui.add(
-                        egui::Slider::new(&mut self.screenshot_settings.legend_scale, 0.5..=3.0)
-                            .suffix("x"),
+                        egui::Slider::new(
+                            &mut self.screenshot_dialog.settings.legend_scale,
+                            0.5..=3.0,
+                        )
+                        .suffix("x"),
                     );
                 });
             });
-        self.screenshot_settings_open = open;
-        if self.screenshot_output_dir != before_output_dir
-            || self.screenshot_settings != before_settings
+        self.screenshot_dialog.open = open;
+        if self.screenshot_dialog.output_dir != before_output_dir
+            || self.screenshot_dialog.settings != before_settings
         {
             self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.screenshot.settings.set",
                 params: serde_json::json!({
-                    "output_dir":self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                    "include_scale_bar":self.screenshot_settings.include_scale_bar,
-                    "include_legend":self.screenshot_settings.include_legend,
-                    "scale_bar_scale":self.screenshot_settings.scale_bar_scale,
-                    "legend_scale":self.screenshot_settings.legend_scale,
+                    "output_dir":self.screenshot_dialog.output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                    "include_scale_bar":self.screenshot_dialog.settings.include_scale_bar,
+                    "include_legend":self.screenshot_dialog.settings.include_legend,
+                    "scale_bar_scale":self.screenshot_dialog.settings.scale_bar_scale,
+                    "legend_scale":self.screenshot_dialog.settings.legend_scale,
                 }),
             });
         }

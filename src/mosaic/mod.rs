@@ -35,8 +35,7 @@ use crate::app_support::memory::{
 };
 use crate::app_support::repaint as repaint_control;
 use crate::app_support::screenshot::{
-    ScreenshotRequest, ScreenshotSettings, ScreenshotWorkerHandle, ScreenshotWorkerMsg,
-    next_numbered_screenshot_path,
+    RendererScreenshotRequest, ScreenshotDialogState, ScreenshotSettings,
 };
 use crate::camera::Camera;
 use crate::data::dataset_source::DatasetSource;
@@ -258,13 +257,8 @@ pub struct MosaicViewerApp {
     group_layers_dialog: Option<GroupLayersDialog>,
     smooth_pixels: bool,
     show_tile_debug: bool,
-    screenshot_settings: ScreenshotSettings,
-    screenshot_settings_open: bool,
-    screenshot_worker: ScreenshotWorkerHandle,
-    screenshot_next_id: u64,
-    screenshot_pending: Option<ScreenshotRequest>,
-    screenshot_in_flight: Option<u64>,
-    screenshot_output_dir: Option<PathBuf>,
+    screenshot_dialog: ScreenshotDialogState,
+    screenshot_capture: MosaicScreenshotCaptureAdapter,
     seg_geojson: MosaicGeoJsonSegmentationOverlay,
     seg_geojson_pending_visible: bool,
     project_space: ProjectSpace,
@@ -272,6 +266,11 @@ pub struct MosaicViewerApp {
     consumed_mosaic_resource_generation: u64,
     consumed_mosaic_object_generation: u64,
     native_command_ingress: NativeControlIngress,
+}
+
+#[derive(Debug, Default)]
+struct MosaicScreenshotCaptureAdapter {
+    pending: Option<RendererScreenshotRequest>,
 }
 
 impl ChannelListHost for MosaicViewerApp {

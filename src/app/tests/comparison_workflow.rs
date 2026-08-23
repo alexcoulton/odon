@@ -136,14 +136,13 @@ fn motivating_two_property_comparison_runs_end_to_end_on_one_document() {
         viewport(&right)["camera"]["center_world_lvl0"]
     );
 
-    app.request_screenshot_png_for_viewport(
-        std::env::temp_dir().join("odon-acceptance-left.png"),
-        ViewportId::new(&left).unwrap(),
-    );
-    app.request_screenshot_png_for_viewport(
-        std::env::temp_dir().join("odon-acceptance-right.png"),
-        ViewportId::new(&right).unwrap(),
-    );
+    let (completion_tx, _completion_rx) = crossbeam_channel::bounded(2);
+    let preferences = odon::model::ScreenshotPreferences::default();
+    app.request_actor_screenshot(51, Some(&left), &preferences, completion_tx.clone())
+        .unwrap();
+    app.request_actor_screenshot(52, Some(&right), &preferences, completion_tx)
+        .unwrap();
+    assert_eq!(app.screenshot_capture.pending.len(), 2);
 
     let level = app.dataset.levels.last().unwrap();
     let view = ViewPlaneSelection {

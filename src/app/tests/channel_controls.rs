@@ -277,16 +277,19 @@ fn channel_and_view_controls_preserve_external_semantics() {
             .is_some_and(|zoom| zoom > 0.0)
     );
 
-    let screenshot_path = std::env::temp_dir().join(format!(
-        "odon-control-screenshot-{}.png",
-        std::process::id()
-    ));
-    app.request_screenshot_png(screenshot_path);
+    let (completion_tx, _completion_rx) = crossbeam_channel::bounded(1);
+    app.request_actor_screenshot(
+        41,
+        None,
+        &odon::model::ScreenshotPreferences::default(),
+        completion_tx,
+    )
+    .unwrap();
     assert_eq!(
-        app.screenshot_pending
+        app.screenshot_capture
+            .pending
             .front()
-            .map(|pending| pending.request.id),
-        Some(1)
+            .map(|pending| pending.request.presentation.capture_id),
+        Some(41)
     );
-    assert!(app.screenshot_in_flight.is_empty());
 }

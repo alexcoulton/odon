@@ -1,6 +1,6 @@
 # Odon Application State Ownership Inventory
 
-Status: Wave 7 ownership and release audit
+Status: ownership complete; release audit in progress
 
 Date: 2026-08-23
 
@@ -22,14 +22,14 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 175 | 168 | 7 | 0 | 0 |
+| `OmeZarrViewerApp` | 170 | 170 | 0 | 0 | 0 |
 | `RootApp` | 36 | 36 | 0 | 0 | 0 |
-| `MosaicViewerApp` | 79 | 73 | 6 | 0 | 0 |
-| **Total** | **290** | **277** | **13** | **0** | **0** |
+| `MosaicViewerApp` | 74 | 74 | 0 | 0 | 0 |
+| **Total** | **280** | **280** | **0** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
-transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
-`delete` are the remaining ownership-cleanup queue and must be updated as each slice lands.
+transient UI, shared-resource handles, or narrow platform effects. There are no remaining
+`narrow`, `replace`, or `delete` rows.
 
 The initial test-only renderer semantic-emulator baseline was 55 allowlisted methods. Milestone 2
 retired all 55 across workspace topology, navigation, channels, layers, rendering preferences,
@@ -93,7 +93,7 @@ not necessarily the owner in the current compatibility implementation.
 | Layer transforms | `channel_offsets_world`, `channel_scales`, `channel_rotations_rad`, `loaded_layer_offsets_world`, `points_offset_world`, `spatial_points_offset_world`, `seg_labels_offset_world`, `seg_geojson_offset_world`, `seg_objects_offset_world`, `xenium_cells_offset_world`, `xenium_transcripts_offset_world` | Actor-native presentation for migrated layers and legacy mirrors for others | Actor per-viewport presentation; Wave 6/7 |
 | Layer ordering/gestures | `overlay_layer_order`, `channel_layer_order`, `channel_sort_mode`, `layer_drag`, `layer_move`, `layer_transform` | Actor ordering mirror plus transient gestures | Actor owns order; drag/move/transform previews remain transient; Wave 7 |
 | TIFF plane state | `tiff_plane_state` | Alternate-document resource plus dialog draft | Actor document/plane model and transient draft; Wave 2D |
-| Screenshots | `screenshot_settings`, `screenshot_settings_open`, `screenshot_worker`, `screenshot_next_id`, `screenshot_pending`, `screenshot_in_flight`, `screenshot_output_dir` | Settings, presentation-task queue, worker, and dialog | Actor owns settings/task lifecycle; render thread fulfills pixel request; Wave 5 |
+| Screenshots | `screenshot_dialog`, `screenshot_capture` | Transient settings draft and generation-specific renderer pixel-readback adapter | Actor owns preferences, task identity, projection barrier, cancellation, and output lifecycle; render thread only returns pixels for an actor-issued capture ID |
 | Multi-viewport | `viewport_workspace`, `viewport_layer_groups` | Actor projection mirror | Actor semantic model; renderer consumes projection; Wave 7 |
 | Per-frame active resources | `viewport_raw_active_keys`, `viewport_cpu_active_keys`, `viewport_label_active_keys`, `viewport_spatial_image_active_keys` | Aggregate cache-retention observations | Renderer |
 | Frame planning telemetry | `viewport_frame_plan_ms`, `viewport_frame_plan_ema_ms`, `viewport_frame_plan_samples` | Renderer performance telemetry | Renderer diagnostics |

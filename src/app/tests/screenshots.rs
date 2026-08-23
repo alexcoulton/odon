@@ -15,17 +15,18 @@ fn viewport_screenshot_queue_keeps_targets_independent_and_cleans_removed_view()
         .as_str()
         .unwrap()
         .to_string();
-    app.request_screenshot_png_for_viewport(
-        std::env::temp_dir().join("odon-left-viewport.png"),
-        ViewportId::new(&left).unwrap(),
+    let (completion_tx, _completion_rx) = crossbeam_channel::bounded(2);
+    let preferences = odon::model::ScreenshotPreferences::default();
+    app.request_actor_screenshot(61, Some(&left), &preferences, completion_tx.clone())
+        .unwrap();
+    app.request_actor_screenshot(62, Some(&right), &preferences, completion_tx)
+        .unwrap();
+    assert_eq!(app.screenshot_capture.pending.len(), 2);
+    assert_eq!(app.screenshot_capture.pending[0].viewport_id.as_str(), left);
+    assert_eq!(
+        app.screenshot_capture.pending[1].viewport_id.as_str(),
+        right
     );
-    app.request_screenshot_png_for_viewport(
-        std::env::temp_dir().join("odon-right-viewport.png"),
-        ViewportId::new(&right).unwrap(),
-    );
-    assert_eq!(app.screenshot_pending.len(), 2);
-    assert_eq!(app.screenshot_pending[0].viewport_id.as_str(), left);
-    assert_eq!(app.screenshot_pending[1].viewport_id.as_str(), right);
 
     let removed = app.actor_command(
         "viewer.viewports.remove",
@@ -34,6 +35,6 @@ fn viewport_screenshot_queue_keeps_targets_independent_and_cleans_removed_view()
         }),
     );
     assert_eq!(removed["removed"], true);
-    assert_eq!(app.screenshot_pending.len(), 1);
-    assert_eq!(app.screenshot_pending[0].viewport_id.as_str(), left);
+    assert_eq!(app.screenshot_capture.pending.len(), 1);
+    assert_eq!(app.screenshot_capture.pending[0].viewport_id.as_str(), left);
 }

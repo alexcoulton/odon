@@ -22,6 +22,28 @@ pub enum ExecutionClass {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum CompletionContract {
+    ImmediateSemantic,
+    ResourceReady,
+    RetainedBackground,
+    PresentationDependent,
+}
+
+impl CompletionContract {
+    pub const fn completion_point(self) -> &'static str {
+        match self {
+            Self::ImmediateSemantic => "actor model commit",
+            Self::ResourceReady => "required resources or output installed",
+            Self::RetainedBackground => "retained task reaches a terminal state",
+            Self::PresentationDependent => {
+                "matching projection is presented and output commits atomically"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExecutionOwner {
     Actor,
     LegacyUi,
@@ -125,6 +147,38 @@ pub struct MethodDescriptor {
     pub available_in: &'static [&'static str],
     pub since: &'static str,
     pub execution_class: ExecutionClass,
+}
+
+impl MethodDescriptor {
+    pub const fn completion_contract(&self) -> CompletionContract {
+        completion_contract(self.execution_class, self.starts_task)
+    }
+
+    pub const fn cancellation_contract(&self) -> &'static str {
+        if self.starts_task {
+            "cooperative"
+        } else {
+            "not_applicable"
+        }
+    }
+}
+
+pub const fn completion_contract(
+    execution_class: ExecutionClass,
+    starts_task: bool,
+) -> CompletionContract {
+    if matches!(execution_class, ExecutionClass::Presentation) {
+        CompletionContract::PresentationDependent
+    } else if starts_task {
+        CompletionContract::RetainedBackground
+    } else if matches!(
+        execution_class,
+        ExecutionClass::Resource | ExecutionClass::ExternalCompute
+    ) {
+        CompletionContract::ResourceReady
+    } else {
+        CompletionContract::ImmediateSemantic
+    }
 }
 
 pub fn execution_owner(
@@ -318,8 +372,18 @@ fn mcp_exposed(name: &str) -> bool {
 }
 
 fn execution_class(name: &str, starts_task: bool) -> ExecutionClass {
-    if name.contains("screenshot") || name == "exports.canvas.capture" {
+    if matches!(
+        name,
+        "viewer.screenshot.capture"
+            | "viewer.workspace.screenshot.capture"
+            | "app.screenshot.capture"
+            | "project.screenshot.capture"
+            | "exports.canvas.capture"
+    ) {
         return ExecutionClass::Presentation;
+    }
+    if name == "viewer.screenshot.settings.set" {
+        return ExecutionClass::Resource;
     }
     if matches!(
         name,
@@ -431,6 +495,9 @@ pub fn catalog_json() -> Value {
                     "available_in": descriptor.available_in,
                     "execution_class": descriptor.execution_class,
                     "readiness_requirements": descriptor.execution_class.readiness_requirements(),
+                    "completion_contract": descriptor.completion_contract(),
+                    "completion_point": descriptor.completion_contract().completion_point(),
+                    "cancellation": descriptor.cancellation_contract(),
                     "execution_route": execution_route_json(descriptor),
                     "aliases": aliases_for(descriptor.name),
                     "request_schema": request_schema_for(descriptor),
@@ -440,6 +507,7 @@ pub fn catalog_json() -> Value {
             .chain(PROTOCOL_METHODS.iter().map(
                 |(name, summary, capability, mutates, starts_task)| {
                     let execution_class = execution_class(name, *starts_task);
+                    let completion_contract = completion_contract(execution_class, *starts_task);
                     json!({
                         "name": name,
                         "summary": summary,
@@ -450,6 +518,9 @@ pub fn catalog_json() -> Value {
                         "stability": Stability::Experimental,
                         "execution_class": execution_class,
                         "readiness_requirements": execution_class.readiness_requirements(),
+                        "completion_contract": completion_contract,
+                        "completion_point": completion_contract.completion_point(),
+                        "cancellation": if *starts_task {"cooperative"} else {"not_applicable"},
                         "execution_route": {
                             "summary":ExecutionOwner::ControlService,
                             "by_mode":{
@@ -481,6 +552,9 @@ pub fn catalog_json() -> Value {
                         "available_in": descriptor.available_in,
                         "execution_class": descriptor.execution_class,
                         "readiness_requirements": descriptor.execution_class.readiness_requirements(),
+                        "completion_contract": descriptor.completion_contract(),
+                        "completion_point": descriptor.completion_contract().completion_point(),
+                        "cancellation": descriptor.cancellation_contract(),
                         "execution_route": execution_route_json(descriptor),
                         "request_schema": request_schema_for(descriptor),
                         "result_schema": {"type": "object"},

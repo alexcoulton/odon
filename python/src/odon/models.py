@@ -69,6 +69,7 @@ class TaskSnapshot:
     state: str
     progress: float | None
     phase: str
+    phase_details: Any
     result: Any
     error: Any
     created_at_unix_ms: int
@@ -90,6 +91,7 @@ class TaskSnapshot:
             state=str(value["state"]),
             progress=float(progress) if progress is not None else None,
             phase=str(value.get("phase", "")),
+            phase_details=value.get("phase_details"),
             result=value.get("result"),
             error=value.get("error"),
             created_at_unix_ms=int(value.get("created_at_unix_ms", 0)),

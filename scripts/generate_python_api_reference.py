@@ -174,6 +174,37 @@ ERROR_NAMES = (
     "PermissionDeniedError", "WrongModeError", "ResourceLimitError",
 )
 
+
+def completion_contract(name: str, starts_task: bool) -> str:
+    """Mirror the central Rust registry's public completion classification."""
+
+    if name in {
+        "viewer.screenshot.capture",
+        "viewer.workspace.screenshot.capture",
+        "app.screenshot.capture",
+        "project.screenshot.capture",
+        "exports.canvas.capture",
+    }:
+        return "presentation_dependent"
+    if starts_task:
+        return "retained_background"
+    if (
+        name == "viewer.screenshot.settings.set"
+        or name.startswith("data.resources.")
+        or name.startswith("viewer.layers.")
+        or name.startswith("datasets.open_")
+        or name in {"project.open", "project.save", "project.save_as"}
+        or name.endswith(".load")
+        or name.endswith(".reload")
+        or "preload" in name
+        or name.startswith("exports.")
+        or name.startswith("viewer.measurements.")
+        or name.startswith("viewer.analysis.warmup.")
+        or name.startswith("memory.pin")
+    ):
+        return "resource_ready"
+    return "immediate_semantic"
+
 DOCUMENTED_CLASS_MODULES = (
     "odon.client", "odon.async_client", "odon.resources", "odon.async_resources",
     "odon.data", "odon.async_data", "odon.layers", "odon.async_layers", "odon.tasks",
@@ -293,6 +324,11 @@ def registry_methods() -> dict[str, dict[str, Any]]:
             "event": None,
             "modes": "protocol",
         }
+    for name, descriptor in result.items():
+        descriptor["completion"] = completion_contract(name, descriptor["task"])
+        descriptor["cancellation"] = (
+            "cooperative" if descriptor["task"] else "not_applicable"
+        )
     return result
 
 
@@ -390,6 +426,11 @@ def method_row(
         flags.append("mutates")
     if any(item["task"] for item in descriptors):
         flags.append("task")
+    completions = list(dict.fromkeys(item["completion"] for item in descriptors))
+    if completions:
+        flags.append("completion: " + ", ".join(completions))
+    if any(item["cancellation"] == "cooperative" for item in descriptors):
+        flags.append("cancellation: cooperative")
     events = [item["event"] for item in descriptors if item.get("event")]
     if events:
         flags.append("event: " + ", ".join(events))

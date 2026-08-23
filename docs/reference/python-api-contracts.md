@@ -141,7 +141,8 @@ migration.
 The active-view compatibility methods for camera, plane navigation, channel
 presentation, panels, and smooth-pixel sampling are routed to the
 same actor-owned viewport. `system.list_methods` reports each method's
-`execution_class` and `readiness_requirements`. `system.get_diagnostics`
+`execution_class`, `readiness_requirements`, `completion_contract`, exact
+`completion_point`, and `cancellation` policy. `system.get_diagnostics`
 reports the current `actor`/`hybrid`/`legacy_ui`/`control_service` route per method plus
 separate queue, model, reply, worker, projection, and presentation-wait
 measurements.
@@ -163,6 +164,17 @@ wait for a covered macOS window to paint. Pixel-dependent work such as window
 or canvas screenshots can still require presentation readiness. Legacy fields,
 including `canvas_ready`, remain in diagnostic snapshots for compatibility but
 are not the completion condition for actor-owned dataset opening.
+
+The completion contract is one of:
+
+| Contract | What completion means |
+| --- | --- |
+| `immediate_semantic` | The actor has committed the semantic result. |
+| `resource_ready` | Required resources or output have been installed. |
+| `retained_background` | The returned task has reached a terminal state. |
+| `presentation_dependent` | The required projection was rendered and output committed atomically. |
+
+Python and MCP receive this metadata from the same central Rust registry.
 
 An actor-owned command submitted while an asynchronous open is still in its
 transition phase fails immediately with `NOT_READY` and declared readiness
@@ -223,7 +235,7 @@ Methods marked `task` return `Task` or `AsyncTask` promptly. Every task has a
 `TaskSnapshot` containing:
 
 ```text
-task_id, label, state, progress, phase, result, error,
+task_id, label, state, progress, phase, phase_details, result, error,
 created_at_unix_ms, completed_at_unix_ms,
 cancellation_supported, owner_session_id
 ```
@@ -232,6 +244,12 @@ States are `queued`, `running`, `completed`, `failed`, or `cancelled`.
 `TaskSnapshot.done` is true for the three terminal states. Progress is either a
 floating-point fraction or `None` when the operation cannot report meaningful
 progress.
+
+`phase_details` is optional structured data for the current phase. A screenshot
+waiting behind a covered or minimized window uses
+`waiting_for_presentation` and reports its `capture_id`,
+`desired_projection_revision`, and exact renderer `resource_generations`.
+During encoding it changes to `writing_output` with the target path and format.
 
 Synchronous code can block its own thread:
 
@@ -554,8 +572,13 @@ large memory; repeat with `force=True` only after presenting that estimate to
 the user. In mosaic mode, scopes determine which ROI items are pinned.
 
 Tile worker count is bounded from 1 to 12. Screenshot capture returns a task
-that settles when output has been written. Explicit viewport, composed
-workspace, complete-window, and project-page captures are separate operations.
+that settles when output has been written. While Odon cannot draw a frame, the
+task remains observable in `waiting_for_presentation`; unrelated actor commands
+continue to complete. Returning to Odon releases only the capture whose
+projection revision and resource generations match. The renderer returns
+pixels and the actor's bounded writer performs an atomic no-clobber commit,
+removing temporary output on failure or cancellation. Explicit viewport,
+composed workspace, complete-window, and project-page captures are separate operations.
 File output does not overwrite unless
 the relevant method explicitly accepts and receives overwrite permission.
 

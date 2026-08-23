@@ -37,8 +37,7 @@ impl MosaicViewerApp {
         let segmentation = self.seg_geojson.control_loading_snapshot();
         let segmentation_busy = self.seg_geojson.is_busy();
         let pinned_levels_loading = self.projected_memory_running();
-        let screenshot_pending = self.screenshot_pending.is_some();
-        let screenshot_in_flight = self.screenshot_in_flight.is_some();
+        let screenshot_pending = self.screenshot_capture.pending.is_some();
 
         let mut reasons = Vec::new();
         if image_tiles_busy {
@@ -53,7 +52,7 @@ impl MosaicViewerApp {
         if pinned_levels_loading {
             reasons.push("pinned_levels");
         }
-        if screenshot_pending || screenshot_in_flight {
+        if screenshot_pending {
             reasons.push("screenshot");
         }
 
@@ -76,7 +75,7 @@ impl MosaicViewerApp {
             "pinned_levels_loading": pinned_levels_loading,
             "screenshot": {
                 "pending": screenshot_pending,
-                "in_flight": screenshot_in_flight,
+                "in_flight": false,
             },
         })
     }

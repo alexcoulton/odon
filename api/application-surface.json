@@ -454,8 +454,8 @@
       "permissions": ["viewer.screenshot", "application.screenshot"],
       "python_sync": ["odon.resources:Screenshots.capture", "odon.resources:Screenshots.capture_window", "odon.resources:Screenshots.capture_project", "odon.resources:Screenshots.get_settings", "odon.resources:Screenshots.set_settings"],
       "python_async": ["odon.async_resources:AsyncScreenshots.capture", "odon.async_resources:AsyncScreenshots.capture_window", "odon.async_resources:AsyncScreenshots.capture_project", "odon.async_resources:AsyncScreenshots.get_settings", "odon.async_resources:AsyncScreenshots.set_settings"],
-      "tests": ["rust:screenshot_task_completion", "rust:screenshot_preferences_set_and_get_complete_without_a_ui_frame", "rust:invalid_screenshot_output_directory_does_not_replace_existing_preferences", "python:test_screenshot_settings_and_overwrite"],
-      "notes": "Single-view screenshot preferences are actor-owned and project to the renderer; output-folder validation runs on the bounded worker pool and commits by generation. Mosaic preferences remain on the mosaic route until Wave 4, while the four pixel-capture methods remain explicit presentation work for Wave 5."
+      "tests": ["rust:viewer_capture_waits_for_presentation_but_does_not_block_the_actor", "rust:covered_capture_times_out_with_presentation_phase_details", "rust:stale_renderer_acknowledgement_cannot_complete_a_new_capture", "rust:screenshot_writer_removes_temporary_output_after_commit_failure", "python:test_screenshot_settings_and_overwrite", "python:test_async_wait_yields_while_unrelated_work_progresses"],
+      "notes": "Screenshot preferences and task/output lifecycle are actor-owned in single and mosaic modes. The renderer retains only a generation-specific pixel-readback adapter. Captures expose structured waiting-for-presentation details and the bounded actor worker commits PNG output atomically."
     },
 
     {"id":"VIEW-04.target","feature_id":"VIEW-04","domain":"viewer.rendering","title":"GPU image compositing controls and deterministic output","phase":"B","status":"covered",
