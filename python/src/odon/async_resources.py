@@ -17,6 +17,12 @@ def _with_revision(params: Mapping[str, Any], if_revision: int | None) -> dict[s
     return result
 
 
+def _compact(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop only absent optional parameters while preserving nested JSON nulls."""
+
+    return {key: value for key, value in params.items() if value is not None}
+
+
 def _with_viewport_revision(
     params: Mapping[str, Any],
     if_revision: int | None,
@@ -3167,6 +3173,52 @@ class AsyncMosaic:
 
     async def get_object_state(self) -> Any:
         return await self._client.call("mosaic.objects.get_state")
+
+    async def get_object_style(self) -> Any:
+        return await self._client.call("mosaic.objects.style.get")
+
+    async def set_object_style(self, **style: Any) -> Any:
+        return await self._client.call("mosaic.objects.style.set", {"style": style})
+
+    async def get_object_selection(
+        self, *, item_id: int | None = None, roi_id: str | None = None
+    ) -> Any:
+        return await self._client.call(
+            "mosaic.objects.selection.get",
+            _compact({"item_id": item_id, "roi_id": roi_id}),
+        )
+
+    async def replace_object_selection(
+        self,
+        *,
+        selected_indices: Sequence[int],
+        item_id: int | None = None,
+        roi_id: str | None = None,
+        primary_index: int | None = None,
+        expected_generation: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "mosaic.objects.selection.replace",
+            _compact(
+                {
+                    "item_id": item_id,
+                    "roi_id": roi_id,
+                    "expected_generation": expected_generation,
+                    "state": {
+                        "selected_indices": list(selected_indices),
+                        "primary_index": primary_index,
+                    },
+                }
+            ),
+        )
+
+    async def clear_object_selection(
+        self, *, item_id: int | None = None, roi_id: str | None = None
+    ) -> Any:
+        return await self._client.call(
+            "mosaic.objects.selection.clear",
+            _compact({"item_id": item_id, "roi_id": roi_id}),
+        )
 
     async def load_selected_objects(
         self, *, if_revision: int | None = None

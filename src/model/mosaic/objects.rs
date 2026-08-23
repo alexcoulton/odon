@@ -3,6 +3,178 @@
 use super::*;
 
 impl MosaicModel {
+    pub(super) fn object_style_snapshot(&self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        Ok(json!({"style":self.object_style}))
+    }
+
+    pub(super) fn set_object_style(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let patch = params.get("style").unwrap_or(params);
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| invalid("mosaic object style must be an object"))?;
+        let mut next = self.object_style.clone();
+        let next_object = next.as_object_mut().expect("mosaic object style object");
+        for (key, value) in patch {
+            match key.as_str() {
+                "opacity" | "fill_opacity" | "selected_fill_opacity" => {
+                    let number = value
+                        .as_f64()
+                        .filter(|number| number.is_finite() && (0.0..=1.0).contains(number))
+                        .ok_or_else(|| invalid(format!("{key} must be between 0 and 1")))?;
+                    next_object.insert(key.clone(), json!(number));
+                }
+                "width_screen_px" => {
+                    let number = value
+                        .as_f64()
+                        .filter(|number| number.is_finite() && *number >= 0.0)
+                        .ok_or_else(|| invalid("width_screen_px must be non-negative"))?;
+                    next_object.insert(key.clone(), json!(number));
+                }
+                "downsample_factor" => {
+                    let number = value
+                        .as_f64()
+                        .filter(|number| number.is_finite() && *number > 0.0)
+                        .ok_or_else(|| invalid("downsample_factor must be greater than zero"))?;
+                    next_object.insert(key.clone(), json!(number));
+                }
+                "fill_cells" => {
+                    value
+                        .as_bool()
+                        .ok_or_else(|| invalid("fill_cells must be boolean"))?;
+                    next_object.insert(key.clone(), value.clone());
+                }
+                "color_rgb" => {
+                    let values = value
+                        .as_array()
+                        .filter(|values| values.len() == 3)
+                        .ok_or_else(|| invalid("color_rgb must contain three bytes"))?;
+                    if values
+                        .iter()
+                        .any(|value| value.as_u64().is_none_or(|value| value > 255))
+                    {
+                        return Err(invalid("color_rgb must contain three bytes"));
+                    }
+                    next_object.insert(key.clone(), value.clone());
+                }
+                "color_property_key" => {
+                    value
+                        .as_str()
+                        .ok_or_else(|| invalid("color_property_key must be a string"))?;
+                    next_object.insert(key.clone(), value.clone());
+                }
+                "color_level_overrides" => {
+                    value
+                        .as_object()
+                        .ok_or_else(|| invalid("color_level_overrides must be an object"))?;
+                    next_object.insert(key.clone(), value.clone());
+                }
+                "style" | "item_id" | "roi_id" => {}
+                _ => {
+                    return Err(invalid(format!(
+                        "unknown mosaic object style field '{key}'"
+                    )));
+                }
+            }
+        }
+        let changed = next != self.object_style;
+        self.object_style = next;
+        Ok(json!({"changed":changed,"style":self.object_style}))
+    }
+
+    pub(super) fn object_selection_projection(&self) -> Value {
+        Value::Object(
+            self.object_selections
+                .iter()
+                .map(|(item_id, selection)| (item_id.to_string(), selection.projection_json()))
+                .collect(),
+        )
+    }
+
+    fn object_item_id(&self, params: &Value) -> Result<usize, ControlError> {
+        if let Some(item_id) = params.get("item_id").and_then(Value::as_u64) {
+            let item_id = usize::try_from(item_id).map_err(|_| invalid("item_id is too large"))?;
+            if self.items.iter().any(|item| item.id == item_id) {
+                return Ok(item_id);
+            }
+            return Err(invalid("mosaic object item_id was not found"));
+        }
+        let roi_id = params
+            .get("roi_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("item_id or roi_id is required"))?;
+        self.items
+            .iter()
+            .find(|item| item.roi_id == roi_id)
+            .map(|item| item.id)
+            .ok_or_else(|| invalid("mosaic object roi_id was not found"))
+    }
+
+    pub(super) fn object_selection_snapshot(&self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        if params.get("item_id").is_none() && params.get("roi_id").is_none() {
+            return Ok(json!({"items":self.object_selection_projection()}));
+        }
+        let item_id = self.object_item_id(params)?;
+        let selection = self.object_selections.get(&item_id);
+        Ok(json!({
+            "item_id":item_id,
+            "selection":selection.map_or_else(
+                || ObjectSelectionModel::default().snapshot(self.object_resources.get(&item_id).map(AsRef::as_ref), 256),
+                |selection| selection.snapshot(self.object_resources.get(&item_id).map(AsRef::as_ref), 256)
+            )
+        }))
+    }
+
+    pub(super) fn replace_object_selection(
+        &mut self,
+        params: &Value,
+    ) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let item_id = self.object_item_id(params)?;
+        if params
+            .get("clear_others")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            for (other_item_id, selection) in &mut self.object_selections {
+                if *other_item_id != item_id {
+                    selection.clear(None, 0);
+                }
+            }
+        }
+        let resource = self.object_resources.get(&item_id).cloned();
+        let selection = self.object_selections.entry(item_id).or_default();
+        let response = selection.replace_transaction(resource.as_deref(), params, 256)?;
+        Ok(json!({"item_id":item_id,"result":response}))
+    }
+
+    pub(super) fn clear_object_selections(
+        &mut self,
+        params: &Value,
+    ) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        if params.get("item_id").is_some() || params.get("roi_id").is_some() {
+            let item_id = self.object_item_id(params)?;
+            let resource = self.object_resources.get(&item_id).cloned();
+            let result = self
+                .object_selections
+                .entry(item_id)
+                .or_default()
+                .clear(resource.as_deref(), 256);
+            return Ok(json!({"item_id":item_id,"result":result}));
+        }
+        let changed = self
+            .object_selections
+            .values()
+            .any(|selection| !selection.selected_indices().is_empty());
+        for selection in self.object_selections.values_mut() {
+            selection.clear(None, 0);
+        }
+        Ok(json!({"changed":changed,"items":self.object_selection_projection()}))
+    }
+
     pub(crate) fn prepare_object_load(
         &mut self,
         downsample_factor: f32,

@@ -344,6 +344,9 @@ impl MosaicViewerApp {
         {
             self.seg_geojson.set_fast_object_rendering(value);
         }
+        if let Some(style) = state.get("object_style") {
+            self.seg_geojson.apply_control_style(style)?;
+        }
         if let Some(channels) = state.get("channels").and_then(serde_json::Value::as_array) {
             for projected in channels {
                 let Some(index) = projected
@@ -471,6 +474,9 @@ impl MosaicViewerApp {
                     .install_control_resource(*item_id, resource.as_ref());
             }
             self.control_actor_object_generation = object_generation;
+        }
+        if let Some(selections) = state.get("object_selections") {
+            self.seg_geojson.apply_control_selections(selections)?;
         }
         self.pending_object_load_ids = state["objects"]["items"]
             .as_array()

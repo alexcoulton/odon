@@ -241,6 +241,11 @@ impl AppModel {
                 | "mosaic.focus.clear"
                 | "mosaic.fit_all"
                 | "mosaic.objects.get_state"
+                | "mosaic.objects.style.get"
+                | "mosaic.objects.style.set"
+                | "mosaic.objects.selection.get"
+                | "mosaic.objects.selection.replace"
+                | "mosaic.objects.selection.clear"
         );
         if !supported {
             return None;
@@ -375,7 +380,11 @@ impl AppModel {
                         json!({"mode":"mosaic","selection":result})
                     }
                     "mosaic.focus.get" => json!({"mode":"mosaic","focused":result}),
-                    "mosaic.objects.get_state" => json!({"mode":"mosaic","objects":result}),
+                    "mosaic.objects.get_state"
+                    | "mosaic.objects.style.get"
+                    | "mosaic.objects.selection.get" => {
+                        json!({"mode":"mosaic","objects":result})
+                    }
                     _ => json!({"mode":"mosaic","result":result}),
                 };
                 ModelDispatch {
@@ -387,6 +396,8 @@ impl AppModel {
                             | "mosaic.selection.get"
                             | "mosaic.focus.get"
                             | "mosaic.objects.get_state"
+                            | "mosaic.objects.style.get"
+                            | "mosaic.objects.selection.get"
                     ),
                 }
             });

@@ -347,6 +347,63 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
     let objects = call(&channels, "mosaic.objects.get_state", json!({}));
     assert_eq!(objects["objects"]["loaded_count"], 2);
     assert_eq!(objects["objects"]["settled"], true);
+    let style = call(
+        &channels,
+        "mosaic.objects.style.set",
+        json!({"style":{"fill_cells":true,"opacity":0.42}}),
+    );
+    assert_eq!(style["result"]["style"]["fill_cells"], true);
+    assert_eq!(
+        call(&channels, "mosaic.objects.style.get", json!({}))["objects"]["style"]["opacity"],
+        0.42
+    );
+    let selected = call(
+        &channels,
+        "mosaic.objects.selection.replace",
+        json!({"roi_id":"ROI-A","state":{"selected_indices":[0],"primary_index":0}}),
+    );
+    assert_eq!(
+        selected["result"]["result"]["selection"]["selection_count"],
+        1
+    );
+    assert_eq!(
+        call(
+            &channels,
+            "mosaic.objects.selection.get",
+            json!({"roi_id":"ROI-A"})
+        )["objects"]["selection"]["selection_count"],
+        1
+    );
+    call(
+        &channels,
+        "mosaic.objects.selection.replace",
+        json!({"roi_id":"ROI-B","state":{"selected_indices":[0],"primary_index":0}}),
+    );
+    call(
+        &channels,
+        "mosaic.objects.selection.replace",
+        json!({
+            "roi_id":"ROI-A",
+            "state":{"selected_indices":[0],"primary_index":0},
+            "clear_others":true,
+        }),
+    );
+    assert_eq!(
+        call(
+            &channels,
+            "mosaic.objects.selection.get",
+            json!({"roi_id":"ROI-B"})
+        )["objects"]["selection"]["selection_count"],
+        0
+    );
+    assert_eq!(
+        call(
+            &channels,
+            "mosaic.objects.selection.clear",
+            json!({"roi_id":"ROI-A"})
+        )["result"]["result"]["selection"]["selection_count"],
+        0
+    );
     let cancelled = call(&channels, "mosaic.objects.cancel_load", json!({}));
     assert_eq!(cancelled["result"]["cancelled_requests"], 0);
 

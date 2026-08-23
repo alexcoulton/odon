@@ -113,13 +113,29 @@ impl MosaicViewerApp {
                 let camera_before = self.control_camera_snapshot();
                 let have_any_seg = self.seg_geojson.has_any_segpaths();
                 let visible_before = self.seg_geojson.visible;
-                let zoom_selected = self.seg_geojson.ui_left_panel(ui, have_any_seg);
+                let style_before = self.seg_geojson.control_style_json();
+                let (zoom_selected, clear_selection) =
+                    self.seg_geojson.ui_left_panel(ui, have_any_seg);
+                let style_after = self.seg_geojson.control_style_json();
                 if self.seg_geojson.visible != visible_before {
                     let visible = self.seg_geojson.visible;
                     self.seg_geojson.visible = visible_before;
                     self.submit_native_control_intent(
                         "viewer.objects.set_visibility",
                         serde_json::json!({"target":"objects","visible":visible}),
+                    );
+                }
+                if style_after != style_before {
+                    let _ = self.seg_geojson.apply_control_style(&style_before);
+                    self.submit_native_control_intent(
+                        "mosaic.objects.style.set",
+                        serde_json::json!({"style":style_after}),
+                    );
+                }
+                if clear_selection {
+                    self.submit_native_control_intent(
+                        "mosaic.objects.selection.clear",
+                        serde_json::json!({}),
                     );
                 }
                 if zoom_selected

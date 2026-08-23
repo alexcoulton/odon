@@ -1544,6 +1544,26 @@ fn annotation_semantics_resources_and_persistence_are_actor_owned() {
 }
 
 #[test]
+fn mosaic_object_style_and_selection_have_no_renderer_commit_fallback() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let canvas = source(root.join("src/mosaic/canvas.rs"));
+    let panels = source(root.join("src/mosaic/panels.rs"));
+    let overlay = source(root.join("src/mosaic/segmentation_geojson.rs"));
+    let model = source(root.join("src/model/mosaic.rs"));
+
+    assert!(!canvas.contains(".select_at("));
+    assert!(!canvas.contains("seg_geojson.clear_selection("));
+    assert!(canvas.contains("mosaic.objects.selection.replace"));
+    assert!(canvas.contains("mosaic.objects.selection.clear"));
+    assert!(panels.contains("mosaic.objects.style.set"));
+    assert!(panels.contains("mosaic.objects.selection.clear"));
+    assert!(!overlay.contains("pub fn select_at("));
+    assert!(!overlay.contains("pub fn clear_selection("));
+    assert!(model.contains("object_style: Value"));
+    assert!(model.contains("object_selections: HashMap<usize, ObjectSelectionModel>"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));

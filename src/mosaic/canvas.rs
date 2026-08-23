@@ -56,10 +56,27 @@ impl MosaicViewerApp {
             let world = self.camera.screen_to_world(pos, rect);
             let mods = ui.input(|i| i.modifiers);
             if let Some(it) = self.items.iter().find(|it| item_rect(it).contains(world)) {
-                self.seg_geojson
-                    .select_at(it.id, world, &self.camera, mods.shift, mods.command);
+                if let Some(state) = self.seg_geojson.control_selection_state_after_click(
+                    it.id,
+                    world,
+                    &self.camera,
+                    mods.shift,
+                    mods.command,
+                ) {
+                    self.submit_native_control_intent(
+                        "mosaic.objects.selection.replace",
+                        serde_json::json!({
+                            "item_id":it.id,
+                            "state":state,
+                            "clear_others":!mods.shift && !mods.command,
+                        }),
+                    );
+                }
             } else if !mods.shift && !mods.command {
-                self.seg_geojson.clear_selection();
+                self.submit_native_control_intent(
+                    "mosaic.objects.selection.clear",
+                    serde_json::json!({}),
+                );
             }
         }
 

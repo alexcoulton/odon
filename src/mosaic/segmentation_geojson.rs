@@ -74,6 +74,129 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
 }
 
 impl MosaicGeoJsonSegmentationOverlay {
+    pub fn control_style_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "opacity":self.opacity,
+            "width_screen_px":self.width_screen_px,
+            "color_rgb":self.color_rgb,
+            "fill_cells":self.fill_cells,
+            "fill_opacity":self.fill_opacity,
+            "selected_fill_opacity":self.selected_fill_opacity,
+            "color_property_key":self.color_property_key,
+            "color_level_overrides":self.color_level_overrides,
+            "downsample_factor":self.downsample_factor,
+        })
+    }
+
+    pub fn apply_control_style(&mut self, style: &serde_json::Value) -> Result<(), String> {
+        if let Some(value) = style.get("opacity").and_then(serde_json::Value::as_f64) {
+            self.opacity = value as f32;
+        }
+        if let Some(value) = style
+            .get("width_screen_px")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.width_screen_px = value as f32;
+        }
+        if let Some(values) = style
+            .get("color_rgb")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| values.len() == 3)
+        {
+            self.color_rgb = [
+                values[0].as_u64().unwrap_or(0) as u8,
+                values[1].as_u64().unwrap_or(0) as u8,
+                values[2].as_u64().unwrap_or(0) as u8,
+            ];
+        }
+        if let Some(value) = style.get("fill_cells").and_then(serde_json::Value::as_bool) {
+            self.fill_cells = value;
+        }
+        if let Some(value) = style
+            .get("fill_opacity")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.fill_opacity = value as f32;
+        }
+        if let Some(value) = style
+            .get("selected_fill_opacity")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.selected_fill_opacity = value as f32;
+        }
+        if let Some(value) = style
+            .get("color_property_key")
+            .and_then(serde_json::Value::as_str)
+        {
+            self.color_property_key = value.to_string();
+        }
+        if let Some(value) = style.get("color_level_overrides") {
+            self.color_level_overrides = serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid mosaic object legend projection: {error}"))?;
+        }
+        if let Some(value) = style
+            .get("downsample_factor")
+            .and_then(serde_json::Value::as_f64)
+        {
+            self.downsample_factor = value as f32;
+        }
+        Ok(())
+    }
+
+    pub fn control_selection_state_after_click(
+        &self,
+        item_id: usize,
+        pointer_world: egui::Pos2,
+        camera: &crate::camera::Camera,
+        additive: bool,
+        toggle: bool,
+    ) -> Option<serde_json::Value> {
+        let layer = self.items.get(&item_id)?.layer.as_ref()?;
+        Some(layer.control_selection_state_after_click(
+            pointer_world,
+            egui::Vec2::ZERO,
+            camera,
+            additive,
+            toggle,
+        ))
+    }
+
+    pub fn apply_control_selections(
+        &mut self,
+        selections: &serde_json::Value,
+    ) -> Result<(), String> {
+        let selections = selections
+            .as_object()
+            .ok_or_else(|| "mosaic object selections projection must be an object".to_string())?;
+        for (item_id, state) in selections {
+            let item_id = item_id
+                .parse::<usize>()
+                .map_err(|_| "mosaic object selection key is invalid".to_string())?;
+            let Some(layer) = self
+                .items
+                .get_mut(&item_id)
+                .and_then(|state| state.layer.as_mut())
+            else {
+                continue;
+            };
+            let selected = state
+                .get("selected_indices")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_u64)
+                .map(|index| index as usize)
+                .collect::<Vec<_>>();
+            let primary = state
+                .get("primary_index")
+                .and_then(serde_json::Value::as_u64)
+                .map(|index| index as usize);
+            layer.install_control_selection(&selected, primary)?;
+        }
+        self.update_primary_selection();
+        Ok(())
+    }
+
     pub fn set_samplesheet_dir(&mut self, dir: Option<PathBuf>) {
         self.samplesheet_dir = dir;
     }
@@ -190,11 +313,12 @@ impl MosaicGeoJsonSegmentationOverlay {
         self.force_repaint_frames = self.force_repaint_frames.max(2);
     }
 
-    pub fn ui_left_panel(&mut self, ui: &mut egui::Ui, have_any: bool) -> bool {
+    pub fn ui_left_panel(&mut self, ui: &mut egui::Ui, have_any: bool) -> (bool, bool) {
         if !have_any {
-            return false;
+            return (false, false);
         }
         let mut zoom_requested = false;
+        let mut clear_selection_requested = false;
 
         ui.separator();
         ui.heading("Segmentation");
@@ -327,7 +451,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                 )
                 .clicked()
             {
-                self.clear_selection();
+                clear_selection_requested = true;
             }
             if ui
                 .add_enabled(
@@ -366,7 +490,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             ui.label("No object selected");
         }
 
-        zoom_requested
+        (zoom_requested, clear_selection_requested)
     }
 
     pub fn tick(&mut self) {
@@ -519,43 +643,6 @@ impl MosaicGeoJsonSegmentationOverlay {
             &color_level_overrides,
         );
         layer.hover_tooltip(pointer_world, egui::Vec2::ZERO, camera)
-    }
-
-    pub fn select_at(
-        &mut self,
-        item_id: usize,
-        pointer_world: egui::Pos2,
-        camera: &crate::camera::Camera,
-        additive: bool,
-        toggle: bool,
-    ) {
-        let style = self.shared_style();
-        let color_level_overrides = self.current_color_level_overrides().clone();
-        if !additive && !toggle {
-            self.clear_selection();
-        }
-
-        if let Some(st) = self.items.get_mut(&item_id)
-            && let Some(layer) = st.layer.as_mut()
-        {
-            apply_style(
-                layer,
-                style,
-                Some(self.color_property_key.as_str()),
-                &color_level_overrides,
-            );
-            layer.select_at(pointer_world, egui::Vec2::ZERO, camera, additive, toggle);
-        }
-        self.update_primary_selection();
-    }
-
-    pub fn clear_selection(&mut self) {
-        for st in self.items.values_mut() {
-            if let Some(layer) = st.layer.as_mut() {
-                layer.clear_selection();
-            }
-        }
-        self.primary_selected_item_id = None;
     }
 
     pub fn selection_count(&self) -> usize {

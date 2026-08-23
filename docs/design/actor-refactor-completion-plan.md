@@ -288,6 +288,13 @@ shared generation-tagged resources. The renderer retains only paint/UI adapters,
 pending widget intent; project save paths preserve the actor projection rather than reassembling
 annotation truth from those adapters.
 
+Mosaic ROI focus and selection are confirmed projection-only. Mosaic object appearance, legend
+configuration, and per-ROI object selections now also commit through typed actor methods; native
+hit testing computes a proposed selection without mutating the renderer, and the renderer installs
+the resulting actor projection. The remaining Milestone 4 resource work is now isolated to the
+legacy single-view GeoJSON line loader and mosaic's frame-driven fallback loading of segmentation
+resources.
+
 Work:
 
 - make object presentation, filters, selections, legends, and analysis configuration actor-only;

@@ -36,31 +36,6 @@ impl ObjectsLayer {
         Some(lines)
     }
 
-    pub fn select_at(
-        &mut self,
-        pointer_world: egui::Pos2,
-        local_to_world_offset: egui::Vec2,
-        camera: &crate::camera::Camera,
-        additive: bool,
-        toggle: bool,
-    ) {
-        let (selected, primary) = self.selection_state_after_click(
-            pointer_world,
-            local_to_world_offset,
-            camera,
-            additive,
-            toggle,
-        );
-        if selected == self.selected_object_indices && primary == self.selected_object_index {
-            return;
-        }
-        self.selected_object_indices = selected;
-        self.selected_object_index = primary;
-        self.rebuild_selection_render_lods();
-        self.clear_measurements();
-        self.invalidate_table_cache();
-    }
-
     pub(crate) fn control_selection_state_after_click(
         &self,
         pointer_world: egui::Pos2,
@@ -189,14 +164,6 @@ impl ObjectsLayer {
             .as_ref()
             .map(|indices| indices.len())
             .unwrap_or_else(|| self.object_count())
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.selected_object_indices.clear();
-        self.selected_object_index = None;
-        self.rebuild_selection_render_lods();
-        self.clear_measurements();
-        self.invalidate_table_cache();
     }
 
     pub(super) fn rebuild_selection_fill_state(&mut self, object_count: usize) {

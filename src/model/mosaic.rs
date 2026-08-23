@@ -15,7 +15,7 @@ use crate::data::project_config::{
 };
 
 use super::layers::NativeLayersModel;
-use super::{ControlPinnedLevelResource, SystemMemorySnapshot};
+use super::{ControlPinnedLevelResource, ObjectSelectionModel, SystemMemorySnapshot};
 
 mod layout;
 mod memory;
@@ -239,6 +239,8 @@ pub(crate) struct MosaicModel {
     show_tile_debug: bool,
     objects_visible: bool,
     fast_object_rendering: bool,
+    object_style: Value,
+    object_selections: HashMap<usize, ObjectSelectionModel>,
     object_resources: BTreeMap<usize, Arc<super::ControlObjectResource>>,
     object_operation_generation: u64,
     object_pending_ids: HashSet<usize>,
@@ -291,6 +293,8 @@ impl Default for MosaicModel {
             show_tile_debug: false,
             objects_visible: false,
             fast_object_rendering: true,
+            object_style: default_mosaic_object_style(),
+            object_selections: HashMap::new(),
             object_resources: BTreeMap::new(),
             object_operation_generation: 0,
             object_pending_ids: HashSet::new(),
@@ -454,6 +458,8 @@ impl MosaicModel {
         self.show_tile_debug = false;
         self.objects_visible = false;
         self.fast_object_rendering = true;
+        self.object_style = default_mosaic_object_style();
+        self.object_selections.clear();
         self.object_resources.clear();
         self.object_failures.clear();
         self.object_pending_ids.clear();
@@ -716,6 +722,8 @@ impl MosaicModel {
             "show_tile_debug":self.show_tile_debug,
             "objects_visible":self.objects_visible,
             "fast_object_rendering":self.fast_object_rendering,
+            "object_style":self.object_style,
+            "object_selections":self.object_selection_projection(),
             "channels":self.channels.iter().map(|channel| json!({
                 "index":channel.index,
                 "name":channel.name,
@@ -756,6 +764,11 @@ impl MosaicModel {
             "mosaic.focus.clear" => self.clear_focus(),
             "mosaic.fit_all" => self.fit_all(),
             "mosaic.objects.get_state" => self.require_resource().map(|_| self.object_state()),
+            "mosaic.objects.style.get" => self.object_style_snapshot(),
+            "mosaic.objects.style.set" => self.set_object_style(params),
+            "mosaic.objects.selection.get" => self.object_selection_snapshot(params),
+            "mosaic.objects.selection.replace" => self.replace_object_selection(params),
+            "mosaic.objects.selection.clear" => self.clear_object_selections(params),
             _ => return None,
         };
         Some(result)
@@ -827,6 +840,20 @@ impl MosaicModel {
         };
         Some(result.map(|response| (response, !read_only)))
     }
+}
+
+fn default_mosaic_object_style() -> Value {
+    json!({
+        "opacity":0.75,
+        "width_screen_px":1.0,
+        "color_rgb":[0,255,120],
+        "fill_cells":false,
+        "fill_opacity":0.30,
+        "selected_fill_opacity":0.70,
+        "color_property_key":"",
+        "color_level_overrides":{},
+        "downsample_factor":1.0,
+    })
 }
 
 fn initial_native_layers(

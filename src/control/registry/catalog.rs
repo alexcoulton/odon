@@ -2691,6 +2691,56 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Empty
         ),
         method!(
+            "mosaic.objects.style.get",
+            "Get actor-owned global mosaic object presentation and legend style.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            MOSAIC_MODE,
+            Empty
+        ),
+        method!(
+            "mosaic.objects.style.set",
+            "Set actor-owned global mosaic object presentation and legend style.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("mosaic.objects.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
+            "mosaic.objects.selection.get",
+            "Get actor-owned per-ROI mosaic object selections.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
+            "mosaic.objects.selection.replace",
+            "Atomically replace one ROI's mosaic object selection.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("mosaic.objects.selection.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
+            "mosaic.objects.selection.clear",
+            "Clear actor-owned mosaic object selections globally or for one ROI.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("mosaic.objects.selection.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
             "mosaic.objects.load_selected",
             "Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish.",
             "viewer.objects.write",
