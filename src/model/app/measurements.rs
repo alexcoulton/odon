@@ -166,7 +166,7 @@ impl AppModel {
     ) -> Result<Value, ControlError> {
         let target = self.resolve_object_target(params)?;
         let resource = self.object_resource_for_target(target, "exports.objects.columns")?;
-        let columns = object_export_columns(resource, self.analysis.state());
+        let columns = object_export_columns(resource, self.analysis_state_for_target(target));
         let mut response = json!({"columns":columns,"total":columns.len()});
         Self::decorate_object_target(&mut response, target);
         Ok(response)

@@ -300,6 +300,21 @@ fn spatialdata_and_xenium_open_without_a_ui_frame() {
         .unwrap();
     assert_eq!(style["style"]["fill_cells"], true);
 
+    let (set_analysis, set_analysis_rx) = request(
+        "viewer.analysis.set",
+        json!({
+            "target":"spatial_shape",
+            "layer_id":7,
+            "state":{"threshold_set_name":"Spatial analysis"},
+        }),
+    );
+    channels.request_tx.send(set_analysis).unwrap();
+    let analysis = set_analysis_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("targeted analysis does not wait for a frame")
+        .unwrap();
+    assert_eq!(analysis["state"]["threshold_set_name"], "Spatial analysis");
+
     for method in [
         "viewer.analysis.get",
         "viewer.measurements.get",

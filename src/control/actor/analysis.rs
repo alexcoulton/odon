@@ -153,7 +153,7 @@ pub(super) fn begin_analysis_preset_export(
             return false;
         }
     };
-    let state = model.analysis_state().clone();
+    let state = model.analysis_state_for_target(spec.target).clone();
     match load_job_tx.try_send(LoadJob::AnalysisPresetExport {
         request,
         spec,

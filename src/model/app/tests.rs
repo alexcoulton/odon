@@ -306,13 +306,22 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
         renderer_payload: None,
     });
     model
-        .install_document_object_layers(&[DocumentObjectLayerResource {
-            layer_id: "spatial_shape:7".to_string(),
-            name: "Cells".to_string(),
-            kind: "spatial_shape".to_string(),
-            primary: false,
-            resource,
-        }])
+        .install_document_object_layers(&[
+            DocumentObjectLayerResource {
+                layer_id: "segmentation_objects".to_string(),
+                name: "Primary cells".to_string(),
+                kind: "objects".to_string(),
+                primary: true,
+                resource: Arc::clone(&resource),
+            },
+            DocumentObjectLayerResource {
+                layer_id: "spatial_shape:7".to_string(),
+                name: "Cells".to_string(),
+                kind: "spatial_shape".to_string(),
+                primary: false,
+                resource,
+            },
+        ])
         .expect("secondary object layer installs");
 
     let target = json!({"target":"spatial_shape","layer_id":7});
@@ -408,6 +417,45 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
         .expect("spatial analysis starts");
     assert_eq!(analysis.target, ObjectTarget::SpatialShape(7));
     assert_eq!(analysis.resource.features.len(), 1);
+
+    let primary_analysis = json!({
+        "target":"segmentation_objects",
+        "state":{"threshold_set_name":"Primary analysis"},
+    });
+    model
+        .dispatch("viewer.analysis.set", &primary_analysis)
+        .unwrap()
+        .unwrap();
+    let spatial_analysis = json!({
+        "target":"spatial_shape",
+        "layer_id":7,
+        "state":{"threshold_set_name":"Spatial analysis"},
+    });
+    model
+        .dispatch("viewer.analysis.set", &spatial_analysis)
+        .unwrap()
+        .unwrap();
+    let primary = model
+        .dispatch(
+            "viewer.analysis.get",
+            &json!({"target":"segmentation_objects"}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    let spatial = model
+        .dispatch("viewer.analysis.get", &target)
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(primary["state"]["threshold_set_name"], "Primary analysis");
+    assert_eq!(spatial["state"]["threshold_set_name"], "Spatial analysis");
+    let secondary = model.secondary_object_projections();
+    assert_eq!(
+        secondary[0].analysis_state["threshold_set_name"],
+        "Spatial analysis"
+    );
+    assert_eq!(secondary[0].analysis_generation, 2);
 
     let measurement = model
         .prepare_measurement(&target)

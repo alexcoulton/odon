@@ -187,6 +187,12 @@ impl OmeZarrViewerApp {
             .retain(|layer_id, _| wanted.contains(layer_id));
         self.control_actor_secondary_object_selection_generations
             .retain(|layer_id, _| wanted.contains(layer_id));
+        self.control_actor_secondary_object_analysis_generations
+            .retain(|layer_id, _| wanted.contains(layer_id));
+        let active_channel = self
+            .channels
+            .get(self.selected_channel)
+            .map(|channel| channel.name.clone());
         for projected in layers {
             let installed = self
                 .control_actor_secondary_object_generations
@@ -219,6 +225,8 @@ impl OmeZarrViewerApp {
                 }
                 self.control_actor_secondary_object_generations
                     .insert(projected.layer_id, projected.generation);
+                self.control_actor_secondary_object_analysis_generations
+                    .remove(&projected.layer_id);
             }
             let selected_indices = projected
                 .selection
@@ -243,6 +251,25 @@ impl OmeZarrViewerApp {
                 .max(1);
             self.control_actor_secondary_object_selection_generations
                 .insert(projected.layer_id, selection_generation);
+            let installed_analysis = self
+                .control_actor_secondary_object_analysis_generations
+                .get(&projected.layer_id)
+                .copied()
+                .unwrap_or(0);
+            if projected.analysis_generation > installed_analysis {
+                let state = serde_json::from_value::<crate::objects::ObjectProjectAnalysisState>(
+                    projected.analysis_state.clone(),
+                )
+                .map_err(|error| {
+                    format!(
+                        "actor spatial shape layer {} analysis state is invalid: {error}",
+                        projected.layer_id
+                    )
+                })?;
+                objects.apply_project_analysis_state(&state, active_channel.as_deref());
+                self.control_actor_secondary_object_analysis_generations
+                    .insert(projected.layer_id, projected.analysis_generation);
+            }
         }
         Ok(())
     }

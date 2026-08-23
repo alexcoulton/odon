@@ -46,7 +46,7 @@ impl AppModel {
             tile_loading: TileLoadingModel::default(),
             pinned_memory: PinnedMemoryModel::default(),
             threshold_preview: ThresholdPreviewModel::default(),
-            analysis: AnalysisModel::default(),
+            analyses: HashMap::from([(ObjectTarget::Primary, AnalysisModel::default())]),
             measurement: MeasurementModel::default(),
             object_export: ObjectExportModel::default(),
             mosaic: MosaicModel::default(),
@@ -267,6 +267,11 @@ impl AppModel {
                 generation: layer.generation,
                 resource: Arc::clone(&layer.resource),
                 selection: layer.selection.projection_json(),
+                analysis_generation: self
+                    .analysis_generation_for_target(ObjectTarget::SpatialShape(layer.layer_id)),
+                analysis_state: self
+                    .analysis_state_for_target(ObjectTarget::SpatialShape(layer.layer_id))
+                    .clone(),
             })
             .collect::<Vec<_>>();
         layers.sort_by_key(|layer| layer.layer_id);
@@ -904,6 +909,9 @@ impl AppModel {
             self.object_resource_generation =
                 self.object_resource_generation.wrapping_add(1).max(1);
             let generation = self.object_resource_generation;
+            self.analyses
+                .entry(ObjectTarget::SpatialShape(id))
+                .or_default();
             let dataset = self.dataset_mut()?;
             dataset.secondary_object_layers.insert(
                 id,

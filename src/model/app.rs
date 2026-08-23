@@ -320,6 +320,8 @@ pub struct ControlSecondaryObjectProjection {
     pub generation: u64,
     pub resource: Arc<ControlObjectResource>,
     pub selection: Value,
+    pub analysis_generation: u64,
+    pub analysis_state: Value,
 }
 
 impl ObjectTarget {
@@ -404,7 +406,7 @@ pub struct AppModel {
     tile_loading: TileLoadingModel,
     pinned_memory: PinnedMemoryModel,
     threshold_preview: ThresholdPreviewModel,
-    analysis: AnalysisModel,
+    analyses: HashMap<ObjectTarget, AnalysisModel>,
     measurement: MeasurementModel,
     object_export: ObjectExportModel,
     mosaic: MosaicModel,

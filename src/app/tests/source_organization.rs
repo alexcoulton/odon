@@ -1433,6 +1433,16 @@ fn native_object_selection_and_analysis_have_no_renderer_commit_fallback() {
     let update = source(root.join("src/app/update.rs"));
     assert!(update.contains("objects.apply_project_analysis_state("));
     assert!(update.contains("method: \"viewer.analysis.set\""));
+
+    let model = source(root.join("src/model/app.rs"));
+    assert!(model.contains("analyses: HashMap<ObjectTarget, AnalysisModel>"));
+    assert!(!model.contains("analysis: AnalysisModel"));
+    assert!(model.contains("pub analysis_generation: u64"));
+    assert!(model.contains("pub analysis_state: Value"));
+
+    let projection = source(root.join("src/app/actor_projection.rs"));
+    assert!(projection.contains("projected.analysis_generation > installed_analysis"));
+    assert!(projection.contains("objects.apply_project_analysis_state("));
 }
 
 #[test]
@@ -1774,7 +1784,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 310,
+        total_fields, 311,
         "review the ownership ledger when host fields change"
     );
 }

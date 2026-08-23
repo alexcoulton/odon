@@ -484,7 +484,9 @@ impl AppModel {
                 })
             });
         self.threshold_preview.reset(default_threshold_level);
-        self.analysis.reset();
+        self.analyses.clear();
+        self.analyses
+            .insert(ObjectTarget::Primary, AnalysisModel::default());
         self.measurement.reset();
         self.object_export.reset();
         self.measured_viewports

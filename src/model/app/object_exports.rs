@@ -45,7 +45,7 @@ impl AppModel {
                 .ok_or_else(|| invalid("overwrite must be a boolean"))?,
             None => false,
         };
-        let available = object_export_columns(&resource, self.analysis.state());
+        let available = object_export_columns(&resource, self.analysis_state_for_target(target));
         let columns = match params.get("columns") {
             Some(value) => value
                 .as_array()
@@ -116,7 +116,7 @@ impl AppModel {
             row_indices: Arc::new(row_indices),
             columns: Arc::new(columns),
             selected_indices: Arc::new(selected_indices),
-            analysis_state: self.analysis.state().clone(),
+            analysis_state: self.analysis_state_for_target(target).clone(),
         })
     }
 

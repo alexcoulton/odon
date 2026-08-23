@@ -30,10 +30,6 @@ impl Default for AnalysisModel {
 }
 
 impl AnalysisModel {
-    pub(crate) fn reset(&mut self) {
-        *self = Self::default();
-    }
-
     pub(crate) fn state(&self) -> &Value {
         &self.state
     }

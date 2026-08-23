@@ -341,7 +341,7 @@
       },
       {
         "id": "viewer.consumed_generations",
-        "fields": ["control_actor_object_generation", "control_actor_secondary_object_generations", "control_actor_secondary_object_selection_generations", "control_actor_label_generation", "control_actor_object_selection_generation", "control_actor_mask_generation", "control_actor_workspace_revision", "control_actor_threshold_generation", "control_actor_analysis_generation", "control_actor_measurement_generation", "control_actor_object_export_generation", "control_actor_mask_undo_available", "control_actor_tile_policy_generation"],
+        "fields": ["control_actor_object_generation", "control_actor_secondary_object_generations", "control_actor_secondary_object_selection_generations", "control_actor_secondary_object_analysis_generations", "control_actor_label_generation", "control_actor_object_selection_generation", "control_actor_mask_generation", "control_actor_workspace_revision", "control_actor_threshold_generation", "control_actor_analysis_generation", "control_actor_measurement_generation", "control_actor_object_export_generation", "control_actor_mask_undo_available", "control_actor_tile_policy_generation"],
         "current_class": "renderer",
         "disposition": "retain",
         "canonical_writer": "renderer projection consumer",
