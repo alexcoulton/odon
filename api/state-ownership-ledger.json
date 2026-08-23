@@ -631,12 +631,12 @@
       },
       {
         "id": "root.object_preload",
-        "fields": ["object_preload_cache", "object_preload_settings", "object_preload_available_count", "object_preload_on_disk_bytes", "object_preload_total", "object_preload_done", "object_preload_failed", "object_preload_loading"],
-        "current_class": "mixed_compatibility",
-        "disposition": "replace",
+        "fields": ["object_preload"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
         "canonical_writer": "ControlActor project preload retained task and shared resource catalog",
         "projection_source": "preload task and resource generations",
-        "renderer_consumers": "project preload status UI and renderer resource install",
+        "renderer_consumers": "single/mosaic resource installation and copied display-only preload status",
         "persistence_consumers": "project preload settings",
         "native_commit_point": "typed project preload/clear command",
         "milestone": 5

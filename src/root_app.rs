@@ -149,26 +149,10 @@ fn project_roi_segmentation_path(
     }
 }
 
-fn project_object_cache_ui_state(
-    available_count: usize,
-    on_disk_bytes: u64,
-    cached: usize,
-    total: usize,
-    done: usize,
-    failed: usize,
-    loading: bool,
-    cached_settings: ObjectPreloadSettings,
-) -> ProjectObjectCacheUiState {
-    ProjectObjectCacheUiState {
-        available_count,
-        on_disk_bytes,
-        cached,
-        total,
-        done,
-        failed,
-        loading,
-        cached_settings,
-    }
+#[derive(Default)]
+struct ProjectObjectPreloadRenderProjection {
+    resources: HashMap<(PathBuf, ObjectPreloadSettings), Arc<PreloadedObjectLayer>>,
+    ui: ProjectObjectCacheUiState,
 }
 
 pub struct RootApp {
@@ -177,14 +161,7 @@ pub struct RootApp {
     close_dialog_open: bool,
     spatial_open: Option<SpatialOpenDialog>,
     deep_link_rx: Option<Receiver<DeepLinkRequest>>,
-    object_preload_cache: HashMap<(PathBuf, ObjectPreloadSettings), Arc<PreloadedObjectLayer>>,
-    object_preload_settings: ObjectPreloadSettings,
-    object_preload_available_count: usize,
-    object_preload_on_disk_bytes: u64,
-    object_preload_total: usize,
-    object_preload_done: usize,
-    object_preload_failed: usize,
-    object_preload_loading: bool,
+    object_preload: ProjectObjectPreloadRenderProjection,
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
     remote_http_url: String,
@@ -875,27 +852,32 @@ impl RootApp {
             mode,
             lazy_properties: projection.settings.lazy_properties,
         };
-        self.object_preload_settings = settings;
-        self.object_preload_available_count =
-            projection.state["available_count"].as_u64().unwrap_or(0) as usize;
-        self.object_preload_on_disk_bytes = projection.state["on_disk_bytes"].as_u64().unwrap_or(0);
-        self.object_preload_total = projection.state["total"].as_u64().unwrap_or(0) as usize;
-        self.object_preload_done = projection.state["done"].as_u64().unwrap_or(0) as usize;
-        self.object_preload_failed = projection.state["failed"].as_u64().unwrap_or(0) as usize;
-        self.object_preload_loading = projection.state["loading"].as_bool().unwrap_or(false);
-        self.object_preload_cache.clear();
+        self.object_preload.ui = ProjectObjectCacheUiState {
+            available_count: projection.state["available_count"].as_u64().unwrap_or(0) as usize,
+            on_disk_bytes: projection.state["on_disk_bytes"].as_u64().unwrap_or(0),
+            cached: 0,
+            total: projection.state["total"].as_u64().unwrap_or(0) as usize,
+            done: projection.state["done"].as_u64().unwrap_or(0) as usize,
+            failed: projection.state["failed"].as_u64().unwrap_or(0) as usize,
+            loading: projection.state["loading"].as_bool().unwrap_or(false),
+            cached_settings: settings,
+        };
+        self.object_preload.resources.clear();
         for (path, resource) in projection.resources.iter() {
             let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
                 continue;
             };
-            self.object_preload_cache
+            self.object_preload
+                .resources
                 .insert((path.clone(), settings), Arc::new(preloaded.clone()));
         }
+        self.object_preload.ui.cached = self.object_preload.resources.len();
 
         match &mut self.mode {
             Mode::Mosaic { mosaic, .. } => {
                 let cached = self
-                    .object_preload_cache
+                    .object_preload
+                    .resources
                     .iter()
                     .filter_map(|((path, cached_settings), preloaded)| {
                         (*cached_settings == settings)
@@ -912,7 +894,7 @@ impl RootApp {
                     .find(|roi| app.is_viewing_project_roi(roi))
                     .and_then(|roi| {
                         project_roi_segmentation_path(app.project_space(), roi)
-                            .and_then(|path| self.object_preload_cache.get(&(path, settings)))
+                            .and_then(|path| self.object_preload.resources.get(&(path, settings)))
                     })
                     .cloned();
                 if let Some(preloaded) = matching {
@@ -1366,14 +1348,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             deep_link_rx: None,
-            object_preload_cache: HashMap::new(),
-            object_preload_settings: ObjectPreloadSettings::default(),
-            object_preload_available_count: 0,
-            object_preload_on_disk_bytes: 0,
-            object_preload_total: 0,
-            object_preload_done: 0,
-            object_preload_failed: 0,
-            object_preload_loading: false,
+            object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1434,14 +1409,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             deep_link_rx: None,
-            object_preload_cache: HashMap::new(),
-            object_preload_settings: ObjectPreloadSettings::default(),
-            object_preload_available_count: 0,
-            object_preload_on_disk_bytes: 0,
-            object_preload_total: 0,
-            object_preload_done: 0,
-            object_preload_failed: 0,
-            object_preload_loading: false,
+            object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1503,14 +1471,7 @@ impl RootApp {
             close_dialog_open: false,
             spatial_open: None,
             deep_link_rx: None,
-            object_preload_cache: HashMap::new(),
-            object_preload_settings: ObjectPreloadSettings::default(),
-            object_preload_available_count: 0,
-            object_preload_on_disk_bytes: 0,
-            object_preload_total: 0,
-            object_preload_done: 0,
-            object_preload_failed: 0,
-            object_preload_loading: false,
+            object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1617,8 +1578,9 @@ impl RootApp {
                     return None;
                 }
                 let preloaded = self
-                    .object_preload_cache
-                    .get(&(path.clone(), self.object_preload_settings))
+                    .object_preload
+                    .resources
+                    .get(&(path.clone(), self.object_preload.ui.cached_settings))
                     .cloned()?;
                 Some((path, preloaded))
             })
@@ -2146,14 +2108,7 @@ impl eframe::App for RootApp {
             self.settings_open = true;
         }
 
-        let object_preload_cached = self.object_preload_cache.len();
-        let object_preload_available_count = self.object_preload_available_count;
-        let object_preload_on_disk_bytes = self.object_preload_on_disk_bytes;
-        let object_preload_total = self.object_preload_total;
-        let object_preload_done = self.object_preload_done;
-        let object_preload_failed = self.object_preload_failed;
-        let object_preload_loading = self.object_preload_loading;
-        let object_preload_settings = self.object_preload_settings;
+        let object_preload_ui = self.object_preload.ui;
         let external_layers = Some(self.control_runtime.external_layers())
             .filter(|(revision, _, _)| *revision != self.control_external_revision);
         let observed = self.actor_renderer_observation();
@@ -2198,16 +2153,7 @@ impl eframe::App for RootApp {
                     });
                 });
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    project_space.set_object_cache_ui_state(project_object_cache_ui_state(
-                        object_preload_available_count,
-                        object_preload_on_disk_bytes,
-                        object_preload_cached,
-                        object_preload_total,
-                        object_preload_done,
-                        object_preload_failed,
-                        object_preload_loading,
-                        object_preload_settings,
-                    ));
+                    project_space.set_object_cache_ui_state(object_preload_ui);
                     let action = project_space.ui(ui, None);
                     if let Some(action) = action {
                         if !project_space.submit_action_control_intent(&action) {
@@ -2252,16 +2198,7 @@ impl eframe::App for RootApp {
                 }
                 app.project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
-                app.set_project_object_cache_ui_state(project_object_cache_ui_state(
-                    object_preload_available_count,
-                    object_preload_on_disk_bytes,
-                    object_preload_cached,
-                    object_preload_total,
-                    object_preload_done,
-                    object_preload_failed,
-                    object_preload_loading,
-                    object_preload_settings,
-                ));
+                app.set_project_object_cache_ui_state(object_preload_ui);
                 app.update(ctx, frame);
                 native_control_intents.extend(app.take_native_control_intents());
                 self.label_prompt_preference = app.label_prompt_preference();
@@ -2278,16 +2215,7 @@ impl eframe::App for RootApp {
                 mosaic
                     .project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
-                mosaic.set_project_object_cache_ui_state(project_object_cache_ui_state(
-                    object_preload_available_count,
-                    object_preload_on_disk_bytes,
-                    object_preload_cached,
-                    object_preload_total,
-                    object_preload_done,
-                    object_preload_failed,
-                    object_preload_loading,
-                    object_preload_settings,
-                ));
+                mosaic.set_project_object_cache_ui_state(object_preload_ui);
                 let dropped = ctx.input(|i| i.raw.dropped_files.clone());
                 if !dropped.is_empty() {
                     mosaic.project_space_mut().handle_dropped_paths(

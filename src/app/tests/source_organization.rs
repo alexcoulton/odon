@@ -1620,6 +1620,32 @@ fn mosaic_actor_tasks_do_not_require_a_renderer_pending_item_mirror() {
 }
 
 #[test]
+fn project_object_preload_is_one_actor_projection_adapter() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root_app = source(root.join("src/root_app.rs"));
+
+    assert!(root_app.contains("struct ProjectObjectPreloadRenderProjection"));
+    assert!(root_app.contains("resources: HashMap<"));
+    assert!(root_app.contains("ui: ProjectObjectCacheUiState"));
+    assert!(root_app.contains("fn apply_project_object_preload_projection("));
+    for obsolete in [
+        "object_preload_cache:",
+        "object_preload_settings:",
+        "object_preload_available_count:",
+        "object_preload_on_disk_bytes:",
+        "object_preload_total:",
+        "object_preload_done:",
+        "object_preload_failed:",
+        "object_preload_loading:",
+    ] {
+        assert!(
+            !root_app.contains(obsolete),
+            "project preload state must not split back into host-owned fields: {obsolete}"
+        );
+    }
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -1911,7 +1937,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 309,
+        total_fields, 302,
         "review the ownership ledger when host fields change"
     );
 }
