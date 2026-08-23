@@ -34,7 +34,7 @@ The following checks cover the parts that do not require a real native window co
 
 | Requirement | Authoritative check | Current evidence |
 | --- | --- | --- |
-| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 263/263 application methods, zero legacy/hybrid routes |
+| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 264/264 application methods, zero legacy/hybrid routes |
 | TCP comparison workflow completes with no UI frame | `comparison_workflow_completes_over_tcp_without_a_ui_frame` | Passing |
 | Actor projection coalesces while unconsumed and retains the final workspace | Same TCP comparison test plus actor workspace projection tests | Passing |
 | Resource/compute families complete without frames | Domain tests under `src/control/actor/tests/` | Passing in the Rust library suite |
@@ -46,7 +46,7 @@ The following checks cover the parts that do not require a real native window co
 | Native camera fit queues before the first projection without mutating renderer state | `native_camera_fit_queues_before_first_projection_without_mutating_renderer_state` | Passing |
 | Native channel controls queue before the first projection without mutating renderer state | `native_channel_controls_queue_before_first_projection_without_mutating_renderer_state` plus the viewport source guard | Passing |
 | Native layer commits queue before the first projection without mutating renderer state | `native_layer_commits_queue_before_first_projection_without_mutating_renderer_state` plus the viewport source guard | Passing |
-| Actor-owned panel, right-tab, rendering, and scale-bar controls wait for projection | viewport source guard and actor-backed rendering preference tests | Passing; left-tab ownership remains open |
+| Actor-owned panel, tab, rendering, and scale-bar controls wait for projection | viewport source guard and actor-backed rendering preference tests | Passing; both single-view panel tabs are actor-owned |
 | Semantic events cannot bypass the actor through renderer snapshot diffs | Same source guard; `publish_native_event` and `control_observed_state` are forbidden | Passing |
 | Native project/viewer/mosaic commits do not use before/after snapshot translators | `root_has_no_native_snapshot_translator` plus native direct-intent tests | Passing |
 | Local actor remains available when optional TCP publication fails | `optional_tcp_failure_keeps_the_local_actor_available` | Passing |

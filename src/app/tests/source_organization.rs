@@ -1220,6 +1220,7 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     for forbidden_presentation_write in [
         "self.show_left_panel =",
         "self.show_right_panel =",
+        "self.left_tab =",
         "self.right_tab =",
         "self.smooth_pixels =",
         "self.show_scale_bar =",

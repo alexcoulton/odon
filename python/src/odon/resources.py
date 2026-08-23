@@ -453,6 +453,11 @@ class Viewer:
             _with_revision({"smooth": smooth}, if_revision),
         )
 
+    def set_left_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
+        return self._client.call(
+            "viewer.ui.set_left_tab", _with_revision({"tab": tab}, if_revision)
+        )
+
     def set_right_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
         return self._client.call(
             "viewer.ui.set_right_tab", _with_revision({"tab": tab}, if_revision)

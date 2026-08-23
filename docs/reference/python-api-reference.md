@@ -123,6 +123,7 @@ Access: `app.viewer`. Camera, rendering, panels, scale bar, and viewer UI state.
 | `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
 | `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. |
 | `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; event: viewer.rendering.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; event: viewer.ui.changed) |
 | `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; event: viewer.ui.changed) |
 | `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. |
 | `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; event: viewer.scale_bar.changed) |
@@ -873,6 +874,7 @@ Access: `app.viewer`. Async viewer resource.
 | `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. |
 | `get_rendering_state() -> 'Any'` | `viewer.rendering.get_state` | single, mosaic | Inspect renderer, additive compositing, interpolation, and deterministic-capture readiness. |
 | `set_smooth_pixels(smooth: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.rendering.set_smooth_pixels` | single, mosaic | Set image interpolation state. (mutates; event: viewer.rendering.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_left_tab` | single | Set the single-view left tab. (mutates; event: viewer.ui.changed) |
 | `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.ui.set_right_tab` | single | Set the single-view right tab. (mutates; event: viewer.ui.changed) |
 | `get_scale_bar() -> 'Any'` | `viewer.scale_bar.get` | single | Inspect canvas scale-bar visibility and availability. |
 | `set_scale_bar(visible: 'bool', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.scale_bar.set` | single | Set canvas scale-bar visibility. (mutates; event: viewer.scale_bar.changed) |

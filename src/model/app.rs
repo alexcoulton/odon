@@ -281,6 +281,7 @@ struct DatasetModel {
     geometry_source: GeometrySource,
     show_left_panel: bool,
     show_right_panel: bool,
+    left_tab: String,
     right_tab: String,
     shared_resources: Value,
     performance: Value,
@@ -652,6 +653,9 @@ fn project_roi_view_workspace_snapshot(
         }
         if let Some(right_tab) = ui.get("right_tab") {
             snapshot["ui"]["right_tab"] = right_tab.clone();
+        }
+        if let Some(left_tab) = ui.get("left_tab") {
+            snapshot["ui"]["left_tab"] = left_tab.clone();
         }
         if let Some(active) = snapshot
             .get_mut("viewports")

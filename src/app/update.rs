@@ -208,6 +208,7 @@ impl eframe::App for OmeZarrViewerApp {
         }
 
         if self.show_left_panel {
+            let previous_tab = self.left_tab;
             let mut tab = self.left_tab;
             left_panel::show(
                 ctx,
@@ -240,7 +241,12 @@ impl eframe::App for OmeZarrViewerApp {
                     }
                 },
             );
-            self.left_tab = tab;
+            if tab != previous_tab {
+                self.native_control_intents.push(NativeControlIntent {
+                    method: "viewer.ui.set_left_tab",
+                    params: serde_json::json!({"tab": tab.storage_key()}),
+                });
+            }
         }
         if let Some(action) = self.project_space.ui_floating_windows(ctx, true) {
             self.handle_project_space_action(action);

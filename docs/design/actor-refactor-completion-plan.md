@@ -29,7 +29,7 @@ At completion:
 
 The implementation starts this plan with the following evidence:
 
-- 263 of 263 registered application methods are actor-owned in every supported mode and target;
+- 264 of 264 registered application methods are actor-owned in every supported mode and target;
 - there are zero legacy or hybrid registered application routes;
 - the TCP two-viewer comparison completes without a UI frame;
 - resource and compute families have paused-frame tests;
@@ -204,7 +204,8 @@ the renderer only as the current paint/UI input.
 Generic native-layer activation, visibility, ordering, offsets, transforms, and property
 transactions now obey the same rule. Actor-owned panel toggles, right-tab selection, viewport
 rendering preferences, and the native scale-bar menu also remain unchanged locally until their
-projection arrives. The locally selected left panel tab is still an unmodeled compatibility item.
+projection arrives. Left-tab selection now follows the same actor-owned command/projection path,
+so all single-view panel settings have crossed this boundary.
 
 Ownership slices, in order:
 

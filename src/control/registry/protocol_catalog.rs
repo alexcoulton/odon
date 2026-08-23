@@ -297,6 +297,7 @@ pub static METHOD_ALIASES: &[(&str, &str)] = &[
         "get_channel_intensity_stats",
         "viewer.channels.intensity_stats",
     ),
+    ("set_left_tab", "viewer.ui.set_left_tab"),
     ("set_right_tab", "viewer.ui.set_right_tab"),
     ("set_mosaic_right_tab", "mosaic.ui.set_right_tab"),
     ("configure_mosaic_layout", "mosaic.layout.configure"),

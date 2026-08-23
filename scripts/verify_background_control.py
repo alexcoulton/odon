@@ -55,6 +55,7 @@ ACTOR_METHODS = (
     "viewer.channels.intensity_stats",
     "viewer.channels.presentation.set",
     "viewer.panels.set",
+    "viewer.ui.set_left_tab",
     "viewer.ui.set_right_tab",
     "viewer.scale_bar.get",
     "viewer.scale_bar.set",
@@ -388,6 +389,7 @@ def main() -> None:
     )
     call(app, "viewer.channels.presentation.set", {"search": "", "sort": "manual"})
     call(app, "viewer.panels.set", {"left": False, "right": False})
+    left_tab = call(app, "viewer.ui.set_left_tab", {"tab": "project"})
     right_tab = call(app, "viewer.ui.set_right_tab", {"tab": "measurements"})
     call(app, "viewer.scale_bar.set", {"visible": True})
     screenshot_settings = call(
@@ -478,7 +480,9 @@ def main() -> None:
     assert fit["result"]["zoom_screen_per_lvl0_px"] > 0, fit
     assert captured_view["captured"] is True, captured_view
     assert applied_view["applied"] is True, applied_view
+    assert left_tab["tab"]["left_tab"] == "project", left_tab
     assert right_tab["tab"]["right_tab"] == "measurements", right_tab
+    assert final_workspace["ui"]["left_tab"] == "project", final_workspace
     assert final_workspace["ui"]["right_tab"] == "measurements", final_workspace
     assert final_workspace["layout"] == "horizontal", final_workspace
     assert len(final_workspace["viewports"]) == 2, final_workspace

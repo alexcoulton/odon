@@ -62,6 +62,20 @@ class ResourceTests(unittest.TestCase):
             ("viewer.scale_bar.set", {"visible": False, "if_revision": 5}),
         )
 
+    def test_panel_tab_wrappers(self) -> None:
+        client = Client()
+        viewer = Viewer(client)  # type: ignore[arg-type]
+        viewer.set_left_tab("project", if_revision=4)
+        viewer.set_right_tab("analysis")
+        self.assertEqual(
+            client.calls[0],
+            ("viewer.ui.set_left_tab", {"tab": "project", "if_revision": 4}),
+        )
+        self.assertEqual(
+            client.calls[1],
+            ("viewer.ui.set_right_tab", {"tab": "analysis"}),
+        )
+
 
 class AsyncResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_application_and_scale_bar(self) -> None:
@@ -74,6 +88,17 @@ class AsyncResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[0][0], "app.settings.set")
         self.assertEqual(client.calls[1][1]["save"], "save")
         self.assertTrue(client.calls[2][1]["visible"])
+
+    async def test_async_panel_tab_wrappers(self) -> None:
+        client = AsyncClient()
+        viewer = AsyncViewer(client)  # type: ignore[arg-type]
+        await viewer.set_left_tab("layers")
+        await viewer.set_right_tab("measurements", if_revision=7)
+        self.assertEqual(client.calls[0], ("viewer.ui.set_left_tab", {"tab": "layers"}))
+        self.assertEqual(
+            client.calls[1],
+            ("viewer.ui.set_right_tab", {"tab": "measurements", "if_revision": 7}),
+        )
 
 
 if __name__ == "__main__":

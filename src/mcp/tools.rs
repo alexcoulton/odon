@@ -163,6 +163,7 @@ fn tools_list() -> Value {
                 "fit_to_view",
                 "Fit the current image or mosaic to the viewport."
             ),
+            set_left_tab_tool_schema(),
             set_right_tab_tool_schema(),
             set_mosaic_right_tab_tool_schema(),
             configure_mosaic_layout_tool_schema(),
@@ -664,6 +665,24 @@ fn set_right_tab_tool_schema() -> Value {
                 "tab": {
                     "type": "string",
                     "enum": ["properties", "views", "analysis", "measurements", "memory", "roi_selector"]
+                }
+            },
+            "required": ["tab"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_left_tab_tool_schema() -> Value {
+    json!({
+        "name": "set_left_tab",
+        "description": "Set the active left-panel tab in the current single-image viewer.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "enum": ["layers", "project"]
                 }
             },
             "required": ["tab"],

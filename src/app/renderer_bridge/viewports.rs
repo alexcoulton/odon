@@ -118,7 +118,10 @@ impl OmeZarrViewerApp {
                 "primary_object_geometry_instances": 1,
                 "primary_object_count": self.seg_objects.object_count(),
             },
-            "ui":{"right_tab":self.right_tab.storage_key()},
+            "ui":{
+                "left_tab":self.left_tab.storage_key(),
+                "right_tab":self.right_tab.storage_key(),
+            },
             "labels": self.control_labels_json(),
             "masks": self.control_mask_projection_snapshot(),
             "panels": self.control_side_panels_snapshot(),

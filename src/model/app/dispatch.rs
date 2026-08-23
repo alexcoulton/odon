@@ -84,6 +84,7 @@ impl AppModel {
                 | "memory.unpin_all"
                 | "viewer.panels.get"
                 | "viewer.panels.set"
+                | "viewer.ui.set_left_tab"
                 | "viewer.ui.set_right_tab"
                 | "viewer.workspace.get"
                 | "viewer.viewports.list"
@@ -521,6 +522,7 @@ impl AppModel {
                 "memory.unpin_all" => self.unpin_all_memory()?,
                 "viewer.panels.get" => self.get_panels()?,
                 "viewer.panels.set" => self.set_panels(params)?,
+                "viewer.ui.set_left_tab" => self.set_left_tab(params)?,
                 "viewer.ui.set_right_tab" => self.set_right_tab(params)?,
                 "project.views.capture" => self.capture_project_view(params)?,
                 "project.views.apply" => self.apply_project_view(params)?,

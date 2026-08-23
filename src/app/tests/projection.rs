@@ -139,6 +139,13 @@ fn coalesced_actor_projection_replaces_the_renderer_workspace_atomically() {
         .unwrap();
     model
         .dispatch(
+            "viewer.ui.set_left_tab",
+            &serde_json::json!({"tab":"project"}),
+        )
+        .unwrap()
+        .unwrap();
+    model
+        .dispatch(
             "viewer.ui.set_right_tab",
             &serde_json::json!({"tab":"measurements"}),
         )
@@ -241,6 +248,7 @@ fn coalesced_actor_projection_replaces_the_renderer_workspace_atomically() {
     assert_eq!(rendered["ratio"], projection["ratio"]);
     assert_eq!(rendered["active_viewport_id"], right);
     assert_eq!(rendered["links"], projection["links"]);
+    assert_eq!(app.left_tab, LeftTab::Project);
     assert_eq!(app.right_tab, RightTab::Measurements);
     assert_eq!(rendered["masks"]["layers"], projection["masks"]["layers"]);
     assert_eq!(

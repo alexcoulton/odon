@@ -2411,6 +2411,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "viewer.ui.set_left_tab",
+            "Set the single-view left tab.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.ui.changed"),
+            SINGLE_MODE,
+            Object
+        ),
+        method!(
             "viewer.ui.set_right_tab",
             "Set the single-view right tab.",
             "viewer.write",

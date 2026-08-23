@@ -23,7 +23,7 @@ impl AppModel {
                 "left": dataset.show_left_panel,
                 "right": dataset.show_right_panel,
             },
-            "ui":{"right_tab":dataset.right_tab},
+            "ui":{"left_tab":dataset.left_tab,"right_tab":dataset.right_tab},
             "channel_metadata": workspace.active().state.channels.iter().map(|channel| json!({
                 "index": channel.index,
                 "name": channel.name,

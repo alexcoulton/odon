@@ -442,6 +442,7 @@ impl AppModel {
             geometry_source,
             show_left_panel: true,
             show_right_panel: true,
+            left_tab: "layers".to_string(),
             right_tab: "properties".to_string(),
             shared_resources: default_shared_resources(source_key),
             performance: default_performance_snapshot(),
@@ -622,6 +623,13 @@ impl AppModel {
         &mut self,
         snapshot: &Value,
     ) -> Result<(), ControlError> {
+        if let Some(left_tab) = snapshot
+            .get("ui")
+            .and_then(|ui| ui.get("left_tab"))
+            .and_then(Value::as_str)
+        {
+            self.dataset_mut()?.left_tab = left_tab.to_string();
+        }
         if let Some(right_tab) = snapshot
             .get("ui")
             .and_then(|ui| ui.get("right_tab"))

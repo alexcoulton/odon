@@ -143,6 +143,7 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "exports.objects.export_geoparquet",
     "viewer.panels.get",
     "viewer.panels.set",
+    "viewer.ui.set_left_tab",
     "viewer.ui.set_right_tab",
     "viewer.layers.add",
     "viewer.layers.list",

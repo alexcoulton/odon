@@ -392,6 +392,7 @@ The exact tool list is provided by the `odon_mcp` binary through MCP
 | `set_side_panels` | Show or hide side panels. |
 | `get_smooth_pixels` | Report smooth pixel interpolation state. |
 | `set_smooth_pixels` | Enable or disable smooth pixel interpolation. |
+| `set_left_tab` | Set the active left-panel tab in single-image mode. |
 | `set_right_tab` | Set the active right-panel tab in single-image mode. |
 
 ### Opening Data And ROIs

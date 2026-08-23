@@ -352,9 +352,10 @@ them as a startup semantic authority.
 Generic native-layer activation, visibility, ordering, offsets, transforms, and property edits no
 longer branch on whether the first projection has arrived. Gesture fields retain only their
 preview and starting revision; the committed state is a typed actor command. Panel visibility,
-right-tab selection, rendering preferences, and the native scale-bar action likewise wait for
-projection instead of changing actor-owned renderer fields directly. `left_tab` remains local and
-must be classified or modeled before the panel-settings ledger row closes.
+left- and right-tab selection, rendering preferences, and the native scale-bar action likewise wait
+for projection instead of changing actor-owned renderer fields directly. The single-view panel
+settings ledger row is therefore actor-owned; project compatibility restoration remains the open
+workspace boundary.
 
 ## Native cutover status
 

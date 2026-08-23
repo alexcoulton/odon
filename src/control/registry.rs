@@ -287,6 +287,7 @@ fn mcp_exposed(name: &str) -> bool {
             | "viewer.objects.get_filter"
             | "viewer.objects.set_filter"
             | "viewer.objects.clear_filter"
+            | "viewer.ui.set_left_tab"
             | "viewer.ui.set_right_tab"
             | "mosaic.ui.set_right_tab"
             | "mosaic.layout.configure"

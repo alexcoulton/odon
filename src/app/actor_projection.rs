@@ -465,6 +465,14 @@ impl OmeZarrViewerApp {
         &mut self,
         projection: &serde_json::Value,
     ) -> Result<(), String> {
+        if let Some(left_tab) = projection
+            .get("ui")
+            .and_then(|ui| ui.get("left_tab"))
+            .and_then(serde_json::Value::as_str)
+        {
+            self.left_tab = LeftTab::from_storage_key(left_tab)
+                .ok_or_else(|| format!("actor left tab '{left_tab}' is invalid"))?;
+        }
         if let Some(right_tab) = projection
             .get("ui")
             .and_then(|ui| ui.get("right_tab"))

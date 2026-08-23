@@ -9,12 +9,12 @@
       "title": "Inspect application state and navigate between viewer and project modes",
       "phase": "A",
       "status": "covered",
-      "native_entry_points": ["root update", "Back", "right-panel tabs"],
-      "methods": ["app.get_state", "app.navigation.show_project", "viewer.ui.set_right_tab"],
+      "native_entry_points": ["root update", "Back", "left- and right-panel tabs"],
+      "methods": ["app.get_state", "app.navigation.show_project", "viewer.ui.set_left_tab", "viewer.ui.set_right_tab"],
       "events": ["application.mode.changed", "viewer.ui.changed"],
       "permissions": ["viewer.read", "application.write", "viewer.write"],
-      "python_sync": ["odon.resources:Application.get_state", "odon.resources:Application.show_project_page", "odon.resources:Viewer.set_right_tab"],
-      "python_async": ["odon.async_resources:AsyncApplication.get_state", "odon.async_resources:AsyncApplication.show_project_page", "odon.async_resources:AsyncViewer.set_right_tab"],
+      "python_sync": ["odon.resources:Application.get_state", "odon.resources:Application.show_project_page", "odon.resources:Viewer.set_left_tab", "odon.resources:Viewer.set_right_tab"],
+      "python_async": ["odon.async_resources:AsyncApplication.get_state", "odon.async_resources:AsyncApplication.show_project_page", "odon.async_resources:AsyncViewer.set_left_tab", "odon.async_resources:AsyncViewer.set_right_tab"],
       "tests": ["rust:root_control_dispatches_semantic_methods", "python:test_resource_wrappers_forward_revision"]
     },
     {

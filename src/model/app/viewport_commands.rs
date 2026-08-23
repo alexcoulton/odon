@@ -776,4 +776,19 @@ impl AppModel {
         self.dataset_mut()?.right_tab = tab.to_string();
         Ok(json!({"mode":"single","tab":{"right_tab":tab}}))
     }
+
+    pub(super) fn set_left_tab(&mut self, params: &Value) -> Result<Value, ControlError> {
+        let tab = params
+            .get("tab")
+            .or_else(|| params.get("left_tab"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|tab| !tab.is_empty())
+            .ok_or_else(|| invalid("set_left_tab requires tab"))?;
+        if !matches!(tab, "layers" | "project") {
+            return Err(invalid("unknown left tab; expected layers or project"));
+        }
+        self.dataset_mut()?.left_tab = tab.to_string();
+        Ok(json!({"mode":"single","tab":{"left_tab":tab}}))
+    }
 }

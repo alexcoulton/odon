@@ -178,7 +178,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor viewport UI settings",
         "projection_source": "viewport presentation projection",
-        "renderer_consumers": "egui panel layout; actor-owned panel/right-tab controls wait for projection while left-tab selection remains local",
+        "renderer_consumers": "egui panel layout; actor-owned panel and left/right-tab controls wait for projection",
         "persistence_consumers": "project workspace and settings",
         "native_commit_point": "typed viewer UI command",
         "milestone": 3

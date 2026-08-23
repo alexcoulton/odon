@@ -134,6 +134,15 @@ fn actor_opens_and_configures_viewports_without_draining_the_ui_queue() {
     assert_eq!(levels["levels"].as_array().unwrap().len(), 4);
     assert_eq!(levels["levels"][0]["width"], 512);
     assert_eq!(levels["default_full_level"], 0);
+    let (left_tab, left_tab_rx) = request("viewer.ui.set_left_tab", json!({"tab":"project"}));
+    channels.request_tx.send(left_tab).unwrap();
+    assert_eq!(
+        left_tab_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap()["tab"]["left_tab"],
+        "project"
+    );
     let (tab, tab_rx) = request("viewer.ui.set_right_tab", json!({"tab":"measurements"}));
     channels.request_tx.send(tab).unwrap();
     assert_eq!(
@@ -199,6 +208,10 @@ fn actor_opens_and_configures_viewports_without_draining_the_ui_queue() {
     );
     assert_eq!(right_projection["native_layers"][0]["visible"], false);
     assert_eq!(right_projection["rendering"]["show_scale_bar"], false);
+    assert_eq!(
+        projection.workspace.as_ref().unwrap()["ui"]["left_tab"],
+        "project"
+    );
     assert_eq!(
         projection.workspace.as_ref().unwrap()["ui"]["right_tab"],
         "measurements"
