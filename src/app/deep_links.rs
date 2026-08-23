@@ -1,10 +1,6 @@
 use super::*;
 
 impl OmeZarrViewerApp {
-    pub fn set_show_scale_bar(&mut self, show: bool) {
-        self.show_scale_bar = show;
-    }
-
     pub fn set_label_prompt_preference(&mut self, preference: LabelPromptSessionPreference) {
         self.seg_label_prompt_preference = preference;
         if preference == LabelPromptSessionPreference::Ask {

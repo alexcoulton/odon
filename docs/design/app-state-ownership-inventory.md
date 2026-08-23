@@ -341,10 +341,9 @@ contains only shared-resource/cache telemetry, frame and tile-loading observatio
 native-layer resource descriptors. Dataset bootstrap no longer serializes renderer workspace state
 into the actor: the project snapshot is installed first and the actor restores its matching ROI
 view and persisted masks before producing the initial projection. Production project attachment
-and renderer-side dataset switching no longer invoke the in-process semantic restorer; it remains
-test-only while its persistence characterizations are converted. Mutation of the combined
-per-frame viewport container stays open in the `viewer.workspace_projection` ledger row, while
-heavyweight project resource materialization is tracked in the resource milestones. The first
+and renderer-side dataset switching no longer invoke the in-process semantic restorer; the
+actor-side persisted-workspace decoder is now named for that role. Heavyweight project resource
+materialization remains tracked in the resource milestones. The first
 container split is in place: `ViewportRenderState` now isolates canvas geometry, render IDs,
 previous selections, level/fallback history, and zoom-out retention from projected viewport
 semantics. `ViewportTransientState` separately contains slice drafts, channel/group/overlay
@@ -365,8 +364,11 @@ longer branch on whether the first projection has arrived. Gesture fields retain
 preview and starting revision; the committed state is a typed actor command. Panel visibility,
 left- and right-tab selection, rendering preferences, and the native scale-bar action likewise wait
 for projection instead of changing actor-owned renderer fields directly. The single-view panel
-settings ledger row is therefore actor-owned; the combined renderer projection/frame-state
-container is the remaining Milestone 3 workspace boundary.
+settings ledger row is therefore actor-owned. Milestone 3 is closed: every viewport and mosaic
+presentation field is now classified as an actor projection, shared resource, renderer cache, or
+transient draft, and the executable ledger rejects any mixed or open Milestone 3 row. The final
+RootApp scale-bar mirror was deleted; the native menu checkmark consumes the active viewport
+projection directly.
 
 ## Native cutover status
 

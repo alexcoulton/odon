@@ -1253,6 +1253,8 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(root.contains("app.control_renderer_observation_snapshot()"));
     assert!(root.contains("report_renderer_observation("));
     assert!(!root.contains("app.set_show_scale_bar(visible)"));
+    assert!(!root.contains("view_show_scale_bar"));
+    assert!(root.contains("menu.set_scale_bar_visible(visible)"));
     assert!(root.contains("runtime.bootstrap_project_model(snapshot)"));
     assert!(!root.contains("control_actor_semantic_snapshot"));
     assert!(root.contains("runtime.bootstrap_mosaic_model(mosaic.control_actor_resource())"));
@@ -1650,6 +1652,16 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
                 (2..=8).contains(&milestone),
                 "invalid milestone {milestone} for {struct_name}.{id}"
             );
+            if milestone == 3 {
+                assert_ne!(
+                    current_class, "mixed_compatibility",
+                    "Milestone 3 ownership must no longer mix actor projections with local drafts: {struct_name}.{id}"
+                );
+                assert_eq!(
+                    disposition, "retain",
+                    "Milestone 3 ownership row remains open: {struct_name}.{id}"
+                );
+            }
             for key in required_metadata {
                 assert!(
                     entry[key]
@@ -1686,7 +1698,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 315,
+        total_fields, 314,
         "review the ownership ledger when host fields change"
     );
 }

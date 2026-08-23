@@ -628,7 +628,7 @@ impl AppModel {
         true
     }
 
-    pub(super) fn restore_renderer_workspace(
+    pub(super) fn restore_workspace_snapshot(
         &mut self,
         snapshot: &Value,
     ) -> Result<(), ControlError> {
@@ -701,9 +701,9 @@ impl AppModel {
         let projected = snapshot
             .get("viewports")
             .and_then(Value::as_array)
-            .ok_or_else(|| invalid("renderer workspace has no viewport array"))?;
+            .ok_or_else(|| invalid("workspace snapshot has no viewport array"))?;
         if projected.is_empty() || projected.len() > crate::viewports::MAX_VIEWPORTS {
-            return Err(invalid("renderer workspace has an invalid viewport count"));
+            return Err(invalid("workspace snapshot has an invalid viewport count"));
         }
         let default_channels = self.dataset()?.workspace.active().state.channels.clone();
         let mut measured = HashSet::new();
@@ -712,13 +712,13 @@ impl AppModel {
             let id = value
                 .get("viewport_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| invalid("renderer viewport has no ID"))
+                .ok_or_else(|| invalid("workspace viewport has no ID"))
                 .and_then(|id| ViewportId::new(id).map_err(|error| invalid(error.to_string())))?;
             let title = value
                 .get("title")
                 .and_then(Value::as_str)
                 .filter(|title| !title.trim().is_empty())
-                .ok_or_else(|| invalid(format!("renderer viewport '{id}' has no title")))?
+                .ok_or_else(|| invalid(format!("workspace viewport '{id}' has no title")))?
                 .to_string();
             let mut state = ViewportModel {
                 center: [0.0, 0.0],
@@ -761,7 +761,7 @@ impl AppModel {
                         .collect::<Vec<_>>(),
                 ),
             };
-            apply_renderer_viewport(&mut state, value)?;
+            apply_workspace_viewport(&mut state, value)?;
             if renderer_viewport_size(value).is_some() {
                 measured.insert(id.clone());
             }
@@ -784,13 +784,13 @@ impl AppModel {
         let active = snapshot
             .get("active_viewport_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| invalid("renderer workspace has no active viewport ID"))
+            .ok_or_else(|| invalid("workspace snapshot has no active viewport ID"))
             .and_then(|id| ViewportId::new(id).map_err(|error| invalid(error.to_string())))?;
         let layout = snapshot
             .get("layout")
             .and_then(Value::as_str)
             .and_then(ViewportLayout::parse)
-            .ok_or_else(|| invalid("renderer workspace has an invalid layout"))?;
+            .ok_or_else(|| invalid("workspace snapshot has an invalid layout"))?;
         let links = snapshot
             .get("links")
             .map(|links| ViewportLinks {
@@ -811,8 +811,8 @@ impl AppModel {
             ViewportWorkspace::restore_projection(slots, active, layout, links, ratio, revision)
                 .map_err(|error| invalid(error.to_string()))?;
         let mut workspace = workspace;
-        apply_renderer_channel_metadata(&mut workspace, snapshot);
-        apply_renderer_channel_transforms(&mut workspace, snapshot);
+        apply_workspace_channel_metadata(&mut workspace, snapshot);
+        apply_workspace_channel_transforms(&mut workspace, snapshot);
         if let Some(presentation) = snapshot.get("channel_presentation") {
             let active = workspace.active_mut();
             if let Some(search) = presentation.get("search").and_then(Value::as_str) {
@@ -861,7 +861,7 @@ impl AppModel {
         let channel_count = self.dataset()?.workspace.active().state.channels.len();
         let base = self.workspace_snapshot()?;
         let snapshot = project_roi_view_workspace_snapshot(view, channel_count, &base)?;
-        self.restore_renderer_workspace(&snapshot)?;
+        self.restore_workspace_snapshot(&snapshot)?;
         let dataset = self.dataset_mut()?;
         let has_objects = dataset.object_resource.is_some();
         let has_labels = dataset.label_resource.is_some();

@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 2 complete; Milestone 3 topology ownership in progress
+Status: in progress — Milestones 0 through 3 complete; Milestone 4 object ownership in progress
 
 Date: 2026-08-23
 
@@ -189,6 +189,14 @@ Exit criteria:
 ## Milestone 3 — remove viewport and presentation mirrors
 
 Purpose: make the actor model the sole semantic source for the most frequently changing state.
+
+Status: complete on 2026-08-23. Every Milestone 3 ownership row is now an explicit retained actor
+projection, shared resource, renderer cache, or transient UI draft; no mixed compatibility row or
+open disposition remains. The last RootApp scale-bar mirror was deleted: the native menu submits a
+typed command and its checkmark is updated only from the active actor viewport projection. The
+persisted-workspace decoder is named for its actual actor-side role and is no longer described as
+a renderer restore path. Source guards enforce the closed ledger, command-only native commits,
+resource-only renderer observations, and projection-only renderer boundary.
 
 Current progress: native viewport chrome always emits typed topology commands, including before
 the first actor projection, and has no renderer-mutation fallback for clone, remove, activate,
@@ -421,19 +429,16 @@ advance this plan.
 
 From the present checkpoint, work proceeds in this order:
 
-1. Finish the Milestone 3 audit: classify every remaining mosaic/single renderer observation and
-   projected field, remove any semantic recapture path, add paused-frame projection tests, and
-   close the viewport/presentation ledger rows only when the exit criteria are proven.
-2. Complete Milestone 4 in independently testable slices: object resources and filters, selection,
+1. Complete Milestone 4 in independently testable slices: object resources and filters, selection,
    masks and undo, then annotations and editing. Each slice replaces renderer semantics with an
    actor model plus generation-tagged shared resources.
-3. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
+2. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
    settings, and application state behind immutable actor snapshots and bounded workers.
-4. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
+3. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
    projection consumption, renderer orchestration, and explicit platform effects only.
-5. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
+4. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
    completion point and proving cancellation, responsiveness, and generation-specific waiting.
-6. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
+5. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
    generated contracts and documentation, close the ownership ledger, and record final sign-off.
 
 No later step may be used to declare an earlier ownership gate complete. In particular, passing

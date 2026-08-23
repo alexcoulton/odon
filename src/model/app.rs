@@ -807,7 +807,7 @@ fn overlay_project_viewport(
     Ok(projected)
 }
 
-fn apply_renderer_viewport(state: &mut ViewportModel, value: &Value) -> Result<(), ControlError> {
+fn apply_workspace_viewport(state: &mut ViewportModel, value: &Value) -> Result<(), ControlError> {
     if let Some(camera) = value.get("camera") {
         if let Some(center) = camera
             .get("center_world_lvl0")
@@ -1741,7 +1741,7 @@ fn ensure_model_channel_group(
     group_id
 }
 
-fn apply_renderer_channel_transforms(
+fn apply_workspace_channel_transforms(
     workspace: &mut ViewportWorkspace<ViewportModel>,
     snapshot: &Value,
 ) {
@@ -1787,7 +1787,7 @@ fn apply_renderer_channel_transforms(
     }
 }
 
-fn apply_renderer_channel_metadata(
+fn apply_workspace_channel_metadata(
     workspace: &mut ViewportWorkspace<ViewportModel>,
     snapshot: &Value,
 ) {

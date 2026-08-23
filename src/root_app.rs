@@ -185,7 +185,6 @@ pub struct RootApp {
     object_preload_done: usize,
     object_preload_failed: usize,
     object_preload_loading: bool,
-    view_show_scale_bar: bool,
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
     remote_http_url: String,
@@ -330,7 +329,6 @@ impl RootApp {
     }
 
     fn configure_single_app(&self, app: &mut OmeZarrViewerApp) {
-        app.set_show_scale_bar(self.view_show_scale_bar);
         app.set_label_prompt_preference(self.label_prompt_preference);
         app.set_auto_contrast_settings(self.app_settings.auto_contrast);
         app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
@@ -937,6 +935,25 @@ impl RootApp {
             log_warn!("single-viewer actor projection has no workspace");
             return false;
         };
+        let projected_scale_bar = workspace
+            .get("active_viewport_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|active_id| {
+                workspace
+                    .get("viewports")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|viewports| {
+                        viewports.iter().find(|viewport| {
+                            viewport
+                                .get("viewport_id")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(active_id)
+                        })
+                    })
+            })
+            .and_then(|viewport| viewport.get("rendering"))
+            .and_then(|rendering| rendering.get("show_scale_bar"))
+            .and_then(serde_json::Value::as_bool);
         let Mode::Single(app) = &mut self.mode else {
             log_warn!("actor projection could not establish a single-image viewer");
             return false;
@@ -971,6 +988,12 @@ impl RootApp {
         if let Err(error) = app.apply_control_actor_workspace_projection(workspace) {
             log_warn!("actor render projection could not be applied: {error}");
             return false;
+        }
+        if let Some(visible) = projected_scale_bar {
+            #[cfg(target_os = "macos")]
+            if let Some(menu) = self.native_menu.as_ref() {
+                menu.set_scale_bar_visible(visible);
+            }
         }
         true
     }
@@ -1339,7 +1362,6 @@ impl RootApp {
             object_preload_done: 0,
             object_preload_failed: 0,
             object_preload_loading: false,
-            view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1385,7 +1407,6 @@ impl RootApp {
         let (app_settings, mut settings_status) = Self::load_app_settings();
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
         let mut app = OmeZarrViewerApp::new(cc, dataset, store, app_settings.auto_contrast);
-        app.set_show_scale_bar(true);
         app.set_fast_object_rendering(app_settings.fast_object_rendering);
         if let Some(path) = project_path.as_deref() {
             let mut ps = ProjectSpace::default();
@@ -1408,7 +1429,6 @@ impl RootApp {
             object_preload_done: 0,
             object_preload_failed: 0,
             object_preload_loading: false,
-            view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1477,7 +1497,6 @@ impl RootApp {
             object_preload_done: 0,
             object_preload_failed: 0,
             object_preload_loading: false,
-            view_show_scale_bar: true,
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
             remote_http_url: String::new(),
@@ -1880,6 +1899,12 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if self.native_menu.is_none() {
+            if let Ok(menu) = NativeMenu::init("odon", true) {
+                self.native_menu = Some(menu);
+            }
+        }
         self.handle_viewport_screenshot_events(ctx);
         self.process_control_presentations(ctx);
         self.process_control_presentation_captures(ctx);
@@ -1911,11 +1936,6 @@ impl eframe::App for RootApp {
 
         #[cfg(target_os = "macos")]
         {
-            if self.native_menu.is_none() {
-                if let Ok(m) = NativeMenu::init("odon", self.view_show_scale_bar) {
-                    self.native_menu = Some(m);
-                }
-            }
             if let Some(menu) = self.native_menu.as_ref() {
                 for action in menu.drain_actions() {
                     match action {
@@ -2075,7 +2095,6 @@ impl eframe::App for RootApp {
                             }
                         }
                         NativeMenuAction::SetScaleBarVisible(visible) => {
-                            self.view_show_scale_bar = visible;
                             if let Mode::Single(app) = &mut self.mode {
                                 app.submit_native_scale_bar_visibility(visible);
                             }

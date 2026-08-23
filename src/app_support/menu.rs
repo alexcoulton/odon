@@ -205,6 +205,14 @@ impl NativeMenu {
     }
 
     #[cfg(target_os = "macos")]
+    pub fn set_scale_bar_visible(&self, visible: bool) {
+        self.view_scale_bar.set_checked(visible);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn set_scale_bar_visible(&self, _visible: bool) {}
+
+    #[cfg(target_os = "macos")]
     pub fn drain_actions(&self) -> Vec<NativeMenuAction> {
         let mut out = Vec::new();
         while let Ok(ev) = muda::MenuEvent::receiver().try_recv() {

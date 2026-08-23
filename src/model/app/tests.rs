@@ -961,7 +961,7 @@ fn complete_channel_presentation_executes_and_roundtrips_without_a_renderer() {
     let mut restored = AppModel::project();
     restored.install_dataset(&dataset);
     restored
-        .restore_renderer_workspace(&projection)
+        .restore_workspace_snapshot(&projection)
         .expect("complete presentation projection roundtrips");
     assert_eq!(restored.render_workspace_snapshot().unwrap(), projection);
 
