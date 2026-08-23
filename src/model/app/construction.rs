@@ -176,15 +176,16 @@ impl AppModel {
         self.mosaic_operation_generation
     }
 
-    pub fn bootstrap_mosaic_from_renderer(
+    pub fn bootstrap_mosaic(
         &mut self,
         mut resource: ControlMosaicResource,
-        state: &Value,
     ) -> Result<(), ControlError> {
         let generation = resource.generation.max(1);
         resource.generation = generation;
         self.mosaic.install_resource(Arc::new(resource));
-        self.mosaic.restore_renderer_state(state)?;
+        let project = self.project.snapshot();
+        self.mosaic
+            .restore_project_state(&project.state, &project.config.layer_groups)?;
         self.mosaic_operation_generation = generation;
         self.mosaic_operation_pending = false;
         self.mode = ModelMode::Mosaic;
@@ -198,18 +199,21 @@ impl AppModel {
         &mut self,
         generation: u64,
         mut resource: ControlMosaicResource,
-    ) -> bool {
+    ) -> Result<bool, ControlError> {
         if generation != self.mosaic_operation_generation || !self.mosaic_operation_pending {
-            return false;
+            return Ok(false);
         }
         resource.generation = generation;
         self.mosaic.install_resource(Arc::new(resource));
+        let project = self.project.snapshot();
+        self.mosaic
+            .restore_project_state(&project.state, &project.config.layer_groups)?;
         self.mosaic_operation_pending = false;
         self.mode = ModelMode::Mosaic;
         self.dataset = None;
         self.readiness
             .finish(OperationKind::Mosaic, generation, "Mosaic resources ready");
-        true
+        Ok(true)
     }
 
     pub(crate) fn fail_mosaic_open(&mut self, generation: u64, message: impl Into<String>) -> bool {

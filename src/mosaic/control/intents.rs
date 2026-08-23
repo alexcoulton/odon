@@ -1,13 +1,6 @@
 use super::super::*;
 
 impl MosaicViewerApp {
-    pub fn set_control_actor_owned(&mut self, owned: bool) {
-        self.control_actor_owned = owned;
-        if !owned {
-            self.native_control_intents.clear();
-        }
-    }
-
     pub fn take_native_control_intents(&mut self) -> Vec<NativeControlIntent> {
         std::mem::take(&mut self.native_control_intents)
     }
@@ -17,9 +10,6 @@ impl MosaicViewerApp {
         method: &'static str,
         params: serde_json::Value,
     ) -> bool {
-        if !self.control_actor_owned {
-            return false;
-        }
         self.native_control_intents
             .push(NativeControlIntent { method, params });
         true
@@ -46,9 +36,6 @@ impl MosaicViewerApp {
         key: &str,
         value: serde_json::Value,
     ) -> bool {
-        if !self.control_actor_owned {
-            return false;
-        }
         let mut params = self.layout_command_params();
         params[key] = value;
         self.submit_native_control_intent("mosaic.layout.configure", params)
@@ -58,9 +45,6 @@ impl MosaicViewerApp {
         &mut self,
         before: &serde_json::Value,
     ) {
-        if !self.control_actor_owned {
-            return;
-        }
         let after = self.control_camera_snapshot();
         if &after != before {
             self.submit_native_control_intent("viewer.camera.set", after);

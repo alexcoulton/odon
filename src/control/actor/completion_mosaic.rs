@@ -45,31 +45,44 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                     }
                     let source = result.resource.source.clone();
                     let roi_count = result.resource.items.len();
-                    if model.install_mosaic_for_generation(generation, result.resource) {
-                        *render_document = None;
-                        publish_projection(
-                            model,
-                            None,
-                            presentation_tx,
-                            presentation_coalesce_rx,
-                            wake_ui,
-                            diagnostics,
-                        );
-                        finish_request(
-                            request,
-                            json!({
-                                "opened":true,
-                                "mode":"mosaic",
-                                "source":source,
-                                "roi_count":roi_count,
-                                "model_ready":true,
-                                "resources_ready":true,
-                                "presentation_ready":false,
-                            }),
-                            diagnostics,
-                        );
-                    } else {
-                        reject_stale_mosaic(request, diagnostics, "mosaic opening");
+                    match model.install_mosaic_for_generation(generation, result.resource) {
+                        Ok(true) => {
+                            *render_document = None;
+                            publish_projection(
+                                model,
+                                None,
+                                presentation_tx,
+                                presentation_coalesce_rx,
+                                wake_ui,
+                                diagnostics,
+                            );
+                            finish_request(
+                                request,
+                                json!({
+                                    "opened":true,
+                                    "mode":"mosaic",
+                                    "source":source,
+                                    "roi_count":roi_count,
+                                    "model_ready":true,
+                                    "resources_ready":true,
+                                    "presentation_ready":false,
+                                }),
+                                diagnostics,
+                            );
+                        }
+                        Ok(false) => {
+                            reject_stale_mosaic(request, diagnostics, "mosaic opening");
+                        }
+                        Err(error) => {
+                            let message =
+                                format!("could not restore mosaic project state: {error}");
+                            model.fail_mosaic_open(generation, &message);
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                ControlError::new(ControlErrorKind::Application, message),
+                            );
+                        }
                     }
                 }
                 Err(error) => {

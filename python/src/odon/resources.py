@@ -3137,6 +3137,27 @@ class Mosaic:
             "mosaic.objects.cancel_load", _with_revision({}, if_revision)
         )
 
+    def set_left_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
+        return self._client.call(
+            "mosaic.ui.set_left_tab", _with_revision({"tab": tab}, if_revision)
+        )
+
+    def set_rendering(
+        self,
+        *,
+        smooth_pixels: bool | None = None,
+        show_tile_debug: bool | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {}
+        if smooth_pixels is not None:
+            params["smooth_pixels"] = smooth_pixels
+        if show_tile_debug is not None:
+            params["show_tile_debug"] = show_tile_debug
+        return self._client.call(
+            "mosaic.rendering.set", _with_revision(params, if_revision)
+        )
+
     def set_right_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
         return self._client.call(
             "mosaic.ui.set_right_tab", _with_revision({"tab": tab}, if_revision)

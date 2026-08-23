@@ -106,10 +106,7 @@ impl MosaicViewerApp {
                     let mut params = self.layout_command_params();
                     params["show_text_labels"] = serde_json::json!(show_text_labels);
                     params["label_columns"] = serde_json::json!(label_columns);
-                    if !self.submit_native_control_intent("mosaic.layout.configure", params) {
-                        self.show_text_labels = show_text_labels;
-                        self.label_columns = label_columns;
-                    }
+                    self.submit_native_control_intent("mosaic.layout.configure", params);
                 }
             }
             MosaicLayerId::SegmentationGeoJson => {
@@ -117,7 +114,7 @@ impl MosaicViewerApp {
                 let have_any_seg = self.seg_geojson.has_any_segpaths();
                 let visible_before = self.seg_geojson.visible;
                 let zoom_selected = self.seg_geojson.ui_left_panel(ui, have_any_seg);
-                if self.control_actor_owned && self.seg_geojson.visible != visible_before {
+                if self.seg_geojson.visible != visible_before {
                     let visible = self.seg_geojson.visible;
                     self.seg_geojson.visible = visible_before;
                     self.submit_native_control_intent(
@@ -450,16 +447,7 @@ impl MosaicViewerApp {
                 "label_columns":self.label_columns,
                 "fit":false,
             });
-            if !self.submit_native_control_intent("mosaic.layout.configure", params) {
-                self.group_by = group_by;
-                self.show_group_labels = show_group_labels;
-                self.group_gap = group_gap;
-                self.layout_mode = layout_mode;
-                self.sort_by = sort_by;
-                self.sort_secondary_enabled = sort_secondary_enabled;
-                self.sort_by_secondary = sort_by_secondary;
-                self.apply_sort_and_layout();
-            }
+            self.submit_native_control_intent("mosaic.layout.configure", params);
         }
 
         ui.add_space(8.0);

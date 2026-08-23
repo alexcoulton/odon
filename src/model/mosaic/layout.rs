@@ -3,6 +3,22 @@
 use super::*;
 
 impl MosaicModel {
+    pub(super) fn set_left_tab(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let tab = params
+            .get("tab")
+            .or_else(|| params.get("left_tab"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|tab| !tab.is_empty())
+            .ok_or_else(|| invalid("set_mosaic_left_tab requires tab"))?;
+        if !matches!(tab, "layers" | "project") {
+            return Err(invalid("unknown left tab; expected layers or project"));
+        }
+        self.left_tab = tab.to_string();
+        Ok(json!({"left_tab":self.left_tab}))
+    }
+
     pub(super) fn set_right_tab(&mut self, params: &Value) -> Result<Value, ControlError> {
         self.require_resource()?;
         let tab = params
@@ -93,6 +109,7 @@ impl MosaicModel {
 
     pub(super) fn layout_snapshot(&self) -> Value {
         json!({
+            "left_tab":self.left_tab,
             "right_tab":self.right_tab,
             "group_by":self.group_by,
             "sort_by":self.sort_by,

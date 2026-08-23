@@ -133,6 +133,33 @@ class MosaicResourceTests(unittest.TestCase):
             ("mosaic.objects.cancel_load", {"if_revision": 10}),
         )
 
+    def test_mosaic_presentation_wrappers(self) -> None:
+        client = RecordingClient()
+        mosaic = Mosaic(client)  # type: ignore[arg-type]
+
+        mosaic.set_left_tab("project", if_revision=3)
+        mosaic.set_right_tab("layout")
+        mosaic.set_rendering(smooth_pixels=False, show_tile_debug=True, if_revision=4)
+
+        self.assertEqual(
+            client.calls[0],
+            ("mosaic.ui.set_left_tab", {"tab": "project", "if_revision": 3}),
+        )
+        self.assertEqual(
+            client.calls[1], ("mosaic.ui.set_right_tab", {"tab": "layout"})
+        )
+        self.assertEqual(
+            client.calls[2],
+            (
+                "mosaic.rendering.set",
+                {
+                    "smooth_pixels": False,
+                    "show_tile_debug": True,
+                    "if_revision": 4,
+                },
+            ),
+        )
+
 
 class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_mosaic_focus_wrappers(self) -> None:
@@ -163,6 +190,23 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[0], ("mosaic.objects.get_state", {}))
         self.assertEqual(client.calls[1][0], "mosaic.objects.load_selected")
         self.assertEqual(client.calls[2], ("mosaic.objects.cancel_load", {}))
+
+    async def test_async_mosaic_presentation_wrappers(self) -> None:
+        client = AsyncRecordingClient()
+        mosaic = AsyncMosaic(client)  # type: ignore[arg-type]
+
+        await mosaic.set_left_tab("layers")
+        await mosaic.set_right_tab("memory", if_revision=5)
+        await mosaic.set_rendering(show_tile_debug=False)
+
+        self.assertEqual(
+            client.calls[0], ("mosaic.ui.set_left_tab", {"tab": "layers"})
+        )
+        self.assertEqual(client.calls[1][1]["if_revision"], 5)
+        self.assertEqual(
+            client.calls[2],
+            ("mosaic.rendering.set", {"show_tile_debug": False}),
+        )
 
 
 if __name__ == "__main__":

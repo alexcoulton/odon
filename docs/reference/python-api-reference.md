@@ -533,6 +533,8 @@ Access: `app.mosaic`. Mosaic items, layout, selection, focus, object loading, an
 | `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. |
 | `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; event: mosaic.objects.changed) |
 | `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; event: mosaic.objects.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; event: mosaic.ui.changed) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; event: viewer.rendering.changed) |
 | `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; event: mosaic.ui.changed) |
 
 ### Data resources
@@ -1284,6 +1286,8 @@ Access: `app.mosaic`. Async mosaic resource.
 | `get_object_state() -> 'Any'` | `mosaic.objects.get_state` | mosaic | Get per-ROI mosaic object-source, loading, and allocation state. |
 | `load_selected_objects(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.load_selected` | mosaic | Load object segmentations for the selected mosaic ROIs and settle when all requested reads finish. (mutates; task; event: mosaic.objects.changed) |
 | `cancel_object_load(*, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.cancel_load` | mosaic | Cancel remaining scheduled object loads while allowing an in-flight disk read to finish. (mutates; event: mosaic.objects.changed) |
+| `set_left_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_left_tab` | mosaic | Set the mosaic left tab. (mutates; event: mosaic.ui.changed) |
+| `set_rendering(*, smooth_pixels: 'bool \| None' = None, show_tile_debug: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.rendering.set` | mosaic | Set mosaic interpolation and tile-debug presentation preferences. (mutates; event: viewer.rendering.changed) |
 | `set_right_tab(tab: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.ui.set_right_tab` | mosaic | Set the mosaic right tab. (mutates; event: mosaic.ui.changed) |
 
 ### Async data resources

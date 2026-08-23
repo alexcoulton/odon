@@ -2431,12 +2431,32 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "mosaic.ui.set_left_tab",
+            "Set the mosaic left tab.",
+            "viewer.write",
+            true,
+            false,
+            Some("mosaic.ui.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
             "mosaic.ui.set_right_tab",
             "Set the mosaic right tab.",
             "viewer.write",
             true,
             false,
             Some("mosaic.ui.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
+            "mosaic.rendering.set",
+            "Set mosaic interpolation and tile-debug presentation preferences.",
+            "viewer.write",
+            true,
+            false,
+            Some("viewer.rendering.changed"),
             MOSAIC_MODE,
             Object
         ),

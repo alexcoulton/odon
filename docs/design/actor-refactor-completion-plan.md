@@ -29,7 +29,7 @@ At completion:
 
 The implementation starts this plan with the following evidence:
 
-- 264 of 264 registered application methods are actor-owned in every supported mode and target;
+- 266 of 266 registered application methods are actor-owned in every supported mode and target;
 - there are zero legacy or hybrid registered application routes;
 - the TCP two-viewer comparison completes without a UI frame;
 - resource and compute families have paused-frame tests;
@@ -220,7 +220,15 @@ Generic native-layer activation, visibility, ordering, offsets, transforms, and 
 transactions now obey the same rule. Actor-owned panel toggles, right-tab selection, viewport
 rendering preferences, and the native scale-bar menu also remain unchanged locally until their
 projection arrives. Left-tab selection now follows the same actor-owned command/projection path,
-so all single-view panel settings have crossed this boundary.
+so all single-view panel settings have crossed this boundary. Mosaic native channel, layer, focus,
+layout, camera, panel, tab, object-rendering, and display-preference commits now follow the same
+rule: they enqueue typed commands and wait for actor projection, with no projection-readiness or
+`control_actor_owned` mutation fallback. Mosaic startup no longer serializes renderer semantics
+into `BootstrapMosaic`; RootApp sends the project snapshot first, then only the immutable mosaic
+resource, and `MosaicModel` restores persisted mosaic state before publishing its projection. The
+test-only mosaic channel/layout/focus command emulators and renderer semantic bootstrap assembler
+have been deleted. Annotation geometry is still installed as a renderer resource from the project
+until Milestone 4 gives annotations an actor-owned resource and edit model.
 
 Ownership slices, in order:
 
@@ -408,6 +416,29 @@ Use small ownership-complete commits rather than one final cleanup commit:
 Each commit must leave the relevant suites green and must delete the superseded compatibility path
 for its ownership slice. A commit that only relocates an obsolete semantic implementation does not
 advance this plan.
+
+## Current execution sequence
+
+From the present checkpoint, work proceeds in this order:
+
+1. Finish the Milestone 3 audit: classify every remaining mosaic/single renderer observation and
+   projected field, remove any semantic recapture path, add paused-frame projection tests, and
+   close the viewport/presentation ledger rows only when the exit criteria are proven.
+2. Complete Milestone 4 in independently testable slices: object resources and filters, selection,
+   masks and undo, then annotations and editing. Each slice replaces renderer semantics with an
+   actor model plus generation-tagged shared resources.
+3. Complete Milestone 5 by moving remaining project persistence, resource lifecycle, compute/task,
+   settings, and application state behind immutable actor snapshots and bounded workers.
+4. Complete Milestone 6 by deleting obsolete RootApp relays and compatibility outboxes, leaving
+   projection consumption, renderer orchestration, and explicit platform effects only.
+5. Complete Milestone 7 by auditing every method's semantic, resource, task, or presentation
+   completion point and proving cancellation, responsiveness, and generation-specific waiting.
+6. Run Milestone 8 automation and real-window acceptance on each supported platform, synchronize
+   generated contracts and documentation, close the ownership ledger, and record final sign-off.
+
+No later step may be used to declare an earlier ownership gate complete. In particular, passing
+the no-frame API suite does not prove that renderer semantic mirrors have been removed, and a clean
+ownership audit does not replace real covered/minimized window evidence.
 
 ## Progress reporting
 

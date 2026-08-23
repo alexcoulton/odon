@@ -203,30 +203,18 @@ impl MosaicViewerApp {
         let next_gid =
             self.channel_layer_order[next_pos].min(self.channels.len().saturating_sub(1));
 
-        if self.control_actor_owned {
-            self.submit_native_control_intent(
-                "viewer.channels.set_visible",
-                serde_json::json!({"channels":[cur_gid],"mode":"hide"}),
-            );
-            self.submit_native_control_intent(
-                "viewer.channels.set_visible",
-                serde_json::json!({"channels":[next_gid],"mode":"show"}),
-            );
-            self.submit_native_control_intent(
-                "viewer.channels.set_active",
-                serde_json::json!({"index":next_gid}),
-            );
-            return;
-        }
-
-        if let Some(cur) = self.channels.get_mut(cur_gid) {
-            cur.visible = false;
-        }
-        if let Some(next) = self.channels.get_mut(next_gid) {
-            next.visible = true;
-        }
-        self.selected_channel = next_gid;
-        self.active_layer = MosaicLayerId::Channel(next_gid);
+        self.submit_native_control_intent(
+            "viewer.channels.set_visible",
+            serde_json::json!({"channels":[cur_gid],"mode":"hide"}),
+        );
+        self.submit_native_control_intent(
+            "viewer.channels.set_visible",
+            serde_json::json!({"channels":[next_gid],"mode":"show"}),
+        );
+        self.submit_native_control_intent(
+            "viewer.channels.set_active",
+            serde_json::json!({"index":next_gid}),
+        );
     }
 
     pub(super) fn drain_raw_tiles(&mut self) {
@@ -275,12 +263,7 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn fit_mosaic(&mut self) {
-        if self.submit_native_control_intent("mosaic.fit_all", serde_json::json!({})) {
-            return;
-        }
-        if let Some(viewport) = self.last_canvas_rect {
-            self.camera.fit_to_world_rect(viewport, self.mosaic_bounds);
-        }
+        self.submit_native_control_intent("mosaic.fit_all", serde_json::json!({}));
     }
 
     pub(super) fn focused_core_summary(&self) -> Option<(usize, usize, String)> {
@@ -300,62 +283,18 @@ impl MosaicViewerApp {
         Some((idx + 1, n, name))
     }
 
-    pub(super) fn fit_focused_core(&mut self, ctx: &egui::Context) {
+    pub(super) fn step_focused_core(&mut self, _ctx: &egui::Context, step: i32) {
         if self.items.is_empty() {
             return;
         }
-        let id = self
-            .focused_core_id
-            .filter(|id| self.items.iter().any(|it| it.id == *id))
-            .unwrap_or(self.items[0].id);
-        if self.control_actor_owned {
-            if self.focused_core_id == Some(id) {
-                self.submit_native_control_intent("mosaic.focus.fit", serde_json::json!({}));
-            } else if let Some(item) = self.items.iter().find(|item| item.id == id) {
-                self.submit_native_control_intent(
-                    "mosaic.focus.set",
-                    serde_json::json!({"roi_id":item.sample_id,"fit":true}),
-                );
-            }
-            return;
-        }
-        self.focused_core_id = Some(id);
-
-        let Some(it) = self.items.iter().find(|it| it.id == id) else {
-            return;
+        let method = if step >= 0 {
+            "mosaic.focus.next"
+        } else {
+            "mosaic.focus.previous"
         };
-        let world = item_rect(it);
-        let viewport = self
-            .last_canvas_rect
-            .or_else(|| ctx.input(|i| i.viewport().inner_rect));
-        if let Some(viewport) = viewport {
-            self.camera.fit_to_world_rect(viewport, world);
-        }
-    }
-
-    pub(super) fn step_focused_core(&mut self, ctx: &egui::Context, step: i32) {
-        let n = self.items.len();
-        if n == 0 {
-            return;
-        }
-        if self.control_actor_owned {
-            let method = if step >= 0 {
-                "mosaic.focus.next"
-            } else {
-                "mosaic.focus.previous"
-            };
-            self.submit_native_control_intent(
-                method,
-                serde_json::json!({"step":step.unsigned_abs(),"wrap":true}),
-            );
-            return;
-        }
-        let cur_id = self.focused_core_id;
-        let cur_idx = cur_id
-            .and_then(|id| self.items.iter().position(|it| it.id == id))
-            .unwrap_or(0);
-        let next_idx = ((cur_idx as i32) + step).rem_euclid(n as i32) as usize;
-        self.focused_core_id = Some(self.items[next_idx].id);
-        self.fit_focused_core(ctx);
+        self.submit_native_control_intent(
+            method,
+            serde_json::json!({"step":step.unsigned_abs(),"wrap":true}),
+        );
     }
 }

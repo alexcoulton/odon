@@ -37,14 +37,6 @@ impl MosaicViewerApp {
         }
     }
 
-    pub(in crate::mosaic) fn apply_project_camera_state(&mut self, state: &ProjectCameraState) {
-        self.camera.center_world_lvl0 =
-            egui::pos2(state.center_world_lvl0[0], state.center_world_lvl0[1]);
-        if state.zoom_screen_per_lvl0_px.is_finite() && state.zoom_screen_per_lvl0_px > 0.0 {
-            self.camera.zoom_screen_per_lvl0_px = state.zoom_screen_per_lvl0_px;
-        }
-    }
-
     pub(in crate::mosaic) fn project_ui_state(&self) -> ProjectUiState {
         ProjectUiState {
             show_left_panel: Some(self.show_left_panel),
@@ -185,43 +177,6 @@ impl MosaicViewerApp {
         }
     }
 
-    pub(in crate::mosaic) fn apply_project_ui_state(&mut self, state: &ProjectUiState) {
-        if let Some(show_left_panel) = state.show_left_panel {
-            self.show_left_panel = show_left_panel;
-        }
-        if let Some(show_right_panel) = state.show_right_panel {
-            self.show_right_panel = show_right_panel;
-        }
-        if let Some(left_tab) = state
-            .left_tab
-            .as_deref()
-            .and_then(LeftTab::from_storage_key)
-        {
-            self.left_tab = left_tab;
-        }
-        if let Some(right_tab) = state
-            .right_tab
-            .as_deref()
-            .and_then(RightTab::from_storage_key)
-        {
-            self.right_tab = right_tab;
-        }
-        if let Some(channel_sort) = state
-            .channel_sort
-            .as_deref()
-            .and_then(ChannelSortMode::from_storage_key)
-        {
-            self.channel_sort_mode = channel_sort;
-        }
-        if let Some(smooth_pixels) = state.smooth_pixels {
-            self.smooth_pixels = smooth_pixels;
-            self.tiles_gl.set_smooth_pixels(self.smooth_pixels);
-        }
-        if let Some(show_tile_debug) = state.show_tile_debug {
-            self.show_tile_debug = show_tile_debug;
-        }
-    }
-
     pub fn set_layer_groups(&mut self, groups: ProjectLayerGroups) {
         self.layer_groups = groups;
     }
@@ -306,135 +261,19 @@ impl MosaicViewerApp {
             installed += self.seg_geojson.install_preloaded(path, layer.as_ref());
         }
         if installed > 0 {
-            if !self.control_actor_owned {
-                self.seg_geojson.visible = true;
-                self.active_layer = MosaicLayerId::SegmentationGeoJson;
-            }
             self.status = format!("Using cached object segmentations for {installed} ROI(s).");
         }
         installed
     }
 
     pub fn set_project_space(&mut self, mut project_space: ProjectSpace) {
-        if self.control_actor_owned {
-            project_space.set_control_actor_owned(true);
-            self.project_space = project_space;
-            return;
-        }
-        self.layer_groups = project_space.layer_groups().clone();
         if let Some(view) = project_space.mosaic_view_state() {
-            if let Some(ui) = view.ui.as_ref() {
-                self.apply_project_ui_state(ui);
-            }
-            if !view.channel_order.is_empty() {
-                let mut channel_order = view
-                    .channel_order
-                    .iter()
-                    .copied()
-                    .filter(|&idx| idx < self.channels.len())
-                    .collect::<Vec<_>>();
-                for idx in 0..self.channels.len() {
-                    if !channel_order.contains(&idx) {
-                        channel_order.push(idx);
-                    }
-                }
-                self.channel_layer_order = channel_order;
-            }
-            let channel_notes_by_name = view
-                .channels
-                .iter()
-                .filter_map(|saved| {
-                    let name = saved.name.as_deref()?;
-                    let note = saved.note.as_ref()?;
-                    Some((name, note))
-                })
-                .collect::<HashMap<_, _>>();
-            for (idx, saved) in view.channels.iter().enumerate() {
-                let Some(ch) = self.channels.get_mut(idx) else {
-                    continue;
-                };
-                if let Some(note) = channel_notes_by_name.get(ch.name.as_str()) {
-                    ch.note = (*note).clone();
-                }
-                if let Some(visible) = saved.visible {
-                    ch.visible = visible;
-                }
-                if let Some(color_rgb) = saved.color_rgb {
-                    ch.color_rgb = color_rgb;
-                }
-                if let Some([lo, hi]) = saved.window {
-                    ch.window = Some((lo, hi));
-                }
-            }
-            if let Some(active_channel) = view.active_channel {
-                self.selected_channel = active_channel.min(self.channels.len().saturating_sub(1));
-            }
-            if !view.overlay_order.is_empty() {
-                let mut overlay_order = view
-                    .overlay_order
-                    .iter()
-                    .filter_map(|id| self.parse_layer_id_storage_key(id))
-                    .collect::<Vec<_>>();
-                for id in self.overlay_layer_order.iter().copied() {
-                    if !overlay_order.contains(&id) {
-                        overlay_order.push(id);
-                    }
-                }
-                self.overlay_layer_order = overlay_order;
-            }
-            if let Some(sort_by) = view.sort_by.as_ref() {
-                self.sort_by = sort_by.clone();
-            }
-            if let Some(sort_secondary_enabled) = view.sort_secondary_enabled {
-                self.sort_secondary_enabled = sort_secondary_enabled;
-            }
-            if let Some(sort_by_secondary) = view.sort_by_secondary.as_ref() {
-                self.sort_by_secondary = sort_by_secondary.clone();
-            }
-            if let Some(group_by) = view.group_by.as_ref() {
-                self.group_by = group_by.clone();
-            }
-            if let Some(show_group_labels) = view.show_group_labels {
-                self.show_group_labels = show_group_labels;
-            }
-            if let Some(group_gap) = view.group_gap {
-                self.group_gap = group_gap;
-            }
-            if let Some(layout_mode) = view.layout_mode.as_deref()
-                && let Some(parsed) = MosaicLayoutMode::from_storage_key(layout_mode)
-            {
-                self.layout_mode = parsed;
-            }
-            if let Some(show_text_labels) = view.show_text_labels {
-                self.show_text_labels = show_text_labels;
-            }
-            self.label_columns = view.label_columns.clone();
-            self.apply_sort_and_layout();
-            for (id, visible) in &view.overlay_visibility {
-                if let Some(layer_id) = self.parse_layer_id_storage_key(id) {
-                    self.set_layer_visible(layer_id, *visible);
-                }
-            }
-            if let Some(camera) = view.camera.as_ref() {
-                self.apply_project_camera_state(camera);
-            }
+            // Annotation geometry remains a renderer-installed shared resource until the
+            // annotation ownership milestone. Mosaic UI/layout/channel semantics are restored by
+            // the actor from the same project snapshot and arrive here only through projection.
             self.restore_annotation_layers(&view.annotation_layers);
-            if let Some(active_layer) = view
-                .active_layer
-                .as_deref()
-                .and_then(|id| self.parse_layer_id_storage_key(id))
-            {
-                self.set_active_layer(active_layer);
-            } else if !self.channels.is_empty() {
-                self.set_active_layer(MosaicLayerId::Channel(
-                    self.selected_channel
-                        .min(self.channels.len().saturating_sub(1)),
-                ));
-            }
         }
-        project_space.update_layer_groups(|g| {
-            *g = self.layer_groups.clone();
-        });
+        project_space.set_control_actor_owned(true);
         self.project_space = project_space;
     }
 }

@@ -165,7 +165,9 @@ fn tools_list() -> Value {
             ),
             set_left_tab_tool_schema(),
             set_right_tab_tool_schema(),
+            set_mosaic_left_tab_tool_schema(),
             set_mosaic_right_tab_tool_schema(),
+            set_mosaic_rendering_tool_schema(),
             configure_mosaic_layout_tool_schema(),
             tool_schema(
                 "show_project_page",
@@ -704,6 +706,40 @@ fn set_mosaic_right_tab_tool_schema() -> Value {
                 }
             },
             "required": ["tab"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_mosaic_left_tab_tool_schema() -> Value {
+    json!({
+        "name": "set_mosaic_left_tab",
+        "description": "Set the active left-panel tab in mosaic mode.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "enum": ["layers", "project"]
+                }
+            },
+            "required": ["tab"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn set_mosaic_rendering_tool_schema() -> Value {
+    json!({
+        "name": "set_mosaic_rendering",
+        "description": "Set mosaic interpolation and tile-debug presentation preferences.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "smooth_pixels": {"type": "boolean"},
+                "show_tile_debug": {"type": "boolean"}
+            },
+            "minProperties": 1,
             "additionalProperties": false
         }
     })

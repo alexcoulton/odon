@@ -22,7 +22,6 @@ pub enum ActorModelUpdate {
     BootstrapMode(ModelMode),
     BootstrapMosaic {
         resource: ControlMosaicResource,
-        state: Value,
     },
     BootstrapProject(ProjectModelSnapshot),
     BootstrapSettings {
@@ -353,12 +352,10 @@ fn apply_model_update(
             }
             model.bootstrap_mode_from_renderer(mode);
         }
-        ActorModelUpdate::BootstrapMosaic { resource, state } => {
+        ActorModelUpdate::BootstrapMosaic { resource } => {
             *render_document = None;
-            if let Err(error) = model.bootstrap_mosaic_from_renderer(resource, &state) {
-                eprintln!(
-                    "could not bootstrap control actor from mosaic renderer state: {error:?}"
-                );
+            if let Err(error) = model.bootstrap_mosaic(resource) {
+                eprintln!("could not bootstrap control actor mosaic: {error:?}");
             }
         }
         ActorModelUpdate::BootstrapProject(snapshot) => {

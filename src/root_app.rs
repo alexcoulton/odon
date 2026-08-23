@@ -247,10 +247,9 @@ impl RootApp {
             Mode::Single(app) => runtime
                 .bootstrap_dataset_model(app.control_actor_dataset(), app.control_actor_store()),
             Mode::Project { .. } => runtime.bootstrap_model_mode(ModelMode::Project),
-            Mode::Mosaic { mosaic, .. } => runtime.bootstrap_mosaic_model(
-                mosaic.control_actor_resource(),
-                mosaic.control_actor_semantic_snapshot(),
-            ),
+            Mode::Mosaic { mosaic, .. } => {
+                runtime.bootstrap_mosaic_model(mosaic.control_actor_resource())
+            }
             Mode::Transition => runtime.bootstrap_model_mode(ModelMode::Transition),
         }
         self.control_actor_mode_signature = Some(signature);
@@ -2138,10 +2137,6 @@ impl eframe::App for RootApp {
         if let Some(project_space) = self.current_project_space_mut() {
             project_space.set_control_actor_owned(true);
         }
-        if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
-            mosaic.set_control_actor_owned(true);
-        }
-
         let mut native_control_intents = Vec::new();
         match &mut self.mode {
             Mode::Project { project_space } => {

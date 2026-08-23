@@ -483,7 +483,22 @@ fn mosaic_app_stays_split_by_responsibility() {
     assert!(project.contains("fn set_project_space("));
     assert!(!project.contains("fn control_channel_snapshot("));
     assert!(snapshots.contains("fn control_channel_snapshot("));
-    assert!(snapshots.contains("fn control_configure_layout("));
+    for retired_renderer_emulator in [
+        "fn control_configure_layout(",
+        "fn control_set_visible_channels(",
+        "fn control_set_channel_contrast(",
+        "fn control_set_focused_roi(",
+        "fn control_step_focused_roi(",
+    ] {
+        assert!(
+            !snapshots.contains(retired_renderer_emulator),
+            "mosaic command semantics must remain actor-only: {retired_renderer_emulator}"
+        );
+    }
+    assert!(
+        !source(root.join("src/mosaic/construction/actor_resource.rs"))
+            .contains("fn control_actor_semantic_snapshot(")
+    );
     assert!(!snapshots.contains("fn request_screenshot_png("));
     assert!(screenshots.contains("fn request_screenshot_png("));
     assert!(screenshots.contains("fn request_actor_screenshot("));
@@ -1239,6 +1254,8 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(root.contains("report_renderer_observation("));
     assert!(!root.contains("app.set_show_scale_bar(visible)"));
     assert!(root.contains("runtime.bootstrap_project_model(snapshot)"));
+    assert!(!root.contains("control_actor_semantic_snapshot"));
+    assert!(root.contains("runtime.bootstrap_mosaic_model(mosaic.control_actor_resource())"));
     assert!(
         !root.contains("app.set_project_space(")
             && !root.contains("single.set_project_space(")
@@ -1669,7 +1686,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 319,
+        total_fields, 315,
         "review the ownership ledger when host fields change"
     );
 }

@@ -215,6 +215,7 @@ pub(crate) struct MosaicModel {
     native_layers: NativeLayersModel,
     selected_ids: HashSet<usize>,
     focused_id: Option<usize>,
+    left_tab: String,
     right_tab: String,
     group_by: String,
     sort_by: String,
@@ -235,6 +236,7 @@ pub(crate) struct MosaicModel {
     show_left_panel: bool,
     show_right_panel: bool,
     smooth_pixels: bool,
+    show_tile_debug: bool,
     objects_visible: bool,
     fast_object_rendering: bool,
     object_resources: BTreeMap<usize, Arc<super::ControlObjectResource>>,
@@ -265,6 +267,7 @@ impl Default for MosaicModel {
             native_layers: NativeLayersModel::channels(&[]),
             selected_ids: HashSet::new(),
             focused_id: None,
+            left_tab: "layers".to_string(),
             right_tab: "properties".to_string(),
             group_by: String::new(),
             sort_by: "id".to_string(),
@@ -285,6 +288,7 @@ impl Default for MosaicModel {
             show_left_panel: true,
             show_right_panel: true,
             smooth_pixels: true,
+            show_tile_debug: false,
             objects_visible: false,
             fast_object_rendering: true,
             object_resources: BTreeMap::new(),
@@ -423,6 +427,7 @@ impl MosaicModel {
         self.native_layers = initial_native_layers(&self.channels, &self.items);
         self.focused_id = focused_id;
         self.selected_ids = focused_id.into_iter().collect();
+        self.left_tab = "layers".to_string();
         self.right_tab = "properties".to_string();
         self.group_by.clear();
         self.sort_by = "id".to_string();
@@ -439,6 +444,7 @@ impl MosaicModel {
         self.show_left_panel = true;
         self.show_right_panel = true;
         self.smooth_pixels = true;
+        self.show_tile_debug = false;
         self.objects_visible = false;
         self.fast_object_rendering = true;
         self.object_resources.clear();
@@ -455,49 +461,29 @@ impl MosaicModel {
         self.fit_bounds(self.bounds);
     }
 
-    pub(crate) fn restore_renderer_state(&mut self, state: &Value) -> Result<(), ControlError> {
+    pub(crate) fn restore_project_state(
+        &mut self,
+        project_state: &Value,
+        layer_groups: &ProjectLayerGroups,
+    ) -> Result<(), ControlError> {
         self.require_resource()?;
-        if let Some(layout) = state.get("layout") {
-            self.configure_layout(layout)?;
-        }
-        if let Some(tab) = state.get("right_tab").and_then(Value::as_str) {
-            self.set_right_tab(&json!({"tab":tab}))?;
-        }
-        if let Some(items) = state.get("items").and_then(Value::as_array) {
-            self.selected_ids = items
-                .iter()
-                .filter(|item| item["selected"].as_bool() == Some(true))
-                .filter_map(|item| item["id"].as_u64())
-                .map(|id| id as usize)
-                .filter(|id| self.items.iter().any(|item| item.id == *id))
-                .collect();
-            self.focused_id = items
-                .iter()
-                .find(|item| item["focused"].as_bool() == Some(true))
-                .and_then(|item| item["id"].as_u64())
-                .map(|id| id as usize)
-                .filter(|id| self.items.iter().any(|item| item.id == *id));
-        }
-        if let Some(camera) = state.get("camera") {
-            self.set_camera(camera)?;
-        }
-        if let Some(panels) = state.get("panels") {
-            self.set_panels(panels)?;
-        }
-        if let Some(smooth) = state.get("smooth_pixels").and_then(Value::as_bool) {
-            self.smooth_pixels = smooth;
-        }
-        if let Some(visible) = state.get("objects_visible").and_then(Value::as_bool) {
-            self.objects_visible = visible;
-        }
-        if let Some(fast) = state.get("fast_object_rendering").and_then(Value::as_bool) {
-            self.fast_object_rendering = fast;
-        }
+        self.layer_groups.clone_from(layer_groups);
+        let Some(state) = project_state.get("mosaic").filter(|state| !state.is_null()) else {
+            self.sync_native_layers_from_semantics();
+            return Ok(());
+        };
+
         if let Some(channels) = state.get("channels").and_then(Value::as_array) {
-            for projected in channels {
-                let Some(index) = projected["index"].as_u64().map(|index| index as usize) else {
-                    continue;
-                };
+            for (position, projected) in channels.iter().enumerate() {
+                let index = projected
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| {
+                        self.channels
+                            .iter()
+                            .position(|channel| channel.name == name)
+                    })
+                    .unwrap_or(position);
                 let Some(channel) = self.channels.get_mut(index) else {
                     continue;
                 };
@@ -526,9 +512,6 @@ impl MosaicModel {
                 if let Some(note) = projected["note"].as_str() {
                     channel.note = note.to_string();
                 }
-                if projected["active"].as_bool() == Some(true) {
-                    self.active_channel = index;
-                }
             }
         }
         if let Some(order) = state.get("channel_order").and_then(Value::as_array) {
@@ -538,31 +521,104 @@ impl MosaicModel {
                 .map(|index| index as usize)
                 .filter(|index| *index < self.channels.len())
                 .collect::<Vec<_>>();
-            if order.len() == self.channels.len() {
+            if order.len() == self.channels.len()
+                && order.iter().copied().collect::<HashSet<_>>().len() == order.len()
+            {
                 self.channel_order = order;
             }
         }
-        if let Some(presentation) = state.get("channel_presentation") {
-            if let Some(search) = presentation.get("search").and_then(Value::as_str) {
-                self.channel_search = search.to_string();
+        if let Some(active) = state
+            .get("active_channel")
+            .and_then(Value::as_u64)
+            .map(|index| index as usize)
+            .filter(|index| *index < self.channels.len())
+        {
+            self.active_channel = active;
+        }
+
+        let mut layout = state.clone();
+        layout["fit"] = Value::Bool(false);
+        self.configure_layout(&layout)?;
+
+        if let Some(ui) = state.get("ui") {
+            if let Some(value) = ui.get("show_left_panel").and_then(Value::as_bool) {
+                self.show_left_panel = value;
             }
-            if let Some(sort) = presentation
-                .get("sort")
+            if let Some(value) = ui.get("show_right_panel").and_then(Value::as_bool) {
+                self.show_right_panel = value;
+            }
+            if let Some(tab) = ui
+                .get("left_tab")
+                .and_then(Value::as_str)
+                .filter(|tab| matches!(*tab, "layers" | "project"))
+            {
+                self.left_tab = tab.to_string();
+            }
+            if let Some(tab) = ui
+                .get("right_tab")
+                .and_then(Value::as_str)
+                .filter(|tab| matches!(*tab, "properties" | "views" | "layout" | "memory"))
+            {
+                self.right_tab = tab.to_string();
+            }
+            if let Some(sort) = ui
+                .get("channel_sort")
                 .and_then(Value::as_str)
                 .and_then(canonical_channel_sort)
             {
                 self.channel_sort = sort.to_string();
             }
+            if let Some(value) = ui.get("smooth_pixels").and_then(Value::as_bool) {
+                self.smooth_pixels = value;
+            }
+            if let Some(value) = ui.get("show_tile_debug").and_then(Value::as_bool) {
+                self.show_tile_debug = value;
+            }
         }
-        if let Some(groups) = state.get("layer_groups") {
-            self.layer_groups = serde_json::from_value(groups.clone())
-                .map_err(|error| invalid(format!("invalid mosaic channel groups: {error}")))?;
+
+        self.sync_native_layers_from_semantics();
+        let available_layers = self
+            .native_layers
+            .snapshots()
+            .into_iter()
+            .filter_map(|layer| layer["layer_id"].as_str().map(str::to_string))
+            .collect::<HashSet<_>>();
+        if let Some(visibility) = state.get("overlay_visibility").and_then(Value::as_object) {
+            for (layer_id, visible) in visibility {
+                if available_layers.contains(layer_id)
+                    && let Some(visible) = visible.as_bool()
+                {
+                    self.native_layers.set_visibility(layer_id, visible)?;
+                }
+            }
         }
-        if let Some(layers) = state.get("native_layers") {
-            self.native_layers = NativeLayersModel::restore(layers)?;
-            self.sync_semantics_from_native_layers()?;
-        } else {
-            self.sync_native_layers_from_semantics();
+        if let Some(saved_order) = state.get("overlay_order").and_then(Value::as_array) {
+            let mut order = saved_order
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|layer_id| available_layers.contains(*layer_id))
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            for layer_id in ["segmentation_geojson", "text_labels"] {
+                if available_layers.contains(layer_id) && !order.iter().any(|id| id == layer_id) {
+                    order.push(layer_id.to_string());
+                }
+            }
+            if !order.is_empty() {
+                self.native_layers.set_order("overlays", &order)?;
+            }
+        }
+        if let Some(layer_id) = state
+            .get("active_layer")
+            .and_then(Value::as_str)
+            .filter(|layer_id| available_layers.contains(*layer_id))
+        {
+            self.native_layers.set_active(layer_id)?;
+        }
+        self.sync_semantics_from_native_layers()?;
+
+        if let Some(camera) = state.get("camera") {
+            self.set_camera(camera)?;
         }
         Ok(())
     }
@@ -591,6 +647,7 @@ impl MosaicModel {
             "metadata_columns":self.metadata_columns(),
             "mosaic_bounds":{"min":self.bounds[0],"max":self.bounds[1]},
             "camera":self.camera_snapshot(),
+            "left_tab":self.left_tab,
             "right_tab":self.right_tab,
             "layout":{
                 "group_by":self.group_by,
@@ -633,6 +690,7 @@ impl MosaicModel {
             })).collect::<Vec<_>>(),
             "bounds":{"min":self.bounds[0],"max":self.bounds[1]},
             "camera":self.camera_snapshot(),
+            "left_tab":self.left_tab,
             "right_tab":self.right_tab,
             "layout":{
                 "group_by":self.group_by,
@@ -648,6 +706,7 @@ impl MosaicModel {
             },
             "panels":{"left":self.show_left_panel,"right":self.show_right_panel},
             "smooth_pixels":self.smooth_pixels,
+            "show_tile_debug":self.show_tile_debug,
             "objects_visible":self.objects_visible,
             "fast_object_rendering":self.fast_object_rendering,
             "channels":self.channels.iter().map(|channel| json!({
@@ -673,7 +732,9 @@ impl MosaicModel {
         params: &Value,
     ) -> Option<Result<Value, ControlError>> {
         let result = match method {
+            "mosaic.ui.set_left_tab" => self.set_left_tab(params),
             "mosaic.ui.set_right_tab" => self.set_right_tab(params),
+            "mosaic.rendering.set" => self.set_rendering(params),
             "mosaic.layout.configure" => self.configure_layout(params),
             "mosaic.get_state" => self.snapshot(),
             "mosaic.items.list" => self.list_items(params),

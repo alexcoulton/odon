@@ -1,6 +1,6 @@
 # Background-Safe Central Model and Control Actor Plan
 
-Status: stabilization and acceptance in progress. All 264 registered application methods are now
+Status: stabilization and acceptance in progress. All 266 registered application methods are now
 actor-routed in every supported mode and target combination, leaving zero legacy application
 routes. The legacy request channel, canvas-deferred semantic queue, and
 `RootApp::reply_to_control_request` dispatcher have been removed. Alternate object resources,
@@ -178,7 +178,7 @@ presentation state. The former renderer-snapshot event publisher has also been r
 actor commands are now the only source of semantic protocol events. Cross-platform manual
 covered/minimized/Space acceptance remains outstanding.
 
-As of this revision, 279 commands are listed as actor-capable: all 264 application-registry
+As of this revision, 281 commands are listed as actor-capable: all 266 application-registry
 methods, including `app.get_method_availability`, plus 15 of the 34 protocol-service methods. The
 other 19 protocol services (handshake, event/task management, and declarative-UI registries) are
 control-service operations that already execute outside the render loop and are not application
@@ -220,7 +220,7 @@ recorded before Gate A is declared complete.
 
 ### Current method ledger
 
-The registry contains 264 application methods, and all 264 are present in the actor-capable list.
+The registry contains 266 application methods, and all 266 are present in the actor-capable list.
 The route-matrix audit evaluates every supported mode and target variant and reports zero
 `legacy_ui` or hybrid routes. Pixel capture methods are included: they enter an actor-owned
 presentation task and wait for a generation-specific renderer acknowledgement without blocking
@@ -530,7 +530,7 @@ independently reviewable.
 
 Three numbers must be reported separately throughout implementation:
 
-- **registry coverage:** 264/264 application methods actor-capable;
+- **registry coverage:** 266/266 application methods actor-capable;
 - **route coverage:** zero legacy or hybrid application routes across supported modes and targets;
 - **acceptance coverage:** commands proven to complete under paused frames and real OS occlusion.
 

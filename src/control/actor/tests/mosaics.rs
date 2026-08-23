@@ -253,6 +253,22 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
         json!({"tab":"layout"}),
     );
     assert_eq!(tab["tab"]["right_tab"], "layout");
+    let tab = call(
+        &channels,
+        "mosaic.ui.set_left_tab",
+        json!({"tab":"project"}),
+    );
+    assert_eq!(tab["tab"]["left_tab"], "project");
+    let rendering = call(
+        &channels,
+        "mosaic.rendering.set",
+        json!({"smooth_pixels":true,"show_tile_debug":true}),
+    );
+    assert_eq!(rendering["result"]["rendering"]["show_tile_debug"], true);
+    assert_eq!(
+        call(&channels, "viewer.rendering.get_state", json!({}))["show_tile_debug"],
+        true
+    );
     let layout = call(
         &channels,
         "mosaic.layout.configure",
@@ -364,6 +380,30 @@ fn selected_project_rois_open_through_the_same_actor_resource_path() {
         .iter()
         .filter_map(ProjectRoi::source_key)
         .collect();
+    project.state = json!({
+        "mosaic":{
+            "channel_order":[4,3,2,1,0],
+            "channels":[
+                {"name":"DAPI","visible":false,"color_rgb":[1,2,3],"window":[10.0,100.0],"note":"restored"}
+            ],
+            "active_channel":1,
+            "group_by":"",
+            "sort_by":"id",
+            "layout_mode":"native_pixels",
+            "columns":1,
+            "show_text_labels":false,
+            "camera":{"center_world_lvl0":[12.0,34.0],"zoom_screen_per_lvl0_px":0.25},
+            "ui":{
+                "show_left_panel":false,
+                "show_right_panel":true,
+                "left_tab":"project",
+                "right_tab":"layout",
+                "channel_sort":"name_desc",
+                "smooth_pixels":false,
+                "show_tile_debug":true
+            }
+        }
+    });
 
     let channels = spawn_test_actor();
     channels
@@ -376,6 +416,30 @@ fn selected_project_rois_open_through_the_same_actor_resource_path() {
     let state = call(&channels, "mosaic.get_state", json!({}));
     assert_eq!(state["mosaic"]["rois"][0]["roi_id"], "First ROI");
     assert_eq!(state["mosaic"]["rois"][1]["roi_id"], "Second ROI");
+    assert_eq!(state["mosaic"]["left_tab"], "project");
+    assert_eq!(state["mosaic"]["right_tab"], "layout");
+    assert_eq!(state["mosaic"]["layout"]["layout"], "native_pixels");
+    assert_eq!(state["mosaic"]["layout"]["columns"], 1);
+    assert_eq!(
+        state["mosaic"]["camera"]["center_world_lvl0"],
+        json!([12.0, 34.0])
+    );
+    let channels_state = call(&channels, "viewer.channels.list", json!({}));
+    assert_eq!(channels_state["channels"][0]["visible"], false);
+    assert_eq!(channels_state["channels"][0]["color_rgb"], json!([1, 2, 3]));
+    assert_eq!(channels_state["channels"][0]["note"], "restored");
+    assert_eq!(
+        call(&channels, "viewer.channels.get_active", json!({}))["active_channel"]["index"],
+        1
+    );
+    let presentation = call(&channels, "viewer.channels.presentation.get", json!({}));
+    assert_eq!(presentation["presentation"]["sort"], "name_desc");
+    assert_eq!(presentation["presentation"]["order"][0]["index"], 4);
+    let panels = call(&channels, "viewer.panels.get", json!({}));
+    assert_eq!(panels["panels"]["left"], false);
+    let rendering = call(&channels, "viewer.rendering.get_state", json!({}));
+    assert_eq!(rendering["smooth_pixels"], false);
+    assert_eq!(rendering["show_tile_debug"], true);
     assert_eq!(
         channels.diagnostics.legacy_requests.load(Ordering::Relaxed),
         0

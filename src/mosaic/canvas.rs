@@ -36,16 +36,11 @@ impl MosaicViewerApp {
             if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
                 let world = self.camera.screen_to_world(pos, rect);
                 if let Some(it) = self.items.iter().find(|it| item_rect(it).contains(world)) {
-                    if self.control_actor_owned {
-                        let roi_id = it.sample_id.clone();
-                        self.submit_native_control_intent(
-                            "mosaic.focus.set",
-                            serde_json::json!({"roi_id":roi_id,"fit":true}),
-                        );
-                    } else {
-                        self.focused_core_id = Some(it.id);
-                        self.camera.fit_to_world_rect(rect, item_rect(it));
-                    }
+                    let roi_id = it.sample_id.clone();
+                    self.submit_native_control_intent(
+                        "mosaic.focus.set",
+                        serde_json::json!({"roi_id":roi_id,"fit":true}),
+                    );
                 }
             }
         }
@@ -850,79 +845,6 @@ impl MosaicViewerApp {
             zoom_out_floor_until_out,
             zoom_out_floor_world_out,
         )
-    }
-
-    pub(super) fn apply_sort_and_layout(&mut self) {
-        // Sorting/grouping is allowed to reorder items freely, but we preserve user context by:
-        // keeping the focused ROI selected if it still exists, and remapping the camera center as
-        // a fraction of the old mosaic bounds into the new bounds after layout.
-        let keep_focused = self.focused_core_id;
-        let sort_by = self.sort_by.clone();
-        let secondary = if self.sort_secondary_enabled {
-            Some(self.sort_by_secondary.clone())
-        } else {
-            None
-        };
-        let group_by = self.group_by.clone();
-        self.items.sort_by(|a, b| {
-            if !group_by.is_empty() {
-                let ga = group_label_for_item(a, &group_by);
-                let gb = group_label_for_item(b, &group_by);
-                let cg = cmp_sort_key(&ga, &gb);
-                if cg != std::cmp::Ordering::Equal {
-                    return cg;
-                }
-            }
-            let c0 = cmp_sort_key(
-                &sort_value_for_item(a, &sort_by),
-                &sort_value_for_item(b, &sort_by),
-            );
-            if c0 != std::cmp::Ordering::Equal {
-                return c0;
-            }
-            if let Some(sec) = secondary.as_deref() {
-                let c1 = cmp_sort_key(&sort_value_for_item(a, sec), &sort_value_for_item(b, sec));
-                if c1 != std::cmp::Ordering::Equal {
-                    return c1;
-                }
-            }
-            a.sample_id.cmp(&b.sample_id)
-        });
-
-        self.focused_core_id = keep_focused
-            .filter(|id| self.items.iter().any(|it| it.id == *id))
-            .or_else(|| self.items.first().map(|it| it.id));
-
-        // Preserve camera center fraction within mosaic bounds.
-        let old = self.mosaic_bounds;
-        let fx = if old.width() > 0.0 {
-            ((self.camera.center_world_lvl0.x - old.min.x) / old.width()).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
-        let fy = if old.height() > 0.0 {
-            ((self.camera.center_world_lvl0.y - old.min.y) / old.height()).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
-
-        let (bounds, blocks) = layout_items_grouped(
-            &mut self.items,
-            self.grid_cols,
-            self.grid_cell_w,
-            self.grid_cell_h,
-            self.grid_pad,
-            (!self.group_by.is_empty()).then_some(self.group_by.as_str()),
-            self.group_gap.max(0.0),
-            self.layout_mode,
-        );
-        self.mosaic_bounds = bounds;
-        self.group_blocks = blocks;
-        let newb = self.mosaic_bounds;
-        self.camera.center_world_lvl0 = egui::pos2(
-            newb.min.x + newb.width() * fx,
-            newb.min.y + newb.height() * fy,
-        );
     }
 
     pub(super) fn draw_text_labels(&self, ui: &mut egui::Ui, viewport: egui::Rect) {

@@ -34,7 +34,7 @@ The following checks cover the parts that do not require a real native window co
 
 | Requirement | Authoritative check | Current evidence |
 | --- | --- | --- |
-| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 264/264 application methods, zero legacy/hybrid routes |
+| Every registered application route is actor-owned in every supported mode | `registered_application_surface_has_no_legacy_execution_routes` | Passing; 266/266 application methods, zero legacy/hybrid routes |
 | TCP comparison workflow completes with no UI frame | `comparison_workflow_completes_over_tcp_without_a_ui_frame` | Passing |
 | Actor projection coalesces while unconsumed and retains the final workspace | Same TCP comparison test plus actor workspace projection tests | Passing |
 | Resource/compute families complete without frames | Domain tests under `src/control/actor/tests/` | Passing in the Rust library suite |

@@ -374,11 +374,11 @@
       "phase": "A",
       "status": "covered",
       "native_entry_points": ["Layout tab"],
-      "methods": ["mosaic.layout.configure", "mosaic.ui.set_right_tab", "mosaic.fit_all"],
-      "events": ["mosaic.layout.changed", "mosaic.ui.changed", "viewer.camera.changed"],
+      "methods": ["mosaic.layout.configure", "mosaic.rendering.set", "mosaic.ui.set_left_tab", "mosaic.ui.set_right_tab", "mosaic.fit_all"],
+      "events": ["mosaic.layout.changed", "mosaic.ui.changed", "viewer.camera.changed", "viewer.rendering.changed"],
       "permissions": ["mosaic.write", "viewer.write"],
-      "python_sync": ["odon.resources:Mosaic.configure_layout", "odon.resources:Mosaic.set_right_tab", "odon.resources:Mosaic.fit_all"],
-      "python_async": ["odon.async_resources:AsyncMosaic.configure_layout", "odon.async_resources:AsyncMosaic.set_right_tab", "odon.async_resources:AsyncMosaic.fit_all"],
+      "python_sync": ["odon.resources:Mosaic.configure_layout", "odon.resources:Mosaic.set_rendering", "odon.resources:Mosaic.set_left_tab", "odon.resources:Mosaic.set_right_tab", "odon.resources:Mosaic.fit_all"],
+      "python_async": ["odon.async_resources:AsyncMosaic.configure_layout", "odon.async_resources:AsyncMosaic.set_rendering", "odon.async_resources:AsyncMosaic.set_left_tab", "odon.async_resources:AsyncMosaic.set_right_tab", "odon.async_resources:AsyncMosaic.fit_all"],
       "tests": ["rust:mosaic_layout_control"]
     },
     {

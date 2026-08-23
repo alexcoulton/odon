@@ -252,9 +252,6 @@ pub struct MosaicViewerApp {
     show_text_labels: bool,
     label_columns: Vec<String>,
     grid_cols: usize,
-    grid_cell_w: f32,
-    grid_cell_h: f32,
-    grid_pad: f32,
     show_left_panel: bool,
     show_right_panel: bool,
     close_dialog_open: bool,
@@ -283,7 +280,6 @@ pub struct MosaicViewerApp {
     active_help_topic: Option<crate::ui::help::HelpTopic>,
     control_actor_generation: u64,
     control_actor_object_generation: u64,
-    control_actor_owned: bool,
     native_control_intents: Vec<NativeControlIntent>,
 }
 
@@ -303,12 +299,10 @@ impl ChannelListHost for MosaicViewerApp {
     }
 
     fn set_channel_sort_mode(&mut self, mode: ChannelSortMode) {
-        if !self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.presentation.set",
             serde_json::json!({"sort":mode.storage_key()}),
-        ) {
-            self.channel_sort_mode = mode;
-        }
+        );
     }
 
     fn channel_count(&self) -> usize {
@@ -328,30 +322,23 @@ impl ChannelListHost for MosaicViewerApp {
     }
 
     fn set_channel_visible(&mut self, idx: usize, visible: bool) {
-        if !self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.set_visible",
             serde_json::json!({
                 "channels":[idx],
                 "mode":if visible { "show" } else { "hide" },
             }),
-        ) {
-            self.set_layer_visible(MosaicLayerId::Channel(idx), visible);
-        }
+        );
     }
 
     fn set_channels_visible(&mut self, indices: &[usize], visible: bool) {
-        if self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.set_visible",
             serde_json::json!({
                 "channels":indices,
                 "mode":if visible { "show" } else { "hide" },
             }),
-        ) {
-            return;
-        }
-        for &idx in indices {
-            self.set_layer_visible(MosaicLayerId::Channel(idx), visible);
-        }
+        );
     }
 
     fn channel_available(&self, idx: usize) -> bool {
@@ -448,49 +435,26 @@ impl ChannelListHost for MosaicViewerApp {
         }
         let rgb = [[255, 0, 0], [0, 255, 0], [0, 0, 255]];
         let hi = self.abs_max.clamp(1.0, 255.0);
-        if self.control_actor_owned {
+        self.submit_native_control_intent(
+            "viewer.channels.set_visible",
+            serde_json::json!({"channels":[0,1,2],"mode":"only"}),
+        );
+        for (index, color_rgb) in rgb.into_iter().enumerate() {
             self.submit_native_control_intent(
-                "viewer.channels.set_visible",
-                serde_json::json!({"channels":[0,1,2],"mode":"only"}),
+                "viewer.channels.set_color",
+                serde_json::json!({"index":index,"color_rgb":color_rgb}),
             );
-            for (index, color_rgb) in rgb.into_iter().enumerate() {
-                self.submit_native_control_intent(
-                    "viewer.channels.set_color",
-                    serde_json::json!({"index":index,"color_rgb":color_rgb}),
-                );
-                self.submit_native_control_intent(
-                    "viewer.channels.set_contrast",
-                    serde_json::json!({"index":index,"min":0.0,"max":hi}),
-                );
-            }
             self.submit_native_control_intent(
-                "viewer.channels.set_active",
-                serde_json::json!({"index":0}),
+                "viewer.channels.set_contrast",
+                serde_json::json!({"index":index,"min":0.0,"max":hi}),
             );
-            self.status = "Applying RGB preset to channels 0-2...".to_string();
-            return true;
         }
-        let mut changed = false;
-        for (idx, color) in rgb.into_iter().enumerate() {
-            let Some(channel) = self.channels.get_mut(idx) else {
-                continue;
-            };
-            changed |= channel.color_rgb != color;
-            channel.color_rgb = color;
-            changed |= !channel.visible;
-            channel.visible = true;
-            let window = (0.0, hi);
-            changed |= channel.window != Some(window);
-            channel.window = Some(window);
-            self.selected_channel_layers.insert(idx);
-        }
-        if changed {
-            self.active_layer = MosaicLayerId::Channel(0);
-            self.selected_channel_group_id = None;
-            self.channel_select_anchor_idx = Some(0);
-            self.status = "Applied RGB preset to channels 0-2.".to_string();
-        }
-        changed
+        self.submit_native_control_intent(
+            "viewer.channels.set_active",
+            serde_json::json!({"index":0}),
+        );
+        self.status = "Applying RGB preset to channels 0-2...".to_string();
+        true
     }
 
     fn layer_groups(&self) -> ProjectLayerGroups {
@@ -498,12 +462,10 @@ impl ChannelListHost for MosaicViewerApp {
     }
 
     fn set_layer_groups(&mut self, groups: ProjectLayerGroups) {
-        if !self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.set_group",
             serde_json::json!({"state":groups}),
-        ) {
-            self.layer_groups = groups;
-        }
+        );
     }
 
     fn channels_changed(&mut self) {}
@@ -601,15 +563,6 @@ fn group_label_for_item(it: &MosaicItem, column: &str) -> String {
     } else {
         v.to_string()
     }
-}
-
-fn cmp_sort_key(a: &str, b: &str) -> std::cmp::Ordering {
-    let empty_a = a.trim().is_empty();
-    let empty_b = b.trim().is_empty();
-    if empty_a != empty_b {
-        return empty_a.cmp(&empty_b); // non-empty first
-    }
-    a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase())
 }
 
 fn visible_world_rect(camera: &Camera, viewport: egui::Rect) -> egui::Rect {

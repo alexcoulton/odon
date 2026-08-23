@@ -203,14 +203,10 @@ impl OdonControlRuntime {
             .send(crate::control::actor::ActorModelUpdate::BootstrapMode(mode));
     }
 
-    pub fn bootstrap_mosaic_model(
-        &self,
-        resource: crate::model::ControlMosaicResource,
-        state: Value,
-    ) {
+    pub fn bootstrap_mosaic_model(&self, resource: crate::model::ControlMosaicResource) {
         let _ = self
             .actor_model_tx
-            .send(crate::control::actor::ActorModelUpdate::BootstrapMosaic { resource, state });
+            .send(crate::control::actor::ActorModelUpdate::BootstrapMosaic { resource });
     }
 
     pub fn bootstrap_project_model(&self, snapshot: crate::model::ProjectModelSnapshot) {

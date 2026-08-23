@@ -215,7 +215,9 @@ impl AppModel {
                 | "viewer.masks.persistence.sync"
                 | "viewer.viewports.rendering.get"
                 | "viewer.viewports.rendering.set"
+                | "mosaic.ui.set_left_tab"
                 | "mosaic.ui.set_right_tab"
+                | "mosaic.rendering.set"
                 | "mosaic.layout.configure"
                 | "mosaic.get_state"
                 | "mosaic.items.list"
@@ -353,7 +355,10 @@ impl AppModel {
             });
             let response = response.map(|result| {
                 let response = match method {
-                    "mosaic.ui.set_right_tab" => json!({"mode":"mosaic","tab":result}),
+                    "mosaic.ui.set_left_tab" | "mosaic.ui.set_right_tab" => {
+                        json!({"mode":"mosaic","tab":result})
+                    }
+                    "mosaic.rendering.set" => json!({"mode":"mosaic","result":result}),
                     "mosaic.layout.configure" => json!({"mode":"mosaic","layout":result}),
                     "mosaic.get_state" => json!({"mode":"mosaic","mosaic":result}),
                     "mosaic.items.list" => json!({"mode":"mosaic","result":result}),

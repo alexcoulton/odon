@@ -649,49 +649,6 @@ impl MosaicGeoJsonSegmentationOverlay {
         })
     }
 
-    pub fn control_item_snapshot(&self, item_id: usize) -> serde_json::Value {
-        let Some(st) = self.items.get(&item_id) else {
-            return serde_json::json!({
-                "item_id": item_id,
-                "available": false,
-                "path": null,
-                "layer_allocated": false,
-                "loaded": false,
-                "busy": false,
-                "status": "No object segmentation is configured",
-            });
-        };
-        let layer = st.layer.as_ref();
-        serde_json::json!({
-            "item_id": item_id,
-            "available": st.seg_path.is_some(),
-            "path": st.seg_path.as_ref().map(|path| path.to_string_lossy().into_owned()),
-            "layer_allocated": layer.is_some(),
-            "loaded": layer.is_some_and(ObjectsLayer::has_data),
-            "loading_data": layer.is_some_and(ObjectsLayer::is_loading),
-            "loading_properties": layer.is_some_and(ObjectsLayer::is_property_loading),
-            "analyzing": layer.is_some_and(ObjectsLayer::is_analyzing),
-            "bulk_measuring": layer.is_some_and(ObjectsLayer::is_bulk_measuring),
-            "busy": layer.is_some_and(ObjectsLayer::is_busy),
-            "object_count": layer.map(ObjectsLayer::object_count),
-            "selection_count": layer.map(ObjectsLayer::selection_count).unwrap_or(0),
-            "status": layer.map(ObjectsLayer::status).unwrap_or(st.status.as_str()),
-        })
-    }
-
-    pub fn item_load_settled(&self, item_id: usize) -> bool {
-        let Some(state) = self.items.get(&item_id) else {
-            return true;
-        };
-        if state.seg_path.is_none() {
-            return true;
-        }
-        state
-            .layer
-            .as_ref()
-            .is_some_and(|layer| !layer.is_loading())
-    }
-
     pub fn last_missing_bins(&self) -> usize {
         0
     }

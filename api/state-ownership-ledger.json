@@ -837,7 +837,7 @@
       },
       {
         "id": "mosaic.layout",
-        "fields": ["metadata_columns", "sort_by", "sort_secondary_enabled", "sort_by_secondary", "group_by", "show_group_labels", "group_gap", "layout_mode", "group_blocks", "show_text_labels", "label_columns", "grid_cols", "grid_cell_w", "grid_cell_h", "grid_pad"],
+        "fields": ["metadata_columns", "sort_by", "sort_secondary_enabled", "sort_by_secondary", "group_by", "show_group_labels", "group_gap", "layout_mode", "group_blocks", "show_text_labels", "label_columns", "grid_cols"],
         "current_class": "actor_projection",
         "disposition": "narrow",
         "canonical_writer": "ControlActor MosaicModel layout",
@@ -945,12 +945,12 @@
       },
       {
         "id": "mosaic.actor_projection_state",
-        "fields": ["control_actor_generation", "control_actor_object_generation", "control_actor_owned"],
-        "current_class": "mixed_compatibility",
+        "fields": ["control_actor_generation", "control_actor_object_generation"],
+        "current_class": "renderer",
         "disposition": "narrow",
         "canonical_writer": "mosaic projection consumer",
         "projection_source": "actor mosaic and object generations",
-        "renderer_consumers": "stale projection rejection and compatibility gating",
+        "renderer_consumers": "stale projection and shared-resource generation rejection",
         "persistence_consumers": "none",
         "native_commit_point": "none; projection observation",
         "milestone": 6

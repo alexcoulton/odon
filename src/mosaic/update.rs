@@ -9,10 +9,6 @@ impl eframe::App for MosaicViewerApp {
         // viewport while progressively refining visible ROIs.
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
-        if !self.control_actor_owned {
-            self.pending_object_load_ids
-                .retain(|item_id| !self.seg_geojson.item_load_settled(*item_id));
-        }
         self.drain_screenshots();
         for layer in &mut self.annotation_layers {
             if layer.tick() {
@@ -56,28 +52,29 @@ impl eframe::App for MosaicViewerApp {
                 top_bar::ui_panel_toggles(ui, &mut show_left_panel, &mut show_right_panel);
                 if (show_left_panel, show_right_panel)
                     != (self.show_left_panel, self.show_right_panel)
-                    && !self.submit_native_control_intent(
+                {
+                    self.submit_native_control_intent(
                         "viewer.panels.set",
                         serde_json::json!({
                             "left":show_left_panel,
                             "right":show_right_panel,
                         }),
-                    )
-                {
-                    self.show_left_panel = show_left_panel;
-                    self.show_right_panel = show_right_panel;
+                    );
                 }
                 let mut smooth_pixels = self.smooth_pixels;
                 if top_bar::ui_smooth_toggle(ui, &mut smooth_pixels) {
-                    if !self.submit_native_control_intent(
-                        "viewer.rendering.set_smooth_pixels",
-                        serde_json::json!({"smooth":smooth_pixels}),
-                    ) {
-                        self.smooth_pixels = smooth_pixels;
-                        self.tiles_gl.set_smooth_pixels(smooth_pixels);
-                    }
+                    self.submit_native_control_intent(
+                        "mosaic.rendering.set",
+                        serde_json::json!({"smooth_pixels":smooth_pixels}),
+                    );
                 }
-                ui.checkbox(&mut self.show_tile_debug, "Tile Debug");
+                let mut show_tile_debug = self.show_tile_debug;
+                if ui.checkbox(&mut show_tile_debug, "Tile Debug").changed() {
+                    self.submit_native_control_intent(
+                        "mosaic.rendering.set",
+                        serde_json::json!({"show_tile_debug":show_tile_debug}),
+                    );
+                }
 
                 if have_channels {
                     ui.separator();
@@ -113,7 +110,12 @@ impl eframe::App for MosaicViewerApp {
                     LeftTab::Project => self.ui_project(ui),
                 },
             );
-            self.left_tab = tab;
+            if tab != self.left_tab {
+                self.submit_native_control_intent(
+                    "mosaic.ui.set_left_tab",
+                    serde_json::json!({"tab":tab.storage_key()}),
+                );
+            }
         }
         if let Some(action) = self.project_space.ui_floating_windows(ctx, false) {
             self.handle_project_space_action(action);
@@ -159,13 +161,11 @@ impl eframe::App for MosaicViewerApp {
                     RightTab::Memory => self.ui_memory(ui),
                 },
             );
-            if tab != self.right_tab
-                && !self.submit_native_control_intent(
+            if tab != self.right_tab {
+                self.submit_native_control_intent(
                     "mosaic.ui.set_right_tab",
                     serde_json::json!({"tab":tab.storage_key()}),
-                )
-            {
-                self.right_tab = tab;
+                );
             }
         }
 

@@ -149,15 +149,7 @@ fn grouped_layout_separates_case_insensitive_groups_and_missing_values() {
 }
 
 #[test]
-fn sort_keys_are_case_insensitive_and_put_missing_values_last() {
-    assert_eq!(cmp_sort_key("alpha", "BETA"), std::cmp::Ordering::Less);
-    assert_eq!(cmp_sort_key("Alpha", "alpha"), std::cmp::Ordering::Equal);
-    assert_eq!(cmp_sort_key("", "value"), std::cmp::Ordering::Greater);
-    assert_eq!(cmp_sort_key(" ", ""), std::cmp::Ordering::Greater);
-}
-
-#[test]
-fn samplesheet_mosaic_controls_shared_channels_layout_focus_and_state_roundtrip() {
+fn samplesheet_mosaic_constructs_shared_channels_and_metadata() {
     let dir = TestMosaicDir::new();
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
     let sheet = dir.0.join("mosaic.csv");
@@ -171,77 +163,13 @@ fn samplesheet_mosaic_controls_shared_channels_layout_focus_and_state_roundtrip(
     )
     .expect("write samplesheet");
     let ctx = egui::Context::default();
-    let mut mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(2))
+    let mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(2))
         .expect("construct samplesheet mosaic");
 
-    assert_eq!(mosaic.control_view_snapshot()["roi_count"], 2);
-    assert_eq!(mosaic.control_view_snapshot()["focused_roi"], "ROI-B");
+    assert_eq!(mosaic.items.len(), 2);
+    assert_eq!(mosaic.focused_core_id, Some(mosaic.items[0].id));
     assert_eq!(mosaic.metadata_columns, vec!["cohort", "site"]);
     assert_eq!(mosaic.channels.len(), 5, "channels are shared across ROIs");
-
-    let visibility = mosaic.control_set_visible_channels(
-        &serde_json::json!({"channels": ["DAPI", "CD3"], "mode": "only"}),
-    );
-    assert_eq!(visibility["visible_channels"].as_array().unwrap().len(), 2);
-    let contrast = mosaic.control_set_channel_contrast(
-        &serde_json::json!({"channel": "CD3", "min": 10, "max": 1000}),
-    );
-    assert_eq!(contrast["min"], 10.0);
-    assert_eq!(contrast["max"], 1000.0);
-    assert!(
-        mosaic.control_set_channel_contrast(
-            &serde_json::json!({"channel": "CD3", "min": 5, "max": 5}),
-        )["error"]
-            .is_string()
-    );
-
-    let layout = mosaic.control_configure_layout(&serde_json::json!({
-        "group_by": "cohort",
-        "sort_by": "site",
-        "columns": 1,
-        "layout": "native_pixels",
-        "show_group_labels": false,
-        "label_columns": ["id", "cohort"],
-        "fit": false,
-    }));
-    assert_eq!(layout["group_by"], "cohort");
-    assert_eq!(layout["columns"], 1);
-    assert_eq!(layout["layout"], "native_pixels");
-    assert_eq!(
-        mosaic.items[0].sample_id, "ROI-A",
-        "metadata sort reorders ROIs"
-    );
-    assert_eq!(mosaic.group_blocks.len(), 2);
-
-    assert_eq!(mosaic.control_mosaic_snapshot()["roi_count"], 2);
-    let focused =
-        mosaic.control_set_focused_roi(&serde_json::json!({"roi_id": "ROI-A", "fit": false}));
-    assert_eq!(focused["focused"]["roi_id"], "ROI-A");
-    mosaic.control_step_focused_roi(&serde_json::json!({"step": 1, "wrap": true}), true);
-    assert_eq!(
-        mosaic.control_view_snapshot()["focused_roi"],
-        "ROI-B",
-        "focus steps forward"
-    );
-    mosaic.control_step_focused_roi(&serde_json::json!({"step": 1, "wrap": true}), true);
-    assert_eq!(
-        mosaic.control_view_snapshot()["focused_roi"],
-        "ROI-A",
-        "focus wraps"
-    );
-
-    let project = mosaic.take_project_space();
-    let saved = project.mosaic_view_state().expect("saved mosaic state");
-    assert_eq!(saved.group_by.as_deref(), Some("cohort"));
-    assert_eq!(saved.layout_mode.as_deref(), Some("native_pixels"));
-    assert_eq!(
-        saved
-            .channels
-            .iter()
-            .filter(|channel| channel.visible == Some(true))
-            .count(),
-        2
-    );
 }
 
 #[test]
@@ -262,9 +190,20 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     let mut mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(2))
         .expect("construct actor mosaic");
     mosaic.control_actor_generation = 1;
-    let before = mosaic.control_actor_semantic_snapshot();
-    mosaic.set_control_actor_owned(true);
-
+    let semantic_snapshot = |mosaic: &MosaicViewerApp| {
+        serde_json::json!({
+            "channels":mosaic.control_channel_snapshot(),
+            "channel_sort":mosaic.channel_sort_mode.storage_key(),
+            "groups":mosaic.layer_groups,
+            "active_layer":MosaicViewerApp::layer_id_storage_key(mosaic.active_layer),
+            "objects_visible":mosaic.seg_geojson.visible,
+            "camera":mosaic.control_camera_snapshot(),
+            "focused":mosaic.focused_core_id,
+            "fast_objects":mosaic.seg_geojson.fast_rendering,
+            "show_group_labels":mosaic.show_group_labels,
+        })
+    };
+    let before = semantic_snapshot(&mosaic);
     ChannelListHost::set_channel_visible(&mut mosaic, 1, true);
     ChannelListHost::set_channel_sort_mode(&mut mosaic, ChannelSortMode::NameAsc);
     let mut groups = mosaic.layer_groups.clone();
@@ -316,17 +255,17 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
             )
         });
     }
-    assert_eq!(mosaic.control_actor_semantic_snapshot(), before);
+    assert_eq!(semantic_snapshot(&mosaic), before);
 
-    let mut projection = before;
-    let text_labels = projection["native_layers"]
-        .as_array_mut()
-        .expect("native layer projection")
-        .iter_mut()
-        .find(|layer| layer["layer_id"] == "text_labels")
-        .expect("text-label layer projection");
-    text_labels["visible"] = serde_json::json!(false);
-    text_labels["active"] = serde_json::json!(true);
+    let projection = serde_json::json!({
+        "generation":1,
+        "native_layers":[{
+            "layer_id":"text_labels",
+            "stack":"overlays",
+            "visible":false,
+            "active":true,
+        }],
+    });
     mosaic
         .apply_control_actor_state(&projection, &[], &[])
         .expect("apply actor projection");

@@ -4,24 +4,20 @@ use super::*;
 
 impl MosaicViewerApp {
     pub(super) fn set_active_layer(&mut self, id: MosaicLayerId) {
-        if self.control_actor_owned {
-            match id {
-                MosaicLayerId::Channel(index) => {
-                    self.submit_native_control_intent(
-                        "viewer.channels.set_active",
-                        serde_json::json!({"index":index}),
-                    );
-                }
-                _ => {
-                    self.submit_native_control_intent(
-                        "viewer.native_layers.set_active",
-                        serde_json::json!({"layer_id":Self::layer_id_storage_key(id)}),
-                    );
-                }
+        match id {
+            MosaicLayerId::Channel(index) => {
+                self.submit_native_control_intent(
+                    "viewer.channels.set_active",
+                    serde_json::json!({"index":index}),
+                );
             }
-            return;
+            _ => {
+                self.submit_native_control_intent(
+                    "viewer.native_layers.set_active",
+                    serde_json::json!({"layer_id":Self::layer_id_storage_key(id)}),
+                );
+            }
         }
-        self.apply_active_layer_projection(id);
     }
 
     pub(super) fn apply_active_layer_projection(&mut self, id: MosaicLayerId) {
@@ -154,46 +150,29 @@ impl MosaicViewerApp {
         } else {
             (lo, hi)
         };
-        if self.control_actor_owned {
-            for &index in indices {
-                self.submit_native_control_intent(
-                    "viewer.channels.set_contrast",
-                    serde_json::json!({"index":index,"min":lo,"max":hi}),
-                );
-            }
-            return;
-        }
-        for &idx in indices {
-            if let Some(dst) = self.channels.get_mut(idx) {
-                dst.window = Some((lo, hi));
-            }
+        for &index in indices {
+            self.submit_native_control_intent(
+                "viewer.channels.set_contrast",
+                serde_json::json!({"index":index,"min":lo,"max":hi}),
+            );
         }
     }
 
     pub(super) fn commit_channel_color(&mut self, index: usize, color_rgb: [u8; 3]) {
-        if !self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.set_color",
             serde_json::json!({"index":index,"color_rgb":color_rgb}),
-        ) && let Some(channel) = self.channels.get_mut(index)
-        {
-            channel.color_rgb = color_rgb;
-        }
+        );
     }
 
     pub(super) fn commit_channel_note(&mut self, index: usize, note: String) {
-        if !self.submit_native_control_intent(
+        self.submit_native_control_intent(
             "viewer.channels.set_note",
             serde_json::json!({"index":index,"note":note}),
-        ) && let Some(channel) = self.channels.get_mut(index)
-        {
-            channel.note = note;
-        }
+        );
     }
 
     pub(super) fn commit_layer_groups_preview(&mut self, before: ProjectLayerGroups) {
-        if !self.control_actor_owned {
-            return;
-        }
         let desired = self.layer_groups.clone();
         if serde_json::to_value(&desired).ok() == serde_json::to_value(&before).ok() {
             return;
@@ -392,39 +371,35 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn set_layer_visible(&mut self, id: MosaicLayerId, visible: bool) {
-        if self.control_actor_owned {
-            match id {
-                MosaicLayerId::TextLabels => {
-                    self.submit_layout_value("show_text_labels", serde_json::json!(visible));
-                }
-                MosaicLayerId::SegmentationGeoJson => {
-                    self.submit_native_control_intent(
-                        "viewer.objects.set_visibility",
-                        serde_json::json!({"target":"objects","visible":visible}),
-                    );
-                }
-                MosaicLayerId::Annotation(_) => {
-                    self.submit_native_control_intent(
-                        "viewer.native_layers.set_visibility",
-                        serde_json::json!({
-                            "layer_id":Self::layer_id_storage_key(id),
-                            "visible":visible,
-                        }),
-                    );
-                }
-                MosaicLayerId::Channel(index) => {
-                    self.submit_native_control_intent(
-                        "viewer.channels.set_visible",
-                        serde_json::json!({
-                            "channels":[index],
-                            "mode":if visible { "show" } else { "hide" },
-                        }),
-                    );
-                }
+        match id {
+            MosaicLayerId::TextLabels => {
+                self.submit_layout_value("show_text_labels", serde_json::json!(visible));
             }
-            return;
+            MosaicLayerId::SegmentationGeoJson => {
+                self.submit_native_control_intent(
+                    "viewer.objects.set_visibility",
+                    serde_json::json!({"target":"objects","visible":visible}),
+                );
+            }
+            MosaicLayerId::Annotation(_) => {
+                self.submit_native_control_intent(
+                    "viewer.native_layers.set_visibility",
+                    serde_json::json!({
+                        "layer_id":Self::layer_id_storage_key(id),
+                        "visible":visible,
+                    }),
+                );
+            }
+            MosaicLayerId::Channel(index) => {
+                self.submit_native_control_intent(
+                    "viewer.channels.set_visible",
+                    serde_json::json!({
+                        "channels":[index],
+                        "mode":if visible { "show" } else { "hide" },
+                    }),
+                );
+            }
         }
-        self.apply_layer_visibility_projection(id, visible);
     }
 
     pub(super) fn apply_layer_visibility_projection(&mut self, id: MosaicLayerId, visible: bool) {
@@ -744,7 +719,7 @@ impl MosaicViewerApp {
 
         ui.separator();
         channels_panel::show(self, ui, ctx);
-        if self.control_actor_owned && self.channel_list_search != channel_search_before {
+        if self.channel_list_search != channel_search_before {
             let desired = self.channel_list_search.clone();
             self.channel_list_search = channel_search_before;
             self.submit_native_control_intent(
@@ -762,47 +737,34 @@ impl MosaicViewerApp {
             dropped = Some((group, from, to));
         });
         if let Some((group, from, to)) = dropped {
-            if self.control_actor_owned {
-                let (stack, layers) = match group {
-                    layer_list::LayerGroup::Overlays => {
-                        let mut order = self.overlay_layer_order.clone();
-                        layer_list::reorder_vec(&mut order, from, to);
-                        (
-                            "overlays",
-                            order
-                                .into_iter()
-                                .map(Self::layer_id_storage_key)
-                                .collect::<Vec<_>>(),
-                        )
-                    }
-                    layer_list::LayerGroup::Channels => {
-                        let mut order = self.channel_layer_order.clone();
-                        layer_list::reorder_vec(&mut order, from, to);
-                        (
-                            "channels",
-                            order
-                                .into_iter()
-                                .map(|index| {
-                                    Self::layer_id_storage_key(MosaicLayerId::Channel(index))
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                    }
-                };
-                self.submit_native_control_intent(
-                    "viewer.native_layers.set_order",
-                    serde_json::json!({"stack":stack,"layers":layers}),
-                );
-            } else {
-                match group {
-                    layer_list::LayerGroup::Overlays => {
-                        layer_list::reorder_vec(&mut self.overlay_layer_order, from, to)
-                    }
-                    layer_list::LayerGroup::Channels => {
-                        layer_list::reorder_vec(&mut self.channel_layer_order, from, to)
-                    }
+            let (stack, layers) = match group {
+                layer_list::LayerGroup::Overlays => {
+                    let mut order = self.overlay_layer_order.clone();
+                    layer_list::reorder_vec(&mut order, from, to);
+                    (
+                        "overlays",
+                        order
+                            .into_iter()
+                            .map(Self::layer_id_storage_key)
+                            .collect::<Vec<_>>(),
+                    )
                 }
-            }
+                layer_list::LayerGroup::Channels => {
+                    let mut order = self.channel_layer_order.clone();
+                    layer_list::reorder_vec(&mut order, from, to);
+                    (
+                        "channels",
+                        order
+                            .into_iter()
+                            .map(|index| Self::layer_id_storage_key(MosaicLayerId::Channel(index)))
+                            .collect::<Vec<_>>(),
+                    )
+                }
+            };
+            self.submit_native_control_intent(
+                "viewer.native_layers.set_order",
+                serde_json::json!({"stack":stack,"layers":layers}),
+            );
         }
     }
 

@@ -129,9 +129,6 @@ impl MosaicViewerApp {
                 metadata_columns: sheet.meta_columns,
                 group_blocks,
                 grid_cols: cols,
-                grid_cell_w: cell_w,
-                grid_cell_h: cell_h,
-                grid_pad: pad,
                 status: format!(
                     "Loaded samplesheet: {}",
                     samplesheet_csv

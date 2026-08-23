@@ -110,9 +110,6 @@ impl MosaicViewerApp {
                 metadata_columns: resource.metadata_columns.as_ref().clone(),
                 group_blocks,
                 grid_cols: columns,
-                grid_cell_w: cell_width,
-                grid_cell_h: cell_height,
-                grid_pad,
                 status: "Ready.".to_string(),
                 allow_back: true,
                 seg_geojson,
@@ -202,6 +199,13 @@ impl MosaicViewerApp {
             }
         }
         if let Some(tab) = state
+            .get("left_tab")
+            .and_then(serde_json::Value::as_str)
+            .and_then(LeftTab::from_storage_key)
+        {
+            self.left_tab = tab;
+        }
+        if let Some(tab) = state
             .get("right_tab")
             .and_then(serde_json::Value::as_str)
             .and_then(RightTab::from_storage_key)
@@ -276,6 +280,13 @@ impl MosaicViewerApp {
             .and_then(serde_json::Value::as_bool)
         {
             self.smooth_pixels = value;
+            self.tiles_gl.set_smooth_pixels(value);
+        }
+        if let Some(value) = state
+            .get("show_tile_debug")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.show_tile_debug = value;
         }
         if let Some(value) = state
             .get("objects_visible")
@@ -493,54 +504,5 @@ impl MosaicViewerApp {
             metadata_columns: Arc::new(self.metadata_columns.clone()),
             items: Arc::new(items),
         }
-    }
-
-    pub fn control_actor_semantic_snapshot(&self) -> serde_json::Value {
-        serde_json::json!({
-            "generation":self.control_actor_generation.max(1),
-            "items":self.items.iter().map(|item| serde_json::json!({
-                "id":item.id,
-                "roi_id":item.sample_id,
-                "offset_world":[item.offset.x,item.offset.y],
-                "scale":item.scale,
-                "placed_size":[item.placed_size.x,item.placed_size.y],
-                "selected":self.selected_core_ids.contains(&item.id),
-                "focused":self.focused_core_id == Some(item.id),
-            })).collect::<Vec<_>>(),
-            "bounds":{"min":[self.mosaic_bounds.min.x,self.mosaic_bounds.min.y],"max":[self.mosaic_bounds.max.x,self.mosaic_bounds.max.y]},
-            "camera":self.control_camera_snapshot(),
-            "right_tab":self.right_tab.storage_key(),
-            "layout":{
-                "group_by":self.group_by,
-                "sort_by":self.sort_by,
-                "sort_secondary_enabled":self.sort_secondary_enabled,
-                "sort_by_secondary":self.sort_by_secondary,
-                "layout":self.layout_mode.storage_key(),
-                "columns":self.grid_cols,
-                "group_gap":self.group_gap,
-                "show_group_labels":self.show_group_labels,
-                "show_text_labels":self.show_text_labels,
-                "label_columns":self.label_columns,
-                "fit":false,
-            },
-            "panels":{"left":self.show_left_panel,"right":self.show_right_panel},
-            "smooth_pixels":self.smooth_pixels,
-            "objects_visible":self.seg_geojson.visible,
-            "fast_object_rendering":self.seg_geojson.fast_rendering,
-            "object_load":self.control_object_loading_snapshot(),
-            "channels":self.channels.iter().enumerate().map(|(index,channel)| serde_json::json!({
-                "index":index,
-                "name":channel.name,
-                "visible":channel.visible,
-                "color_rgb":channel.color_rgb,
-                "window":channel.window.map(|(minimum,maximum)| [minimum,maximum]),
-                "note":channel.note,
-                "active":index == self.selected_channel,
-            })).collect::<Vec<_>>(),
-            "channel_order":self.channel_layer_order,
-            "channel_presentation":self.control_channel_presentation_json(),
-            "layer_groups":self.layer_groups,
-            "native_layers":self.control_native_layer_snapshot_list(),
-        })
     }
 }

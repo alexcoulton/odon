@@ -563,6 +563,37 @@ impl MosaicModel {
             "renderer":"opengl",
             "compositing":"additive",
             "smooth_pixels":self.smooth_pixels,
+            "show_tile_debug":self.show_tile_debug,
+        }))
+    }
+
+    pub(super) fn set_rendering(&mut self, params: &Value) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let before = (self.smooth_pixels, self.show_tile_debug);
+        let mut provided = false;
+        if let Some(value) = params.get("smooth_pixels") {
+            self.smooth_pixels = value
+                .as_bool()
+                .ok_or_else(|| invalid("smooth_pixels must be a boolean"))?;
+            provided = true;
+        }
+        if let Some(value) = params.get("show_tile_debug") {
+            self.show_tile_debug = value
+                .as_bool()
+                .ok_or_else(|| invalid("show_tile_debug must be a boolean"))?;
+            provided = true;
+        }
+        if !provided {
+            return Err(invalid(
+                "mosaic.rendering.set requires smooth_pixels and/or show_tile_debug",
+            ));
+        }
+        Ok(json!({
+            "changed":before != (self.smooth_pixels,self.show_tile_debug),
+            "rendering":{
+                "smooth_pixels":self.smooth_pixels,
+                "show_tile_debug":self.show_tile_debug,
+            },
         }))
     }
 
