@@ -154,7 +154,7 @@ fn annotation_points_layer_stays_split_by_responsibility() {
 
     let selection = source(module_dir.join("selection.rs"));
     let colors = source(module_dir.join("colors.rs"));
-    let parquet = source(module_dir.join("parquet.rs"));
+    let parquet = source(root.join("src/data/annotations/parquet.rs"));
     let gl = source(module_dir.join("gl.rs"));
     assert!(selection.contains("fn pick_nearest_in_roi("));
     assert!(!selection.contains("ParquetRecordBatchReaderBuilder"));

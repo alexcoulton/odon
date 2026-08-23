@@ -11,11 +11,11 @@ use crate::features::points::{
 };
 use crate::render::line_bins::LineSegmentsBins;
 use crate::render::line_bins_gl::{LineBinsGlDrawData, LineBinsGlDrawParams, LineBinsGlRenderer};
-use crate::render::point_bins::PointIndexBins;
 use crate::render::points::PointsStyle;
 use crate::xenium::transcripts::{
     XeniumTranscriptsAllPayload, XeniumTranscriptsMeta, load_transcripts_all_points,
 };
+use odon::data::point_bins::PointIndexBins;
 
 #[derive(Clone)]
 pub struct PreparedXeniumCells {

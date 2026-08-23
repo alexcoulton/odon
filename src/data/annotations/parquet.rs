@@ -9,10 +9,10 @@ use eframe::egui;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use super::{AnnotationDataset, AnnotationRoiData, AnnotationValueMode, ColumnInfo};
-use crate::render::point_bins::PointIndexBins;
+use super::{AnnotationColumnInfo, AnnotationDataset, AnnotationRoiData, AnnotationValueMode};
+use crate::data::point_bins::PointIndexBins;
 
-pub(super) fn read_parquet_columns(path: &Path) -> anyhow::Result<Vec<ColumnInfo>> {
+pub fn read_parquet_columns(path: &Path) -> anyhow::Result<Vec<AnnotationColumnInfo>> {
     let file = File::open(path)
         .with_context(|| format!("failed to open parquet: {}", path.to_string_lossy()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -20,14 +20,14 @@ pub(super) fn read_parquet_columns(path: &Path) -> anyhow::Result<Vec<ColumnInfo
     let schema = builder.schema();
     let mut out = Vec::new();
     for f in schema.fields() {
-        out.push(ColumnInfo {
+        out.push(AnnotationColumnInfo {
             name: f.name().to_string(),
         });
     }
     Ok(out)
 }
 
-pub(super) fn load_annotations_parquet(
+pub fn load_annotations_parquet(
     path: &Path,
     roi_id_column: &str,
     x_column: &str,

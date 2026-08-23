@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use eframe::egui;
 
-use crate::render::point_bins::PointIndexBins;
 use crate::spatialdata::PointsMeta;
+use odon::data::point_bins::PointIndexBins;
 
 use super::{
     PreparedSpatialPoints, SpatialAxisMode, SpatialFeatureCache, SpatialPointsPrepareConfig,

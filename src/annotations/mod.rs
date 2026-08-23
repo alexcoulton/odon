@@ -1,6 +1,5 @@
 mod colors;
 mod gl;
-mod parquet;
 mod selection;
 
 pub use colors::{build_category_luts, default_category_styles};
@@ -11,13 +10,15 @@ use std::sync::Arc;
 
 use eframe::egui;
 
-use crate::render::point_bins::PointIndexBins;
 use crate::ui::tooltip;
 
 use self::colors::{tint_color32, turbo_rgb_u8};
 use self::gl::{AnnotationGlDraw, AnnotationGlDrawParams, AnnotationGlRenderer};
-use self::parquet::{load_annotations_parquet, read_parquet_columns};
 use self::selection::{PointsRadius, pick_nearest_in_roi};
+use odon::data::annotations::{
+    AnnotationColumnInfo, AnnotationDataset, AnnotationRoiData, AnnotationValueMode,
+    load_annotations_parquet, read_parquet_columns,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationShape {
@@ -72,12 +73,6 @@ pub struct AnnotationCategoryStyle {
     pub shape: AnnotationShape,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnotationValueMode {
-    Categorical,
-    Continuous,
-}
-
 #[derive(Debug, Clone)]
 pub struct AnnotationLayerStyle {
     pub radius_screen_px: f32,
@@ -117,25 +112,6 @@ impl Default for AnnotationParquetConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct AnnotationRoiData {
-    pub positions_local: Arc<Vec<egui::Pos2>>,
-    pub values: Arc<Vec<f32>>,
-    pub count: usize,
-    pub bins_local: Option<Arc<PointIndexBins>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AnnotationDataset {
-    pub mode: AnnotationValueMode,
-    pub categories: Vec<String>, // categorical only
-    pub roi: HashMap<String, AnnotationRoiData>,
-    pub value_min: f32, // continuous only
-    pub value_max: f32, // continuous only
-    pub total_points: usize,
-    pub total_rois: usize,
-}
-
-#[derive(Debug, Clone)]
 pub struct AnnotationPointsLayer {
     pub id: u64,
     pub name: String,
@@ -158,15 +134,10 @@ pub struct AnnotationPointsLayer {
     // GL
     gl: AnnotationGlRenderer,
     generation: u64,
-    schema: Option<Vec<ColumnInfo>>,
+    schema: Option<Vec<AnnotationColumnInfo>>,
     schema_status: String,
-    schema_rx: Option<crossbeam_channel::Receiver<anyhow::Result<Vec<ColumnInfo>>>>,
+    schema_rx: Option<crossbeam_channel::Receiver<anyhow::Result<Vec<AnnotationColumnInfo>>>>,
     load_rx: Option<crossbeam_channel::Receiver<anyhow::Result<AnnotationDataset>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ColumnInfo {
-    pub name: String,
 }
 
 impl AnnotationPointsLayer {
@@ -205,7 +176,7 @@ impl AnnotationPointsLayer {
             return;
         };
         self.schema_status = "Reading parquet schema...".to_string();
-        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<Vec<ColumnInfo>>>(1);
+        let (tx, rx) = crossbeam_channel::bounded::<anyhow::Result<Vec<AnnotationColumnInfo>>>(1);
         self.schema_rx = Some(rx);
         std::thread::Builder::new()
             .name("annotations-parquet-schema".to_string())

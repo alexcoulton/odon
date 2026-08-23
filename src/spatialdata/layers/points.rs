@@ -9,12 +9,12 @@ use crate::features::points::{
     FeaturePickerItem, FeaturePointLod, FeaturePointSeries, color_for_feature,
     normalize_feature_key, select_draw_payload, show_feature_picker,
 };
-use crate::render::point_bins::PointIndexBins;
 use crate::render::points::PointsStyle;
 use crate::render::points_gl::{PointsGlDrawData, PointsGlDrawParams, PointsGlRenderer};
 use crate::spatialdata::{
     PointsLoadOptions, PointsMeta, SpatialDataTransform2, load_points_sample,
 };
+use odon::data::point_bins::PointIndexBins;
 
 mod prepare;
 
