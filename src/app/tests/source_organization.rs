@@ -1443,6 +1443,10 @@ fn native_object_selection_and_analysis_have_no_renderer_commit_fallback() {
     let projection = source(root.join("src/app/actor_projection.rs"));
     assert!(projection.contains("projected.analysis_generation > installed_analysis"));
     assert!(projection.contains("objects.apply_project_analysis_state("));
+    assert!(
+        !projection.contains(".load_path(PathBuf::from(source)"),
+        "an actor object projection must install its shared resource, never restart renderer I/O"
+    );
 }
 
 #[test]

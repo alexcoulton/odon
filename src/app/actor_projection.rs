@@ -515,17 +515,18 @@ impl OmeZarrViewerApp {
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             if generation > self.control_actor_object_generation {
-                self.control_actor_object_generation = generation;
-                if let Some(source) = resource.get("source").and_then(serde_json::Value::as_str) {
-                    let downsample_factor = resource
-                        .get("downsample_factor")
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(1.0) as f32;
-                    self.seg_objects
-                        .load_path(PathBuf::from(source), downsample_factor.max(f32::EPSILON));
-                } else {
+                if resource
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none()
+                {
                     self.seg_objects.clear();
+                    self.control_actor_object_generation = generation;
                     self.rebuild_layer_orders();
+                } else {
+                    return Err(format!(
+                        "actor object resource generation {generation} has no shared renderer payload"
+                    ));
                 }
             }
         }
