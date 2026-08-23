@@ -172,8 +172,6 @@ impl RootApp {
         let endpoint = self.remote_s3_endpoint.trim().to_string();
         let region = self.remote_s3_region.trim().to_string();
         let bucket = self.remote_s3_bucket.trim().to_string();
-        let access_key = self.remote_s3_access_key.trim().to_string();
-        let secret_key = self.remote_s3_secret_key.trim().to_string();
         let mut prefixes = state
             .selected_dataset_prefixes
             .iter()
@@ -187,8 +185,6 @@ impl RootApp {
                 region: region.clone(),
                 bucket: bucket.clone(),
                 prefix,
-                access_key: access_key.clone(),
-                secret_key: secret_key.clone(),
             })
             .collect()
     }

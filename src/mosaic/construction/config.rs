@@ -195,10 +195,10 @@ impl MosaicViewerApp {
                 metadata_columns: meta_columns,
                 group_blocks,
                 grid_cols: cols,
-                status: "Ready.".to_string(),
-                allow_back: false,
+                renderer_status: "Ready.".to_string(),
+                show_return_navigation: false,
                 seg_geojson,
-                control_actor_generation: 0,
+                consumed_mosaic_resource_generation: 0,
             },
         ))
     }

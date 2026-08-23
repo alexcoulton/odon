@@ -21,7 +21,7 @@ fn actor_owned_project_action_bypasses_the_viewer_host_request_relay() {
 
     app.handle_project_space_action(ProjectSpaceAction::Open(roi));
 
-    assert!(app.take_request().is_none());
+    assert!(app.take_platform_effect().is_none());
     let mut intents = app.project_space_mut().take_control_intents();
     assert_eq!(intents.len(), 1);
     let intent = intents.remove(0);
@@ -41,7 +41,7 @@ fn actor_owned_roi_selector_action_bypasses_the_viewer_host_request_relay() {
         RoiSelectorAction::OpenRoi(local_roi("ROI-B")),
     );
 
-    assert!(app.take_request().is_none());
+    assert!(app.take_platform_effect().is_none());
     let mut intents = app.project_space_mut().take_control_intents();
     assert_eq!(intents.len(), 1);
     let intent = intents.remove(0);

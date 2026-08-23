@@ -154,10 +154,10 @@ impl MosaicViewerApp {
                 metadata_columns: resource.metadata_columns.as_ref().clone(),
                 group_blocks,
                 grid_cols: columns,
-                status: "Ready.".to_string(),
-                allow_back: true,
+                renderer_status: "Ready.".to_string(),
+                show_return_navigation: true,
                 seg_geojson,
-                control_actor_generation: resource.generation,
+                consumed_mosaic_resource_generation: resource.generation,
             },
         ))
     }
@@ -173,10 +173,10 @@ impl MosaicViewerApp {
             .get("generation")
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| "actor mosaic projection has no generation".to_string())?;
-        if generation != self.control_actor_generation {
+        if generation != self.consumed_mosaic_resource_generation {
             return Err(format!(
                 "actor mosaic generation {generation} does not match renderer generation {}",
-                self.control_actor_generation
+                self.consumed_mosaic_resource_generation
             ));
         }
 
@@ -469,12 +469,12 @@ impl MosaicViewerApp {
         }
 
         let object_generation = state["objects"]["generation"].as_u64().unwrap_or(0);
-        if object_generation > self.control_actor_object_generation {
+        if object_generation > self.consumed_mosaic_object_generation {
             for (item_id, resource) in object_resources {
                 self.seg_geojson
                     .install_control_resource(*item_id, resource.as_ref());
             }
-            self.control_actor_object_generation = object_generation;
+            self.consumed_mosaic_object_generation = object_generation;
         }
         if let Some(selections) = state.get("object_selections") {
             self.seg_geojson.apply_control_selections(selections)?;
@@ -488,8 +488,8 @@ impl MosaicViewerApp {
         Ok(())
     }
 
-    pub fn control_actor_generation(&self) -> u64 {
-        self.control_actor_generation
+    pub fn consumed_mosaic_resource_generation(&self) -> u64 {
+        self.consumed_mosaic_resource_generation
     }
 
     pub fn control_actor_signature(&self) -> String {
@@ -503,7 +503,7 @@ impl MosaicViewerApp {
     }
 
     pub fn control_actor_resource(&self) -> odon::model::ControlMosaicResource {
-        let generation = self.control_actor_generation.max(1);
+        let generation = self.consumed_mosaic_resource_generation.max(1);
         let runtime_by_item = (self._remote_runtimes.len() == self.items.len())
             .then_some(self._remote_runtimes.as_slice());
         let items = self

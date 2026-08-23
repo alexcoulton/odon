@@ -14,21 +14,34 @@ impl eframe::App for MosaicViewerApp {
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close
         if top_bar::handle_cmd_w_close(ctx, &mut self.close_dialog_open) {
-            self.pending_request = Some(MosaicRequest::CloseWindow);
+            self.submit_native_control_intent(
+                "app.lifecycle.request_close",
+                serde_json::json!({"save":"discard"}),
+            );
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 top_bar::ui_title(ui, format!("Mosaic: {} ROIs", self.items.len()));
                 ui.separator();
-                if top_bar::ui_back(ui, self.allow_back) {
-                    self.pending_request = Some(MosaicRequest::BackToSingle);
+                if top_bar::ui_back(ui, self.show_return_navigation) {
+                    if let Some(path) = self.return_dataset_root.clone() {
+                        self.submit_native_control_intent(
+                            "datasets.open_ome_zarr",
+                            serde_json::json!({"path":path}),
+                        );
+                    } else {
+                        self.submit_native_control_intent(
+                            "app.navigation.show_project",
+                            serde_json::json!({}),
+                        );
+                    }
                 }
                 if top_bar::ui_fit(ui, "Fit Mosaic (F)") {
                     self.fit_mosaic();
                 }
                 ui.separator();
-                top_bar::ui_status(ui, &self.status);
+                top_bar::ui_status(ui, &self.renderer_status);
                 ui.separator();
                 let have_items = !self.items.is_empty();
                 if let Some(step) = top_bar::ui_prev_next_core(ui, have_items) {
@@ -172,7 +185,10 @@ impl eframe::App for MosaicViewerApp {
         self.ui_screenshot_settings_dialog(ctx);
 
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
-            self.pending_request = Some(MosaicRequest::CloseWindow);
+            self.submit_native_control_intent(
+                "app.lifecycle.request_close",
+                serde_json::json!({"save":"discard"}),
+            );
         }
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
 

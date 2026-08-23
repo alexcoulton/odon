@@ -19,7 +19,7 @@ impl MosaicViewerApp {
         match action {
             crate::project::ProjectSpaceAction::CaptureCurrentView => {}
             crate::project::ProjectSpaceAction::OpenRemoteDialog => {
-                self.pending_request = Some(MosaicRequest::OpenRemoteDialog);
+                self.pending_platform_effect = Some(MosaicPlatformEffect::OpenRemoteDialog);
             }
             crate::project::ProjectSpaceAction::ShowHelp(topic) => {
                 self.active_help_topic = Some(topic);

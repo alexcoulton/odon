@@ -6,7 +6,7 @@ impl OmeZarrViewerApp {
         method: &'static str,
         params: serde_json::Value,
     ) -> bool {
-        self.native_control_intents
+        self.native_command_ingress
             .push(NativeControlIntent { method, params });
         true
     }
@@ -110,12 +110,17 @@ impl OmeZarrViewerApp {
         self.submit_native_viewport_intent("viewer.viewports.objects.filter.set", params)
     }
 
-    pub fn take_request(&mut self) -> Option<ViewerRequest> {
-        self.pending_request.take()
+    pub fn take_platform_effect(&mut self) -> Option<ViewerPlatformEffect> {
+        self.pending_platform_effect.take()
     }
 
+    #[cfg(test)]
     pub fn take_native_control_intents(&mut self) -> Vec<NativeControlIntent> {
-        std::mem::take(&mut self.native_control_intents)
+        self.native_command_ingress.take_recorded()
+    }
+
+    pub fn set_native_command_ingress(&mut self, ingress: NativeControlIngress) {
+        self.native_command_ingress = ingress;
     }
 
     pub(super) fn ui_viewport_controls(&mut self, ui: &mut egui::Ui) {

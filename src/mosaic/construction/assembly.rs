@@ -13,10 +13,10 @@ pub(super) struct PreparedMosaicConstruction {
     pub(super) metadata_columns: Vec<String>,
     pub(super) group_blocks: Vec<GroupBlock>,
     pub(super) grid_cols: usize,
-    pub(super) status: String,
-    pub(super) allow_back: bool,
+    pub(super) renderer_status: String,
+    pub(super) show_return_navigation: bool,
     pub(super) seg_geojson: MosaicGeoJsonSegmentationOverlay,
-    pub(super) control_actor_generation: u64,
+    pub(super) consumed_mosaic_resource_generation: u64,
 }
 
 impl MosaicViewerApp {
@@ -34,10 +34,10 @@ impl MosaicViewerApp {
             metadata_columns,
             group_blocks,
             grid_cols,
-            status,
-            allow_back,
+            renderer_status,
+            show_return_navigation,
             seg_geojson,
-            control_actor_generation,
+            consumed_mosaic_resource_generation,
         } = prepared;
 
         let focused_core_id = items.first().map(|item| item.id);
@@ -117,9 +117,10 @@ impl MosaicViewerApp {
             control_actor_memory_state: serde_json::json!({}),
             tile_request_generation: 1,
             last_tile_request_signature: None,
-            status,
-            allow_back,
-            pending_request: None,
+            renderer_status,
+            show_return_navigation,
+            return_dataset_root: None,
+            pending_platform_effect: None,
             group_layers_dialog: None,
             smooth_pixels: true,
             show_tile_debug: false,
@@ -134,9 +135,9 @@ impl MosaicViewerApp {
             seg_geojson_pending_visible: false,
             project_space: ProjectSpace::default(),
             active_help_topic: None,
-            control_actor_generation,
-            control_actor_object_generation: 0,
-            native_control_intents: Vec::new(),
+            consumed_mosaic_resource_generation,
+            consumed_mosaic_object_generation: 0,
+            native_command_ingress: NativeControlIngress::detached(),
         }
     }
 }

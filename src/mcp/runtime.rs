@@ -1,8 +1,9 @@
 //! Required local control runtime shared by native UI and remote transports.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
@@ -16,6 +17,135 @@ use crate::control::{
 use super::bridge::{ControlServerServices, spawn_control_server};
 
 pub const DEFAULT_ADDR: &str = "127.0.0.1:0";
+const NATIVE_COMMAND_QUEUE_CAPACITY: usize = 512;
+
+#[derive(Debug, Clone)]
+pub struct NativeCommand {
+    pub method: String,
+    pub params: Value,
+}
+
+/// Bounded native-UI ingress that forwards typed commands to the control actor without waiting
+/// for another `RootApp::update` call.
+#[derive(Debug, Clone)]
+pub struct NativeCommandIngress {
+    tx: Sender<NativeCommand>,
+    recorded_rx: Option<Receiver<NativeCommand>>,
+    pending_methods: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+impl NativeCommandIngress {
+    fn actor(
+        actor_tx: Sender<OdonControlRequest>,
+        event_hub: Arc<EventHub>,
+        task_registry: Arc<TaskRegistry>,
+    ) -> anyhow::Result<Self> {
+        let (tx, rx) = crossbeam_channel::bounded::<NativeCommand>(NATIVE_COMMAND_QUEUE_CAPACITY);
+        let pending_methods = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+        let worker_pending_methods = Arc::clone(&pending_methods);
+        std::thread::Builder::new()
+            .name("odon-native-command-ingress".to_string())
+            .spawn(move || {
+                while let Ok(native) = rx.recv() {
+                    let method = native.method.clone();
+                    let Ok(command) = ControlCommand::decode(&native.method, native.params) else {
+                        clear_pending_method(&worker_pending_methods, &method);
+                        continue;
+                    };
+                    let (reply, result) = crossbeam_channel::bounded(1);
+                    if actor_tx
+                        .send(OdonControlRequest {
+                            command,
+                            reply,
+                            session_id: "native-ui".to_string(),
+                            request_id: None,
+                            event_hub: Arc::clone(&event_hub),
+                            task_registry: Arc::clone(&task_registry),
+                            task_id: None,
+                        })
+                        .is_err()
+                    {
+                        clear_pending_method(&worker_pending_methods, &method);
+                        break;
+                    }
+                    let _ = result.recv();
+                    clear_pending_method(&worker_pending_methods, &method);
+                }
+            })?;
+        Ok(Self {
+            tx,
+            recorded_rx: None,
+            pending_methods,
+        })
+    }
+
+    /// A bounded, non-consuming ingress used by renderer-only tests and before a renderer is
+    /// attached to its required application runtime.
+    pub fn detached() -> Self {
+        let (tx, rx) = crossbeam_channel::bounded::<NativeCommand>(NATIVE_COMMAND_QUEUE_CAPACITY);
+        Self {
+            tx,
+            recorded_rx: Some(rx),
+            pending_methods: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Applies bounded backpressure to the native interaction that committed the command.
+    pub fn submit(&self, method: impl Into<String>, params: Value) -> bool {
+        let method = method.into();
+        *self
+            .pending_methods
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(method.clone())
+            .or_default() += 1;
+        if self
+            .tx
+            .send(NativeCommand {
+                method: method.clone(),
+                params,
+            })
+            .is_ok()
+        {
+            true
+        } else {
+            clear_pending_method(&self.pending_methods, &method);
+            false
+        }
+    }
+
+    pub fn contains_pending(&self, method: &str) -> bool {
+        self.pending_methods
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(method)
+            .is_some_and(|count| *count > 0)
+    }
+
+    pub fn take_recorded(&self) -> Vec<NativeCommand> {
+        let commands: Vec<NativeCommand> = self
+            .recorded_rx
+            .as_ref()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
+        for command in &commands {
+            clear_pending_method(&self.pending_methods, &command.method);
+        }
+        commands
+    }
+}
+
+fn clear_pending_method(pending_methods: &Mutex<HashMap<String, usize>>, method: &str) {
+    let mut pending = pending_methods
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(count) = pending.get_mut(method) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            pending.remove(method);
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct OdonControlRuntime {
@@ -34,6 +164,7 @@ pub struct OdonControlRuntime {
     resource_registry: Arc<ResourceRegistry>,
     _task_service: crate::control::TaskServiceHandle,
     actor_diagnostics: Arc<crate::control::actor::ActorDiagnostics>,
+    native_command_ingress: NativeCommandIngress,
 }
 
 /// Backward-compatible name for callers that explicitly create a TCP-exposed runtime.
@@ -113,6 +244,11 @@ impl OdonControlRuntime {
         let actor_model_tx = actor.model_tx;
         let task_service = actor.task_service;
         let actor_diagnostics = actor.diagnostics;
+        let native_command_ingress = NativeCommandIngress::actor(
+            tx.clone(),
+            Arc::clone(&event_hub),
+            Arc::clone(&task_registry),
+        )?;
 
         let server = spawn_control_server(
             addr,
@@ -149,7 +285,12 @@ impl OdonControlRuntime {
             resource_registry,
             _task_service: task_service,
             actor_diagnostics,
+            native_command_ingress,
         })
+    }
+
+    pub fn native_command_ingress(&self) -> NativeCommandIngress {
+        self.native_command_ingress.clone()
     }
 
     pub fn try_recv_presentation(

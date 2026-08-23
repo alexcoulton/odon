@@ -74,7 +74,7 @@ impl OmeZarrViewerApp {
         if self.screenshot_output_dir != before_output_dir
             || self.screenshot_settings != before_settings
         {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.screenshot.settings.set",
                 params: serde_json::json!({
                     "output_dir":self.screenshot_output_dir.as_ref().map(|path| path.to_string_lossy().into_owned()),
@@ -143,7 +143,7 @@ impl OmeZarrViewerApp {
                 .add_enabled(changed, egui::Button::new("Apply"))
                 .clicked()
             {
-                self.native_control_intents.push(NativeControlIntent {
+                self.native_command_ingress.push(NativeControlIntent {
                     method: "datasets.open_tiff",
                     params: serde_json::json!({
                         "path":state.image_path.to_string_lossy(),

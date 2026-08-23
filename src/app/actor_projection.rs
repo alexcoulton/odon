@@ -592,7 +592,7 @@ impl OmeZarrViewerApp {
                         LabelPromptSessionPreference::AlwaysLoad
                             if !self.seg_label_selected.is_empty() =>
                         {
-                            self.native_control_intents.push(NativeControlIntent {
+                            self.native_command_ingress.push(NativeControlIntent {
                                 method: "viewer.labels.load",
                                 params: serde_json::json!({"name":self.seg_label_selected}),
                             });

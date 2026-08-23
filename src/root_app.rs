@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::app::{
-    LabelPromptSessionPreference, NativeControlIntent, OmeZarrViewerApp, S3DatasetSelection,
-    ViewerRequest,
+    LabelPromptSessionPreference, NativeControlIngress, NativeControlIntent, OmeZarrViewerApp,
+    S3DatasetSelection, ViewerPlatformEffect,
 };
 use crate::app_support::menu::{NativeMenu, NativeMenuAction};
 use crate::app_support::settings::{AppSettings, settings_file_path};
@@ -20,7 +20,7 @@ use crate::data::ome::OmeZarrDataset;
 use crate::data::project_config::ProjectRoi;
 use crate::data::remote_store::{S3BrowseEntry, S3BrowseListing};
 use crate::log_warn;
-use crate::mosaic::{MosaicRequest, MosaicViewerApp};
+use crate::mosaic::{MosaicPlatformEffect, MosaicViewerApp};
 use crate::objects::{ObjectPreloadMode, ObjectPreloadSettings, PreloadedObjectLayer};
 use crate::project::{ProjectObjectCacheUiState, ProjectSpace, ProjectSpaceAction};
 use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
@@ -160,7 +160,7 @@ pub struct RootApp {
     gpu_available: bool,
     close_dialog_open: bool,
     spatial_open: Option<SpatialOpenDialog>,
-    deep_link_rx: Option<Receiver<DeepLinkRequest>>,
+    platform_deep_link_rx: Option<Receiver<DeepLinkRequest>>,
     object_preload: ProjectObjectPreloadRenderProjection,
     remote_dialog_open: bool,
     remote_mode: RemoteMode,
@@ -189,8 +189,8 @@ pub struct RootApp {
     control_document_generation_applied: u64,
     control_actor_mode_signature: Option<String>,
     control_projection_gap: bool,
-    deferred_control_projection: Option<RenderProjection>,
-    pending_native_control_intents: VecDeque<NativeControlIntent>,
+    deferred_renderer_projection: Option<RenderProjection>,
+    native_command_ingress: NativeControlIngress,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
 }
@@ -207,7 +207,7 @@ impl RootApp {
 
     fn bootstrap_control_actor(&mut self) {
         let signature = self.control_actor_mode_signature();
-        self.deferred_control_projection = None;
+        self.deferred_renderer_projection = None;
         let project_snapshot = self
             .current_project_space()
             .map(ProjectSpace::control_actor_project_snapshot);
@@ -230,13 +230,6 @@ impl RootApp {
             Mode::Transition => runtime.bootstrap_model_mode(ModelMode::Transition),
         }
         self.control_actor_mode_signature = Some(signature);
-    }
-
-    fn sync_control_actor_mode_from_native(&mut self) {
-        let signature = self.control_actor_mode_signature();
-        if self.control_actor_mode_signature.as_deref() != Some(signature.as_str()) {
-            self.bootstrap_control_actor();
-        }
     }
 
     fn report_control_viewport_geometry(&self) {
@@ -307,11 +300,13 @@ impl RootApp {
     }
 
     fn configure_single_app(&self, app: &mut OmeZarrViewerApp) {
+        app.set_native_command_ingress(self.native_command_ingress.clone());
         app.set_label_prompt_preference(self.label_prompt_preference);
         app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
 
     fn configure_mosaic_app(&self, mosaic: &mut MosaicViewerApp) {
+        mosaic.set_native_command_ingress(self.native_command_ingress.clone());
         mosaic.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
 
@@ -341,7 +336,7 @@ impl RootApp {
             ctx.request_repaint();
         }
         let latest = self
-            .deferred_control_projection
+            .deferred_renderer_projection
             .take()
             .into_iter()
             .chain(updates)
@@ -354,7 +349,7 @@ impl RootApp {
             Mode::Single(app) if app.control_projection_gesture_active()
         );
         if gesture_active && update.mode == ModelMode::Single {
-            self.deferred_control_projection = Some(update);
+            self.deferred_renderer_projection = Some(update);
             ctx.request_repaint_after(Duration::from_millis(5));
             return;
         }
@@ -554,7 +549,8 @@ impl RootApp {
             let needs_renderer = !matches!(
                 &self.mode,
                 Mode::Mosaic { mosaic, .. }
-                    if mosaic.control_actor_generation() == projection.mosaic_resource_generation
+                    if mosaic.consumed_mosaic_resource_generation()
+                        == projection.mosaic_resource_generation
             );
             if needs_renderer {
                 let Some(resource) = projection.mosaic_resource.as_ref() else {
@@ -598,6 +594,7 @@ impl RootApp {
                         }
                     };
                 self.configure_mosaic_app(&mut mosaic);
+                mosaic.set_return_dataset_root(ret.dataset_root.clone());
                 mosaic.set_project_space(project_space);
                 if let Err(error) = mosaic.apply_control_actor_state(
                     &projection.mosaic_state,
@@ -1234,8 +1231,7 @@ impl RootApp {
                         .clicked()
                     {
                         let settings = self.settings_draft.auto_contrast;
-                        self.pending_native_control_intents
-                            .push_back(NativeControlIntent {
+                        self.native_command_ingress.push(NativeControlIntent {
                                 method: "viewer.channels.auto_contrast",
                                 params: serde_json::json!({
                                     "overwrite_manual":true,
@@ -1352,6 +1348,8 @@ impl RootApp {
     ) -> anyhow::Result<Self> {
         let (app_settings, mut settings_status) = Self::load_app_settings();
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
+        let native_command_ingress =
+            NativeControlIngress::actor(control_runtime.native_command_ingress());
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -1363,7 +1361,7 @@ impl RootApp {
             gpu_available: cc.gl.is_some(),
             close_dialog_open: false,
             spatial_open: None,
-            deep_link_rx: None,
+            platform_deep_link_rx: None,
             object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -1392,8 +1390,8 @@ impl RootApp {
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
             control_projection_gap: false,
-            deferred_control_projection: None,
-            pending_native_control_intents: VecDeque::new(),
+            deferred_renderer_projection: None,
+            native_command_ingress,
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -1410,7 +1408,10 @@ impl RootApp {
     ) -> anyhow::Result<Self> {
         let (app_settings, mut settings_status) = Self::load_app_settings();
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
+        let native_command_ingress =
+            NativeControlIngress::actor(control_runtime.native_command_ingress());
         let mut app = OmeZarrViewerApp::new(cc, dataset, store);
+        app.set_native_command_ingress(native_command_ingress.clone());
         app.set_fast_object_rendering(app_settings.fast_object_rendering);
         if let Some(path) = project_path.as_deref() {
             let mut ps = ProjectSpace::default();
@@ -1424,7 +1425,7 @@ impl RootApp {
             gpu_available: cc.gl.is_some(),
             close_dialog_open: false,
             spatial_open: None,
-            deep_link_rx: None,
+            platform_deep_link_rx: None,
             object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -1453,8 +1454,8 @@ impl RootApp {
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
             control_projection_gap: false,
-            deferred_control_projection: None,
-            pending_native_control_intents: VecDeque::new(),
+            deferred_renderer_projection: None,
+            native_command_ingress,
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -1470,6 +1471,8 @@ impl RootApp {
     ) -> anyhow::Result<Self> {
         let (app_settings, mut settings_status) = Self::load_app_settings();
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
+        let native_command_ingress =
+            NativeControlIngress::actor(control_runtime.native_command_ingress());
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -1477,6 +1480,7 @@ impl RootApp {
             }
         }
         mosaic.set_fast_object_rendering(app_settings.fast_object_rendering);
+        mosaic.set_native_command_ingress(native_command_ingress.clone());
         mosaic.set_layer_groups(ps.layer_groups().clone());
         let mut root = Self {
             mode: Mode::Mosaic {
@@ -1486,7 +1490,7 @@ impl RootApp {
             gpu_available: cc.gl.is_some(),
             close_dialog_open: false,
             spatial_open: None,
-            deep_link_rx: None,
+            platform_deep_link_rx: None,
             object_preload: ProjectObjectPreloadRenderProjection::default(),
             remote_dialog_open: false,
             remote_mode: RemoteMode::Http,
@@ -1515,8 +1519,8 @@ impl RootApp {
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
             control_projection_gap: false,
-            deferred_control_projection: None,
-            pending_native_control_intents: VecDeque::new(),
+            deferred_renderer_projection: None,
+            native_command_ingress,
             #[cfg(target_os = "macos")]
             native_menu: None,
         };
@@ -1562,45 +1566,21 @@ impl RootApp {
                     _ => "datasets.open_ome_zarr",
                 },
             };
-        self.pending_native_control_intents
-            .push_back(NativeControlIntent {
-                method,
-                params: serde_json::json!({"path":root}),
-            });
+        self.native_command_ingress.push(NativeControlIntent {
+            method,
+            params: serde_json::json!({"path":root}),
+        });
     }
 
     pub fn queue_deep_link(&mut self, request: DeepLinkRequest) {
-        self.pending_native_control_intents
-            .push_back(NativeControlIntent {
-                method: "deep_links.apply",
-                params: serde_json::json!({"request":request}),
-            });
+        self.native_command_ingress.push(NativeControlIntent {
+            method: "deep_links.apply",
+            params: serde_json::json!({"request":request}),
+        });
     }
 
     pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>) {
-        self.deep_link_rx = Some(rx);
-    }
-
-    fn cached_project_object_layers_for_rois(
-        &self,
-        project_space: &ProjectSpace,
-        rois: &[ProjectRoi],
-    ) -> Vec<(PathBuf, Arc<PreloadedObjectLayer>)> {
-        let mut seen = HashSet::new();
-        rois.iter()
-            .filter_map(|roi| {
-                let path = project_roi_segmentation_path(project_space, roi)?;
-                if !seen.insert(path.clone()) {
-                    return None;
-                }
-                let preloaded = self
-                    .object_preload
-                    .resources
-                    .get(&(path.clone(), self.object_preload.ui.cached_settings))
-                    .cloned()?;
-                Some((path, preloaded))
-            })
-            .collect()
+        self.platform_deep_link_rx = Some(rx);
     }
 
     pub fn add_paths_to_project(&mut self, paths: Vec<PathBuf>) {
@@ -1613,88 +1593,6 @@ impl RootApp {
             }
             Mode::Mosaic { mosaic, .. } => mosaic.project_space_mut().handle_dropped_paths(paths),
             Mode::Transition => {}
-        }
-    }
-
-    fn switch_single_to_mosaic(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
-        let prev = std::mem::replace(&mut self.mode, Mode::Transition);
-        let Mode::Single(mut single) = prev else {
-            self.mode = prev;
-            return;
-        };
-
-        let ret = ReturnToSingleState {
-            dataset_root: single.current_local_dataset_root(),
-        };
-        let project_space = single.take_project_space();
-        let project_rois = project_space.rois_for_local_paths(&paths);
-        let project_dir = project_space.project_dir();
-        let cached_objects =
-            self.cached_project_object_layers_for_rois(&project_space, &project_rois);
-        let mosaic_result = if project_rois.len() >= 2 {
-            MosaicViewerApp::from_project_rois(
-                ctx,
-                self.gpu_available,
-                project_rois,
-                project_dir,
-                None,
-            )
-        } else {
-            MosaicViewerApp::from_local_paths(ctx, self.gpu_available, paths, None)
-        };
-
-        match mosaic_result {
-            Ok(mut mosaic) => {
-                self.configure_mosaic_app(&mut mosaic);
-                if !cached_objects.is_empty() {
-                    let installed = mosaic.install_preloaded_project_segmentations(&cached_objects);
-                    log_warn!(
-                        "project preload: installed cached object segmentations for {installed} mosaic ROI(s)"
-                    );
-                }
-                mosaic.set_project_space(project_space);
-                self.mode = Mode::Mosaic { mosaic, ret };
-            }
-            Err(err) => {
-                let mut single = single;
-                let mut ps = project_space;
-                ps.set_status(format!("Open mosaic failed: {err}"));
-                single.set_project_space_from_actor(ps);
-                self.mode = Mode::Single(single);
-            }
-        }
-    }
-
-    fn switch_mosaic_to_single(&mut self, ctx: &egui::Context) {
-        let prev = std::mem::replace(&mut self.mode, Mode::Transition);
-        let Mode::Mosaic { mosaic, ret } = prev else {
-            self.mode = prev;
-            return;
-        };
-
-        let mut mosaic = mosaic;
-        let project_space = mosaic.take_project_space();
-
-        let Some(root) = ret.dataset_root.clone() else {
-            // No known return target; return to project landing.
-            self.mode = Mode::Project { project_space };
-            return;
-        };
-
-        match OmeZarrDataset::open_local(&root) {
-            Ok((dataset, store)) => {
-                let mut app =
-                    OmeZarrViewerApp::new_runtime(ctx, self.gpu_available, dataset, store);
-                self.configure_single_app(&mut app);
-                app.set_project_space_from_actor(project_space);
-                self.mode = Mode::Single(app);
-            }
-            Err(err) => {
-                // If reopen fails, fall back to staying in mosaic.
-                eprintln!("Back failed: {err}");
-                mosaic.set_project_space(project_space);
-                self.mode = Mode::Mosaic { mosaic, ret };
-            }
         }
     }
 
@@ -1897,16 +1795,15 @@ impl eframe::App for RootApp {
         self.process_control_presentations(ctx);
         self.process_control_presentation_captures(ctx);
         self.process_control_platform_effects(ctx);
-        if let Some(rx) = self.deep_link_rx.as_ref() {
+        if let Some(rx) = self.platform_deep_link_rx.as_ref() {
             ctx.request_repaint_after(Duration::from_millis(100));
             let mut received_deep_link = false;
             while let Ok(request) = rx.try_recv() {
                 log_warn!("deep_link: received {:?}", request);
-                self.pending_native_control_intents
-                    .push_back(NativeControlIntent {
-                        method: "deep_links.apply",
-                        params: serde_json::json!({"request":request}),
-                    });
+                self.native_command_ingress.push(NativeControlIntent {
+                    method: "deep_links.apply",
+                    params: serde_json::json!({"request":request}),
+                });
                 received_deep_link = true;
             }
             if received_deep_link {
@@ -1916,11 +1813,7 @@ impl eframe::App for RootApp {
                 ));
             }
         }
-        let open_mosaic: Option<Vec<PathBuf>> = None;
-        let mut open_remote_s3_mosaic: Option<(Vec<crate::app::S3DatasetSelection>, ProjectSpace)> =
-            None;
         let mut open_remote_dialog = false;
-        let mut back_to_single = false;
         let mut native_menu_control_intents = Vec::new();
 
         #[cfg(target_os = "macos")]
@@ -2212,11 +2105,10 @@ impl eframe::App for RootApp {
                     .set_recent_projects(&self.app_settings.recent_projects);
                 app.set_project_object_cache_ui_state(object_preload_ui);
                 app.update(ctx, frame);
-                native_control_intents.extend(app.take_native_control_intents());
                 self.label_prompt_preference = app.label_prompt_preference();
-                if let Some(req) = app.take_request() {
-                    match req {
-                        ViewerRequest::OpenRemoteDialog => open_remote_dialog = true,
+                if let Some(effect) = app.take_platform_effect() {
+                    match effect {
+                        ViewerPlatformEffect::OpenRemoteDialog => open_remote_dialog = true,
                     }
                 }
             }
@@ -2235,19 +2127,9 @@ impl eframe::App for RootApp {
                     );
                 }
                 mosaic.update(ctx, frame);
-                native_control_intents.extend(mosaic.take_native_control_intents());
-                if let Some(req) = mosaic.take_request() {
-                    match req {
-                        MosaicRequest::CloseWindow => {
-                            native_control_intents.push(NativeControlIntent {
-                                method: "app.lifecycle.request_close",
-                                params: serde_json::json!({"save":"discard"}),
-                            });
-                        }
-                        MosaicRequest::BackToSingle => {
-                            back_to_single = true;
-                        }
-                        MosaicRequest::OpenRemoteDialog => {
+                if let Some(effect) = mosaic.take_platform_effect() {
+                    match effect {
+                        MosaicPlatformEffect::OpenRemoteDialog => {
                             self.remote_dialog_open = true;
                             self.remote_status.clear();
                         }
@@ -2284,28 +2166,12 @@ impl eframe::App for RootApp {
                     true
                 }
             });
-            // The actor publishes the canonical revisions and events for these optimistic native
-            // commits.
-            self.pending_native_control_intents
-                .extend(native_control_intents);
-            // Persistence commands must follow any semantic edits collected in this frame so the
-            // actor's single mailbox snapshots the updated project.
-            self.pending_native_control_intents
-                .extend(native_menu_control_intents);
-            // Close/quit validation observes every semantic mutation and persistence command
-            // collected earlier in this frame.
-            self.pending_native_control_intents
-                .extend(lifecycle_intents);
-        }
-        while let Some(intent) = self.pending_native_control_intents.front() {
-            if self
-                .control_runtime
-                .submit_native_command(ctx, intent.method, intent.params.clone())
+            for intent in native_control_intents
+                .into_iter()
+                .chain(native_menu_control_intents)
+                .chain(lifecycle_intents)
             {
-                self.pending_native_control_intents.pop_front();
-            } else {
-                ctx.request_repaint_after(Duration::from_millis(5));
-                break;
+                self.native_command_ingress.push(intent);
             }
         }
 
@@ -2321,62 +2187,53 @@ impl eframe::App for RootApp {
         self.ui_settings_dialog(ctx);
 
         if let Some(action) = self.ui_remote_dialog(ctx) {
-            let previous_mode = std::mem::replace(&mut self.mode, Mode::Transition);
-            let (project_space, single_restore, mosaic_restore) = match previous_mode {
-                Mode::Project { project_space } => (project_space, None, None),
-                Mode::Single(mut app) => (app.take_project_space(), Some(app), None),
-                Mode::Mosaic { mut mosaic, ret } => {
-                    (mosaic.take_project_space(), None, Some((mosaic, ret)))
-                }
-                Mode::Transition => (ProjectSpace::default(), None, None),
+            let (sources, open_mosaic) = match action {
+                RootRemoteAction::OpenS3Mosaic(datasets) => (
+                    datasets
+                        .into_iter()
+                        .map(|dataset| DatasetSource::S3 {
+                            endpoint: dataset.endpoint,
+                            region: dataset.region,
+                            bucket: dataset.bucket,
+                            prefix: dataset.prefix,
+                        })
+                        .collect::<Vec<_>>(),
+                    true,
+                ),
+                RootRemoteAction::AddToProject(sources) => (sources, false),
             };
-            match action {
-                RootRemoteAction::OpenS3Mosaic(datasets) => {
-                    open_remote_s3_mosaic = Some((datasets, project_space));
+            if let Some(project_space) = self.current_project_space_mut() {
+                if open_mosaic {
+                    let _ = project_space.select_roi_ids(&[], "replace");
                 }
-                RootRemoteAction::AddToProject(sources) => {
-                    let mut project_space = project_space;
-                    let count = sources.len();
-                    for source in sources {
+                let count = sources.len();
+                for source in sources {
+                    let source_key = source.source_key();
+                    if let Some(existing) = project_space
+                        .rois()
+                        .iter()
+                        .find(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
+                        .map(|roi| roi.id.clone())
+                    {
+                        if open_mosaic {
+                            let _ = project_space.select_roi_ids(&[existing], "add");
+                        }
+                    } else {
                         project_space.add_roi_source(source);
                     }
+                }
+                if open_mosaic {
+                    let accepted =
+                        project_space.submit_action_control_intent(&ProjectSpaceAction::OpenMosaic);
+                    debug_assert!(accepted);
                     project_space
-                        .set_status(format!("Added {count} remote ROI(s) to the project."));
-                    if let Some(mut app) = single_restore {
-                        app.set_project_space_from_actor(project_space);
-                        self.mode = Mode::Single(app);
-                    } else if let Some((mut mosaic, ret)) = mosaic_restore {
-                        mosaic.set_project_space(project_space);
-                        self.mode = Mode::Mosaic { mosaic, ret };
-                    } else {
-                        self.mode = Mode::Project { project_space };
-                    }
+                        .set_status(format!("Opening {count} remote ROI(s) as a mosaic..."));
+                } else {
+                    project_space
+                        .set_status(format!("Adding {count} remote ROI(s) to the project..."));
                 }
             }
         }
-
-        if let Some((datasets, project_space)) = open_remote_s3_mosaic {
-            let ret = ReturnToSingleState { dataset_root: None };
-            match MosaicViewerApp::from_remote_s3_sources(ctx, self.gpu_available, datasets, None) {
-                Ok(mut mosaic) => {
-                    self.configure_mosaic_app(&mut mosaic);
-                    mosaic.set_project_space(project_space);
-                    self.mode = Mode::Mosaic { mosaic, ret };
-                }
-                Err(err) => {
-                    let mut ps = project_space;
-                    ps.set_status(format!("Open remote mosaic failed: {err}"));
-                    self.mode = Mode::Project { project_space: ps };
-                }
-            }
-        }
-        if let Some(paths) = open_mosaic {
-            self.switch_single_to_mosaic(ctx, paths);
-        }
-        if back_to_single {
-            self.switch_mosaic_to_single(ctx);
-        }
-        self.sync_control_actor_mode_from_native();
         self.report_control_viewport_geometry();
         self.report_control_presentation();
         self.report_control_renderer_observation();

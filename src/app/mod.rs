@@ -645,8 +645,6 @@ pub struct S3DatasetSelection {
     pub region: String,
     pub bucket: String,
     pub prefix: String,
-    pub access_key: String,
-    pub secret_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1937,8 +1935,8 @@ pub struct OmeZarrViewerApp {
     threshold_preview_gl: Option<ThresholdPreviewGlRenderer>,
     tiles_gl: Option<TilesGl>,
     labels_gl: Option<LabelsGl>,
-    pending_request: Option<ViewerRequest>,
-    native_control_intents: Vec<NativeControlIntent>,
+    pending_platform_effect: Option<ViewerPlatformEffect>,
+    native_command_ingress: NativeControlIngress,
     control_actor_object_generation: u64,
     control_actor_secondary_object_generations: HashMap<u64, u64>,
     control_actor_secondary_object_selection_generations: HashMap<u64, u64>,
@@ -2055,7 +2053,7 @@ struct LayerTransformState {
 }
 
 #[derive(Debug, Clone)]
-pub enum ViewerRequest {
+pub enum ViewerPlatformEffect {
     OpenRemoteDialog,
 }
 
@@ -2063,6 +2061,46 @@ pub enum ViewerRequest {
 pub struct NativeControlIntent {
     pub method: &'static str,
     pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeControlIngress {
+    inner: odon::mcp::NativeCommandIngress,
+}
+
+impl NativeControlIngress {
+    pub fn detached() -> Self {
+        Self {
+            inner: odon::mcp::NativeCommandIngress::detached(),
+        }
+    }
+
+    pub fn actor(inner: odon::mcp::NativeCommandIngress) -> Self {
+        Self { inner }
+    }
+
+    pub fn push(&self, intent: NativeControlIntent) -> bool {
+        self.inner.submit(intent.method, intent.params)
+    }
+
+    pub fn contains_pending(&self, method: &str) -> bool {
+        self.inner.contains_pending(method)
+    }
+
+    #[cfg(test)]
+    pub fn take_recorded(&self) -> Vec<NativeControlIntent> {
+        self.inner
+            .take_recorded()
+            .into_iter()
+            .filter_map(|intent| {
+                let method = odon::control::registry::method(&intent.method)?.name;
+                Some(NativeControlIntent {
+                    method,
+                    params: intent.params,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

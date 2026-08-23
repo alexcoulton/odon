@@ -80,7 +80,7 @@ impl OmeZarrViewerApp {
                 self.project_space.set_view_preset_draft(spec);
             }
             ProjectSpaceAction::OpenRemoteDialog => {
-                self.pending_request = Some(ViewerRequest::OpenRemoteDialog);
+                self.pending_platform_effect = Some(ViewerPlatformEffect::OpenRemoteDialog);
             }
             ProjectSpaceAction::ShowHelp(topic) => {
                 self.active_help_topic = Some(topic);
@@ -676,14 +676,14 @@ impl OmeZarrViewerApp {
         };
 
         if opened {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.panels.set",
                 params: serde_json::json!({
                     "left":self.show_left_panel,
                     "right":true,
                 }),
             });
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.ui.set_right_tab",
                 params: serde_json::json!({"tab":"analysis"}),
             });
@@ -716,7 +716,7 @@ impl OmeZarrViewerApp {
             .seg_objects
             .ui_export_dialog(ctx, self.control_actor_object_export_generation > 0)
         {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: intent.method,
                 params: intent.params,
             });

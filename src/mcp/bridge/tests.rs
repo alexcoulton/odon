@@ -36,6 +36,33 @@ fn optional_tcp_failure_keeps_the_local_actor_available() {
 }
 
 #[test]
+fn native_ingress_reaches_actor_without_root_update() {
+    let ctx = egui::Context::default();
+    let runtime =
+        OdonControlBridge::spawn_inner("127.0.0.1:0", ctx.clone(), false, false, None, None, None)
+            .expect("spawn local actor");
+    let ingress = runtime.native_command_ingress();
+    assert!(ingress.submit(
+        "project.rois.add",
+        json!({"id":"native-no-frame","path":"/tmp/native-no-frame.ome.zarr"}),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ingress.contains_pending("project.rois.add") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!ingress.contains_pending("project.rois.add"));
+
+    let reply = runtime
+        .submit_native_command_with_reply(&ctx, "project.rois.list", json!({}))
+        .expect("query actor after native ingress command");
+    let project = reply
+        .recv_timeout(Duration::from_secs(2))
+        .expect("actor query reply")
+        .expect("actor query succeeds");
+    assert_eq!(project["rois"][0]["id"], "native-no-frame");
+}
+
+#[test]
 fn tcp_bridge_validates_envelopes_and_roundtrips_app_replies() {
     let bridge = OdonControlBridge::spawn("127.0.0.1:0", egui::Context::default())
         .expect("spawn bridge on ephemeral port");

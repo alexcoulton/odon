@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 175 | 166 | 9 | 0 | 0 |
-| `RootApp` | 36 | 32 | 4 | 0 | 0 |
-| `MosaicViewerApp` | 78 | 66 | 12 | 0 | 0 |
-| **Total** | **289** | **264** | **25** | **0** | **0** |
+| `OmeZarrViewerApp` | 175 | 168 | 7 | 0 | 0 |
+| `RootApp` | 36 | 36 | 0 | 0 | 0 |
+| `MosaicViewerApp` | 79 | 73 | 6 | 0 | 0 |
+| **Total** | **290** | **277** | **13** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. `Narrow`, `replace`, and
@@ -376,6 +376,16 @@ presentation field is now classified as an actor projection, shared resource, re
 transient draft, and the executable ledger rejects any mixed or open Milestone 3 row. The final
 RootApp scale-bar mirror was deleted; the native menu checkmark consumes the active viewport
 projection directly.
+
+Milestone 6 closes the application shell boundary. Viewer and mosaic host enums now contain only
+the native remote-dialog effect; close and return navigation submit typed commands. Root mode is a
+renderer composition chosen exclusively while applying actor projections after the one-time
+startup bootstrap, and the recurring renderer-to-actor mode bootstrap and direct native mosaic
+constructors are deleted. Viewer, root, and mosaic native commits share one bounded ingress worker
+that forwards commands to the actor independently of `RootApp::update`; renderer-only tests use a
+bounded detached recorder with the same command DTO. The root deep-link receiver is explicitly a
+platform input, deferred projections are latest-generation renderer values, and mosaic generation
+fields are explicitly consumed-resource observations.
 
 ## Native cutover status
 

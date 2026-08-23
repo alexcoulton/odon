@@ -438,7 +438,7 @@ impl OmeZarrViewerApp {
                 let channel_search_before = self.channel_list_search.clone();
                 channels_panel::show(self, ui, ctx);
                 if self.channel_list_search != channel_search_before {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.channels.presentation.set",
                         params: serde_json::json!({"search": self.channel_list_search}),
                     });

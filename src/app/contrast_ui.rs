@@ -322,7 +322,7 @@ impl OmeZarrViewerApp {
                         ThresholdRegionScope::VisibleRegion => "visible",
                         ThresholdRegionScope::EntireImage => "entire_image",
                     };
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.thresholds.preview.start",
                         params: serde_json::json!({
                             "scope":scope,
@@ -387,7 +387,7 @@ impl OmeZarrViewerApp {
                     || (min_pixels_changed
                         && min_pixels != self.threshold_region_min_pixels)
                 {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.thresholds.preview.configure",
                         params: serde_json::json!({
                             "threshold":threshold,
@@ -398,19 +398,19 @@ impl OmeZarrViewerApp {
 
                 ui.horizontal(|ui| {
                     if ui.button("Refresh preview").clicked() {
-                        self.native_control_intents.push(NativeControlIntent {
+                        self.native_command_ingress.push(NativeControlIntent {
                             method: "viewer.thresholds.preview.refresh",
                             params: serde_json::json!({}),
                         });
                     }
                     if ui.button("Apply mask from preview").clicked() {
-                        self.native_control_intents.push(NativeControlIntent {
+                        self.native_command_ingress.push(NativeControlIntent {
                             method: "viewer.thresholds.preview.apply",
                             params: serde_json::json!({"sync_project":true}),
                         });
                     }
                     if ui.button("Cancel preview").clicked() {
-                        self.native_control_intents.push(NativeControlIntent {
+                        self.native_command_ingress.push(NativeControlIntent {
                             method: "viewer.thresholds.preview.cancel",
                             params: serde_json::json!({}),
                         });
@@ -443,7 +443,7 @@ impl OmeZarrViewerApp {
             None
         };
         if let Some((channel, note)) = changed_note {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.channels.set_note",
                 params: serde_json::json!({"channel": channel, "note": note}),
             });

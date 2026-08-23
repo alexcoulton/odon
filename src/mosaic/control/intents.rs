@@ -1,8 +1,13 @@
 use super::super::*;
 
 impl MosaicViewerApp {
+    #[cfg(test)]
     pub fn take_native_control_intents(&mut self) -> Vec<NativeControlIntent> {
-        std::mem::take(&mut self.native_control_intents)
+        self.native_command_ingress.take_recorded()
+    }
+
+    pub fn set_native_command_ingress(&mut self, ingress: NativeControlIngress) {
+        self.native_command_ingress = ingress;
     }
 
     pub(in crate::mosaic) fn submit_native_control_intent(
@@ -10,7 +15,7 @@ impl MosaicViewerApp {
         method: &'static str,
         params: serde_json::Value,
     ) -> bool {
-        self.native_control_intents
+        self.native_command_ingress
             .push(NativeControlIntent { method, params });
         true
     }

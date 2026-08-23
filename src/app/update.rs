@@ -14,7 +14,7 @@ impl eframe::App for OmeZarrViewerApp {
             for path in dropped.into_iter().filter_map(|f| f.path) {
                 if crate::objects::ObjectsLayer::supports_source_path(&path) {
                     if let Some(path) = self.seg_objects.prepare_source_path(path) {
-                        self.native_control_intents.push(NativeControlIntent {
+                        self.native_command_ingress.push(NativeControlIntent {
                             method: "viewer.objects.source.load",
                             params: serde_json::json!({
                                 "path": path,
@@ -48,7 +48,7 @@ impl eframe::App for OmeZarrViewerApp {
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close
         if top_bar::handle_cmd_w_close(ctx, &mut self.close_dialog_open) {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "app.lifecycle.request_close",
                 params: serde_json::json!({"save":"discard"}),
             });
@@ -150,7 +150,7 @@ impl eframe::App for OmeZarrViewerApp {
                 let (mut show_left_panel, mut show_right_panel) = panels_before;
                 top_bar::ui_panel_toggles(ui, &mut show_left_panel, &mut show_right_panel);
                 if panels_before != (show_left_panel, show_right_panel) {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.panels.set",
                         params: serde_json::json!({
                             "left": show_left_panel,
@@ -229,7 +229,7 @@ impl eframe::App for OmeZarrViewerApp {
                 },
             );
             if tab != previous_tab {
-                self.native_control_intents.push(NativeControlIntent {
+                self.native_command_ingress.push(NativeControlIntent {
                     method: "viewer.ui.set_left_tab",
                     params: serde_json::json!({"tab": tab.storage_key()}),
                 });
@@ -321,7 +321,7 @@ impl eframe::App for OmeZarrViewerApp {
                                     &analysis_before,
                                     active_channel.as_deref(),
                                 );
-                                self.native_control_intents.push(NativeControlIntent {
+                                self.native_command_ingress.push(NativeControlIntent {
                                     method: "viewer.analysis.set",
                                     params: serde_json::json!({
                                         "target":"segmentation_objects",
@@ -388,7 +388,7 @@ impl eframe::App for OmeZarrViewerApp {
                                 ui.label("SpatialData shape layer not found.");
                             }
                             if let Some(after) = analysis_after {
-                                self.native_control_intents.push(NativeControlIntent {
+                                self.native_command_ingress.push(NativeControlIntent {
                                     method: "viewer.analysis.set",
                                     params: serde_json::json!({
                                         "target":"spatial_shape",
@@ -438,7 +438,7 @@ impl eframe::App for OmeZarrViewerApp {
                                         ("viewer.measurements.cancel", serde_json::json!({}))
                                     }
                                 };
-                                self.native_control_intents
+                                self.native_command_ingress
                                     .push(NativeControlIntent { method, params });
                             }
                         } else if let LayerId::SpatialShape(id) = self.active_layer {
@@ -491,7 +491,7 @@ impl eframe::App for OmeZarrViewerApp {
                 },
             );
             if tab != previous_tab {
-                self.native_control_intents.push(NativeControlIntent {
+                self.native_command_ingress.push(NativeControlIntent {
                     method: "viewer.ui.set_right_tab",
                     params: serde_json::json!({"tab": tab.storage_key()}),
                 });
@@ -510,7 +510,7 @@ impl eframe::App for OmeZarrViewerApp {
         self.ui_screenshot_settings_dialog(ctx);
 
         if top_bar::ui_close_dialog(ctx, &mut self.close_dialog_open) {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "app.lifecycle.request_close",
                 params: serde_json::json!({"save":"discard"}),
             });

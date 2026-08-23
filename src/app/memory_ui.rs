@@ -135,7 +135,7 @@ impl OmeZarrViewerApp {
 
     pub(super) fn execute_memory_load(&mut self, mut params: serde_json::Value) {
         params["force"] = serde_json::Value::Bool(true);
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "memory.pin",
             params,
         });
@@ -264,7 +264,7 @@ impl OmeZarrViewerApp {
             self.tile_prefetch_aggressiveness,
             self.prefer_pinned_finer_levels,
         ) {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "memory.tiles.set",
                 params: serde_json::json!({
                     "workers":tile_loader_threads,
@@ -420,7 +420,7 @@ impl OmeZarrViewerApp {
                             .add_enabled(can_unload, egui::Button::new("Unload"))
                             .clicked()
                         {
-                            self.native_control_intents.push(NativeControlIntent {
+                            self.native_command_ingress.push(NativeControlIntent {
                                 method: "memory.unpin",
                                 params: serde_json::json!({"level":level_idx}),
                             });

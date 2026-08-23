@@ -113,7 +113,7 @@ impl OmeZarrViewerApp {
                 "mode".to_string(),
                 serde_json::json!(if additive { "add" } else { "replace" }),
             );
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.objects.select_rect",
                 params: serde_json::Value::Object(params),
             });
@@ -140,7 +140,7 @@ impl OmeZarrViewerApp {
                 "mode".to_string(),
                 serde_json::json!(if additive { "add" } else { "replace" }),
             );
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.objects.select_lasso",
                 params: serde_json::Value::Object(params),
             });
@@ -245,7 +245,7 @@ impl OmeZarrViewerApp {
             serde_json::json!(self.object_selection_target_generation(target)),
         );
         params.insert("state".to_string(), state);
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.objects.selection.state.replace",
             params: serde_json::Value::Object(params),
         });
@@ -276,7 +276,7 @@ impl OmeZarrViewerApp {
         let mut params = self.object_selection_target_params(Some(target));
         params.insert("ids".to_string(), serde_json::json!(ids));
         params.insert("mode".to_string(), serde_json::json!("replace"));
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.objects.selection.select_ids",
             params: serde_json::Value::Object(params),
         });
@@ -284,7 +284,7 @@ impl OmeZarrViewerApp {
     }
 
     pub(super) fn commit_clear_object_selection(&mut self, target: LayerId) {
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.objects.clear_selection",
             params: serde_json::Value::Object(self.object_selection_target_params(Some(target))),
         });

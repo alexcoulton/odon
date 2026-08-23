@@ -49,7 +49,7 @@ impl OmeZarrViewerApp {
             );
         }
         if analysis_changed {
-            self.native_control_intents.push(NativeControlIntent {
+            self.native_command_ingress.push(NativeControlIntent {
                 method: "viewer.analysis.set",
                 params: serde_json::json!({
                     "target":"segmentation_objects",
@@ -399,7 +399,7 @@ impl OmeZarrViewerApp {
                 let annotation_after = self.annotation_layers[idx].control_state_json();
                 let source_request = self.annotation_layers[idx].take_control_source_request();
                 if annotation_after != annotation_before {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.annotations.layers.update",
                         params: serde_json::json!({"layer_id":id,"state":annotation_after}),
                     });
@@ -416,12 +416,12 @@ impl OmeZarrViewerApp {
                             "viewer.annotations.source.reload"
                         }
                     };
-                    self.native_control_intents
+                    self.native_command_ingress
                         .push(NativeControlIntent { method, params });
                 }
                 ui.separator();
                 if ui.button("Delete layer").clicked() {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.annotations.layers.delete",
                         params: serde_json::json!({"layer_id":id}),
                     });
@@ -460,7 +460,7 @@ impl OmeZarrViewerApp {
                             if name.is_empty() {
                                 self.seg_label_status = "Label name is empty.".to_string();
                             } else {
-                                self.native_control_intents.push(NativeControlIntent {
+                                self.native_command_ingress.push(NativeControlIntent {
                                     method: "viewer.labels.load",
                                     params: serde_json::json!({"name":name}),
                                 });
@@ -474,7 +474,7 @@ impl OmeZarrViewerApp {
                             if name.is_empty() {
                                 self.seg_label_status = "Label name is empty.".to_string();
                             } else {
-                                self.native_control_intents.push(NativeControlIntent {
+                                self.native_command_ingress.push(NativeControlIntent {
                                     method: "viewer.labels.load",
                                     params: serde_json::json!({"name":name}),
                                 });
@@ -496,7 +496,7 @@ impl OmeZarrViewerApp {
                 ui.separator();
                 let mut visible = self.cells_outlines_visible;
                 if ui.checkbox(&mut visible, "Visible").changed() {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.labels.set_visibility",
                         params: serde_json::json!({"visible":visible}),
                     });

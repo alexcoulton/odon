@@ -1,12 +1,16 @@
 use super::super::*;
 
 impl MosaicViewerApp {
-    pub fn take_request(&mut self) -> Option<MosaicRequest> {
-        self.pending_request.take()
+    pub fn set_return_dataset_root(&mut self, root: Option<PathBuf>) {
+        self.return_dataset_root = root;
+    }
+
+    pub fn take_platform_effect(&mut self) -> Option<MosaicPlatformEffect> {
+        self.pending_platform_effect.take()
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
-        self.status = status.into();
+        self.renderer_status = status.into();
     }
 
     pub fn set_fast_object_rendering(&mut self, enabled: bool) {

@@ -1,13 +1,10 @@
-//! Mosaic construction from CLI, samplesheets, actor resources, local, remote, and project sources.
+//! Mosaic construction from CLI, samplesheets, and actor-prepared resources.
 
 use super::*;
 
 mod actor_resource;
 mod assembly;
 mod config;
-mod local;
-mod project;
-mod remote;
 mod samplesheet;
 
 use assembly::PreparedMosaicConstruction;

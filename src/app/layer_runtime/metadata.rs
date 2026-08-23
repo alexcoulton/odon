@@ -2,7 +2,7 @@ use super::*;
 
 impl OmeZarrViewerApp {
     pub(in crate::app) fn add_annotation_layer(&mut self) {
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.annotations.layers.create",
             params: serde_json::json!({}),
         });
@@ -71,7 +71,7 @@ impl OmeZarrViewerApp {
                 )
             }
         };
-        self.native_control_intents
+        self.native_command_ingress
             .push(NativeControlIntent { method, params });
     }
 
@@ -105,7 +105,7 @@ impl OmeZarrViewerApp {
                 serde_json::json!({}),
             ),
         };
-        self.native_control_intents
+        self.native_command_ingress
             .push(NativeControlIntent { method, params });
     }
 

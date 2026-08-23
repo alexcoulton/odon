@@ -189,7 +189,7 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     let ctx = egui::Context::default();
     let mut mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(2))
         .expect("construct actor mosaic");
-    mosaic.control_actor_generation = 1;
+    mosaic.consumed_mosaic_resource_generation = 1;
     let semantic_snapshot = |mosaic: &MosaicViewerApp| {
         serde_json::json!({
             "channels":mosaic.control_channel_snapshot(),

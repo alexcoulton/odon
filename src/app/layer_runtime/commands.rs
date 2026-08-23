@@ -50,7 +50,7 @@ impl OmeZarrViewerApp {
         let Some((viewport_id, revision)) = self.active_viewport_command_scope() else {
             return false;
         };
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.viewports.layers.set_visibility",
             params: serde_json::json!({
                 "viewport_id":viewport_id,
@@ -98,7 +98,7 @@ impl OmeZarrViewerApp {
         let Some((viewport_id, revision)) = self.active_viewport_command_scope() else {
             return false;
         };
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.viewports.layers.set_active",
             params: serde_json::json!({
                 "viewport_id":viewport_id,
@@ -121,7 +121,7 @@ impl OmeZarrViewerApp {
             .into_iter()
             .map(Self::layer_id_storage_key)
             .collect::<Vec<_>>();
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.viewports.layers.set_order",
             params: serde_json::json!({
                 "viewport_id":viewport_id,
@@ -151,7 +151,7 @@ impl OmeZarrViewerApp {
         let Some((viewport_id, revision)) = self.active_viewport_command_scope() else {
             return false;
         };
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.viewports.layers.state.replace",
             params: serde_json::json!({
                 "viewport_id":viewport_id,
@@ -169,7 +169,7 @@ impl OmeZarrViewerApp {
         revision: u64,
         state: serde_json::Value,
     ) -> bool {
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.viewports.layers.state.replace",
             params: serde_json::json!({
                 "viewport_id":viewport_id,
@@ -223,7 +223,7 @@ impl OmeZarrViewerApp {
         if let Some(rotation) = rotation_rad {
             params["rotation_rad"] = serde_json::json!(rotation);
         }
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.channels.set_transform",
             params,
         });

@@ -434,14 +434,7 @@ fn mosaic_app_stays_split_by_responsibility() {
     let assembly = source(construction_dir.join("assembly.rs"));
     assert!(assembly.contains("struct PreparedMosaicConstruction"));
     assert!(assembly.contains("fn from_prepared_construction("));
-    for adapter in [
-        "actor_resource.rs",
-        "config.rs",
-        "local.rs",
-        "project.rs",
-        "remote.rs",
-        "samplesheet.rs",
-    ] {
+    for adapter in ["actor_resource.rs", "config.rs", "samplesheet.rs"] {
         let contents = source(construction_dir.join(adapter));
         assert!(contents.contains("PreparedMosaicConstruction"));
         assert!(
@@ -502,7 +495,7 @@ fn mosaic_app_stays_split_by_responsibility() {
     assert!(!snapshots.contains("fn request_screenshot_png("));
     assert!(screenshots.contains("fn request_screenshot_png("));
     assert!(screenshots.contains("fn request_actor_screenshot("));
-    assert!(host.contains("fn take_request("));
+    assert!(host.contains("fn take_platform_effect("));
     assert!(host.contains("fn set_fast_object_rendering("));
 
     let model = source(root.join("src/model/mosaic.rs"));
@@ -1686,7 +1679,7 @@ fn remote_dataset_io_is_actor_backed_and_not_renderer_local() {
 
     assert!(!root.join("src/app/remote.rs").exists());
     assert!(!app.contains("mod remote;"));
-    assert!(viewer_project.contains("ViewerRequest::OpenRemoteDialog"));
+    assert!(viewer_project.contains("ViewerPlatformEffect::OpenRemoteDialog"));
     for method in [
         "datasets.s3.configure_session",
         "datasets.s3.list",
@@ -2016,6 +2009,15 @@ fn root_requires_the_actor_and_host_requests_are_platform_only() {
     let mosaic = source(root.join("src/mosaic/mod.rs"));
 
     assert!(root_app.contains("control_runtime: OdonControlRuntime"));
+    assert!(root_app.contains("native_command_ingress: NativeControlIngress"));
+    assert!(!root_app.contains("sync_control_actor_mode_from_native"));
+    assert!(!root_app.contains("pending_native_control_intents"));
+    assert!(!root_app.contains("switch_mosaic_to_single"));
+    assert!(!root_app.contains("MosaicViewerApp::from_remote_s3_sources"));
+    assert!(viewer.contains("pub enum ViewerPlatformEffect {\n    OpenRemoteDialog,"));
+    assert!(mosaic.contains("pub enum MosaicPlatformEffect {\n    OpenRemoteDialog,"));
+    assert!(viewer.contains("native_command_ingress: NativeControlIngress"));
+    assert!(mosaic.contains("native_command_ingress: NativeControlIngress"));
     for forbidden in [
         "control_runtime: Option<OdonControlRuntime>",
         "control_runtime.is_some()",
@@ -2184,7 +2186,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 289,
+        total_fields, 290,
         "review the ownership ledger when host fields change"
     );
 }

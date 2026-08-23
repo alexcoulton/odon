@@ -27,7 +27,7 @@ use self::io::{
 use self::segmentation_geojson::MosaicGeoJsonSegmentationOverlay;
 use self::tiles_gl::{ChannelDraw, MosaicTileDraw, MosaicTilesGl};
 use crate::annotations::AnnotationPointsLayer;
-use crate::app::{NativeControlIntent, S3DatasetSelection};
+use crate::app::{NativeControlIngress, NativeControlIntent};
 use crate::app_support::memory::{
     MemoryChannelRow, MemoryRisk, MemoryRiskLevel, PendingMemoryAction, SystemMemorySnapshot,
     format_bytes, memory_risk, refresh_system_memory_if_needed, ui_memory_channel_selector,
@@ -41,8 +41,8 @@ use crate::app_support::screenshot::{
 use crate::camera::Camera;
 use crate::data::dataset_source::DatasetSource;
 use crate::data::ome::OmeZarrDataset;
-use crate::data::project_config::{ProjectLayerGroups, ProjectRoi};
-use crate::data::remote_store::{build_http_store, build_s3_store};
+use crate::data::project_config::ProjectLayerGroups;
+use crate::data::remote_store::build_http_store;
 use crate::data::samplesheet::load_samplesheet_csv;
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
 use crate::objects::PreloadedObjectLayer;
@@ -251,9 +251,10 @@ pub struct MosaicViewerApp {
     tile_request_generation: u64,
     last_tile_request_signature: Option<TileRequestSignature>,
 
-    status: String,
-    allow_back: bool,
-    pending_request: Option<MosaicRequest>,
+    renderer_status: String,
+    show_return_navigation: bool,
+    return_dataset_root: Option<PathBuf>,
+    pending_platform_effect: Option<MosaicPlatformEffect>,
     group_layers_dialog: Option<GroupLayersDialog>,
     smooth_pixels: bool,
     show_tile_debug: bool,
@@ -268,9 +269,9 @@ pub struct MosaicViewerApp {
     seg_geojson_pending_visible: bool,
     project_space: ProjectSpace,
     active_help_topic: Option<crate::ui::help::HelpTopic>,
-    control_actor_generation: u64,
-    control_actor_object_generation: u64,
-    native_control_intents: Vec<NativeControlIntent>,
+    consumed_mosaic_resource_generation: u64,
+    consumed_mosaic_object_generation: u64,
+    native_command_ingress: NativeControlIngress,
 }
 
 impl ChannelListHost for MosaicViewerApp {
@@ -443,7 +444,7 @@ impl ChannelListHost for MosaicViewerApp {
             "viewer.channels.set_active",
             serde_json::json!({"index":0}),
         );
-        self.status = "Applying RGB preset to channels 0-2...".to_string();
+        self.renderer_status = "Applying RGB preset to channels 0-2...".to_string();
         true
     }
 
@@ -482,9 +483,7 @@ impl ChannelListHost for MosaicViewerApp {
 }
 
 #[derive(Debug, Clone)]
-pub enum MosaicRequest {
-    CloseWindow,
-    BackToSingle,
+pub enum MosaicPlatformEffect {
     OpenRemoteDialog,
 }
 

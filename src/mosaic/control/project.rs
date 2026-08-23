@@ -140,7 +140,8 @@ impl MosaicViewerApp {
             installed += self.seg_geojson.install_preloaded(path, layer.as_ref());
         }
         if installed > 0 {
-            self.status = format!("Using cached object segmentations for {installed} ROI(s).");
+            self.renderer_status =
+                format!("Using cached object segmentations for {installed} ROI(s).");
         }
         installed
     }

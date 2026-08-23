@@ -33,7 +33,7 @@ impl MosaicViewerApp {
         });
         self.screenshot_in_flight = Some(id);
         self.screenshot_settings_open = false;
-        self.status = "Capturing screenshot...".to_string();
+        self.renderer_status = "Capturing screenshot...".to_string();
     }
 
     pub fn request_actor_screenshot(
@@ -62,7 +62,7 @@ impl MosaicViewerApp {
             ),
         });
         self.screenshot_settings_open = false;
-        self.status = "Capturing actor-requested screenshot...".to_string();
+        self.renderer_status = "Capturing actor-requested screenshot...".to_string();
         Ok(())
     }
 

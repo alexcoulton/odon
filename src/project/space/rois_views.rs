@@ -535,19 +535,6 @@ impl ProjectSpace {
             .collect()
     }
 
-    pub fn rois_for_local_paths(&self, paths: &[PathBuf]) -> Vec<ProjectRoi> {
-        let selected = paths.iter().collect::<HashSet<_>>();
-        self.config
-            .rois
-            .iter()
-            .filter(|roi| {
-                roi.local_path()
-                    .is_some_and(|path| selected.contains(&path.to_path_buf()))
-            })
-            .cloned()
-            .collect()
-    }
-
     #[cfg(test)]
     pub fn roi_for_link_target(
         &self,

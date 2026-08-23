@@ -129,16 +129,16 @@ impl MosaicViewerApp {
                 metadata_columns: sheet.meta_columns,
                 group_blocks,
                 grid_cols: cols,
-                status: format!(
+                renderer_status: format!(
                     "Loaded samplesheet: {}",
                     samplesheet_csv
                         .file_name()
                         .and_then(|name| name.to_str())
                         .unwrap_or("<samplesheet>")
                 ),
-                allow_back: false,
+                show_return_navigation: false,
                 seg_geojson,
-                control_actor_generation: 0,
+                consumed_mosaic_resource_generation: 0,
             },
         ))
     }

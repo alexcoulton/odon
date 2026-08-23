@@ -458,7 +458,7 @@ impl OmeZarrViewerApp {
         else {
             return;
         };
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.channels.intensity_stats",
             params: serde_json::json!({
                 "request_id":self.hist_request_id,

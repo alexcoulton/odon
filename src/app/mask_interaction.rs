@@ -54,7 +54,7 @@ impl OmeZarrViewerApp {
         ) {
             params.insert("sync_project".to_string(), serde_json::json!(true));
         }
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method,
             params: serde_json::Value::Object(params),
         });
@@ -71,7 +71,7 @@ impl OmeZarrViewerApp {
         if let Some(layer_id) = layer_id {
             params.insert("id".to_string(), serde_json::json!(layer_id));
         }
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.masks.export_geojson",
             params: serde_json::Value::Object(params),
         });
@@ -123,7 +123,7 @@ impl OmeZarrViewerApp {
         active_layer_id: Option<u64>,
         selection: serde_json::Value,
     ) {
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.masks.state.replace",
             params: serde_json::json!({
                 "expected_generation":self.control_actor_mask_generation.max(1),
@@ -204,9 +204,8 @@ impl OmeZarrViewerApp {
         name: Option<String>,
     ) -> Option<u64> {
         if !self
-            .native_control_intents
-            .iter()
-            .any(|intent| intent.method == "viewer.masks.layers.create")
+            .native_command_ingress
+            .contains_pending("viewer.masks.layers.create")
         {
             let mut params = serde_json::Map::new();
             if let Some(name) = name {
@@ -621,7 +620,7 @@ impl OmeZarrViewerApp {
         };
 
         let state = self.mask_semantic_state();
-        self.native_control_intents.push(NativeControlIntent {
+        self.native_command_ingress.push(NativeControlIntent {
             method: "viewer.masks.state.replace",
             params: serde_json::json!({
                 "expected_generation": actor_generation.max(1),

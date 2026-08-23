@@ -925,7 +925,7 @@ impl MosaicViewerApp {
                     if self.screenshot_in_flight == Some(id) {
                         self.screenshot_in_flight = None;
                     }
-                    self.status = match result {
+                    self.renderer_status = match result {
                         Ok(()) => format!("Saved screenshot -> {}", path.to_string_lossy()),
                         Err(err) => format!("Save screenshot failed: {err}"),
                     };

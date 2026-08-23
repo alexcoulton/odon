@@ -209,7 +209,7 @@ impl OmeZarrViewerApp {
                 self.seg_label_selected = label_name.to_string();
                 self.seg_label_input = self.seg_label_selected.clone();
                 if self.tiles_gl.is_some() {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.labels.load",
                         params: serde_json::json!({"name":label_name}),
                     });

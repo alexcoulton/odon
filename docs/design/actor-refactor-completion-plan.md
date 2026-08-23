@@ -1,6 +1,6 @@
 # Control Actor Refactor Completion Plan
 
-Status: in progress — Milestones 0 through 5 complete; Milestone 6 is next
+Status: in progress — Milestones 0 through 6 complete; Milestone 7 is next
 
 Date: 2026-08-23
 
@@ -54,16 +54,16 @@ histogram and automatic-contrast workers, and renderer-local memory-pinning work
 
 ### Current measured checkpoint
 
-The executable ledger currently covers 289 concrete host fields. It has 264 retained fields and 25
+The executable ledger currently covers 290 concrete host fields. It has 277 retained fields and 13
 fields in open `narrow` or `replace` rows. There are no open `delete` rows and no renderer semantic
 command emulators.
 
 | Milestone | Open rows | Open fields | Remaining ownership domains |
 | --- | ---: | ---: | --- |
 | 5 | 0 | 0 | complete |
-| 6 | 9 | 12 | host requests, native command outboxes, root mode/deep-link/projection relays, mosaic shell state |
+| 6 | 0 | 0 | complete |
 | 7 | 2 | 13 | single-view and mosaic screenshot/presentation state |
-| **Total** | **11** | **25** | |
+| **Total** | **2** | **13** | |
 
 `Retain` means the field has a valid final role as a renderer resource/observation, transient UI
 draft, shared actor resource, or platform effect. It does not mean that the renderer owns semantic
@@ -498,6 +498,11 @@ checks passed on the same tree.
 
 Purpose: leave `RootApp` and the app façade as orchestration boundaries, not alternate model owners.
 
+Status: complete on 2026-08-23. Host requests are platform-only, root renderer composition is
+selected solely from actor projections after startup, native remote mosaics use actor-owned project
+and mosaic commands, and viewer/root/mosaic commits share a bounded ingress worker that continues
+forwarding commands without `RootApp::update`.
+
 Work:
 
 - audit all remaining `pending_request`, outbox, snapshot, and synchronization paths;
@@ -555,6 +560,13 @@ Open rows: `viewer.native_command_outbox`, `root.native_command_outbox`, and
 Commit gate for Milestone 6: all nine current rows are closed, source guards reject semantic host
 requests and renderer outboxes, and pausing `RootApp::update` cannot block any non-presentation
 method.
+
+Checkpoint evidence: formatting and all-target compilation passed; Rust library tests passed
+184/184, binary tests passed 205 with 4 fixture-dependent ignores, data-contract tests passed
+10/10, and Python SDK tests passed 96/96. The no-frame native-ingress test proves a native project
+command reaches the actor and becomes queryable without any root update. Generated-reference,
+JSON-ledger, source-boundary, application-surface, queue, and actor-route guards passed on the same
+tree.
 
 ## Milestone 7 — close completion and presentation semantics
 
@@ -685,9 +697,9 @@ From the present checkpoint, work proceeds in this order:
    fields have explicit final roles.
 4. **5D external spatial adapters — complete:** document decoders run on the bounded actor worker,
    immutable resources feed renderer adapters, and the 5E cumulative gate passed.
-5. **6A–6C application shell — next:** classify platform effects, remove shell semantic authority, and
-   consolidate native command ingress; then checkpoint Milestone 6.
-6. **7A presentation tasks:** unify screenshot state and generation-specific acknowledgement.
+5. **6A–6C application shell — complete:** platform effects are narrow, shell mode is
+   projection-only, and native commands use one bounded actor ingress.
+6. **7A presentation tasks — next:** unify screenshot state and generation-specific acknowledgement.
 7. **7B completion audit:** test and document every method's exact sync/async completion contract;
    then checkpoint Milestone 7 with zero open ledger fields.
 8. **Milestone 8 automation:** run all Rust, Python, generated-contract, performance, allocation,

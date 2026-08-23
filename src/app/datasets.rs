@@ -179,7 +179,7 @@ impl OmeZarrViewerApp {
                         "Load Labels failed: the actor has no selected label group.".to_string(),
                     );
                 } else {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.labels.load",
                         params: serde_json::json!({"name":name}),
                     });
@@ -323,7 +323,7 @@ impl OmeZarrViewerApp {
                     self.seg_label_prompt_preference = LabelPromptSessionPreference::Ask;
                     self.seg_label_prompt_always = false;
                 } else {
-                    self.native_control_intents.push(NativeControlIntent {
+                    self.native_command_ingress.push(NativeControlIntent {
                         method: "viewer.labels.load",
                         params: serde_json::json!({"name":name}),
                     });
@@ -393,7 +393,7 @@ impl OmeZarrViewerApp {
                             } else {
                                 LabelPromptSessionPreference::Ask
                             };
-                            self.native_control_intents.push(NativeControlIntent {
+                            self.native_command_ingress.push(NativeControlIntent {
                                 method: "viewer.labels.load",
                                 params: serde_json::json!({"name":name}),
                             });
