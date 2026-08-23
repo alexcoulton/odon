@@ -1712,6 +1712,44 @@ fn label_discovery_and_loading_are_actor_owned() {
 }
 
 #[test]
+fn document_tiff_plane_and_tile_policy_commits_are_actor_only() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let datasets = source(root.join("src/app/datasets.rs"));
+    let tiff = source(root.join("src/app/tiff.rs"));
+    let memory = source(root.join("src/app/memory_ui.rs"));
+    let image_runtime = source(root.join("src/app/image_runtime.rs"));
+
+    assert!(!datasets.contains("switch_dataset_with_store"));
+    assert!(tiff.contains("\"datasets.open_tiff\""));
+    for forbidden in [
+        "fn apply_tiff_plane_selection(",
+        "build_tiff_runtime_assets(",
+        "self.dataset =",
+        "self.store =",
+        "self.loader =",
+        "self.raw_loader =",
+    ] {
+        assert!(
+            !tiff.contains(forbidden),
+            "TIFF plane controls must not rebuild document resources locally: {forbidden}"
+        );
+    }
+    assert!(memory.contains("\"memory.tiles.set\""));
+    for forbidden in [
+        "self.tile_loader_threads =",
+        "self.tile_prefetch_mode =",
+        "self.tile_prefetch_aggressiveness =",
+        "self.respawn_tile_loaders()",
+    ] {
+        assert!(
+            !memory.contains(forbidden),
+            "tile policy UI must wait for actor projection: {forbidden}"
+        );
+    }
+    assert!(image_runtime.contains("apply_control_actor_tile_loading_policy"));
+}
+
+#[test]
 fn production_control_path_has_no_legacy_ui_dispatcher() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
@@ -2003,7 +2041,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 292,
+        total_fields, 293,
         "review the ownership ledger when host fields change"
     );
 }

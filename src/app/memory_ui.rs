@@ -155,15 +155,13 @@ impl OmeZarrViewerApp {
         );
         ui.add_space(6.0);
 
-        let before_tile_policy = (
-            self.tile_loader_threads,
-            self.tile_prefetch_mode,
-            self.tile_prefetch_aggressiveness,
-            self.prefer_pinned_finer_levels,
-        );
+        let mut tile_loader_threads = self.tile_loader_threads;
+        let mut tile_prefetch_mode = self.tile_prefetch_mode;
+        let mut tile_prefetch_aggressiveness = self.tile_prefetch_aggressiveness;
+        let mut prefer_pinned_finer_levels = self.prefer_pinned_finer_levels;
         ui.collapsing("Tile Loading", |ui| {
             if self.supports_runtime_tile_loader_tuning() {
-                let mut threads = self.tile_loader_threads as u32;
+                let mut threads = tile_loader_threads as u32;
                 ui.horizontal(|ui| {
                     ui.label("Workers");
                     let changed = ui
@@ -176,47 +174,32 @@ impl OmeZarrViewerApp {
                     if ui.button("Auto").clicked() {
                         threads = Self::default_tile_loader_threads() as u32;
                     }
-                    if changed || threads as usize != self.tile_loader_threads {
-                        let next = threads.max(1) as usize;
-                        if next != self.tile_loader_threads {
-                            self.tile_loader_threads = next;
-                            match self.respawn_tile_loaders() {
-                                Ok(()) => {
-                                    self.tile_loading_status = format!(
-                                        "Respawned tile loaders with {} worker(s).",
-                                        self.tile_loader_threads
-                                    );
-                                }
-                                Err(err) => {
-                                    self.tile_loading_status =
-                                        format!("Tile loader reconfigure failed: {err}");
-                                }
-                            }
-                        }
+                    if changed || threads as usize != tile_loader_threads {
+                        tile_loader_threads = threads.max(1) as usize;
                     }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Prefetch");
                     egui::ComboBox::from_id_salt("tile-prefetch-mode")
-                        .selected_text(match self.tile_prefetch_mode {
+                        .selected_text(match tile_prefetch_mode {
                             TilePrefetchMode::Off => "Off",
                             TilePrefetchMode::TargetHalo => "Target halo",
                             TilePrefetchMode::TargetAndFinerHalo => "Target + finer halo",
                         })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
-                                &mut self.tile_prefetch_mode,
+                                &mut tile_prefetch_mode,
                                 TilePrefetchMode::Off,
                                 "Off",
                             );
                             ui.selectable_value(
-                                &mut self.tile_prefetch_mode,
+                                &mut tile_prefetch_mode,
                                 TilePrefetchMode::TargetHalo,
                                 "Target halo",
                             );
                             ui.selectable_value(
-                                &mut self.tile_prefetch_mode,
+                                &mut tile_prefetch_mode,
                                 TilePrefetchMode::TargetAndFinerHalo,
                                 "Target + finer halo",
                             );
@@ -225,31 +208,31 @@ impl OmeZarrViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Aggressiveness");
                     egui::ComboBox::from_id_salt("tile-prefetch-aggressiveness")
-                        .selected_text(match self.tile_prefetch_aggressiveness {
+                        .selected_text(match tile_prefetch_aggressiveness {
                             TilePrefetchAggressiveness::Conservative => "Conservative",
                             TilePrefetchAggressiveness::Balanced => "Balanced",
                             TilePrefetchAggressiveness::Aggressive => "Aggressive",
                         })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
-                                &mut self.tile_prefetch_aggressiveness,
+                                &mut tile_prefetch_aggressiveness,
                                 TilePrefetchAggressiveness::Conservative,
                                 "Conservative",
                             );
                             ui.selectable_value(
-                                &mut self.tile_prefetch_aggressiveness,
+                                &mut tile_prefetch_aggressiveness,
                                 TilePrefetchAggressiveness::Balanced,
                                 "Balanced",
                             );
                             ui.selectable_value(
-                                &mut self.tile_prefetch_aggressiveness,
+                                &mut tile_prefetch_aggressiveness,
                                 TilePrefetchAggressiveness::Aggressive,
                                 "Aggressive",
                             );
                         });
                 });
                 ui.checkbox(
-                    &mut self.prefer_pinned_finer_levels,
+                    &mut prefer_pinned_finer_levels,
                     "Use pinned finer levels for missing coarser levels",
                 )
                 .on_hover_text(
@@ -266,28 +249,32 @@ impl OmeZarrViewerApp {
             }
             ui.separator();
         });
-        let after_tile_policy = (
+        if (
+            tile_loader_threads,
+            tile_prefetch_mode,
+            tile_prefetch_aggressiveness,
+            prefer_pinned_finer_levels,
+        ) != (
             self.tile_loader_threads,
             self.tile_prefetch_mode,
             self.tile_prefetch_aggressiveness,
             self.prefer_pinned_finer_levels,
-        );
-        if after_tile_policy != before_tile_policy {
+        ) {
             self.native_control_intents.push(NativeControlIntent {
                 method: "memory.tiles.set",
                 params: serde_json::json!({
-                    "workers":self.tile_loader_threads,
-                    "prefetch_mode":match self.tile_prefetch_mode {
+                    "workers":tile_loader_threads,
+                    "prefetch_mode":match tile_prefetch_mode {
                         TilePrefetchMode::Off => "off",
                         TilePrefetchMode::TargetHalo => "target_halo",
                         TilePrefetchMode::TargetAndFinerHalo => "target_and_finer_halo",
                     },
-                    "prefetch_aggressiveness":match self.tile_prefetch_aggressiveness {
+                    "prefetch_aggressiveness":match tile_prefetch_aggressiveness {
                         TilePrefetchAggressiveness::Conservative => "conservative",
                         TilePrefetchAggressiveness::Balanced => "balanced",
                         TilePrefetchAggressiveness::Aggressive => "aggressive",
                     },
-                    "prefer_pinned_finer_levels":self.prefer_pinned_finer_levels,
+                    "prefer_pinned_finer_levels":prefer_pinned_finer_levels,
                 }),
             });
         }

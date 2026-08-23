@@ -6,8 +6,8 @@
       {
         "id": "viewer.document",
         "fields": ["dataset", "store"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
+        "current_class": "shared_resource",
+        "disposition": "retain",
         "canonical_writer": "ControlActor AppModel document transaction",
         "projection_source": "RenderProjection document descriptor and shared store resource",
         "renderer_consumers": "image metadata, tile planning, and renderer construction",
@@ -413,14 +413,26 @@
       },
       {
         "id": "viewer.tile_policy",
-        "fields": ["tile_loader_threads", "tile_prefetch_mode", "tile_prefetch_aggressiveness", "tile_loading_status"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor persisted tile policy and renderer loading observation",
+        "fields": ["tile_loader_threads", "tile_prefetch_mode", "tile_prefetch_aggressiveness"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor persisted tile policy",
         "projection_source": "tile-policy generation",
-        "renderer_consumers": "tile scheduler and loading diagnostics",
+        "renderer_consumers": "tile scheduler",
         "persistence_consumers": "application settings",
         "native_commit_point": "typed tile-loading policy command",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.tile_policy_status",
+        "fields": ["tile_loading_status"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "renderer tile-policy resource realization",
+        "projection_source": "tile-policy generation",
+        "renderer_consumers": "memory panel loading diagnostics",
+        "persistence_consumers": "none",
+        "native_commit_point": "none; renderer realization status",
         "milestone": 5
       },
       {
@@ -510,13 +522,25 @@
       {
         "id": "viewer.tiff_plane",
         "fields": ["tiff_plane_state"],
-        "current_class": "mixed_compatibility",
-        "disposition": "narrow",
-        "canonical_writer": "ControlActor alternate-document plane model and egui draft",
-        "projection_source": "document and plane projection",
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor alternate-document transaction",
+        "projection_source": "immutable TIFF document resource",
         "renderer_consumers": "TIFF renderer and plane controls",
         "persistence_consumers": "document descriptor and saved view",
-        "native_commit_point": "typed TIFF plane command",
+        "native_commit_point": "typed datasets.open_tiff command",
+        "milestone": 5
+      },
+      {
+        "id": "viewer.tiff_plane_draft",
+        "fields": ["tiff_plane_draft"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "egui TIFF plane controls",
+        "projection_source": "current immutable TIFF plane state",
+        "renderer_consumers": "TIFF Z/T draft controls and submission status",
+        "persistence_consumers": "none",
+        "native_commit_point": "typed datasets.open_tiff command",
         "milestone": 5
       },
       {

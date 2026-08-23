@@ -248,6 +248,7 @@ impl OmeZarrViewerApp {
             layer_move: None,
             layer_transform: None,
             tiff_plane_state: None,
+            tiff_plane_draft: None,
             screenshot_settings: ScreenshotSettings::default(),
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),
@@ -527,6 +528,7 @@ impl OmeZarrViewerApp {
             layer_move: None,
             layer_transform: None,
             tiff_plane_state: None,
+            tiff_plane_draft: None,
             screenshot_settings: ScreenshotSettings::default(),
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),
@@ -585,6 +587,10 @@ impl OmeZarrViewerApp {
             assets.chanmax_level,
             auto_contrast_settings,
         );
+        app.tiff_plane_draft = assets
+            .tiff_plane_state
+            .as_ref()
+            .map(TiffPlaneDraft::from_projection);
         app.tiff_plane_state = assets.tiff_plane_state;
         Ok(app)
     }
@@ -613,6 +619,10 @@ impl OmeZarrViewerApp {
             assets.chanmax_level,
             auto_contrast_settings,
         );
+        app.tiff_plane_draft = assets
+            .tiff_plane_state
+            .as_ref()
+            .map(TiffPlaneDraft::from_projection);
         app.tiff_plane_state = assets.tiff_plane_state;
         Ok(app)
     }
@@ -828,6 +838,7 @@ impl OmeZarrViewerApp {
             layer_move: None,
             layer_transform: None,
             tiff_plane_state: None,
+            tiff_plane_draft: None,
             screenshot_settings: ScreenshotSettings::default(),
             screenshot_settings_open: false,
             screenshot_worker: ScreenshotWorkerHandle::spawn(),

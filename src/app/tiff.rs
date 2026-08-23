@@ -1,148 +1,6 @@
 use super::*;
 
 impl OmeZarrViewerApp {
-    pub(super) fn apply_tiff_plane_selection(
-        &mut self,
-        ctx: &egui::Context,
-        target_z: usize,
-        target_t: usize,
-    ) -> anyhow::Result<()> {
-        let Some(prev_state) = self.tiff_plane_state.clone() else {
-            anyhow::bail!("TIFF plane selection is not active");
-        };
-
-        let prev_channels = self.channels.clone();
-        let prev_selected_name = self
-            .channels
-            .get(self.selected_channel)
-            .map(|c| c.name.clone());
-        let old_world_w = self
-            .dataset
-            .levels
-            .first()
-            .map(|l| l.shape[self.dataset.dims.x] as f32)
-            .unwrap_or(0.0);
-        let old_world_h = self
-            .dataset
-            .levels
-            .first()
-            .map(|l| l.shape[self.dataset.dims.y] as f32)
-            .unwrap_or(0.0);
-        let fx = if old_world_w > 0.0 {
-            (self.camera.center_world_lvl0.x / old_world_w).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
-        let fy = if old_world_h > 0.0 {
-            (self.camera.center_world_lvl0.y / old_world_h).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
-        let old_zoom = self.camera.zoom_screen_per_lvl0_px;
-        let preserve_transforms = self.channels.len();
-
-        let mut assets = build_tiff_runtime_assets(
-            self.tiles_gl.is_some(),
-            prev_state.dataset_root,
-            prev_state.image_path,
-            prev_state.dataset_name,
-            prev_state.channel_name,
-            crate::xenium::TiffPlaneSelection {
-                z: target_z,
-                t: target_t,
-            },
-        )?;
-
-        let mut new_channels = assets.dataset.channels.clone();
-        apply_preserved_channel_settings(&prev_channels, &mut new_channels);
-        for ch in &mut new_channels {
-            if let Some(w) = self.channel_window_overrides.get(&ch.name).copied() {
-                ch.window = Some(w);
-            }
-        }
-        assets.dataset.channels = new_channels.clone();
-
-        if let Some(tiles_gl) = self.tiles_gl.as_ref() {
-            tiles_gl.reset();
-        }
-        if let Some(labels_gl) = self.labels_gl.as_ref() {
-            labels_gl.reset();
-        }
-
-        self.dataset = assets.dataset;
-        self.store = assets.store;
-        self.loader = assets.loader;
-        self.raw_loader = assets.raw_loader;
-        self.hist_loader = assets.hist_loader;
-        self.chanmax_loader = assets.chanmax_loader;
-        self.chanmax_level = assets.chanmax_level;
-        self.channels = new_channels;
-        self.tiff_plane_state = assets.tiff_plane_state.take();
-        if let Some(state) = self.tiff_plane_state.as_mut() {
-            state.status.clear();
-        }
-
-        if self.channels.len() != preserve_transforms {
-            self.channel_offsets_world = vec![egui::Vec2::ZERO; self.channels.len()];
-            self.channel_scales = vec![egui::Vec2::splat(1.0); self.channels.len()];
-            self.channel_rotations_rad = vec![0.0; self.channels.len()];
-        }
-
-        if let Some(name) = prev_selected_name {
-            if let Some(ch) = self.channels.iter().find(|c| c.name == name) {
-                self.selected_channel = ch.index;
-            } else {
-                self.selected_channel = self
-                    .selected_channel
-                    .min(self.channels.len().saturating_sub(1));
-            }
-        } else {
-            self.selected_channel = self
-                .selected_channel
-                .min(self.channels.len().saturating_sub(1));
-        }
-        if matches!(self.active_layer, LayerId::Channel(_)) {
-            self.active_layer = LayerId::Channel(self.selected_channel);
-        }
-
-        let new_world_w = self
-            .dataset
-            .levels
-            .first()
-            .map(|l| l.shape[self.dataset.dims.x] as f32)
-            .unwrap_or(0.0);
-        let new_world_h = self
-            .dataset
-            .levels
-            .first()
-            .map(|l| l.shape[self.dataset.dims.y] as f32)
-            .unwrap_or(0.0);
-        self.camera.center_world_lvl0 = egui::pos2(new_world_w * fx, new_world_h * fy);
-        self.camera.zoom_screen_per_lvl0_px = old_zoom;
-
-        self.cache = TileCache::new(256);
-        self.pending.clear();
-        self.previous_render_id = None;
-        self.previous_view_selection = None;
-        self.previous_displayed_view_selection = None;
-        self.active_render_id = self.compute_render_id();
-        self.last_render_view_selection = self.committed_view_selection();
-        self.hist = None;
-        self.hist_request_id = 0;
-        self.hist_request_pending = false;
-        self.hist_dirty = true;
-        self.hist_navigation_dirty_since = None;
-        self.hist_last_sent = Instant::now()
-            .checked_sub(Duration::from_secs(3600))
-            .unwrap_or_else(Instant::now);
-        self.chanmax_request_id = self.chanmax_request_id.wrapping_add(1).max(1);
-        self.chanmax_pending = vec![false; self.channels.len()];
-        self.chanmax_snapshot = self.channels.iter().map(|c| c.window).collect();
-        self.maybe_apply_auto_contrast_on_open();
-        ctx.request_repaint();
-        Ok(())
-    }
-
     pub(super) fn ui_screenshot_settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.screenshot_settings_open {
             return;
@@ -248,10 +106,14 @@ impl OmeZarrViewerApp {
         self.roi_info_open = open;
     }
 
-    pub(super) fn ui_tiff_plane_controls(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let Some(mut state) = self.tiff_plane_state.clone() else {
+    pub(super) fn ui_tiff_plane_controls(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
+        let Some(state) = self.tiff_plane_state.clone() else {
             return;
         };
+        let mut draft = self
+            .tiff_plane_draft
+            .clone()
+            .unwrap_or_else(|| TiffPlaneDraft::from_projection(&state));
         if state.size_z <= 1 && state.size_t <= 1 {
             return;
         }
@@ -266,40 +128,48 @@ impl OmeZarrViewerApp {
             ui.label("Z");
             ui.add_enabled(
                 state.size_z > 1,
-                egui::DragValue::new(&mut state.draft_z).range(0..=state.size_z.saturating_sub(1)),
+                egui::DragValue::new(&mut draft.draft_z).range(0..=state.size_z.saturating_sub(1)),
             );
             ui.label("T");
             ui.add_enabled(
                 state.size_t > 1,
-                egui::DragValue::new(&mut state.draft_t).range(0..=state.size_t.saturating_sub(1)),
+                egui::DragValue::new(&mut draft.draft_t).range(0..=state.size_t.saturating_sub(1)),
             );
         });
 
-        let changed = state.draft_z != state.current_z || state.draft_t != state.current_t;
+        let changed = draft.draft_z != state.current_z || draft.draft_t != state.current_t;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(changed, egui::Button::new("Apply"))
                 .clicked()
             {
-                match self.apply_tiff_plane_selection(ctx, state.draft_z, state.draft_t) {
-                    Ok(()) => return,
-                    Err(err) => state.status = err.to_string(),
-                }
+                self.native_control_intents.push(NativeControlIntent {
+                    method: "datasets.open_tiff",
+                    params: serde_json::json!({
+                        "path":state.image_path.to_string_lossy(),
+                        "z":draft.draft_z,
+                        "t":draft.draft_t,
+                    }),
+                });
+                draft.status = format!(
+                    "Opening TIFF plane Z={}, T={}...",
+                    draft.draft_z, draft.draft_t
+                );
             }
             if ui
                 .add_enabled(changed, egui::Button::new("Reset"))
                 .clicked()
             {
-                state.draft_z = state.current_z;
-                state.draft_t = state.current_t;
-                state.status.clear();
+                draft.draft_z = state.current_z;
+                draft.draft_t = state.current_t;
+                draft.status.clear();
             }
         });
 
-        if !state.status.is_empty() {
-            ui.colored_label(ui.visuals().warn_fg_color, &state.status);
+        if !draft.status.is_empty() {
+            ui.colored_label(ui.visuals().warn_fg_color, &draft.status);
         }
-        self.tiff_plane_state = Some(state);
+        self.tiff_plane_draft = Some(draft);
         ui.separator();
     }
 }

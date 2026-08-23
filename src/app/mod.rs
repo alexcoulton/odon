@@ -1999,6 +1999,7 @@ pub struct OmeZarrViewerApp {
     layer_move: Option<LayerMoveState>,
     layer_transform: Option<LayerTransformState>,
     tiff_plane_state: Option<TiffPlaneState>,
+    tiff_plane_draft: Option<TiffPlaneDraft>,
     screenshot_settings: ScreenshotSettings,
     screenshot_settings_open: bool,
     screenshot_worker: ScreenshotWorkerHandle,
@@ -2086,17 +2087,28 @@ struct LabelToWorld {
 
 #[derive(Debug, Clone)]
 struct TiffPlaneState {
-    dataset_root: PathBuf,
     image_path: PathBuf,
-    dataset_name: String,
-    channel_name: String,
     size_z: usize,
     size_t: usize,
     current_z: usize,
     current_t: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TiffPlaneDraft {
     draft_z: usize,
     draft_t: usize,
     status: String,
+}
+
+impl TiffPlaneDraft {
+    fn from_projection(state: &TiffPlaneState) -> Self {
+        Self {
+            draft_z: state.current_z,
+            draft_t: state.current_t,
+            status: String::new(),
+        }
+    }
 }
 
 struct TiffRuntimeAssets {
@@ -2450,43 +2462,6 @@ pub(crate) fn build_tiff_dataset(
     }
 }
 
-fn build_tiff_runtime_assets(
-    gpu_available: bool,
-    dataset_root: PathBuf,
-    image_path: PathBuf,
-    dataset_name: String,
-    channel_name: String,
-    plane_selection: crate::xenium::TiffPlaneSelection,
-) -> anyhow::Result<TiffRuntimeAssets> {
-    let pyramid = Arc::new(crate::xenium::TiffPyramid::open_with_selection(
-        &image_path,
-        plane_selection,
-    )?);
-    pyramid.validate_supported_ome_layout()?;
-    let levels = pyramid.to_levels_info();
-    crate::log_info!("tiff pyramid levels={}", levels.len());
-    let dataset = build_tiff_dataset(
-        dataset_root.clone(),
-        dataset_name.clone(),
-        levels,
-        pyramid.dims(),
-        pyramid.default_channels_named(&channel_name),
-        pyramid.abs_max,
-        pyramid.physical_pixel_size_xy(),
-    );
-    let store = dummy_local_store_for_path(&dataset_root)?;
-    build_tiff_runtime_assets_from_parts(
-        gpu_available,
-        dataset_root,
-        image_path,
-        dataset_name,
-        channel_name,
-        pyramid,
-        dataset,
-        store,
-    )
-}
-
 fn build_tiff_runtime_assets_from_resource(
     gpu_available: bool,
     resource: &crate::data::document::AlternateDocumentResource,
@@ -2503,36 +2478,19 @@ fn build_tiff_runtime_assets_from_prepared_resource(
     pyramid: Arc<crate::xenium::TiffPyramid>,
 ) -> anyhow::Result<TiffRuntimeAssets> {
     let dataset = resource.dataset.clone();
-    let dataset_root = dataset
-        .source
-        .local_path()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| anyhow::anyhow!("TIFF document has no local source path"))?;
     let image_path = pyramid.path.clone();
-    let dataset_name = dataset
-        .multiscale
-        .name
-        .clone()
-        .unwrap_or_else(|| "tiff".to_string());
     build_tiff_runtime_assets_from_parts(
         gpu_available,
-        dataset_root,
         image_path,
-        dataset_name,
-        "image".to_string(),
         pyramid,
         dataset,
         Arc::clone(&resource.store),
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_tiff_runtime_assets_from_parts(
     gpu_available: bool,
-    dataset_root: PathBuf,
     image_path: PathBuf,
-    dataset_name: String,
-    channel_name: String,
     pyramid: Arc<crate::xenium::TiffPyramid>,
     dataset: OmeZarrDataset,
     store: Arc<dyn zarrs::storage::ReadableStorageTraits>,
@@ -2550,17 +2508,11 @@ fn build_tiff_runtime_assets_from_parts(
     let hist_loader = crate::xenium::spawn_tiff_histogram_loader(pyramid.clone())?;
     let chanmax_loader = crate::xenium::spawn_tiff_channel_max_loader(pyramid.clone())?;
     let tiff_plane_state = pyramid.has_plane_selection().then(|| TiffPlaneState {
-        dataset_root,
         image_path,
-        dataset_name,
-        channel_name,
         size_z: pyramid.size_z,
         size_t: pyramid.size_t,
         current_z: pyramid.plane_selection.z,
         current_t: pyramid.plane_selection.t,
-        draft_z: pyramid.plane_selection.z,
-        draft_t: pyramid.plane_selection.t,
-        status: String::new(),
     });
     Ok(TiffRuntimeAssets {
         chanmax_level: update::choose_default_max_level(&dataset),
@@ -2621,34 +2573,6 @@ impl OmeZarrViewerApp {
         }
         if any_changed {
             self.bump_render_id();
-        }
-    }
-}
-
-fn apply_preserved_channel_settings(prev: &[ChannelInfo], new: &mut [ChannelInfo]) {
-    use std::collections::HashMap;
-
-    #[derive(Clone, Copy)]
-    struct Settings {
-        visible: bool,
-        color_rgb: [u8; 3],
-    }
-
-    let mut by_name: HashMap<&str, Settings> = HashMap::with_capacity(prev.len());
-    for ch in prev {
-        by_name.insert(
-            ch.name.as_str(),
-            Settings {
-                visible: ch.visible,
-                color_rgb: ch.color_rgb,
-            },
-        );
-    }
-
-    for ch in new {
-        if let Some(s) = by_name.get(ch.name.as_str()) {
-            ch.visible = s.visible;
-            ch.color_rgb = s.color_rgb;
         }
     }
 }
