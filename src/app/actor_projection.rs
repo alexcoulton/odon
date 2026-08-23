@@ -596,20 +596,26 @@ impl OmeZarrViewerApp {
             return Err("actor projection has an invalid viewport count".to_string());
         }
 
-        let mut current = self
-            .viewport_workspace
-            .take()
-            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
-        let current_active = current.active_id().clone();
+        let mut current = self.viewport_workspace.take();
+        let current_active = current
+            .as_ref()
+            .map(|workspace| workspace.active_id().clone());
         let previous_viewport_ids = current
-            .viewports()
-            .iter()
+            .as_ref()
+            .into_iter()
+            .flat_map(|workspace| workspace.viewports())
             .map(|viewport| viewport.id.clone())
             .collect::<HashSet<_>>();
-        if let Some(active) = current.get_mut(&current_active) {
-            active.state = ViewerViewportState::capture(self);
+        if let Some(workspace) = current.as_mut() {
+            let active_id = workspace.active_id().clone();
+            if let Some(active) = workspace.get_mut(&active_id) {
+                active.state = ViewerViewportState::capture(self);
+            }
         }
-        let fallback = current.active().state.clone();
+        let fallback = current
+            .as_ref()
+            .map(|workspace| workspace.active().state.clone())
+            .unwrap_or_else(|| ViewerViewportState::capture(self));
         let projected_masks = self
             .mask_layers
             .iter()
@@ -637,7 +643,8 @@ impl OmeZarrViewerApp {
                 .ok_or_else(|| format!("actor projection viewport '{id}' has no title"))?
                 .to_string();
             let mut state = current
-                .get(&id)
+                .as_ref()
+                .and_then(|workspace| workspace.get(&id))
                 .map(|viewport| viewport.state.clone())
                 .unwrap_or_else(|| fallback.clone());
             state.masks.clone_from(&projected_masks);
@@ -668,7 +675,9 @@ impl OmeZarrViewerApp {
             .iter()
             .map(|viewport| viewport.id.clone())
             .collect::<HashSet<_>>();
-        if current_active != active || previous_viewport_ids != projected_viewport_ids {
+        if current_active.as_ref() != Some(&active)
+            || previous_viewport_ids != projected_viewport_ids
+        {
             self.cancel_viewport_transient_gestures();
         }
         self.screenshot_pending

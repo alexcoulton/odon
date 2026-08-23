@@ -221,7 +221,6 @@ impl OmeZarrViewerApp {
     pub(in crate::app) fn control_in_viewport(
         &mut self,
         params: &serde_json::Value,
-        domain: ViewportControlDomain,
         operation: impl FnOnce(&mut Self, &serde_json::Value) -> serde_json::Value,
     ) -> serde_json::Value {
         self.sync_runtime_to_active_viewport();
@@ -229,90 +228,20 @@ impl OmeZarrViewerApp {
             Ok(id) => id,
             Err(error) => return serde_json::json!({"error": error}),
         };
-        let Some(mut workspace) = self.viewport_workspace.take() else {
+        let Some(workspace) = self.viewport_workspace.take() else {
             return serde_json::json!({"error": "viewer workspace is not initialized"});
         };
         let active_viewport_id = workspace.active_id().clone();
-        let active_before = workspace.active().state.clone();
         let Some(target) = workspace.get(&viewport_id) else {
             self.viewport_workspace = Some(workspace);
             return serde_json::json!({"error": format!("viewport '{viewport_id}' was not found")});
         };
-        let revision_guard = match domain {
-            ViewportControlDomain::Read => None,
-            ViewportControlDomain::Navigation => params
-                .get("if_navigation_revision")
-                .and_then(serde_json::Value::as_u64)
-                .map(|expected| ("navigation", expected, target.navigation_revision)),
-        };
-        if let Some((kind, expected, current)) = revision_guard
-            && expected != current
-        {
-            self.viewport_workspace = Some(workspace);
-            return serde_json::json!({
-                "error": format!(
-                    "viewport {kind} revision conflict: expected {expected}, current {current}"
-                ),
-                "viewport_id": viewport_id.as_str(),
-                "expected_revision": expected,
-                "current_revision": current,
-                "revision_domain": kind,
-            });
-        }
-        let before = target.state.clone();
-        before.apply(self);
-        self.bump_render_id();
-        let result = operation(self, params);
-        let after = ViewerViewportState::capture(self);
-        let succeeded = result.get("error").is_none();
-        if let Some(target) = workspace.get_mut(&viewport_id) {
-            target.state = after.clone();
-        }
-        let mut affected_viewport_ids = vec![viewport_id.as_str().to_string()];
-        if succeeded {
-            match domain {
-                ViewportControlDomain::Read => {}
-                ViewportControlDomain::Navigation => {
-                    let _ = workspace.bump_navigation_revision(&viewport_id);
-                }
-            }
-        }
-        let links = workspace.links();
-        if succeeded
-            && domain == ViewportControlDomain::Navigation
-            && ((links.camera && after.camera_changed_from(&before))
-                || (links.plane && after.plane_changed_from(&before)))
-        {
-            let other_ids = workspace
-                .viewports()
-                .iter()
-                .filter(|viewport| viewport.id != viewport_id)
-                .map(|viewport| viewport.id.clone())
-                .collect::<Vec<_>>();
-            for other_id in other_ids {
-                if let Some(other) = workspace.get_mut(&other_id) {
-                    other.state.copy_linked_navigation_from(&after, links);
-                }
-                let _ = workspace.bump_navigation_revision(&other_id);
-                affected_viewport_ids.push(other_id.as_str().to_string());
-            }
-        }
-        let target = workspace
-            .get(&viewport_id)
-            .expect("target viewport remains in workspace");
+        let target_state = target.state.clone();
         let navigation_revision = target.navigation_revision;
         let presentation_revision = target.presentation_revision;
-        let link_transaction_id = (affected_viewport_ids.len() > 1)
-            .then(|| format!("{}-{navigation_revision}", viewport_id.as_str()));
-        let active_after = &workspace.active().state;
-        let active_viewport_changed = succeeded
-            && match domain {
-                ViewportControlDomain::Read => false,
-                ViewportControlDomain::Navigation => {
-                    active_after.camera_changed_from(&active_before)
-                        || active_after.plane_changed_from(&active_before)
-                }
-            };
+        target_state.apply(self);
+        self.bump_render_id();
+        let result = operation(self, params);
         workspace.active().state.apply(self);
         self.bump_render_id();
         self.viewport_workspace = Some(workspace);
@@ -320,51 +249,41 @@ impl OmeZarrViewerApp {
             "viewport_id": viewport_id.as_str(),
             "navigation_revision": navigation_revision,
             "presentation_revision": presentation_revision,
-            "affected_viewport_ids": affected_viewport_ids,
-            "link_transaction_id": link_transaction_id,
+            "affected_viewport_ids": [viewport_id.as_str()],
+            "link_transaction_id": null,
             "active_viewport_id": active_viewport_id.as_str(),
-            "active_viewport_changed": active_viewport_changed,
+            "active_viewport_changed": false,
             "result": result,
         })
     }
 
     pub fn control_get_viewport_camera(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.control_camera_snapshot()
-        })
+        self.control_in_viewport(params, |app, _| app.control_camera_snapshot())
     }
 
     pub fn control_get_viewport_plane(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.control_plane_snapshot()
-        })
+        self.control_in_viewport(params, |app, _| app.control_plane_snapshot())
     }
 
     pub fn control_get_viewport_object_filter(
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.seg_objects.filter_snapshot_json()
-        })
+        self.control_in_viewport(params, |app, _| app.seg_objects.filter_snapshot_json())
     }
 
     pub fn control_get_viewport_channels(
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.control_channel_snapshot()
-        })
+        self.control_in_viewport(params, |app, _| app.control_channel_snapshot())
     }
 
     pub fn control_get_viewport_channel_groups(
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.control_channel_groups_snapshot()
-        })
+        self.control_in_viewport(params, |app, _| app.control_channel_groups_snapshot())
     }
 
     #[cfg(test)]
@@ -372,8 +291,6 @@ impl OmeZarrViewerApp {
         &mut self,
         params: &serde_json::Value,
     ) -> serde_json::Value {
-        self.control_in_viewport(params, ViewportControlDomain::Read, |app, _| {
-            app.control_rendering_snapshot()
-        })
+        self.control_in_viewport(params, |app, _| app.control_rendering_snapshot())
     }
 }

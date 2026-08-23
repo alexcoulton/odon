@@ -1169,6 +1169,27 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
         !ui.contains("native_viewport_actor_owned()"),
         "viewport chrome must submit topology commands even before its first actor projection"
     );
+    let renderer_queries = source(app_dir.join("renderer_bridge/viewports.rs"));
+    for forbidden_authority in [
+        "bump_navigation_revision(",
+        "bump_presentation_revision(",
+        "copy_linked_navigation_from(",
+        "ViewportControlDomain",
+    ] {
+        assert!(
+            !combined.contains(forbidden_authority)
+                && !renderer_queries.contains(forbidden_authority),
+            "renderer viewport code must not own revision or linked-state semantics: {forbidden_authority}"
+        );
+    }
+    let navigation = source(app_dir.join("navigation.rs"));
+    let interactions = source(app_dir.join("canvas/interactions.rs"));
+    let update = source(app_dir.join("update.rs"));
+    assert!(!navigation.contains("native_viewport_actor_owned()"));
+    assert!(!interactions.contains("native_viewport_actor_owned()"));
+    assert!(!update.contains("set_view_plane_mode("));
+    assert!(!update.contains("set_active_view_slice_level0("));
+    assert!(!source(app_dir.join("image_runtime.rs")).contains("fn set_view_plane_mode("));
 
     let root = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app.rs"));
     assert!(root.contains("app.control_renderer_observation_snapshot()"));

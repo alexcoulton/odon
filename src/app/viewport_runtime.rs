@@ -237,17 +237,7 @@ impl OmeZarrViewerApp {
     pub(super) fn sync_runtime_to_active_viewport(&mut self) {
         let state = ViewerViewportState::capture(self);
         if let Some(workspace) = self.viewport_workspace.as_mut() {
-            let active_id = workspace.active_id().clone();
-            let previous = workspace.active().state.clone();
-            workspace.active_mut().state = state.clone();
-            if state.camera_changed_from(&previous) || state.plane_changed_from(&previous) {
-                let _ = workspace.bump_navigation_revision(&active_id);
-            }
-            if state.presentation_changed_from(&previous) {
-                let _ = workspace.bump_presentation_revision(&active_id);
-            }
-        } else {
-            self.viewport_workspace = Some(ViewportWorkspace::new(state));
+            workspace.active_mut().state = state;
         }
     }
 

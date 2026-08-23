@@ -340,6 +340,11 @@ renderer-to-actor report no longer sends a workspace snapshot: its dedicated obs
 contains only shared-resource/cache telemetry, frame and tile-loading observations, and missing
 native-layer resource descriptors. Direct project compatibility restoration and mutation of the
 combined per-frame viewport container remain open in the `viewer.workspace_projection` ledger row.
+Frame capture may retain an optimistic camera or slice preview for painting, but it no longer
+increments actor-owned navigation/presentation revisions or copies linked navigation to sibling
+viewports. Camera fit and committed plane changes always queue typed actor commands; query-only
+renderer fixtures restore the active frame state without writing their observation into the
+workspace projection.
 
 ## Native cutover status
 

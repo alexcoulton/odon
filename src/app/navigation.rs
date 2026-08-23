@@ -105,12 +105,7 @@ impl OmeZarrViewerApp {
     ) -> bool {
         let mut camera = self.camera.clone();
         camera.fit_to_world_rect(viewport, world);
-        if self.native_viewport_actor_owned() {
-            self.submit_native_camera(&camera)
-        } else {
-            self.camera = camera;
-            true
-        }
+        self.submit_native_camera(&camera)
     }
 
     pub(super) fn choose_level(&self) -> usize {

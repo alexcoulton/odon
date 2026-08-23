@@ -15,6 +15,14 @@ fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
         }),
     );
     assert!(created.get("error").is_none(), "{created:#}");
+    let revisions_before_frame = app
+        .viewport_workspace
+        .as_ref()
+        .unwrap()
+        .viewports()
+        .iter()
+        .map(|viewport| (viewport.navigation_revision, viewport.presentation_revision))
+        .collect::<Vec<_>>();
 
     let ctx = egui::Context::default();
     ctx.begin_pass(egui::RawInput {
@@ -37,6 +45,18 @@ fn horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas() {
         .iter()
         .map(|viewport| viewport.state.last_canvas_rect.unwrap())
         .collect::<Vec<_>>();
+    let revisions_after_frame = app
+        .viewport_workspace
+        .as_ref()
+        .unwrap()
+        .viewports()
+        .iter()
+        .map(|viewport| (viewport.navigation_revision, viewport.presentation_revision))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        revisions_after_frame, revisions_before_frame,
+        "renderer frame observations must not advance actor-owned viewport revisions"
+    );
     assert_eq!(canvases.len(), 2);
     assert!(
         (canvases[0].top() - canvases[1].top()).abs() <= 2.0,

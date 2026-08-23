@@ -3,23 +3,13 @@ use super::*;
 impl OmeZarrViewerApp {
     pub(super) fn ui_viewport_workspace(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let frame_plan_started = Instant::now();
-        let mut workspace = self
-            .viewport_workspace
-            .take()
-            .unwrap_or_else(|| ViewportWorkspace::new(ViewerViewportState::capture(self)));
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            ui.centered_and_justified(|ui| ui.label("Waiting for the viewer workspace…"));
+            return;
+        };
         let active_id = workspace.active_id().clone();
         if let Some(active) = workspace.get_mut(&active_id) {
-            let state = ViewerViewportState::capture(self);
-            let navigation_changed =
-                state.camera_changed_from(&active.state) || state.plane_changed_from(&active.state);
-            let presentation_changed = state.presentation_changed_from(&active.state);
-            active.state = state;
-            if navigation_changed {
-                active.navigation_revision = active.navigation_revision.wrapping_add(1).max(1);
-            }
-            if presentation_changed {
-                active.presentation_revision = active.presentation_revision.wrapping_add(1).max(1);
-            }
+            active.state = ViewerViewportState::capture(self);
         }
 
         let viewport_ids = workspace
@@ -353,31 +343,7 @@ impl OmeZarrViewerApp {
         let after = ViewerViewportState::capture(self);
         self.native_viewport_command_scope = None;
         if let Some(viewport) = workspace.get_mut(viewport_id) {
-            viewport.state = after.clone();
-        }
-
-        let links = workspace.links();
-        let camera_changed = after.camera_changed_from(&before);
-        let plane_changed = after.plane_changed_from(&before);
-        if camera_changed || plane_changed {
-            let _ = workspace.bump_navigation_revision(viewport_id);
-        }
-        if after.presentation_changed_from(&before) {
-            let _ = workspace.bump_presentation_revision(viewport_id);
-        }
-        if (links.camera && camera_changed) || (links.plane && plane_changed) {
-            let other_ids = workspace
-                .viewports()
-                .iter()
-                .filter(|viewport| viewport.id != *viewport_id)
-                .map(|viewport| viewport.id.clone())
-                .collect::<Vec<_>>();
-            for other_id in other_ids {
-                if let Some(other) = workspace.get_mut(&other_id) {
-                    other.state.copy_linked_navigation_from(&after, links);
-                }
-                let _ = workspace.bump_navigation_revision(&other_id);
-            }
+            viewport.state = after;
         }
 
         if activate {

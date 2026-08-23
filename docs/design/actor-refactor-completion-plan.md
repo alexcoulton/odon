@@ -194,8 +194,10 @@ Current progress: native viewport chrome always emits typed topology commands, i
 the first actor projection, and has no renderer-mutation fallback for clone, remove, activate,
 rename, layout, ratio, swap, or links. Periodic renderer feedback now uses a renderer-only
 observation payload; actor-owned workspace, navigation, channel, layer, panel, and mask semantics
-are absent from that path. Project compatibility restoration and the mutable per-frame viewport
-state container remain to be narrowed before the first ownership slice is closed.
+are absent from that path. Renderer frames no longer advance navigation/presentation revisions or
+propagate linked camera/plane state, and native camera-fit and plane controls have no direct
+semantic fallback. Project compatibility restoration and the mutable per-frame viewport state
+container remain to be narrowed before the first ownership slice is closed.
 
 Ownership slices, in order:
 

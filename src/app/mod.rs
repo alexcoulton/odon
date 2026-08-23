@@ -184,12 +184,6 @@ where
     aggregate.extend(keys);
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ViewportControlDomain {
-    Read,
-    Navigation,
-}
 const MASK_POLYGON_CLOSE_HIT_RADIUS_SCREEN_PX: f32 = 10.0;
 const MASK_POLYGON_VERTEX_HIT_RADIUS_SCREEN_PX: f32 = 8.0;
 const MASK_POLYGON_EDGE_HIT_RADIUS_SCREEN_PX: f32 = 6.0;
@@ -1786,124 +1780,6 @@ impl ViewerViewportState {
         app.show_scale_bar = self.show_scale_bar;
         app.show_hud = self.show_hud;
         app.show_tile_debug = self.show_tile_debug;
-    }
-
-    fn camera_changed_from(&self, other: &Self) -> bool {
-        self.camera.center_world_lvl0 != other.camera.center_world_lvl0
-            || self.camera.zoom_screen_per_lvl0_px != other.camera.zoom_screen_per_lvl0_px
-    }
-
-    fn plane_changed_from(&self, other: &Self) -> bool {
-        self.view_plane_mode != other.view_plane_mode
-            || self.current_x_level0 != other.current_x_level0
-            || self.current_y_level0 != other.current_y_level0
-            || self.current_z_level0 != other.current_z_level0
-    }
-
-    fn presentation_fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.selected_channel.hash(&mut hasher);
-        self.active_layer.hash(&mut hasher);
-        self.channel_layer_order.hash(&mut hasher);
-        self.overlay_layer_order.hash(&mut hasher);
-        self.channel_sort_mode.storage_key().hash(&mut hasher);
-        serde_json::to_string(&self.layer_groups)
-            .unwrap_or_default()
-            .hash(&mut hasher);
-        for channel in &self.channels {
-            channel.index.hash(&mut hasher);
-            channel.visible.hash(&mut hasher);
-            channel.color_rgb.hash(&mut hasher);
-            channel
-                .window
-                .map(|(lo, hi)| (lo.to_bits(), hi.to_bits()))
-                .hash(&mut hasher);
-        }
-        serde_json::to_string(&self.object_display)
-            .unwrap_or_default()
-            .hash(&mut hasher);
-        self.object_filter
-            .project_json()
-            .to_string()
-            .hash(&mut hasher);
-        self.object_visible.hash(&mut hasher);
-        self.object_opacity.to_bits().hash(&mut hasher);
-        self.object_width_screen_px.to_bits().hash(&mut hasher);
-        self.object_color_rgb.hash(&mut hasher);
-        self.object_show_selection_overlay.hash(&mut hasher);
-        self.cells_outlines_visible.hash(&mut hasher);
-        self.cells_outlines_color_rgb.hash(&mut hasher);
-        self.cells_outlines_opacity.to_bits().hash(&mut hasher);
-        self.cells_outlines_width_px.to_bits().hash(&mut hasher);
-        self.cell_points_visible.hash(&mut hasher);
-        format!("{:?}", self.cell_points_style).hash(&mut hasher);
-        format!("{:?}", self.masks).hash(&mut hasher);
-        format!("{:?}", self.annotations).hash(&mut hasher);
-        self.seg_geojson_visible.hash(&mut hasher);
-        self.seg_geojson_opacity.to_bits().hash(&mut hasher);
-        self.seg_geojson_width_screen_px.to_bits().hash(&mut hasher);
-        self.seg_geojson_color_rgb.hash(&mut hasher);
-        for shape in &self.spatial_shapes {
-            shape.id.hash(&mut hasher);
-            shape.visible.hash(&mut hasher);
-            shape.opacity.to_bits().hash(&mut hasher);
-            shape.width_screen_px.to_bits().hash(&mut hasher);
-            shape.color_rgb.hash(&mut hasher);
-            if let Some(objects) = shape.objects.as_ref() {
-                serde_json::to_string(&objects.display)
-                    .unwrap_or_default()
-                    .hash(&mut hasher);
-                objects.filter.project_json().to_string().hash(&mut hasher);
-                objects.visible.hash(&mut hasher);
-                objects.opacity.to_bits().hash(&mut hasher);
-                objects.width_screen_px.to_bits().hash(&mut hasher);
-                objects.color_rgb.hash(&mut hasher);
-                objects.show_selection_overlay.hash(&mut hasher);
-            }
-        }
-        format!("{:?}", self.spatial_points).hash(&mut hasher);
-        for image in &self.spatial_images {
-            image.id.hash(&mut hasher);
-            image.visible.hash(&mut hasher);
-            image.opacity.to_bits().hash(&mut hasher);
-            image.current_z_level0.hash(&mut hasher);
-            for channel in &image.channels {
-                channel.index.hash(&mut hasher);
-                channel.visible.hash(&mut hasher);
-                channel.color_rgb.hash(&mut hasher);
-                channel
-                    .window
-                    .map(|(lo, hi)| (lo.to_bits(), hi.to_bits()))
-                    .hash(&mut hasher);
-            }
-        }
-        format!("{:?}", self.xenium_cells).hash(&mut hasher);
-        format!("{:?}", self.xenium_transcripts).hash(&mut hasher);
-        self.smooth_pixels.hash(&mut hasher);
-        self.show_scale_bar.hash(&mut hasher);
-        self.show_hud.hash(&mut hasher);
-        self.show_tile_debug.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn presentation_changed_from(&self, other: &Self) -> bool {
-        self.presentation_fingerprint() != other.presentation_fingerprint()
-    }
-
-    fn copy_linked_navigation_from(&mut self, source: &Self, links: ViewportLinks) {
-        if links.camera {
-            self.camera = source.camera.clone();
-        }
-        if links.plane {
-            self.view_plane_mode = source.view_plane_mode;
-            self.draft_view_slice_level0 = source.draft_view_slice_level0;
-            self.current_x_level0 = source.current_x_level0;
-            self.current_y_level0 = source.current_y_level0;
-            self.current_z_level0 = source.current_z_level0;
-            self.previous_displayed_view_selection = source.previous_displayed_view_selection;
-        }
     }
 
     fn layer_visible(&self, id: LayerId) -> Option<bool> {

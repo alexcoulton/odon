@@ -42,6 +42,8 @@ The following checks cover the parts that do not require a real native window co
 | Renderer adapters contain no semantic command emulators | `renderer_has_no_semantic_command_emulators` | Passing; inventory reduced from 55 to zero |
 | Native viewport topology has no renderer mutation fallback | `native_workspace_topology_commands_do_not_fall_back_to_renderer_mutation` and `native_workspace_topology_has_no_renderer_mutation_fallback` | Passing |
 | Periodic renderer observation excludes actor-owned semantic state | `renderer_observation_excludes_actor_owned_workspace_semantics` | Passing |
+| Renderer frames cannot advance viewport revisions or linked navigation | `horizontal_split_stacks_each_header_above_an_adjacent_full_height_canvas` plus the viewport source guard | Passing |
+| Native camera fit queues before the first projection without mutating renderer state | `native_camera_fit_queues_before_first_projection_without_mutating_renderer_state` | Passing |
 | Semantic events cannot bypass the actor through renderer snapshot diffs | Same source guard; `publish_native_event` and `control_observed_state` are forbidden | Passing |
 | Native project/viewer/mosaic commits do not use before/after snapshot translators | `root_has_no_native_snapshot_translator` plus native direct-intent tests | Passing |
 | Local actor remains available when optional TCP publication fails | `optional_tcp_failure_keeps_the_local_actor_available` | Passing |
@@ -71,7 +73,7 @@ The following checks cover the parts that do not require a real native window co
 Latest cumulative run before platform acceptance:
 
 - Rust library: 170 passed, 0 failed.
-- Rust `odon` binary: 190 passed, 0 failed, 4 tests intentionally ignored by the latest cumulative run; the frame-planning benchmark was previously run explicitly and passed, while three extended-fixture tests remain unavailable.
+- Rust `odon` binary: 191 passed, 0 failed, 4 tests intentionally ignored by the latest cumulative run; the frame-planning benchmark was previously run explicitly and passed, while three extended-fixture tests remain unavailable.
 - Rust `data_contracts` integration: 10 passed, 0 failed.
 - Python SDK: 88 passed, 0 failed.
 

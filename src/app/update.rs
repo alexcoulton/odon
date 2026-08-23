@@ -108,9 +108,7 @@ impl eframe::App for OmeZarrViewerApp {
                     ui.separator();
                     let mut mode = self.view_plane_mode;
                     if top_bar::ui_view_plane_mode(ui, &mut mode, &supported_view_planes) {
-                        if !self.submit_native_active_viewport_plane(mode, None) {
-                            self.set_view_plane_mode(mode);
-                        }
+                        self.submit_native_active_viewport_plane(mode, None);
                     }
                 }
                 if let Some(slice_extent) =
@@ -135,21 +133,15 @@ impl eframe::App for OmeZarrViewerApp {
                     } else if slider.changed {
                         self.previous_displayed_view_selection = None;
                         self.draft_view_slice_level0 = None;
-                        if !self.submit_native_active_viewport_plane(
+                        self.submit_native_active_viewport_plane(
                             self.view_plane_mode,
                             Some(slice_level0),
-                        ) {
-                            self.set_active_view_slice_level0(slice_level0);
-                        }
+                        );
                     } else if slider.released
                         && let Some(draft) = self.draft_view_slice_level0.take()
                     {
                         self.previous_displayed_view_selection = None;
-                        if !self
-                            .submit_native_active_viewport_plane(self.view_plane_mode, Some(draft))
-                        {
-                            self.set_active_view_slice_level0(draft);
-                        }
+                        self.submit_native_active_viewport_plane(self.view_plane_mode, Some(draft));
                     }
                 }
                 ui.separator();

@@ -45,6 +45,24 @@ fn native_workspace_topology_commands_do_not_fall_back_to_renderer_mutation() {
 }
 
 #[test]
+fn native_camera_fit_queues_before_first_projection_without_mutating_renderer_state() {
+    let mut app = fixture_app();
+    app.control_actor_workspace_revision = 0;
+    let before = app.camera.clone();
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let world = egui::Rect::from_min_size(egui::pos2(100.0, 200.0), egui::vec2(400.0, 300.0));
+
+    assert!(app.fit_camera_to_world_rect(viewport, world));
+    let intent = take_one(&mut app, "viewer.viewports.camera.set");
+    assert_eq!(intent.params["if_navigation_revision"], 1);
+    assert_eq!(app.camera.center_world_lvl0, before.center_world_lvl0);
+    assert_eq!(
+        app.camera.zoom_screen_per_lvl0_px,
+        before.zoom_screen_per_lvl0_px
+    );
+}
+
+#[test]
 fn detached_workspace_retains_the_explicit_native_command_scope() {
     let mut app = fixture_app();
     let _workspace = app.viewport_workspace.take().expect("fixture workspace");

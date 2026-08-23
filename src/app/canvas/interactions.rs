@@ -584,10 +584,8 @@ impl OmeZarrViewerApp {
         }
 
         if camera_changed {
-            if self.native_viewport_actor_owned() {
-                let desired = self.camera.clone();
-                self.submit_native_camera(&desired);
-            }
+            let desired = self.camera.clone();
+            self.submit_native_camera(&desired);
             self.hist_dirty = true;
             self.hist_navigation_dirty_since = Some(Instant::now());
         }

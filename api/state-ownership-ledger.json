@@ -94,7 +94,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor per-viewport camera model",
         "projection_source": "viewport navigation projection",
-        "renderer_consumers": "canvas transforms and navigation preview",
+        "renderer_consumers": "canvas transforms and optimistic navigation preview; renderer never advances semantic revisions or linked state",
         "persistence_consumers": "saved views and project workspace",
         "native_commit_point": "typed viewer camera command after gesture",
         "milestone": 3
@@ -130,7 +130,7 @@
         "disposition": "narrow",
         "canonical_writer": "ControlActor viewport plane and channel presentation model",
         "projection_source": "viewport navigation and presentation projection",
-        "renderer_consumers": "canvas and channel panels",
+        "renderer_consumers": "canvas and channel panels; plane controls have no direct semantic mutation fallback",
         "persistence_consumers": "project workspace and saved views",
         "native_commit_point": "typed plane/channel/rendering command",
         "milestone": 3
