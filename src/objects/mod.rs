@@ -32,7 +32,10 @@ use crate::spatialdata::{
     load_shapes_property_values_by_row, load_shapes_xy_point_features,
     load_shapes_xy_point_objects,
 };
-use odon::model::{ControlObjectFilterResult, ControlObjectResource, ObjectResourceLoader};
+use odon::model::{
+    ContinuousDomain, ContinuousPalette, ContinuousScale, ControlObjectFilterResult,
+    ControlObjectResource, ObjectColorMapping, ObjectResourceLoader, OutOfRangeMode,
+};
 
 mod analysis;
 mod control_service;
@@ -386,6 +389,10 @@ pub struct ObjectsLayer {
     color_groups_cache: HashMap<String, ObjectColorGroups>,
     color_mode: ObjectColorMode,
     color_property_key: String,
+    color_mapping: ObjectColorMapping,
+    resolved_continuous_domain: Option<[f64; 2]>,
+    continuous_color_payload: Option<ObjectContinuousColorPayload>,
+    continuous_color_generation: u64,
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     pending_color_value_visibility: Option<PendingColorValueVisibility>,
@@ -827,10 +834,21 @@ struct ObjectColorGroup {
     fill_generation: u64,
 }
 
+#[derive(Debug, Clone)]
+struct ObjectContinuousColorPayload {
+    mapping: ObjectColorMapping,
+    resolved_domain: [f64; 2],
+    colors_rgba: Arc<Vec<[u8; 4]>>,
+    numeric_count: usize,
+    missing_count: usize,
+    generation: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObjectColorMode {
     Single,
     ByProperty,
+    Continuous,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -916,6 +934,8 @@ pub(crate) struct ObjectProjectAnalysisState {
 pub(crate) struct ObjectProjectDisplayState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_property_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_mapping: Option<ObjectColorMapping>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     #[serde(default, skip_serializing_if = "is_false")]

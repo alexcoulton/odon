@@ -224,6 +224,7 @@ fn cancelled_project_roi_open_cannot_replace_the_previous_document() {
                 downsample_factor,
                 features: Arc::new(Vec::new()),
                 property_names: Arc::new(Vec::new()),
+                numeric_summaries: Arc::new(Default::default()),
                 renderer_payload: None,
             })
         }
@@ -316,6 +317,7 @@ fn superseding_dataset_open_rejects_a_late_project_roi_completion() {
                 downsample_factor,
                 features: Arc::new(Vec::new()),
                 property_names: Arc::new(Vec::new()),
+                numeric_summaries: Arc::new(Default::default()),
                 renderer_payload: None,
             })
         }

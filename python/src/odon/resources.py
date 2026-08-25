@@ -23,6 +23,57 @@ def _compact(params: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in params.items() if value is not None}
 
 
+def _continuous_color_mapping(
+    property: str,
+    *,
+    palette: str | Iterable[Mapping[str, Any]] = "viridis",
+    domain: str | Sequence[float] = "auto",
+    scale: str = "linear",
+    reverse: bool = False,
+    out_of_range: str = "clamp",
+    missing_color_rgb: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Build and validate Odon's portable continuous object-colour contract."""
+    if not property.strip():
+        raise ValueError("property must not be empty")
+    if isinstance(palette, str):
+        palette_value: Any = palette
+    else:
+        palette_value = [dict(stop) for stop in palette]
+        if len(palette_value) < 2:
+            raise ValueError("custom palettes require at least two stops")
+    if isinstance(domain, str):
+        if domain != "auto":
+            raise ValueError("domain must be 'auto' or a two-number sequence")
+        domain_value: Any = domain
+    else:
+        domain_value = [float(value) for value in domain]
+        if len(domain_value) != 2 or domain_value[0] >= domain_value[1]:
+            raise ValueError("domain must contain two numbers with min < max")
+    if scale not in {"linear", "log10"}:
+        raise ValueError("scale must be 'linear' or 'log10'")
+    if scale == "log10" and domain_value != "auto" and domain_value[0] <= 0:
+        raise ValueError("log10 domains must be greater than zero")
+    if out_of_range not in {"clamp", "hide"}:
+        raise ValueError("out_of_range must be 'clamp' or 'hide'")
+    missing = None if missing_color_rgb is None else list(missing_color_rgb)
+    if missing is not None and (
+        len(missing) != 3
+        or any(not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255 for value in missing)
+    ):
+        raise ValueError("missing_color_rgb must contain three integers from 0 to 255")
+    return {
+        "mode": "continuous",
+        "property": property,
+        "palette": palette_value,
+        "domain": domain_value,
+        "scale": scale,
+        "reverse": reverse,
+        "out_of_range": out_of_range,
+        "missing_color_rgb": missing,
+    }
+
+
 def _with_viewport_revision(
     params: Mapping[str, Any],
     if_revision: int | None,
@@ -1016,6 +1067,40 @@ class ViewportObjects:
         **style: Any,
     ) -> Any:
         return self._viewport.set_object_style(
+            if_revision=if_revision,
+            if_presentation_revision=if_presentation_revision,
+            **style,
+        )
+
+    def color_by_continuous(
+        self,
+        property: str,
+        *,
+        palette: str | Iterable[Mapping[str, Any]] = "viridis",
+        domain: str | Sequence[float] = "auto",
+        scale: str = "linear",
+        reverse: bool = False,
+        out_of_range: str = "clamp",
+        missing_color_rgb: Sequence[int] | None = None,
+        fill_cells: bool | None = None,
+        fill_opacity: float | None = None,
+        if_revision: int | None = None,
+        if_presentation_revision: int | None = None,
+    ) -> Any:
+        """Colour objects by exact numeric values using a continuous palette."""
+        style = {
+            "color_mapping": _continuous_color_mapping(
+                property,
+                palette=palette,
+                domain=domain,
+                scale=scale,
+                reverse=reverse,
+                out_of_range=out_of_range,
+                missing_color_rgb=missing_color_rgb,
+            ),
+            **_compact({"fill_cells": fill_cells, "fill_opacity": fill_opacity}),
+        }
+        return self.set_style(
             if_revision=if_revision,
             if_presentation_revision=if_presentation_revision,
             **style,
@@ -2248,6 +2333,37 @@ class Objects:
             "viewer.objects.style.set", _with_revision(params, if_revision)
         )
 
+    def color_by_continuous(
+        self,
+        property: str,
+        *,
+        palette: str | Iterable[Mapping[str, Any]] = "viridis",
+        domain: str | Sequence[float] = "auto",
+        scale: str = "linear",
+        reverse: bool = False,
+        out_of_range: str = "clamp",
+        missing_color_rgb: Sequence[int] | None = None,
+        fill_cells: bool | None = None,
+        fill_opacity: float | None = None,
+        if_revision: int | None = None,
+        **selector: Any,
+    ) -> Any:
+        """Colour the selected object resource by an exact numeric property."""
+        return self.set_style(
+            if_revision=if_revision,
+            **selector,
+            color_mapping=_continuous_color_mapping(
+                property,
+                palette=palette,
+                domain=domain,
+                scale=scale,
+                reverse=reverse,
+                out_of_range=out_of_range,
+                missing_color_rgb=missing_color_rgb,
+            ),
+            **_compact({"fill_cells": fill_cells, "fill_opacity": fill_opacity}),
+        )
+
     def set_legend(
         self,
         entries: Iterable[Mapping[str, Any]],
@@ -3292,6 +3408,33 @@ class Mosaic:
 
     def set_object_style(self, **style: Any) -> Any:
         return self._client.call("mosaic.objects.style.set", {"style": style})
+
+    def color_objects_by_continuous(
+        self,
+        property: str,
+        *,
+        palette: str | Iterable[Mapping[str, Any]] = "viridis",
+        domain: str | Sequence[float] = "auto",
+        scale: str = "linear",
+        reverse: bool = False,
+        out_of_range: str = "clamp",
+        missing_color_rgb: Sequence[int] | None = None,
+        fill_cells: bool | None = None,
+        fill_opacity: float | None = None,
+    ) -> Any:
+        """Apply one continuous object-colour scale across the mosaic."""
+        return self.set_object_style(
+            color_mapping=_continuous_color_mapping(
+                property,
+                palette=palette,
+                domain=domain,
+                scale=scale,
+                reverse=reverse,
+                out_of_range=out_of_range,
+                missing_color_rgb=missing_color_rgb,
+            ),
+            **_compact({"fill_cells": fill_cells, "fill_opacity": fill_opacity}),
+        )
 
     def get_object_selection(
         self, *, item_id: int | None = None, roi_id: str | None = None

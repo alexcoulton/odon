@@ -349,6 +349,7 @@ impl NativeLayersModel {
                     "show_selection_overlay":true,
                     "fast_rendering":true,
                     "color_property":"",
+                    "color_mapping":{"mode":"single"},
                     "color_level_overrides":{},
                 }),
             });
@@ -392,6 +393,7 @@ impl NativeLayersModel {
                         "show_selection_overlay":true,
                         "fast_rendering":true,
                         "color_property":"",
+                        "color_mapping":{"mode":"single"},
                         "color_level_overrides":{},
                         "filter":{
                             "mode":"simple",

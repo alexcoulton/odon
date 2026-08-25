@@ -1195,6 +1195,12 @@ impl OmeZarrViewerApp {
                     .filter(|value| !value.is_empty())
                     .map(str::to_string);
             }
+            if let Some(value) = objects.get("color_mapping") {
+                state.object_display.color_mapping =
+                    Some(serde_json::from_value(value.clone()).map_err(|error| {
+                        format!("actor object color mapping is invalid: {error}")
+                    })?);
+            }
             if let Some(value) = objects.get("color_level_overrides") {
                 state.object_display.color_level_overrides = serde_json::from_value(value.clone())
                     .map_err(|error| {

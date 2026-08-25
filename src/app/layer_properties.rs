@@ -526,7 +526,19 @@ impl OmeZarrViewerApp {
                     .local_path()
                     .and_then(|p| p.parent())
                     .unwrap_or_else(|| Path::new("."));
-                if let Some(action) = self.seg_objects.ui_properties(ui, default_dir) {
+                let style_before = self.seg_objects.control_style_json();
+                let object_action = self.seg_objects.ui_properties(ui, default_dir);
+                let style_after = self.seg_objects.control_style_json();
+                if style_after != style_before {
+                    let _ = self
+                        .seg_objects
+                        .apply_actor_style_projection_json(&style_before);
+                    self.native_command_ingress.push(NativeControlIntent {
+                        method: "viewer.objects.style.set",
+                        params: style_after,
+                    });
+                }
+                if let Some(action) = object_action {
                     self.queue_object_ui_action(action);
                 }
             }
@@ -538,7 +550,27 @@ impl OmeZarrViewerApp {
                         .local_path()
                         .and_then(|p| p.parent())
                         .unwrap_or_else(|| Path::new("."));
-                    if layer.ui_properties(ui, default_dir) {
+                    let style_before = layer
+                        .object_layer()
+                        .map(|objects| objects.control_style_json());
+                    let changed = layer.ui_properties(ui, default_dir);
+                    let style_after = layer
+                        .object_layer()
+                        .map(|objects| objects.control_style_json());
+                    if let (Some(style_before), Some(style_after)) = (style_before, style_after)
+                        && style_before != style_after
+                    {
+                        if let Some(objects) = layer.object_layer_mut() {
+                            let _ = objects.apply_actor_style_projection_json(&style_before);
+                        }
+                        let mut params = style_after;
+                        params["target"] = serde_json::json!("spatial_shape");
+                        params["layer_id"] = serde_json::json!(id);
+                        self.native_command_ingress.push(NativeControlIntent {
+                            method: "viewer.objects.style.set",
+                            params,
+                        });
+                    } else if changed {
                         self.bump_render_id();
                     }
                 } else {

@@ -10,6 +10,7 @@ impl AppModel {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        let color_mapping = viewport.objects.get("color_mapping").cloned();
         let overrides = viewport
             .objects
             .get("color_level_overrides")
@@ -54,6 +55,9 @@ impl AppModel {
             spec["load_labels"] = Value::Bool(false);
             spec["cell_color_by"] =
                 color_property.map_or(Value::Null, |value| Value::String(value.to_string()));
+            if let Some(mapping) = color_mapping {
+                spec["object_color_mapping"] = mapping;
+            }
             spec["visible_cell_types"] = json!(visible_cell_types);
             spec["hidden_cell_types"] = json!(hidden_cell_types);
             spec["fill_cells"] = viewport
@@ -195,6 +199,21 @@ impl AppModel {
                 .as_object_mut()
                 .expect("object presentation is normalized")
                 .insert("color_property".to_string(), value.clone());
+        }
+        if let Some(value) = spec.get("object_color_mapping") {
+            let mapping = normalize_object_color_mapping(value)?;
+            let property = mapping
+                .get("property")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .map(Value::String)
+                .unwrap_or(Value::Null);
+            let objects = viewport
+                .objects
+                .as_object_mut()
+                .expect("object presentation is normalized");
+            objects.insert("color_property".to_string(), property);
+            objects.insert("color_mapping".to_string(), mapping);
         }
         for (name, visible) in [("visible_cell_types", true), ("hidden_cell_types", false)] {
             if let Some(values) = spec.get(name).and_then(Value::as_array) {

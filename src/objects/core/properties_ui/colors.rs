@@ -83,6 +83,11 @@ impl ObjectsLayer {
             }
             _ => (ObjectColorMode::Single, String::new()),
         };
+        let next_mapping = if next_mode == ObjectColorMode::ByProperty {
+            ObjectColorMapping::categorical(next_key.clone())
+        } else {
+            ObjectColorMapping::Single
+        };
         let needs_property_load = next_mode == ObjectColorMode::ByProperty
             && self.property_column_available_but_unloaded(next_key.as_str());
         if self.color_mode == next_mode
@@ -90,6 +95,8 @@ impl ObjectsLayer {
             && (!needs_property_load
                 || self.property_load_key.as_deref() == Some(next_key.as_str()))
         {
+            self.color_mapping = next_mapping;
+            self.resolved_continuous_domain = None;
             return;
         }
         // A legend can be inspected before the render path has materialized
@@ -109,6 +116,9 @@ impl ObjectsLayer {
         }
         self.color_mode = next_mode;
         self.color_property_key = next_key;
+        self.color_mapping = next_mapping;
+        self.resolved_continuous_domain = None;
+        self.continuous_color_payload = None;
         if self.color_mode == ObjectColorMode::ByProperty {
             let key = self.color_property_key.clone();
             self.ensure_property_loaded(key.as_str());
@@ -125,162 +135,193 @@ impl ObjectsLayer {
         self.color_legend_cache = None;
     }
 
-    pub(crate) fn project_display_state(&self) -> ObjectProjectDisplayState {
-        let color_property_key = (self.color_mode == ObjectColorMode::ByProperty)
-            .then(|| self.color_property_key.clone())
-            .filter(|key| !key.is_empty());
-        let color_level_overrides = if color_property_key.as_deref()
-            == Some(self.color_level_overrides_property_key.as_str())
-        {
-            self.color_level_overrides.clone()
-        } else {
-            BTreeMap::new()
-        };
-        ObjectProjectDisplayState {
-            color_property_key,
-            color_level_overrides,
-            fill_cells: self.fill_cells,
-            fill_opacity: self.fill_opacity,
-            selected_fill_opacity: self.selected_fill_opacity,
-            fast_rendering: self.fast_rendering,
+    pub fn set_color_mapping(&mut self, mapping: ObjectColorMapping) -> Result<(), String> {
+        mapping.validate()?;
+        if self.color_mapping == mapping {
+            if let ObjectColorMapping::Continuous { property, .. } = &mapping {
+                self.ensure_property_loaded(property);
+                self.resolve_continuous_domain();
+            }
+            return Ok(());
         }
+        match &mapping {
+            ObjectColorMapping::Single => {
+                self.set_color_by_property(None);
+                return Ok(());
+            }
+            ObjectColorMapping::Categorical { property } => {
+                self.set_color_by_property(Some(property.clone()));
+                return Ok(());
+            }
+            ObjectColorMapping::Continuous { property, .. } => {
+                let property = property.clone();
+                if self.color_mode == ObjectColorMode::ByProperty
+                    && !self.color_property_key.is_empty()
+                    && self.color_groups.is_none()
+                    && !self.has_active_filter()
+                {
+                    self.ensure_color_groups();
+                }
+                if let Some(groups) = self.color_groups.take() {
+                    self.color_groups_cache
+                        .insert(groups.property_key.clone(), groups);
+                }
+                self.color_mode = ObjectColorMode::Continuous;
+                self.color_property_key = property.clone();
+                self.color_mapping = mapping;
+                if self
+                    .status
+                    .ends_with("has too many distinct values for Color by.")
+                {
+                    self.status = format!("Loaded {} object(s).", self.object_count());
+                }
+                self.ensure_property_loaded(&property);
+                self.resolve_continuous_domain();
+                self.continuous_color_payload = None;
+                self.filtered_color_groups = None;
+                self.color_legend_cache = None;
+                self.generation = self.generation.wrapping_add(1).max(1);
+            }
+        }
+        Ok(())
     }
 
-    pub(crate) fn apply_project_display_state(&mut self, state: &ObjectProjectDisplayState) {
-        self.set_color_by_property(state.color_property_key.clone());
-        // Project and control-actor presentation is declarative. Preserve a requested property
-        // even when its object column has not materialized yet; the resource loader can satisfy
-        // it later without losing the canonical presentation while the renderer is catching up.
-        if let Some(property_key) = state
-            .color_property_key
-            .as_deref()
-            .filter(|property_key| !property_key.is_empty())
-        {
-            self.color_mode = ObjectColorMode::ByProperty;
-            self.color_property_key = property_key.to_string();
-        }
-        self.color_level_overrides_property_key =
-            state.color_property_key.clone().unwrap_or_default();
-        self.color_level_overrides = state.color_level_overrides.clone();
-        self.fill_cells = state.fill_cells;
-        self.fill_opacity = state.fill_opacity.clamp(0.0, 1.0);
-        self.selected_fill_opacity = state.selected_fill_opacity.clamp(0.0, 1.0);
-        self.fast_rendering = state.fast_rendering;
-        self.filtered_color_groups = None;
-        self.color_legend_cache = None;
+    pub fn color_mapping(&self) -> &ObjectColorMapping {
+        &self.color_mapping
     }
 
-    pub(crate) fn viewport_filter_state(&self) -> ObjectViewportFilterState {
-        ObjectViewportFilterState {
-            mode: self.filter_mode,
-            clauses: self.filter_clauses.clone(),
-            logic: self.filter_logic,
-            query_text: self.filter_query_text.clone(),
-            query_expr: self.filter_query_expr.clone(),
-            query_error: self.filter_query_error.clone(),
-        }
+    pub fn resolved_continuous_domain(&self) -> Option<[f64; 2]> {
+        self.resolved_continuous_domain
     }
 
-    pub(crate) fn viewport_filter_cache_state(&self) -> ObjectViewportFilterCacheState {
-        ObjectViewportFilterCacheState {
-            filtered_ordered_indices: self.filtered_ordered_indices.clone(),
-            filtered_mask: self.filtered_mask.clone(),
-            filtered_render_lods: self.filtered_render_lods.clone(),
-            filtered_point_positions_world: self.filtered_point_positions_world.clone(),
-            filtered_point_values: self.filtered_point_values.clone(),
-            filtered_point_lods: self.filtered_point_lods.clone(),
-            filtered_color_groups: self.filtered_color_groups.clone(),
-            filter_generation: self.filter_generation,
+    pub(crate) fn numeric_property_domain(&mut self, property: &str) -> Option<[f64; 2]> {
+        if self.property_column_available_but_unloaded(property) {
+            self.ensure_property_loaded(property);
+            return None;
         }
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        if let Some(values) = self.property_store.numeric_pairs(property) {
+            for (_, value) in values {
+                let value = f64::from(value);
+                minimum = minimum.min(value);
+                maximum = maximum.max(value);
+            }
+        } else if let Some(objects) = self.objects.as_ref() {
+            for value in objects.iter().filter_map(|object| {
+                object
+                    .inline_properties
+                    .get(property)
+                    .and_then(numeric_json_value)
+                    .map(f64::from)
+            }) {
+                minimum = minimum.min(value);
+                maximum = maximum.max(value);
+            }
+        }
+        (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum])
     }
 
-    pub(crate) fn apply_viewport_filter_cache_state(
+    pub(in crate::objects) fn ensure_continuous_color_payload(
         &mut self,
-        state: &ObjectViewportFilterCacheState,
-    ) {
-        self.filtered_ordered_indices
-            .clone_from(&state.filtered_ordered_indices);
-        self.filtered_mask.clone_from(&state.filtered_mask);
-        self.filtered_render_lods
-            .clone_from(&state.filtered_render_lods);
-        self.filtered_point_positions_world
-            .clone_from(&state.filtered_point_positions_world);
-        self.filtered_point_values
-            .clone_from(&state.filtered_point_values);
-        self.filtered_point_lods
-            .clone_from(&state.filtered_point_lods);
-        self.filtered_color_groups
-            .clone_from(&state.filtered_color_groups);
-        self.filter_generation = state.filter_generation;
-        self.visible_selected_render_cache = None;
+    ) -> Option<&ObjectContinuousColorPayload> {
+        if self.color_mode != ObjectColorMode::Continuous {
+            self.continuous_color_payload = None;
+            return None;
+        }
+        if self.resolved_continuous_domain.is_none() {
+            self.resolve_continuous_domain();
+        }
+        let resolved_domain = self.resolved_continuous_domain?;
+        if self
+            .continuous_color_payload
+            .as_ref()
+            .is_some_and(|payload| {
+                payload.mapping == self.color_mapping && payload.resolved_domain == resolved_domain
+            })
+        {
+            return self.continuous_color_payload.as_ref();
+        }
+        let property = self.color_mapping.property()?.to_string();
+        let config = self.color_mapping.continuous_config()?;
+        let objects = self.objects.as_ref()?;
+        let mut colors_rgba = Vec::with_capacity(objects.len());
+        let mut numeric_count = 0usize;
+        for (index, object) in objects.iter().enumerate() {
+            let value = self
+                .property_store
+                .numeric_at(&property, index)
+                .or_else(|| {
+                    object.inline_properties.get(&property).and_then(|value| {
+                        value
+                            .as_f64()
+                            .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+                            .filter(|value| value.is_finite())
+                    })
+                });
+            numeric_count += usize::from(value.is_some());
+            colors_rgba.push(config.color_rgba(value, resolved_domain));
+        }
+        self.continuous_color_generation = self.continuous_color_generation.wrapping_add(1).max(1);
+        self.continuous_color_payload = Some(ObjectContinuousColorPayload {
+            mapping: self.color_mapping.clone(),
+            resolved_domain,
+            colors_rgba: Arc::new(colors_rgba),
+            numeric_count,
+            missing_count: objects.len().saturating_sub(numeric_count),
+            generation: self.continuous_color_generation,
+        });
+        self.continuous_color_payload.as_ref()
     }
 
-    pub(crate) fn apply_viewport_filter_state(&mut self, state: &ObjectViewportFilterState) {
-        if self.filter_mode == state.mode
-            && self.filter_clauses == state.clauses
-            && self.filter_logic == state.logic
-            && self.filter_query_text == state.query_text
-            && self.filter_query_expr == state.query_expr
-            && self.filter_query_error == state.query_error
-        {
+    pub(super) fn resolve_continuous_domain(&mut self) {
+        let ObjectColorMapping::Continuous {
+            property,
+            domain,
+            scale,
+            ..
+        } = &self.color_mapping
+        else {
+            self.resolved_continuous_domain = None;
+            return;
+        };
+        if let Some(domain) = domain.fixed() {
+            self.resolved_continuous_domain = Some(domain);
             return;
         }
-        self.filter_mode = state.mode;
-        self.filter_clauses.clone_from(&state.clauses);
-        self.filter_logic = state.logic;
-        self.filter_query_text.clone_from(&state.query_text);
-        self.filter_query_expr.clone_from(&state.query_expr);
-        self.filter_query_error.clone_from(&state.query_error);
-        self.ensure_filter_clause_row();
-        self.ensure_active_filter_properties_loaded();
-        self.invalidate_filter_cache();
-    }
-
-    pub(crate) fn apply_project_display_state_preserving_color_visibility(
-        &mut self,
-        state: &ObjectProjectDisplayState,
-    ) {
-        let runtime_color_key = self.color_property_key.clone();
-        let runtime_overrides_key = self.color_level_overrides_property_key.clone();
-        let runtime_overrides = self.color_level_overrides.clone();
-        let preserve_runtime_overrides = !runtime_color_key.is_empty()
-            && runtime_overrides_key == runtime_color_key
-            && state.color_property_key.as_deref() == Some(runtime_color_key.as_str())
-            && state.color_level_overrides.is_empty()
-            && runtime_overrides
-                .values()
-                .any(|style| !style.visible || style.color_rgb.is_some());
-
-        self.apply_project_display_state(state);
-
-        if preserve_runtime_overrides {
-            crate::log_warn!(
-                "objects: preserving runtime Color by overrides for '{}' after project display restore",
-                runtime_color_key
-            );
-            self.color_level_overrides_property_key = runtime_overrides_key;
-            self.color_level_overrides = runtime_overrides;
-            self.color_groups = None;
-            self.filtered_color_groups = None;
-            self.color_legend_cache = None;
-            self.ensure_color_groups();
-            self.generation = self.generation.wrapping_add(1).max(1);
+        let property = property.clone();
+        let values = if let Some(values) = self.property_store.numeric_pairs(&property) {
+            values
+                .into_iter()
+                .map(|(_, value)| f64::from(value))
+                .collect::<Vec<_>>()
+        } else {
+            self.objects
+                .as_ref()
+                .into_iter()
+                .flat_map(|objects| objects.iter())
+                .filter_map(|object| {
+                    object
+                        .inline_properties
+                        .get(&property)
+                        .and_then(numeric_json_value)
+                        .map(f64::from)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        for value in values
+            .into_iter()
+            .filter(|value| value.is_finite())
+            .filter(|value| *scale != ContinuousScale::Log10 || *value > 0.0)
+        {
+            minimum = minimum.min(value);
+            maximum = maximum.max(value);
         }
-    }
-
-    pub(crate) fn clear_project_display_state(&mut self) {
-        self.set_color_by_property(None);
-        self.color_level_overrides_property_key.clear();
-        self.color_level_overrides.clear();
-        self.pending_color_value_colors = None;
-        self.pending_color_value_visibility = None;
-        self.fill_cells = false;
-        self.fill_opacity = 0.30;
-        self.selected_fill_opacity = 0.70;
-        self.fast_rendering = true;
-        self.color_groups = None;
-        self.filtered_color_groups = None;
-        self.color_legend_cache = None;
+        self.resolved_continuous_domain =
+            (minimum.is_finite() && maximum.is_finite()).then_some([minimum, maximum]);
+        self.continuous_color_payload = None;
     }
 
     pub fn set_color_level_overrides(
@@ -546,6 +587,10 @@ impl ObjectsLayer {
         self.invalidate_filter_cache();
         self.reset_object_property_analysis_cache();
         self.generation = self.generation.wrapping_add(1).max(1);
+        self.continuous_color_payload = None;
+        if self.color_mode == ObjectColorMode::Continuous {
+            self.resolve_continuous_domain();
+        }
         self.reconcile_active_color_property();
         self.apply_pending_color_value_visibility();
         let n = self.object_count();
@@ -577,5 +622,7 @@ impl ObjectsLayer {
         );
         self.color_mode = ObjectColorMode::Single;
         self.color_property_key.clear();
+        self.color_mapping = ObjectColorMapping::Single;
+        self.resolved_continuous_domain = None;
     }
 }

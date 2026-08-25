@@ -101,12 +101,15 @@ pub(in crate::control::actor) fn measure_objects_on_worker(
     }
     property_names.sort();
     property_names.dedup();
+    let numeric_summaries =
+        ControlObjectResource::build_numeric_summaries(&features, &property_names);
     Ok((
         ControlObjectResource {
             source: spec.resource.source.clone(),
             downsample_factor: spec.resource.downsample_factor,
             features: Arc::new(features),
             property_names: Arc::new(property_names),
+            numeric_summaries,
             renderer_payload: None,
         },
         measured_objects.len(),

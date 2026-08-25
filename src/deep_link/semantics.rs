@@ -21,6 +21,7 @@ pub(crate) fn object_segmentation_requested(request: &DeepLinkRequest) -> bool {
     }) || !request.object_filters.is_empty()
         || request.object_query.is_some()
         || !request.object_level_colors.is_empty()
+        || request.object_color_mapping.is_some()
 }
 
 #[allow(dead_code)] // See `object_segmentation_requested`.

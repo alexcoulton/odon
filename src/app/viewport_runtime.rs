@@ -324,6 +324,7 @@ impl OmeZarrViewerApp {
                 "show_selection_overlay": state.object_show_selection_overlay,
                 "fast_rendering": state.object_display.fast_rendering,
                 "color_property": state.object_display.color_property_key,
+                "color_mapping": state.object_display.color_mapping,
                 "color_level_overrides": state.object_display.color_level_overrides,
                 "filter": state.object_filter.project_json(),
             },

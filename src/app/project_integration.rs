@@ -33,8 +33,10 @@ impl OmeZarrViewerApp {
                 (Some(property_key), visible_values, hidden_values)
             })
             .unwrap_or_else(|| (display.color_property_key.clone(), Vec::new(), Vec::new()));
-        let uses_object_segmentation =
-            self.seg_objects.object_count() > 0 || cell_color_by.is_some() || display.fill_cells;
+        let uses_object_segmentation = self.seg_objects.object_count() > 0
+            || cell_color_by.is_some()
+            || display.color_mapping.is_some()
+            || display.fill_cells;
         let channel_ref =
             self.channels
                 .get(self.selected_channel)
@@ -61,6 +63,7 @@ impl OmeZarrViewerApp {
             segmentation_source: uses_object_segmentation.then(|| "geoparquet".to_string()),
             load_labels: uses_object_segmentation.then_some(false),
             cell_color_by,
+            object_color_mapping: display.color_mapping,
             visible_cell_types,
             hidden_cell_types,
             fill_cells: uses_object_segmentation.then_some(display.fill_cells),

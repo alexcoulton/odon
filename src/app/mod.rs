@@ -951,6 +951,12 @@ impl ViewerViewportState {
                 .filter(|property| !property.is_empty())
                 .map(str::to_string);
         }
+        if let Some(mapping) = value.get("color_mapping") {
+            presentation.display.color_mapping = Some(
+                serde_json::from_value(mapping.clone())
+                    .map_err(|error| format!("invalid object color mapping: {error}"))?,
+            );
+        }
         if let Some(overrides) = value.get("color_level_overrides") {
             presentation.display.color_level_overrides = serde_json::from_value(overrides.clone())
                 .map_err(|error| format!("invalid object legend presentation: {error}"))?;

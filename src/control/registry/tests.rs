@@ -255,6 +255,17 @@ fn multi_viewport_registry_contracts_expose_ids_revisions_events_and_modes() {
         style_schema["properties"]["if_presentation_revision"]["minimum"],
         1
     );
+    let continuous = &style_schema["properties"]["color_mapping"]["oneOf"][2]["properties"];
+    assert_eq!(continuous["mode"]["const"], "continuous");
+    assert_eq!(continuous["palette"]["anyOf"][0]["enum"][0], "viridis");
+    assert_eq!(continuous["scale"]["enum"][1], "log10");
+
+    let mosaic_style = request_schema_for(method("mosaic.objects.style.set").unwrap());
+    assert_eq!(
+        mosaic_style["properties"]["style"]["properties"]["color_mapping"]["oneOf"][2]["properties"]
+            ["out_of_range"]["enum"][1],
+        "hide"
+    );
 
     let links = request_schema_for(method("viewer.viewport_links.create").unwrap());
     assert_eq!(links["required"], json!(["viewports", "fields"]));

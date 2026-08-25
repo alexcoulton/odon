@@ -3,7 +3,7 @@
 use super::*;
 
 impl ObjectsLayer {
-    pub(in crate::objects) fn available_numeric_object_property_keys(&mut self) -> Vec<String> {
+    pub(crate) fn available_numeric_object_property_keys(&mut self) -> Vec<String> {
         if let Some(cached) = self.object_property_numeric_keys_cache.as_ref() {
             return cached.clone();
         }

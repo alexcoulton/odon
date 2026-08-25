@@ -10,6 +10,13 @@ use crate::render::line_bins::ObjectLineSegmentsBins;
 
 use super::program::compile_program_with_attributes;
 
+mod color_texture;
+mod shaders;
+use color_texture::ObjectColorGpu;
+use shaders::OBJECT_LINE_FRAG_330;
+
+const OBJECT_LINE_VERT_330: &str = shaders::OBJECT_LINE_VERT_330;
+
 #[derive(Debug, Clone)]
 pub struct ObjectLineBinsGlDrawParams {
     pub center_world: egui::Pos2,
@@ -24,6 +31,7 @@ pub struct ObjectLineBinsGlDrawParams {
     pub visible: bool,
     pub local_to_world_offset: egui::Vec2,
     pub local_to_world_scale: egui::Vec2,
+    pub object_color_opacity: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +43,9 @@ pub struct ObjectLineBinsGlDrawData {
     pub selection_generation: u64,
     pub selection_state: Arc<Vec<u8>>,
     pub object_count: usize,
+    pub color_cache_id: u64,
+    pub color_generation: u64,
+    pub object_colors_rgba: Option<Arc<Vec<[u8; 4]>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +117,10 @@ impl ObjectLineBinsGlRenderer {
         let u_local_to_world_scale = objects.u_local_to_world_scale.clone();
         let u_state_tex = objects.u_state_tex.clone();
         let u_state_tex_size = objects.u_state_tex_size.clone();
+        let u_color_tex = objects.u_color_tex.clone();
+        let u_color_tex_size = objects.u_color_tex_size.clone();
+        let u_use_object_colors = objects.u_use_object_colors.clone();
+        let u_object_color_opacity = objects.u_object_color_opacity.clone();
 
         let viewport_pt = info.viewport;
         let ppp = info.pixels_per_point.max(1e-6);
@@ -132,6 +147,7 @@ impl ObjectLineBinsGlRenderer {
                 viewport_size_px.y.max(1.0),
             );
             gl.uniform_1_i32(u_state_tex.as_ref(), 0);
+            gl.uniform_1_i32(u_color_tex.as_ref(), 1);
         }
 
         let mut uploaded_this_frame = 0usize;
@@ -180,6 +196,17 @@ impl ObjectLineBinsGlRenderer {
             else {
                 continue;
             };
+            let color_texture = it.data.object_colors_rgba.as_ref().and_then(|colors| {
+                inner
+                    .ensure_color_uploaded(
+                        gl,
+                        it.data.color_cache_id,
+                        it.data.color_generation,
+                        it.data.object_count,
+                        colors.as_slice(),
+                    )
+                    .map(|color| (color.texture, color.width, color.height))
+            });
 
             unsafe {
                 let gl = gl.as_ref();
@@ -214,6 +241,22 @@ impl ObjectLineBinsGlRenderer {
                 );
                 gl.uniform_2_i32(u_state_tex_size.as_ref(), state_width, state_height);
                 gl.bind_texture(glow::TEXTURE_2D, Some(state_texture));
+                gl.uniform_1_i32(
+                    u_use_object_colors.as_ref(),
+                    i32::from(color_texture.is_some()),
+                );
+                gl.uniform_1_f32(
+                    u_object_color_opacity.as_ref(),
+                    it.params.object_color_opacity.clamp(0.0, 1.0),
+                );
+                if let Some((texture, width, height)) = color_texture {
+                    gl.uniform_2_i32(u_color_tex_size.as_ref(), width, height);
+                    gl.active_texture(glow::TEXTURE1);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                    gl.active_texture(glow::TEXTURE0);
+                } else {
+                    gl.uniform_2_i32(u_color_tex_size.as_ref(), 0, 0);
+                }
             }
 
             let (bx0, by0, bx1, by1) = it.data.bins.bin_range_for_world_rect(it.visible_world);
@@ -264,6 +307,9 @@ impl ObjectLineBinsGlRenderer {
         unsafe {
             let gl = gl.as_ref();
             gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE0);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
             gl.use_program(None);
@@ -299,6 +345,7 @@ struct ObjectLineInner {
     gl_objects: Option<ObjectLineGlObjects>,
     bins: LruCache<(u64, u64, usize), ObjectBinGpu>,
     states: LruCache<u64, ObjectStateGpu>,
+    colors: LruCache<u64, ObjectColorGpu>,
     buffers_to_delete: Vec<glow::Buffer>,
     textures_to_delete: Vec<glow::Texture>,
     last_frame_missing_bins: usize,
@@ -310,6 +357,7 @@ impl ObjectLineInner {
             gl_objects: None,
             bins: LruCache::new(bin_cap),
             states: LruCache::new(state_cap),
+            colors: LruCache::new(state_cap),
             buffers_to_delete: Vec::new(),
             textures_to_delete: Vec::new(),
             last_frame_missing_bins: 0,
@@ -485,6 +533,10 @@ struct ObjectLineGlObjects {
     u_local_to_world_scale: Option<glow::UniformLocation>,
     u_state_tex: Option<glow::UniformLocation>,
     u_state_tex_size: Option<glow::UniformLocation>,
+    u_color_tex: Option<glow::UniformLocation>,
+    u_color_tex_size: Option<glow::UniformLocation>,
+    u_use_object_colors: Option<glow::UniformLocation>,
+    u_object_color_opacity: Option<glow::UniformLocation>,
 }
 
 impl ObjectLineGlObjects {
@@ -528,125 +580,12 @@ impl ObjectLineGlObjects {
             },
             u_state_tex: unsafe { gl.get_uniform_location(program, "u_state_tex") },
             u_state_tex_size: unsafe { gl.get_uniform_location(program, "u_state_tex_size") },
+            u_color_tex: unsafe { gl.get_uniform_location(program, "u_color_tex") },
+            u_color_tex_size: unsafe { gl.get_uniform_location(program, "u_color_tex_size") },
+            u_use_object_colors: unsafe { gl.get_uniform_location(program, "u_use_object_colors") },
+            u_object_color_opacity: unsafe {
+                gl.get_uniform_location(program, "u_object_color_opacity")
+            },
         })
     }
 }
-
-const OBJECT_LINE_VERT_330: &str = r#"#version 330 core
-layout(location = 0) in vec4 a_seg;
-layout(location = 1) in float a_object_id;
-
-uniform vec2 u_center_world;
-uniform float u_zoom_px;
-uniform vec2 u_viewport_min_px;
-uniform vec2 u_viewport_size_px;
-uniform float u_base_width_px;
-uniform float u_selected_width_px;
-uniform float u_primary_width_px;
-uniform vec2 u_local_to_world_offset;
-uniform vec2 u_local_to_world_scale;
-uniform sampler2D u_state_tex;
-uniform ivec2 u_state_tex_size;
-
-out vec2 v_screen_px;
-out vec2 v_a_px;
-out vec2 v_b_px;
-out float v_half_w;
-flat out float v_state;
-
-float selection_state_for_object(int object_id) {
-    if (u_state_tex_size.x <= 0 || u_state_tex_size.y <= 0 || object_id < 0) {
-        return 0.0;
-    }
-    int x = object_id % u_state_tex_size.x;
-    int y = object_id / u_state_tex_size.x;
-    if (y < 0 || y >= u_state_tex_size.y) {
-        return 0.0;
-    }
-    return texelFetch(u_state_tex, ivec2(x, y), 0).r;
-}
-
-void main() {
-    int object_id = int(a_object_id + 0.5);
-    float state = selection_state_for_object(object_id);
-    v_state = state;
-
-    vec2 a_world = u_local_to_world_offset + a_seg.xy * u_local_to_world_scale;
-    vec2 b_world = u_local_to_world_offset + a_seg.zw * u_local_to_world_scale;
-
-    vec2 viewport_center_px = u_viewport_min_px + 0.5 * u_viewport_size_px;
-    vec2 a_px = (a_world - u_center_world) * u_zoom_px + viewport_center_px;
-    vec2 b_px = (b_world - u_center_world) * u_zoom_px + viewport_center_px;
-
-    vec2 d = b_px - a_px;
-    float len2 = max(dot(d, d), 1e-6);
-    vec2 dir = d * inversesqrt(len2);
-    vec2 n = vec2(-dir.y, dir.x);
-
-    float width_px = state > 0.75 ? max(u_primary_width_px, 0.5) :
-        (state > 0.001 ? max(u_selected_width_px, 0.5) : max(u_base_width_px, 0.5));
-    float half_w = 0.5 * width_px;
-    vec2 a2 = a_px - dir * half_w;
-    vec2 b2 = b_px + dir * half_w;
-
-    int vid = gl_VertexID;
-    float t = 0.0;
-    float side = -1.0;
-    if (vid == 0) { t = 0.0; side = -1.0; }
-    else if (vid == 1) { t = 1.0; side = -1.0; }
-    else if (vid == 2) { t = 1.0; side = 1.0; }
-    else if (vid == 3) { t = 0.0; side = -1.0; }
-    else if (vid == 4) { t = 1.0; side = 1.0; }
-    else { t = 0.0; side = 1.0; }
-
-    vec2 base = mix(a2, b2, t) + n * side * half_w;
-    vec2 local = base - u_viewport_min_px;
-    vec2 ndc = vec2(
-        (local.x / u_viewport_size_px.x) * 2.0 - 1.0,
-        1.0 - (local.y / u_viewport_size_px.y) * 2.0
-    );
-    gl_Position = vec4(ndc, 0.0, 1.0);
-
-    v_screen_px = base;
-    v_a_px = a2;
-    v_b_px = b2;
-    v_half_w = half_w;
-}
-"#;
-
-const OBJECT_LINE_FRAG_330: &str = r#"#version 330 core
-in vec2 v_screen_px;
-in vec2 v_a_px;
-in vec2 v_b_px;
-in float v_half_w;
-flat in float v_state;
-
-uniform vec4 u_base_color;
-uniform vec4 u_selected_color;
-uniform vec4 u_primary_color;
-uniform bool u_draw_unselected;
-
-out vec4 out_color;
-
-float segment_distance(vec2 p, vec2 a, vec2 b) {
-    vec2 pa = p - a;
-    vec2 ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-    return length(pa - ba * h);
-}
-
-void main() {
-    if (v_state < 0.001 && !u_draw_unselected) {
-        discard;
-    }
-    float dist = segment_distance(v_screen_px, v_a_px, v_b_px);
-    float aa = 1.0;
-    float alpha = 1.0 - smoothstep(v_half_w - aa, v_half_w + aa, dist);
-    vec4 color = v_state > 0.75 ? u_primary_color :
-        (v_state > 0.001 ? u_selected_color : u_base_color);
-    out_color = vec4(color.rgb, color.a * alpha);
-    if (out_color.a <= 0.0) {
-        discard;
-    }
-}
-"#;

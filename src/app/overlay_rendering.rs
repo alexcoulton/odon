@@ -473,6 +473,7 @@ impl OmeZarrViewerApp {
                     generation,
                     positions_world,
                     values,
+                    colors_rgba: None,
                 };
                 let params = PointsGlDrawParams {
                     center_world: self.camera.center_world_lvl0,
@@ -482,6 +483,7 @@ impl OmeZarrViewerApp {
                     visible: self.cell_points.visible,
                     local_to_world_offset: off,
                     local_to_world_scale: egui::vec2(1.0, 1.0),
+                    color_opacity: 1.0,
                 };
                 let cb = egui_glow::CallbackFn::new(move |info, painter| {
                     renderer.paint(info, painter, &data, &params);

@@ -113,6 +113,19 @@ comparison.left.set_rendering(smooth_pixels=False, show_hud=True)
 comparison.right.set_rendering(smooth_pixels=True, show_hud=False)
 ```
 
+For numeric comparisons, apply one explicit domain so equal colours have equal meaning:
+
+```python
+for viewport in (comparison.left, comparison.right):
+    viewport.objects.color_by_continuous(
+        "mean_channel_1",
+        palette="viridis",
+        domain=(4_000.0, 42_000.0),
+        fill_cells=True,
+        fill_opacity=0.72,
+    )
+```
+
 Stable `Viewport` handles continue to address their ID when another canvas is
 active. Use `app.viewer.viewports.clone(viewport, ...)` when the source view
 must be explicit, and `viewport.fit_camera()` to fit a named canvas. Legacy

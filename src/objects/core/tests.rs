@@ -173,6 +173,7 @@ fn display_restore_preserves_runtime_color_overrides_for_same_property() {
 
     let saved_state = ObjectProjectDisplayState {
         color_property_key: Some("broad_cell_type".to_string()),
+        color_mapping: None,
         color_level_overrides: BTreeMap::new(),
         fill_cells: true,
         fill_opacity: 0.3,
@@ -189,6 +190,135 @@ fn display_restore_preserves_runtime_color_overrides_for_same_property() {
             .and_then(|style| style.color_rgb),
         Some([216, 70, 104])
     );
+}
+
+#[test]
+fn continuous_display_state_round_trips_and_legacy_state_migrates() {
+    let mapping = ObjectColorMapping::Continuous {
+        property: "score".to_string(),
+        palette: ContinuousPalette::Named("plasma".to_string()),
+        domain: ContinuousDomain::Fixed([2.0, 8.0]),
+        scale: ContinuousScale::Linear,
+        reverse: true,
+        out_of_range: OutOfRangeMode::Hide,
+        missing_color_rgb: Some([12, 34, 56]),
+    };
+    let state = ObjectProjectDisplayState {
+        color_property_key: Some("score".to_string()),
+        color_mapping: Some(mapping.clone()),
+        ..ObjectProjectDisplayState::default()
+    };
+    let encoded = serde_json::to_value(&state).expect("serialize continuous display state");
+    let decoded: ObjectProjectDisplayState =
+        serde_json::from_value(encoded).expect("deserialize continuous display state");
+    let mut layer = ObjectsLayer::default();
+    layer.apply_project_display_state(&decoded);
+    assert_eq!(layer.color_mapping(), &mapping);
+
+    let legacy: ObjectProjectDisplayState = serde_json::from_value(serde_json::json!({
+        "color_property_key":"phenotype",
+        "fill_cells":true
+    }))
+    .expect("deserialize legacy categorical display state");
+    layer.apply_project_display_state(&legacy);
+    assert_eq!(
+        layer.color_mapping(),
+        &ObjectColorMapping::categorical("phenotype")
+    );
+}
+
+#[test]
+fn continuous_payload_uses_exact_values_and_is_independent_of_filter_visibility() {
+    let mut low = object_with_geometry_and_bad_point();
+    low.inline_properties
+        .insert("score".to_string(), serde_json::json!(0.0));
+    let mut high = object_with_geometry_and_bad_point();
+    high.id = "high".to_string();
+    high.inline_properties
+        .insert("score".to_string(), serde_json::json!(10.0));
+    let missing = object_with_geometry_and_bad_point();
+    let mut layer = ObjectsLayer::default();
+    layer.objects = Some(Arc::new(vec![low, high, missing]));
+    let mapping = ObjectColorMapping::Continuous {
+        property: "score".to_string(),
+        palette: ContinuousPalette::Named("gray".to_string()),
+        domain: ContinuousDomain::Fixed([0.0, 10.0]),
+        scale: ContinuousScale::Linear,
+        reverse: false,
+        out_of_range: OutOfRangeMode::Clamp,
+        missing_color_rgb: None,
+    };
+    layer
+        .set_color_mapping(mapping)
+        .expect("set continuous mapping");
+    let payload = layer
+        .ensure_continuous_color_payload()
+        .expect("build continuous payload")
+        .clone();
+    assert_eq!(payload.colors_rgba[0], [0, 0, 0, 255]);
+    assert_eq!(payload.colors_rgba[1], [255, 255, 255, 255]);
+    assert_eq!(payload.colors_rgba[2], [0, 0, 0, 0]);
+    assert_eq!(payload.numeric_count, 2);
+    assert_eq!(payload.missing_count, 1);
+
+    layer.filtered_mask = Some(Arc::new(vec![false, true, false]));
+    let after_filter = layer
+        .ensure_continuous_color_payload()
+        .expect("reuse payload after filter");
+    assert_eq!(after_filter.generation, payload.generation);
+    assert!(Arc::ptr_eq(&after_filter.colors_rgba, &payload.colors_rgba));
+}
+
+#[test]
+#[ignore = "diagnostic benchmark; run explicitly with --ignored --nocapture"]
+fn benchmark_continuous_payload_for_45_000_objects() {
+    let objects = (0..45_000)
+        .map(|index| {
+            let mut object = object_with_geometry_and_bad_point();
+            object.id = format!("cell-{index}");
+            object.inline_properties.insert(
+                "score".to_string(),
+                serde_json::json!(index as f64 / 44_999.0),
+            );
+            object
+        })
+        .collect::<Vec<_>>();
+    let mut layer = ObjectsLayer::default();
+    layer.objects = Some(Arc::new(objects));
+    layer
+        .set_color_mapping(ObjectColorMapping::Continuous {
+            property: "score".to_string(),
+            palette: ContinuousPalette::Named("viridis".to_string()),
+            domain: ContinuousDomain::Fixed([0.0, 1.0]),
+            scale: ContinuousScale::Linear,
+            reverse: false,
+            out_of_range: OutOfRangeMode::Clamp,
+            missing_color_rgb: None,
+        })
+        .expect("set continuous mapping");
+
+    let started = std::time::Instant::now();
+    let payload = layer
+        .ensure_continuous_color_payload()
+        .expect("build continuous payload")
+        .clone();
+    let build_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    let colors = Arc::clone(&payload.colors_rgba);
+
+    let reuse_started = std::time::Instant::now();
+    let reused = layer
+        .ensure_continuous_color_payload()
+        .expect("reuse continuous payload");
+    let reuse_ms = reuse_started.elapsed().as_secs_f64() * 1_000.0;
+    println!(
+        "continuous payload benchmark: objects={} build_ms={build_ms:.3} reuse_ms={reuse_ms:.3} bytes={}",
+        reused.colors_rgba.len(),
+        reused.colors_rgba.len() * std::mem::size_of::<[u8; 4]>()
+    );
+
+    assert_eq!(reused.numeric_count, 45_000);
+    assert_eq!(reused.missing_count, 0);
+    assert!(Arc::ptr_eq(&colors, &reused.colors_rgba));
 }
 
 #[test]

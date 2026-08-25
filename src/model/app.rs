@@ -28,14 +28,14 @@ use super::{
     ControlPinnedLevelResource, ControlSegmentationGeoJsonResource,
     ControlThresholdPreviewResource, LabelZarrDataset, MaskModel, MeasurementMetric,
     MeasurementModel, MosaicModel, MosaicObjectLoadResult, MosaicObjectLoadSpec,
-    ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
-    ObjectSelectionModel, OperationKind, PinnedMemoryModel, ProjectObjectPreloadCatalog,
-    ProjectObjectPreloadProjection, ProjectObjectPreloadScope, ProjectObjectPreloadSettings,
-    ProjectObjectPreloadSource, ReadinessModel, ScreenshotPreferences, SegmentationGeoJsonLoadSpec,
-    SegmentationGeoJsonModel, SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope,
-    TileLoadingModel, TileLoadingPolicy, default_screenshot_filename, object_export_columns,
-    parse_world_points, parse_world_rect, project_object_preload_candidates,
-    project_roi_segmentation_path,
+    ObjectColorMapping, ObjectExportFormat, ObjectExportModel, ObjectExportResult,
+    ObjectExportSpec, ObjectSelectionModel, OperationKind, PinnedMemoryModel,
+    ProjectObjectPreloadCatalog, ProjectObjectPreloadProjection, ProjectObjectPreloadScope,
+    ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ReadinessModel,
+    ScreenshotPreferences, SegmentationGeoJsonLoadSpec, SegmentationGeoJsonModel,
+    SystemMemorySnapshot, ThresholdPreviewModel, ThresholdScope, TileLoadingModel,
+    TileLoadingPolicy, default_screenshot_filename, object_export_columns, parse_world_points,
+    parse_world_rect, project_object_preload_candidates, project_roi_segmentation_path,
 };
 use super::{CommandSurfaceModel, ShellModel};
 
@@ -826,6 +826,7 @@ fn overlay_project_viewport(
     {
         for (saved_name, projected_name) in [
             ("color_property_key", "color_property"),
+            ("color_mapping", "color_mapping"),
             ("color_level_overrides", "color_level_overrides"),
             ("fill_cells", "fill_cells"),
             ("fill_opacity", "fill_opacity"),
@@ -2027,7 +2028,7 @@ fn control_plane_json(
     })
 }
 
-fn object_style_json(objects: &Value) -> Value {
+fn object_style_json(objects: &Value, resource: Option<&ControlObjectResource>) -> Value {
     let defaults = default_object_snapshot();
     let value = |name: &str| {
         objects
@@ -2037,24 +2038,32 @@ fn object_style_json(objects: &Value) -> Value {
             .unwrap_or(Value::Null)
     };
     let color_property = value("color_property");
-    let legend = objects
-        .get("color_level_overrides")
-        .and_then(Value::as_object)
-        .map(|overrides| {
-            overrides
-                .iter()
-                .map(|(label, style)| {
-                    json!({
-                        "value": label,
-                        "count": 0,
-                        "color_rgb": style.get("color_rgb").cloned().unwrap_or(Value::Null),
-                        "visible": style.get("visible").and_then(Value::as_bool).unwrap_or(true),
+    let color_mapping = objects
+        .get("color_mapping")
+        .cloned()
+        .unwrap_or_else(|| legacy_object_color_mapping(&color_property));
+    let legend = if color_mapping.get("mode").and_then(Value::as_str) == Some("categorical") {
+        objects
+            .get("color_level_overrides")
+            .and_then(Value::as_object)
+            .map(|overrides| {
+                overrides
+                    .iter()
+                    .map(|(label, style)| {
+                        json!({
+                            "value": label,
+                            "count": 0,
+                            "color_rgb": style.get("color_rgb").cloned().unwrap_or(Value::Null),
+                            "visible": style.get("visible").and_then(Value::as_bool).unwrap_or(true),
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    json!({
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut style = json!({
         "visible": value("visible"),
         "opacity": value("opacity"),
         "width_screen_px": value("width_screen_px"),
@@ -2070,8 +2079,80 @@ fn object_style_json(objects: &Value) -> Value {
             "single"
         },
         "color_property": color_property,
+        "color_mapping": color_mapping,
         "legend": legend,
-    })
+    });
+    if style["color_mapping"]["mode"] == "continuous" {
+        let property = style["color_mapping"]["property"]
+            .as_str()
+            .unwrap_or_default();
+        let summary = resource.and_then(|resource| resource.numeric_summary(property));
+        let log10 = style["color_mapping"]["scale"].as_str() == Some("log10");
+        let usable_summary = summary.filter(|summary| !log10 || summary.positive_count > 0);
+        let resolved_domain = style["color_mapping"]["domain"]
+            .as_array()
+            .filter(|domain| domain.len() == 2)
+            .cloned()
+            .map(Value::Array)
+            .or_else(|| {
+                usable_summary.map(|summary| {
+                    let minimum = if log10 {
+                        summary.positive_minimum.unwrap_or(summary.minimum)
+                    } else {
+                        summary.minimum
+                    };
+                    json!([minimum, summary.maximum])
+                })
+            });
+        style["color_mapping"]["available"] = Value::Bool(usable_summary.is_some());
+        style["color_mapping"]["resolved_domain"] = resolved_domain.unwrap_or(Value::Null);
+        style["color_mapping"]["numeric_count"] = usable_summary
+            .map(|summary| {
+                json!(if log10 {
+                    summary.positive_count
+                } else {
+                    summary.numeric_count
+                })
+            })
+            .unwrap_or(json!(0));
+        style["color_mapping"]["missing_count"] = usable_summary
+            .map(|summary| {
+                json!(
+                    summary.missing_count
+                        + if log10 {
+                            summary.numeric_count.saturating_sub(summary.positive_count)
+                        } else {
+                            0
+                        }
+                )
+            })
+            .unwrap_or(json!(0));
+        if usable_summary.is_none() {
+            style["color_mapping"]["unavailable_reason"] = Value::String(
+                "the requested property is unavailable or has no finite numeric values".to_string(),
+            );
+        }
+    }
+    style
+}
+
+fn legacy_object_color_mapping(color_property: &Value) -> Value {
+    color_property
+        .as_str()
+        .map(str::trim)
+        .filter(|property| !property.is_empty())
+        .map(|property| json!({"mode":"categorical","property":property}))
+        .unwrap_or_else(|| json!({"mode":"single"}))
+}
+
+fn normalize_object_color_mapping(value: &Value) -> Result<Value, ControlError> {
+    let mapping = serde_json::from_value::<ObjectColorMapping>(value.clone())
+        .map_err(|error| invalid(format!("invalid object color_mapping: {error}")))?;
+    mapping
+        .validate()
+        .map_err(|error| invalid(format!("invalid object color_mapping: {error}")))?;
+    serde_json::to_value(mapping)
+        .map_err(|error| invalid(format!("failed to normalize object color_mapping: {error}")))
 }
 
 fn apply_object_style_patch(objects: &mut Value, params: &Value) -> Result<bool, ControlError> {
@@ -2126,7 +2207,24 @@ fn apply_object_style_patch(objects: &mut Value, params: &Value) -> Result<bool,
             Value::String(value) => Value::String(value.trim().to_string()),
             _ => return Err(invalid("color_property must be a string or null")),
         };
+        object.insert("color_property".to_string(), property.clone());
+        if params.get("color_mapping").is_none() {
+            object.insert(
+                "color_mapping".to_string(),
+                legacy_object_color_mapping(&property),
+            );
+        }
+    }
+    if let Some(value) = params.get("color_mapping") {
+        let mapping = normalize_object_color_mapping(value)?;
+        let property = mapping
+            .get("property")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
         object.insert("color_property".to_string(), property);
+        object.insert("color_mapping".to_string(), mapping);
     }
     let changed = &next != objects;
     *objects = next;
@@ -2152,6 +2250,9 @@ fn apply_native_object_layer_presentation(
             .cloned()
             .unwrap_or(Value::Null),
     );
+    if let Some(value) = display.get("color_mapping") {
+        style.insert("color_mapping".to_string(), value.clone());
+    }
     for name in [
         "fill_cells",
         "fill_opacity",
@@ -2204,6 +2305,16 @@ fn apply_native_object_layer_presentation(
 }
 
 fn apply_object_legend_patch(objects: &mut Value, params: &Value) -> Result<(), ControlError> {
+    if objects
+        .get("color_mapping")
+        .and_then(|mapping| mapping.get("mode"))
+        .and_then(Value::as_str)
+        == Some("continuous")
+    {
+        return Err(invalid(
+            "categorical legend entries cannot be edited in continuous color mode",
+        ));
+    }
     let property = objects
         .get("color_property")
         .and_then(Value::as_str)
@@ -2444,9 +2555,21 @@ fn apply_deep_link_viewport(
     }
     if let Some(property) = request.cell_color_by.as_deref() {
         viewport.objects["color_property"] = Value::String(property.to_string());
+        viewport.objects["color_mapping"] = json!({"mode":"categorical","property":property});
         viewport.objects["fill_cells"] = Value::Bool(request.fill_cells.unwrap_or(true));
     } else if let Some(fill) = request.fill_cells {
         viewport.objects["fill_cells"] = Value::Bool(fill);
+    }
+    if let Some(mapping) = request.object_color_mapping.as_ref() {
+        let mapping = serde_json::to_value(mapping)
+            .map_err(|error| invalid(format!("invalid deep-link object color mapping: {error}")))?;
+        viewport.objects["color_property"] = mapping
+            .get("property")
+            .and_then(Value::as_str)
+            .map(|property| Value::String(property.to_string()))
+            .unwrap_or(Value::Null);
+        viewport.objects["color_mapping"] = mapping;
+        viewport.objects["fill_cells"] = Value::Bool(request.fill_cells.unwrap_or(true));
     }
     if let Some(show) = request.show_selection_overlay {
         viewport.objects["show_selection_overlay"] = Value::Bool(show);
@@ -2714,6 +2837,7 @@ fn project_segmentation_view_json(dataset: &DatasetModel, viewport: &ViewportMod
         "label_name":dataset.label_loaded.as_ref().unwrap_or(&dataset.label_selected),
         "object_display":{
             "color_property_key":viewport.objects.get("color_property").cloned().unwrap_or(Value::Null),
+            "color_mapping":viewport.objects.get("color_mapping").cloned().unwrap_or_else(|| json!({"mode":"single"})),
             "color_level_overrides":viewport.objects.get("color_level_overrides").cloned().unwrap_or_else(|| json!({})),
             "fill_cells":viewport.objects.get("fill_cells").cloned().unwrap_or(Value::Bool(false)),
             "fill_opacity":viewport.objects.get("fill_opacity").cloned().unwrap_or(json!(0.30_f32)),
@@ -2778,6 +2902,7 @@ fn default_object_snapshot() -> Value {
         "show_selection_overlay": true,
         "fast_rendering": true,
         "color_property": "",
+        "color_mapping": {"mode":"single"},
         "color_level_overrides": {},
         "filter": default_object_filter_model(),
     })

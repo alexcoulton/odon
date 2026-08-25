@@ -103,6 +103,7 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                     "phenotype".to_string(),
                     "score".to_string(),
                 ]),
+                numeric_summaries: Arc::new(Default::default()),
                 renderer_payload: None,
             })
         }

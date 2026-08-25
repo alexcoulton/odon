@@ -375,6 +375,7 @@ impl SpatialShapesLayer {
                         generation: self.generation,
                         positions_world: Arc::clone(positions_world),
                         values: Arc::clone(values),
+                        colors_rgba: None,
                     };
                     let params = PointsGlDrawParams {
                         center_world: camera.center_world_lvl0,
@@ -384,6 +385,7 @@ impl SpatialShapesLayer {
                         visible: self.visible,
                         local_to_world_offset,
                         local_to_world_scale: egui::vec2(1.0, 1.0),
+                        color_opacity: 1.0,
                     };
                     let renderer = self.gl_points.clone();
                     let cb = egui_glow::CallbackFn::new(move |info, painter| {

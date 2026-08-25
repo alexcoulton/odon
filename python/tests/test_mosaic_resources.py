@@ -183,6 +183,20 @@ class MosaicResourceTests(unittest.TestCase):
             ),
         )
 
+    def test_mosaic_continuous_object_color_helper(self) -> None:
+        client = RecordingClient()
+        mosaic = Mosaic(client)  # type: ignore[arg-type]
+
+        mosaic.color_objects_by_continuous(
+            "mean_channel_1", domain=(2000, 42000), fill_cells=True
+        )
+
+        method, params = client.calls[0]
+        self.assertEqual(method, "mosaic.objects.style.set")
+        self.assertEqual(
+            params["style"]["color_mapping"]["domain"], [2000.0, 42000.0]
+        )
+
 
 class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_mosaic_focus_wrappers(self) -> None:
@@ -226,6 +240,18 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[7][0], "mosaic.objects.load")
         self.assertEqual(client.calls[7][1]["roi_ids"], ["ROI-A"])
         self.assertEqual(client.calls[8], ("mosaic.objects.cancel_load", {}))
+
+    async def test_async_mosaic_continuous_object_color_helper(self) -> None:
+        client = AsyncRecordingClient()
+        mosaic = AsyncMosaic(client)  # type: ignore[arg-type]
+
+        await mosaic.color_objects_by_continuous(
+            "mean_channel_1", palette="cividis", domain="auto"
+        )
+
+        mapping = client.calls[0][1]["style"]["color_mapping"]
+        self.assertEqual(mapping["palette"], "cividis")
+        self.assertEqual(mapping["domain"], "auto")
 
     async def test_async_mosaic_presentation_wrappers(self) -> None:
         client = AsyncRecordingClient()

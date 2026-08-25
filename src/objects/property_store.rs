@@ -47,6 +47,12 @@ impl ObjectPropertyStore {
             .and_then(ObjectPropertyColumn::numeric_pairs)
     }
 
+    pub(in crate::objects) fn numeric_at(&self, key: &str, object_index: usize) -> Option<f64> {
+        self.loaded_columns
+            .get(key)
+            .and_then(|column| column.numeric_at(object_index))
+    }
+
     pub(in crate::objects) fn label_at(&self, key: &str, object_index: usize) -> Option<String> {
         self.loaded_columns
             .get(key)
@@ -388,6 +394,17 @@ impl ObjectPropertyColumn {
             ),
             _ => None,
         }
+    }
+
+    pub(in crate::objects) fn numeric_at(&self, object_index: usize) -> Option<f64> {
+        match self {
+            Self::I64(values) => values
+                .get(object_index)
+                .and_then(|value| value.map(|value| value as f64)),
+            Self::F64(values) => values.get(object_index).and_then(|value| *value),
+            _ => None,
+        }
+        .filter(|value| value.is_finite())
     }
 
     pub(in crate::objects) fn len(&self) -> usize {

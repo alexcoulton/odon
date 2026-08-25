@@ -108,7 +108,7 @@ For `Segmentation Objects`, common controls include:
 - `Fill opacity`
 - `Selected fill`
 - `Color`
-- `Color by`
+- `Color mode` and `Color by` / `Numeric property`
 - `Reload`
 - `Clear`
 
@@ -119,6 +119,13 @@ some properties may appear with `(load)` and are loaded when selected.
 When colouring by property, the legend appears below the filter controls. Legend
 checkboxes show or hide specific category values without changing the underlying
 object file.
+
+Choose `Continuous` to colour a numeric property without creating categories or quantile bins.
+Select a named palette or custom stops, linear or log10 scale, an automatic or fixed domain,
+reverse direction, clamp/hide handling, and an optional missing-value colour. The gradient legend
+shows the resolved minimum, midpoint, maximum, and numeric count. Automatic domains use the full
+unfiltered source, so filtering does not shift colours; use one explicit domain when comparing
+multiple segmentations.
 
 ## Filtering Objects
 

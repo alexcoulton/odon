@@ -12,12 +12,8 @@ pub(super) use components::Interaction;
 use components::render_component;
 
 impl UiRegistry {
-    pub fn render(
-        &self,
-        ctx: &egui::Context,
-        _shell: Option<&serde_json::Value>,
-        show_extension_manager: bool,
-    ) {
+    #[rustfmt::skip]
+    pub fn render(&self, ctx: &egui::Context, _shell: Option<&serde_json::Value>, show_extension_manager: bool) {
         let mut native_removed_extensions = Vec::new();
         {
             let mut state = self.state.lock().expect("UI registry poisoned");

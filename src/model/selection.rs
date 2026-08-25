@@ -791,6 +791,7 @@ mod tests {
                 },
             ]),
             property_names: Arc::new(vec!["id".to_string(), "label".to_string()]),
+            numeric_summaries: Arc::new(Default::default()),
             renderer_payload: None,
         }
     }

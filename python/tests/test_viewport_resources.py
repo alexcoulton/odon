@@ -370,6 +370,24 @@ class ViewportResourceTests(unittest.TestCase):
         self.assertEqual(client.calls[3][0], "viewer.viewports.channels.set_group")
         self.assertEqual(client.calls[3][1]["if_presentation_revision"], 36)
 
+    def test_viewport_continuous_object_color_helper(self) -> None:
+        client = RecordingClient()
+        viewport = Viewports(client).handle("viewport-color")  # type: ignore[arg-type]
+
+        viewport.objects.color_by_continuous(
+            "mean_dapi",
+            palette="viridis",
+            domain=(0, 4095),
+            fill_cells=True,
+            if_presentation_revision=12,
+        )
+
+        method, params = client.calls[0]
+        self.assertEqual(method, "viewer.viewports.objects.style.set")
+        self.assertEqual(params["viewport_id"], "viewport-color")
+        self.assertEqual(params["color_mapping"]["property"], "mean_dapi")
+        self.assertEqual(params["if_presentation_revision"], 12)
+
 
 class AsyncViewportResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_comparison_and_style_parity(self) -> None:
@@ -404,6 +422,18 @@ class AsyncViewportResourceTests(unittest.IsolatedAsyncioTestCase):
             await AsyncViewportWorkspace(client).set_layout(  # type: ignore[arg-type]
                 "horizontal", split="vertical"
             )
+
+    async def test_async_viewport_continuous_object_color_helper(self) -> None:
+        client = AsyncRecordingClient()
+        viewport = AsyncViewports(client).handle("viewport-color")  # type: ignore[arg-type]
+
+        await viewport.objects.color_by_continuous(
+            "score", scale="log10", domain=(1, 1000), reverse=True
+        )
+
+        mapping = client.calls[0][1]["color_mapping"]
+        self.assertEqual(mapping["scale"], "log10")
+        self.assertEqual(mapping["domain"], [1.0, 1000.0])
 
     async def test_async_viewport_revision_guard_parity(self) -> None:
         client = AsyncRecordingClient()

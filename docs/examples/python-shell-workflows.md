@@ -157,6 +157,128 @@ denial. The installed shell is saved as a named session profile while running. O
 profile, menu, toolbar, palette, layout, and extension are removed or restored; only a process
 launched by the example is terminated.
 
+## Cellpose parameter comparison
+
+[`examples/python_cellpose_comparison.py`](../../examples/python_cellpose_comparison.py) turns the
+same five-channel fixture into a small segmentation experiment. Python reads PanCK and CD3 as a
+cytoplasmic composite, pairs it with DAPI, and runs the current Cellpose-SAM model. One neural
+inference is shared by three mask-recovery settings:
+
+- **Permissive** lowers the cell-probability threshold and relaxes flow consistency.
+- **Balanced** uses Cellpose's standard thresholds.
+- **Conservative** raises the cell-probability threshold and tightens flow consistency.
+
+Each run produces a labelled NumPy array, GeoJSON cell outlines, and summary metrics under
+`test_data/cellpose_comparison/`. The generated data is cached and ignored by Git. Odon opens the
+fixture, loads the selected GeoJSON through its actor-owned resource API, and renders a native
+Python-authored panel that switches runs without changing the camera. The panel reports cell count,
+coverage, and area statistics so boundary changes can be judged alongside their quantitative effect.
+
+The script uses inline dependency metadata, keeping Cellpose and PyTorch out of Odon's lightweight
+Python client environment. Its first full invocation installs those dependencies into uv's isolated
+cache and downloads the pretrained model weights:
+
+```bash
+# Inspect the declarative workflow without scientific dependencies.
+uv run --project python python examples/python_cellpose_comparison.py --plan-only
+
+# Segment the fixture, launch Odon, and keep the comparison panel interactive.
+uv run --script examples/python_cellpose_comparison.py --launch --serve
+
+# Reopen cached results without rerunning Cellpose.
+uv run --script examples/python_cellpose_comparison.py --view-only --launch --serve
+
+# Use CUDA or Apple MPS when available, and deliberately refresh the cache.
+uv run --script examples/python_cellpose_comparison.py --gpu --force --segment-only
+```
+
+Cellpose's pretrained models and annotated training data have separate non-commercial licensing.
+Review that licensing before adopting pretrained results in a commercial workflow.
+
+## Large CyCIF Cellpose comparison
+
+[`examples/python_cellpose_large_cycif.py`](../../examples/python_cellpose_large_cycif.py) adapts
+the comparison workflow to the 36-channel, 27,299 × 20,045 pixel
+`TNP_pilot_cycif.qupath-full.ome.zarr`. The exported OME metadata contains generic channel labels,
+so the script reads the adjacent acquisition `markers.csv` and maps DNA1, ECAD, panCK, CD45, CD3D,
+and CD8A to their array indices. DNA1 supplies nuclear context; the five cell-associated markers
+are percentile-normalized independently and averaged into a cytoplasmic composite.
+
+The earlier MACSima pipeline built a dense full-image label raster while merging provisional tile
+IDs. That would require about 2.19 GB for each `int32` result here. The laptop workflow instead uses
+2048-pixel tiles with 256 pixels of overlap and writes atomic GeoJSONL checkpoints. A cell belongs
+to the tile whose inner half-overlap region contains its centroid. The retained tile therefore has
+context around the complete cell, while adjacent predictions do not create duplicate output.
+Finished tiles are skipped on the next invocation, and final Odon GeoJSON files are assembled by
+streaming checkpoints rather than holding the complete segmentation in memory.
+
+One Cellpose 3.1 `cyto2` inference is reused for three mask-recovery settings per tile:
+
+- **Legacy permissive** reproduces `cellprob=-6`, `flow=2`, and `min_size=200` from the earlier script.
+- **Balanced** uses `cellprob=-2` and `flow=0.8`.
+- **Conservative** uses Cellpose's standard `cellprob=0` and `flow=0.4`.
+
+Typical commands are:
+
+```bash
+# Dependency-free plan: marker mapping, shape, tile count, and memory avoided.
+uv run --project python python examples/python_cellpose_large_cycif.py --plan-only
+
+# Benchmark one central tile without writing segmentation output.
+uv run --script examples/python_cellpose_large_cycif.py --benchmark --device mps
+
+# Process four representative central tiles and inspect partial results in Odon.
+uv run --script examples/python_cellpose_large_cycif.py \
+  --max-tiles 4 --device mps --launch --serve
+
+# Resume every remaining tile and write the complete result set.
+uv run --script examples/python_cellpose_large_cycif.py --device mps --segment-only
+
+# Open the latest partial or complete cached result without running Cellpose.
+uv run --script examples/python_cellpose_large_cycif.py --view-only --launch --serve
+```
+
+Outputs default to the external SSD beside the source image because the internal disk cannot safely
+hold three whole-slide result sets. Each configuration receives a signature-named run directory,
+so changing channels, thresholds, model, diameter, or tile geometry cannot silently mix checkpoints.
+
+### DAPI nuclei tuning and independent-model pilot
+
+The broad cytoplasmic composite is useful as a comparison, but it is not a reliable default for this
+heterogeneous slide. Global normalization suppresses locally dim regions, and averaging selective
+phenotype markers dilutes their signal. The bounded follow-up workflows therefore use per-tile
+percentile normalization and matched central tiles:
+
+```bash
+# Six DAPI-only Cellpose nuclei settings, with three shared inferences per tile.
+uv run --script examples/python_cellpose_dapi_nuclei_sweep.py \
+  --device mps --launch --serve
+
+# Independent InstanSeg DAPI/multiplex comparison on the same two tiles.
+uv run --script examples/python_instanseg_large_cycif_pilot.py \
+  --device mps --launch --serve
+```
+
+On the current fixture, the selected Cellpose candidate is the nuclei model with diameter 18,
+`cellprob=-1`, `flow=0.4`, and `min_size=40`. It produces 26,412 nuclei on two matched tiles.
+InstanSeg's DAPI-only result produces 32,324 tighter nuclear outlines and is retained as an
+independent high-recall candidate. Giving InstanSeg DAPI plus ECAD, panCK, CD45, CD3D, and CD8A
+produces about 42,800 nuclei and outlines in DAPI-dark regions; its whole-cell output expands the
+nuclei only slightly. Those multiplex outputs are kept as negative controls rather than recommended
+whole-cell segmentations.
+
+The source OME metadata records one nanometre per level-zero pixel, which is implausible for this
+acquisition. The InstanSeg pilot therefore records an explicit 0.5 µm/px assumption in its signed
+configuration. Confirm that value from acquisition metadata before a production run.
+
+The viewer workflow also derives intensity-filled object layers without rerunning segmentation. It
+rasterizes every Cellpose and InstanSeg polygon on its source tile, calculates the exact level-zero
+mean of Channel 1, and stores the numeric value as `mean_channel_1`. All four enriched GeoJSON
+results use Odon's native continuous object styling with the same explicit minimum, maximum, and
+Viridis palette. A colour therefore represents the same intensity in every result; no quantile or
+other categorical surrogate is generated. The derived GeoJSON and result sidecars are
+signature-cached beside the pilot outputs.
+
 ## Actor-owned default extension host lifecycle
 
 [`examples/python_extension_host_control.py`](../../examples/python_extension_host_control.py)

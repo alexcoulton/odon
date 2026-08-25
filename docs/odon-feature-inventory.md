@@ -154,7 +154,9 @@ This document groups Odon's current capabilities into presentation-friendly cate
 - Fill opacity control.
 - Selected-object fill opacity control.
 - Single-colour object display.
-- Property-based object colouring through `Color by`.
+- Single, categorical, and continuous numeric property colouring through a shared typed mapping.
+- Named and custom continuous palettes, linear/log10 scales, automatic/fixed domains, reversal,
+  clamp/hide semantics, missing-value colour, and a numeric gradient legend.
 - Categorical legend generation.
 - Legend category show/hide controls.
 - Legend category colour overrides.

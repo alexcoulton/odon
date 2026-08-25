@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{any::Any, fmt};
@@ -25,10 +26,22 @@ pub struct ControlObjectResource {
     pub downsample_factor: f32,
     pub features: Arc<Vec<ControlObjectFeature>>,
     pub property_names: Arc<Vec<String>>,
+    /// Full-source summaries for finite numeric values, computed while the resource is built.
+    pub numeric_summaries: Arc<BTreeMap<String, ControlObjectNumericSummary>>,
     /// Optional renderer-native, immutable preload produced by the same worker. The canonical
     /// model never inspects it; a compatible renderer may downcast and install it without
     /// reparsing the source after frames resume.
     pub renderer_payload: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ControlObjectNumericSummary {
+    pub minimum: f64,
+    pub maximum: f64,
+    pub positive_minimum: Option<f64>,
+    pub positive_count: usize,
+    pub numeric_count: usize,
+    pub missing_count: usize,
 }
 
 impl fmt::Debug for ControlObjectResource {
@@ -39,6 +52,7 @@ impl fmt::Debug for ControlObjectResource {
             .field("downsample_factor", &self.downsample_factor)
             .field("feature_count", &self.features.len())
             .field("property_names", &self.property_names)
+            .field("numeric_summaries", &self.numeric_summaries)
             .field("has_renderer_payload", &self.renderer_payload.is_some())
             .finish()
     }
@@ -62,6 +76,7 @@ impl ControlObjectResource {
             "object_count": self.features.len(),
             "property_count": self.property_names.len(),
             "properties": self.property_names.as_ref(),
+            "numeric_properties": self.numeric_summaries.keys().collect::<Vec<_>>(),
             "model_ready": true,
             "resources_ready": true,
         })
@@ -73,6 +88,58 @@ impl ControlObjectResource {
             return Some(Value::String(feature.id.clone()));
         }
         feature.properties.get(property).cloned()
+    }
+
+    pub fn build_numeric_summaries(
+        features: &[ControlObjectFeature],
+        property_names: &[String],
+    ) -> Arc<BTreeMap<String, ControlObjectNumericSummary>> {
+        let mut summaries = BTreeMap::new();
+        for property in property_names
+            .iter()
+            .filter(|property| property.as_str() != "id")
+        {
+            let mut minimum = f64::INFINITY;
+            let mut maximum = f64::NEG_INFINITY;
+            let mut numeric_count = 0usize;
+            let mut positive_minimum = f64::INFINITY;
+            let mut positive_count = 0usize;
+            for feature in features {
+                let Some(value) = feature
+                    .properties
+                    .get(property)
+                    .and_then(Value::as_f64)
+                    .filter(|value| value.is_finite())
+                else {
+                    continue;
+                };
+                minimum = minimum.min(value);
+                maximum = maximum.max(value);
+                numeric_count += 1;
+                if value > 0.0 {
+                    positive_minimum = positive_minimum.min(value);
+                    positive_count += 1;
+                }
+            }
+            if numeric_count > 0 {
+                summaries.insert(
+                    property.clone(),
+                    ControlObjectNumericSummary {
+                        minimum,
+                        maximum,
+                        positive_minimum: positive_minimum.is_finite().then_some(positive_minimum),
+                        positive_count,
+                        numeric_count,
+                        missing_count: features.len().saturating_sub(numeric_count),
+                    },
+                );
+            }
+        }
+        Arc::new(summaries)
+    }
+
+    pub fn numeric_summary(&self, property: &str) -> Option<ControlObjectNumericSummary> {
+        self.numeric_summaries.get(property).copied()
     }
 
     pub fn renderer_payload<T: Any + Send + Sync>(&self) -> Option<&T> {

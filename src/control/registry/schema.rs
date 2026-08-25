@@ -752,6 +752,73 @@ fn request_schema(shape: RequestShape) -> Value {
     }
 }
 
+fn object_color_mapping_schema() -> Value {
+    let property = json!({"type":"string","minLength":1,"maxLength":4096});
+    let palette = json!({
+        "anyOf":[
+            {"type":"string","enum":["viridis","magma","plasma","inferno","cividis","turbo","gray"]},
+            {
+                "type":"array",
+                "minItems":2,
+                "maxItems":256,
+                "items":{
+                    "type":"object",
+                    "properties":{
+                        "position":{"type":"number","minimum":0.0,"maximum":1.0},
+                        "color_rgb":{
+                            "type":"array","minItems":3,"maxItems":3,
+                            "items":{"type":"integer","minimum":0,"maximum":255}
+                        }
+                    },
+                    "required":["position","color_rgb"],
+                    "additionalProperties":false
+                }
+            }
+        ]
+    });
+    json!({
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{"mode":{"const":"single"}},
+                "required":["mode"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{"mode":{"const":"categorical"},"property":property.clone()},
+                "required":["mode","property"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "mode":{"const":"continuous"},
+                    "property":property,
+                    "palette":palette,
+                    "domain":{
+                        "anyOf":[
+                            {"type":"string","const":"auto"},
+                            {"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}
+                        ]
+                    },
+                    "scale":{"type":"string","enum":["linear","log10"],"default":"linear"},
+                    "reverse":{"type":"boolean","default":false},
+                    "out_of_range":{"type":"string","enum":["clamp","hide"],"default":"clamp"},
+                    "missing_color_rgb":{
+                        "anyOf":[
+                            {"type":"null"},
+                            {"type":"array","minItems":3,"maxItems":3,"items":{"type":"integer","minimum":0,"maximum":255}}
+                        ]
+                    }
+                },
+                "required":["mode","property"],
+                "additionalProperties":false
+            }
+        ]
+    })
+}
+
 pub(super) fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
     let mut schema = request_schema(descriptor.request_shape);
     if descriptor.mutates
@@ -787,6 +854,32 @@ pub(super) fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
             "if_navigation_revision".to_string(),
             json!({"type": "integer", "minimum": 1}),
         );
+    }
+    if matches!(
+        descriptor.name,
+        "viewer.objects.style.set"
+            | "viewer.viewports.objects.style.set"
+            | "mosaic.objects.style.set"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        let style_properties = json!({
+            "color_mapping": object_color_mapping_schema(),
+            "color_property": {"type":["string","null"]},
+            "fill_cells": {"type":"boolean"},
+            "fill_opacity": {"type":"number","minimum":0.0,"maximum":1.0}
+        });
+        if descriptor.name == "mosaic.objects.style.set" {
+            properties.insert(
+                "style".to_string(),
+                json!({
+                    "type":"object",
+                    "properties":style_properties,
+                    "additionalProperties":true
+                }),
+            );
+        } else if let Some(style_properties) = style_properties.as_object() {
+            properties.extend(style_properties.clone());
+        }
     }
     if matches!(
         descriptor.name,

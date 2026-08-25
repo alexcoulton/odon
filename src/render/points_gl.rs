@@ -12,6 +12,7 @@ pub struct PointsGlDrawData {
     pub generation: u64,
     pub positions_world: Arc<Vec<egui::Pos2>>,
     pub values: Arc<Vec<f32>>,
+    pub colors_rgba: Option<Arc<Vec<[u8; 4]>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,7 @@ pub struct PointsGlDrawParams {
     pub visible: bool,
     pub local_to_world_offset: egui::Vec2,
     pub local_to_world_scale: egui::Vec2,
+    pub color_opacity: f32,
 }
 
 #[derive(Clone)]
@@ -62,7 +64,10 @@ impl PointsGlRenderer {
         if !params.visible {
             return;
         }
-        let count = data.positions_world.len().min(data.values.len());
+        let mut count = data.positions_world.len().min(data.values.len());
+        if let Some(colors) = data.colors_rgba.as_ref() {
+            count = count.min(colors.len());
+        }
         if count == 0 {
             return;
         }
@@ -77,9 +82,11 @@ impl PointsGlRenderer {
         let needs_upload =
             inner.uploaded_generation != data.generation || inner.uploaded_count != count;
         if needs_upload {
-            if let Ok(interleaved) =
-                interleave_positions_values(&data.positions_world, &data.values)
-            {
+            if let Ok(interleaved) = interleave_positions_values_colors(
+                &data.positions_world,
+                &data.values,
+                data.colors_rgba.as_deref(),
+            ) {
                 if let Some(objects) = inner.gl_objects.as_mut() {
                     objects.upload(gl, &interleaved);
                 } else {
@@ -188,6 +195,14 @@ impl PointsGlRenderer {
                 objects.u_stroke_frac_neg.as_ref(),
                 stroke_frac_neg.clamp(0.0, 1.0),
             );
+            gl.uniform_1_i32(
+                objects.u_use_vertex_color.as_ref(),
+                i32::from(data.colors_rgba.is_some()),
+            );
+            gl.uniform_1_f32(
+                objects.u_color_opacity.as_ref(),
+                params.color_opacity.clamp(0.0, 1.0),
+            );
 
             gl.draw_arrays(glow::POINTS, 0, uploaded_count as i32);
 
@@ -224,6 +239,8 @@ struct GlObjects {
     u_stroke_neg: Option<glow::UniformLocation>,
     u_stroke_frac_pos: Option<glow::UniformLocation>,
     u_stroke_frac_neg: Option<glow::UniformLocation>,
+    u_use_vertex_color: Option<glow::UniformLocation>,
+    u_color_opacity: Option<glow::UniformLocation>,
 }
 
 impl GlObjects {
@@ -245,13 +262,16 @@ impl GlObjects {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
-            // Interleaved: vec2 world + float value
-            let stride = (3 * std::mem::size_of::<f32>()) as i32;
+            // Interleaved: vec2 world + float value + vec4 RGBA.
+            let stride = (7 * std::mem::size_of::<f32>()) as i32;
             let Some(loc_world) = gl.get_attrib_location(program, "a_world") else {
                 return Err(anyhow::anyhow!("missing attribute location a_world"));
             };
             let Some(loc_value) = gl.get_attrib_location(program, "a_value") else {
                 return Err(anyhow::anyhow!("missing attribute location a_value"));
+            };
+            let Some(loc_color) = gl.get_attrib_location(program, "a_color") else {
+                return Err(anyhow::anyhow!("missing attribute location a_color"));
             };
 
             gl.enable_vertex_attrib_array(loc_world);
@@ -264,6 +284,15 @@ impl GlObjects {
                 false,
                 stride,
                 (2 * std::mem::size_of::<f32>()) as i32,
+            );
+            gl.enable_vertex_attrib_array(loc_color);
+            gl.vertex_attrib_pointer_f32(
+                loc_color,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                (3 * std::mem::size_of::<f32>()) as i32,
             );
 
             gl.bind_vertex_array(None);
@@ -284,6 +313,8 @@ impl GlObjects {
                 gl.get_uniform_location(program, "u_stroke_neg"),
                 gl.get_uniform_location(program, "u_stroke_frac_pos"),
                 gl.get_uniform_location(program, "u_stroke_frac_neg"),
+                gl.get_uniform_location(program, "u_use_vertex_color"),
+                gl.get_uniform_location(program, "u_color_opacity"),
             );
 
             Ok::<_, anyhow::Error>((vao, vbo, uniforms))?
@@ -307,6 +338,8 @@ impl GlObjects {
             u_stroke_neg: uniforms.11,
             u_stroke_frac_pos: uniforms.12,
             u_stroke_frac_neg: uniforms.13,
+            u_use_vertex_color: uniforms.14,
+            u_color_opacity: uniforms.15,
         })
     }
 
@@ -324,17 +357,25 @@ impl GlObjects {
     }
 }
 
-fn interleave_positions_values(
+fn interleave_positions_values_colors(
     positions: &[egui::Pos2],
     values: &[f32],
+    colors: Option<&Vec<[u8; 4]>>,
 ) -> anyhow::Result<Vec<f32>> {
-    let n = positions.len().min(values.len());
-    let mut out = Vec::with_capacity(n * 3);
+    let mut n = positions.len().min(values.len());
+    if let Some(colors) = colors {
+        n = n.min(colors.len());
+    }
+    let mut out = Vec::with_capacity(n * 7);
     for i in 0..n {
         let p = positions[i];
         out.push(p.x);
         out.push(p.y);
         out.push(values[i]);
+        let color = colors
+            .map(|colors| colors[i])
+            .unwrap_or([255, 255, 255, 255]);
+        out.extend(color.map(|channel| channel as f32 / 255.0));
     }
     Ok(out)
 }
@@ -394,6 +435,7 @@ fn compile_program(
         // Works for both 120 and 330 (ignored if already specified).
         gl.bind_attrib_location(program, 0, "a_world");
         gl.bind_attrib_location(program, 1, "a_value");
+        gl.bind_attrib_location(program, 2, "a_color");
 
         gl.link_program(program);
         gl.detach_shader(program, vs);
@@ -414,6 +456,7 @@ fn compile_program(
 const VERT_330: &str = r#"#version 330 core
 layout(location = 0) in vec2 a_world;
 layout(location = 1) in float a_value;
+layout(location = 2) in vec4 a_color;
 
 uniform vec2 u_center_world;
 uniform float u_zoom;
@@ -424,6 +467,7 @@ uniform vec2 u_local_to_world_offset;
 uniform vec2 u_local_to_world_scale;
 
 out float v_value;
+out vec4 v_color;
 
 void main() {
     vec2 viewport_center = u_viewport_min + 0.5 * u_viewport_size;
@@ -437,11 +481,13 @@ void main() {
     gl_Position = vec4(ndc, 0.0, 1.0);
     gl_PointSize = u_point_size_px;
     v_value = a_value;
+    v_color = a_color;
 }
 "#;
 
 const FRAG_330: &str = r#"#version 330 core
 in float v_value;
+in vec4 v_color;
 
 uniform float u_threshold;
 uniform vec4 u_fill_pos;
@@ -450,6 +496,8 @@ uniform vec4 u_stroke_pos;
 uniform vec4 u_stroke_neg;
 uniform float u_stroke_frac_pos; // stroke_width_px / radius_px
 uniform float u_stroke_frac_neg;
+uniform int u_use_vertex_color;
+uniform float u_color_opacity;
 
 out vec4 out_color;
 
@@ -464,7 +512,11 @@ void main() {
     float edge_alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
 
     bool pos = (v_value >= u_threshold);
-    vec4 fill = pos ? u_fill_pos : u_fill_neg;
+    vec4 fill = u_use_vertex_color != 0 ? v_color : (pos ? u_fill_pos : u_fill_neg);
+    if (u_use_vertex_color != 0) {
+        fill.a *= u_color_opacity;
+        if (fill.a <= 0.0) { discard; }
+    }
     vec4 stroke = pos ? u_stroke_pos : u_stroke_neg;
     float stroke_frac = pos ? u_stroke_frac_pos : u_stroke_frac_neg;
     vec4 col = fill;
@@ -481,6 +533,7 @@ void main() {
 const VERT_120: &str = r#"#version 120
 attribute vec2 a_world;
 attribute float a_value;
+attribute vec4 a_color;
 
 uniform vec2 u_center_world;
 uniform float u_zoom;
@@ -491,6 +544,7 @@ uniform vec2 u_local_to_world_offset;
 uniform vec2 u_local_to_world_scale;
 
 varying float v_value;
+varying vec4 v_color;
 
 void main() {
     vec2 viewport_center = u_viewport_min + 0.5 * u_viewport_size;
@@ -504,11 +558,13 @@ void main() {
     gl_Position = vec4(ndc, 0.0, 1.0);
     gl_PointSize = u_point_size_px;
     v_value = a_value;
+    v_color = a_color;
 }
 "#;
 
 const FRAG_120: &str = r#"#version 120
 varying float v_value;
+varying vec4 v_color;
 
 uniform float u_threshold;
 uniform vec4 u_fill_pos;
@@ -517,6 +573,8 @@ uniform vec4 u_stroke_pos;
 uniform vec4 u_stroke_neg;
 uniform float u_stroke_frac_pos;
 uniform float u_stroke_frac_neg;
+uniform int u_use_vertex_color;
+uniform float u_color_opacity;
 
 void main() {
     vec2 c = gl_PointCoord * 2.0 - 1.0;
@@ -529,7 +587,11 @@ void main() {
     float edge_alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
 
     bool pos = (v_value >= u_threshold);
-    vec4 fill = pos ? u_fill_pos : u_fill_neg;
+    vec4 fill = u_use_vertex_color != 0 ? v_color : (pos ? u_fill_pos : u_fill_neg);
+    if (u_use_vertex_color != 0) {
+        fill.a *= u_color_opacity;
+        if (fill.a <= 0.0) { discard; }
+    }
     vec4 stroke = pos ? u_stroke_pos : u_stroke_neg;
     float stroke_frac = pos ? u_stroke_frac_pos : u_stroke_frac_neg;
     vec4 col = fill;

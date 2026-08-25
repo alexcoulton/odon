@@ -121,6 +121,7 @@ fn clearing_project_object_preload_rejects_its_late_worker_completion() {
                 downsample_factor,
                 features: Arc::new(Vec::new()),
                 property_names: Arc::new(Vec::new()),
+                numeric_summaries: Arc::new(Default::default()),
                 renderer_payload: None,
             })
         }

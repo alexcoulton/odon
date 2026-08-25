@@ -51,6 +51,12 @@ fn viewport_navigation_and_presentation_revisions_are_scoped_and_guarded() {
         serde_json::json!({
             "viewport_id": left,
             "fill_cells": true,
+            "color_mapping":{
+                "mode":"continuous",
+                "property":"score",
+                "palette":"viridis",
+                "domain":[0.0,10.0]
+            },
             "if_presentation_revision": 1,
         }),
     );
@@ -61,10 +67,26 @@ fn viewport_navigation_and_presentation_revisions_are_scoped_and_guarded() {
         serde_json::json!({
             "viewport_id": right,
             "fill_cells": true,
+            "color_mapping":{
+                "mode":"continuous",
+                "property":"score",
+                "palette":"magma",
+                "domain":[10.0,20.0]
+            },
             "if_presentation_revision": 1,
         }),
     );
     assert_eq!(right_style["presentation_revision"], 2);
+    assert_eq!(
+        app.control_get_viewport(&serde_json::json!({"viewport_id":left}))["objects"]["color_mapping"]
+            ["domain"],
+        serde_json::json!([0.0, 10.0])
+    );
+    assert_eq!(
+        app.control_get_viewport(&serde_json::json!({"viewport_id":right}))["objects"]["color_mapping"]
+            ["palette"],
+        "magma"
+    );
 
     let stale_style = app
         .try_actor_command(

@@ -25,6 +25,7 @@ use crate::objects::{
 use crate::ui::help::HelpTopic;
 use crate::ui::roi_browser::RoiBrowseState;
 use odon::deep_link::DeepLinkRequest;
+use odon::model::ObjectColorMapping;
 
 mod browser_ui;
 mod control_persistence;
@@ -371,6 +372,8 @@ pub struct ProjectViewSpec {
     pub load_labels: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_color_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_color_mapping: Option<ObjectColorMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_cell_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -424,6 +427,7 @@ impl ProjectViewSpec {
             segmentation_source: self.segmentation_source.clone(),
             load_segmentation_labels: self.load_labels,
             cell_color_by: self.cell_color_by.clone(),
+            object_color_mapping: self.object_color_mapping.clone(),
             fill_cells: self.fill_cells,
             show_selection_overlay: self.show_selection_overlay,
             fast_object_rendering: None,

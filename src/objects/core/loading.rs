@@ -317,11 +317,15 @@ pub(super) fn control_resource_from_preloaded(
             }
         })
         .collect::<Vec<_>>();
+    let property_names = property_names.into_iter().collect::<Vec<_>>();
+    let numeric_summaries =
+        odon::model::ControlObjectResource::build_numeric_summaries(&features, &property_names);
     Ok(odon::model::ControlObjectResource {
         source: path,
         downsample_factor,
         features: Arc::new(features),
-        property_names: Arc::new(property_names.into_iter().collect()),
+        property_names: Arc::new(property_names),
+        numeric_summaries,
         renderer_payload: Some(Arc::new(preloaded)),
     })
 }

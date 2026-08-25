@@ -292,6 +292,7 @@ pub struct ObjectFillGlDrawParams {
     pub visible: bool,
     pub local_to_world_offset: egui::Vec2,
     pub local_to_world_scale: egui::Vec2,
+    pub object_color_opacity: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +304,9 @@ pub struct ObjectFillGlDrawData {
     pub object_count: usize,
     pub selection_generation: u64,
     pub selection_state: Arc<Vec<u8>>,
+    pub color_cache_id: u64,
+    pub color_generation: u64,
+    pub object_colors_rgba: Option<Arc<Vec<[u8; 4]>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +373,10 @@ impl ObjectFillGlRenderer {
         let u_local_to_world_scale = objects.u_local_to_world_scale.clone();
         let u_state_tex = objects.u_state_tex.clone();
         let u_state_tex_size = objects.u_state_tex_size.clone();
+        let u_color_tex = objects.u_color_tex.clone();
+        let u_color_tex_size = objects.u_color_tex_size.clone();
+        let u_use_object_colors = objects.u_use_object_colors.clone();
+        let u_object_color_opacity = objects.u_object_color_opacity.clone();
 
         let viewport_pt = info.viewport;
         let ppp = info.pixels_per_point.max(1e-6);
@@ -395,6 +403,7 @@ impl ObjectFillGlRenderer {
                 viewport_size_px.y.max(1.0),
             );
             gl.uniform_1_i32(u_state_tex.as_ref(), 0);
+            gl.uniform_1_i32(u_color_tex.as_ref(), 1);
         }
 
         for item in items {
@@ -438,6 +447,17 @@ impl ObjectFillGlRenderer {
                 primary.b() as f32 / 255.0,
                 primary.a() as f32 / 255.0,
             ];
+            let color_texture = item.data.object_colors_rgba.as_ref().and_then(|colors| {
+                inner
+                    .ensure_color_uploaded(
+                        gl,
+                        item.data.color_cache_id,
+                        item.data.color_generation,
+                        item.data.object_count,
+                        colors.as_slice(),
+                    )
+                    .map(|color| (color.texture, color.width, color.height))
+            });
 
             unsafe {
                 let gl = gl.as_ref();
@@ -463,7 +483,23 @@ impl ObjectFillGlRenderer {
                     item.params.local_to_world_scale.y.max(1e-9),
                 );
                 gl.uniform_2_i32(u_state_tex_size.as_ref(), state_width, state_height);
+                gl.uniform_1_i32(
+                    u_use_object_colors.as_ref(),
+                    i32::from(color_texture.is_some()),
+                );
+                gl.uniform_1_f32(
+                    u_object_color_opacity.as_ref(),
+                    item.params.object_color_opacity.clamp(0.0, 1.0),
+                );
                 gl.bind_texture(glow::TEXTURE_2D, Some(state_texture));
+                if let Some((texture, width, height)) = color_texture {
+                    gl.uniform_2_i32(u_color_tex_size.as_ref(), width, height);
+                    gl.active_texture(glow::TEXTURE1);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                    gl.active_texture(glow::TEXTURE0);
+                } else {
+                    gl.uniform_2_i32(u_color_tex_size.as_ref(), 0, 0);
+                }
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(mesh_vbo));
                 gl.enable_vertex_attrib_array(0);
                 gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 12, 0);
@@ -476,6 +512,9 @@ impl ObjectFillGlRenderer {
         unsafe {
             let gl = gl.as_ref();
             gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE0);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
             gl.use_program(None);
@@ -495,10 +534,18 @@ struct ObjectFillStateGpu {
     generation: u64,
 }
 
+struct ObjectFillColorGpu {
+    texture: glow::Texture,
+    width: i32,
+    height: i32,
+    generation: u64,
+}
+
 struct ObjectFillInner {
     gl_objects: Option<ObjectFillGlObjects>,
     meshes: LruCache<(u64, u64), ObjectFillMeshGpu>,
     states: LruCache<u64, ObjectFillStateGpu>,
+    colors: LruCache<u64, ObjectFillColorGpu>,
     buffers_to_delete: Vec<glow::Buffer>,
     textures_to_delete: Vec<glow::Texture>,
 }
@@ -509,6 +556,7 @@ impl ObjectFillInner {
             gl_objects: None,
             meshes: LruCache::new(mesh_cap),
             states: LruCache::new(state_cap),
+            colors: LruCache::new(state_cap),
             buffers_to_delete: Vec::new(),
             textures_to_delete: Vec::new(),
         }
@@ -648,6 +696,87 @@ impl ObjectFillInner {
         self.delete_queued(gl);
         self.states.get(&cache_id)
     }
+
+    fn ensure_color_uploaded(
+        &mut self,
+        gl: &Arc<glow::Context>,
+        cache_id: u64,
+        generation: u64,
+        object_count: usize,
+        colors_rgba: &[[u8; 4]],
+    ) -> Option<&ObjectFillColorGpu> {
+        let padded_len = object_count.max(1);
+        let width = padded_len.min(4096) as i32;
+        let height = ((padded_len + width as usize - 1) / width as usize).max(1) as i32;
+        if self
+            .colors
+            .get(&cache_id)
+            .is_some_and(|color| color.generation == generation)
+        {
+            return self.colors.get(&cache_id);
+        }
+        let mut texels = vec![0u8; width as usize * height as usize * 4];
+        let copy_len = colors_rgba.len().min(object_count);
+        texels[..copy_len * 4].copy_from_slice(bytemuck::cast_slice(&colors_rgba[..copy_len]));
+        let texture = if let Some(existing) = self.colors.get(&cache_id) {
+            existing.texture
+        } else {
+            unsafe { gl.as_ref().create_texture().map_err(|_| ()).ok()? }
+        };
+        unsafe {
+            let gl = gl.as_ref();
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                width,
+                height,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(texels.as_slice())),
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE0);
+        }
+        if let Some((_key, evicted)) = self.colors.push(
+            cache_id,
+            ObjectFillColorGpu {
+                texture,
+                width,
+                height,
+                generation,
+            },
+        ) && evicted.texture != texture
+        {
+            self.textures_to_delete.push(evicted.texture);
+        }
+        self.delete_queued(gl);
+        self.colors.get(&cache_id)
+    }
 }
 
 struct ObjectFillGlObjects {
@@ -663,6 +792,10 @@ struct ObjectFillGlObjects {
     u_local_to_world_scale: Option<glow::UniformLocation>,
     u_state_tex: Option<glow::UniformLocation>,
     u_state_tex_size: Option<glow::UniformLocation>,
+    u_color_tex: Option<glow::UniformLocation>,
+    u_color_tex_size: Option<glow::UniformLocation>,
+    u_use_object_colors: Option<glow::UniformLocation>,
+    u_object_color_opacity: Option<glow::UniformLocation>,
 }
 
 impl ObjectFillGlObjects {
@@ -699,6 +832,12 @@ impl ObjectFillGlObjects {
             },
             u_state_tex: unsafe { gl.get_uniform_location(program, "u_state_tex") },
             u_state_tex_size: unsafe { gl.get_uniform_location(program, "u_state_tex_size") },
+            u_color_tex: unsafe { gl.get_uniform_location(program, "u_color_tex") },
+            u_color_tex_size: unsafe { gl.get_uniform_location(program, "u_color_tex_size") },
+            u_use_object_colors: unsafe { gl.get_uniform_location(program, "u_use_object_colors") },
+            u_object_color_opacity: unsafe {
+                gl.get_uniform_location(program, "u_object_color_opacity")
+            },
         })
     }
 }
@@ -813,6 +952,10 @@ void main() {
 const OBJECT_FILL_FRAG_330: &str = r#"#version 330 core
 uniform sampler2D u_state_tex;
 uniform ivec2 u_state_tex_size;
+uniform sampler2D u_color_tex;
+uniform ivec2 u_color_tex_size;
+uniform int u_use_object_colors;
+uniform float u_object_color_opacity;
 uniform vec4 u_selected_color;
 uniform vec4 u_primary_color;
 
@@ -831,6 +974,23 @@ void main() {
     float state = texelFetch(u_state_tex, ivec2(x, y), 0).r;
     if (state < 0.001) {
         discard;
+    }
+    if (u_use_object_colors != 0) {
+        if (u_color_tex_size.x <= 0 || u_color_tex_size.y <= 0) {
+            discard;
+        }
+        int color_x = v_object_id % u_color_tex_size.x;
+        int color_y = v_object_id / u_color_tex_size.x;
+        if (color_y < 0 || color_y >= u_color_tex_size.y) {
+            discard;
+        }
+        vec4 object_color = texelFetch(u_color_tex, ivec2(color_x, color_y), 0);
+        object_color.a *= u_object_color_opacity;
+        if (object_color.a <= 0.0) {
+            discard;
+        }
+        out_color = object_color;
+        return;
     }
     out_color = state > 0.75 ? u_primary_color : u_selected_color;
 }"#;

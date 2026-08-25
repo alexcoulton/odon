@@ -126,6 +126,7 @@ fn cancelled_measurement_rejects_a_late_result() {
                 properties: serde_json::Map::new(),
             }]),
             property_names: Arc::new(vec!["id".to_string()]),
+            numeric_summaries: Arc::new(Default::default()),
             renderer_payload: None,
         }),
     ));

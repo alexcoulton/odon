@@ -358,6 +358,7 @@ impl ObjectResourceLoader for BlockingDeepLinkObjectLoader {
             downsample_factor,
             features: Arc::new(Vec::new()),
             property_names: Arc::new(Vec::new()),
+            numeric_summaries: Arc::new(Default::default()),
             renderer_payload: None,
         })
     }

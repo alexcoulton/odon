@@ -10,6 +10,7 @@ mod masks;
 mod measurement;
 mod memory;
 mod mosaic;
+mod object_color;
 mod object_export;
 mod objects;
 mod project;
@@ -50,12 +51,17 @@ pub(crate) use mosaic::{
     MosaicMemoryPinItemSpec, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicModel,
     MosaicObjectLoadResult, MosaicObjectLoadSpec,
 };
+pub use object_color::{
+    ContinuousColorConfig, ContinuousColorStop, ContinuousDomain, ContinuousPalette,
+    ContinuousScale, ObjectColorMapping, OutOfRangeMode,
+};
 pub(crate) use object_export::{
     ObjectExportFormat, ObjectExportModel, ObjectExportResult, ObjectExportSpec,
     object_export_columns, write_object_export,
 };
 pub use objects::{
-    ControlObjectFeature, ControlObjectFilterResult, ControlObjectResource, ObjectResourceLoader,
+    ControlObjectFeature, ControlObjectFilterResult, ControlObjectNumericSummary,
+    ControlObjectResource, ObjectResourceLoader,
 };
 pub use project::ProjectModelSnapshot;
 pub(crate) use project::normalized_loaded_project_snapshot;

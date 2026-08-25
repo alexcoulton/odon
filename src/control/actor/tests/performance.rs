@@ -59,7 +59,7 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
         [0.0, 0.0],
     ]]);
     let features = Arc::new(
-        (0..10_000)
+        (0..45_000)
             .map(|index| ControlObjectFeature {
                 id: format!("feature-{index}"),
                 bbox_world: [0.0, 0.0, 10.0, 10.0],
@@ -77,6 +77,7 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
         downsample_factor: 1.0,
         features: Arc::clone(&features),
         property_names: Arc::new(vec!["id".to_string()]),
+        numeric_summaries: Arc::new(Default::default()),
         renderer_payload: None,
     });
     let (document_generation, resource_generation) =
@@ -103,7 +104,7 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
     assert!(Arc::ptr_eq(before_resource, &resource));
     assert!(Arc::ptr_eq(&before_resource.features, &features));
     let workspace_text = serde_json::to_string(before.workspace.as_ref().unwrap()).unwrap();
-    assert!(!workspace_text.contains("feature-9999"));
+    assert!(!workspace_text.contains("feature-44999"));
 
     let viewport_id = before.workspace.as_ref().unwrap()["active_viewport_id"]
         .as_str()

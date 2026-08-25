@@ -380,6 +380,9 @@ impl AppModel {
         params: &Value,
     ) -> Result<Value, ControlError> {
         let object_target = self.resolve_object_target(params)?;
+        let resource = self
+            .object_resource_for_target(object_target, "viewer.objects.style.get")
+            .ok();
         let id = Self::viewport_id(params)?;
         let workspace = &self.dataset()?.workspace;
         let target = workspace.get(&id).ok_or_else(|| not_found(&id))?;
@@ -390,7 +393,7 @@ impl AppModel {
         Ok(viewport_response(
             workspace,
             &id,
-            object_style_json(objects),
+            object_style_json(objects, resource),
             vec![id.clone()],
             false,
         ))
@@ -401,6 +404,10 @@ impl AppModel {
         params: &Value,
     ) -> Result<Value, ControlError> {
         let object_target = self.resolve_object_target(params)?;
+        let resource = self
+            .object_resource_for_target(object_target, "viewer.objects.style.set")
+            .ok()
+            .cloned();
         let id = Self::viewport_id(params)?;
         let workspace = &mut self.dataset_mut()?.workspace;
         let active_before = workspace.active().state.clone();
@@ -410,7 +417,7 @@ impl AppModel {
             .object_presentation_mut(object_target)
             .ok_or_else(|| object_target_not_found(object_target))?;
         let changed = apply_object_style_patch(objects, params)?;
-        let style = object_style_json(objects);
+        let style = object_style_json(objects, resource.as_ref());
         let native_presentation = objects.clone();
         if object_target != ObjectTarget::Primary {
             target
@@ -434,6 +441,10 @@ impl AppModel {
         params: &Value,
     ) -> Result<Value, ControlError> {
         let object_target = self.resolve_object_target(params)?;
+        let resource = self
+            .object_resource_for_target(object_target, "viewer.objects.legend.set")
+            .ok()
+            .cloned();
         let id = Self::viewport_id(params)?;
         let workspace = &mut self.dataset_mut()?.workspace;
         let active_before = workspace.active().state.clone();
@@ -443,7 +454,7 @@ impl AppModel {
             .object_presentation_mut(object_target)
             .ok_or_else(|| object_target_not_found(object_target))?;
         apply_object_legend_patch(objects, params)?;
-        let style = object_style_json(objects);
+        let style = object_style_json(objects, resource.as_ref());
         let native_presentation = objects.clone();
         if object_target != ObjectTarget::Primary {
             target

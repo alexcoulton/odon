@@ -193,6 +193,11 @@ impl AppModel {
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
+            object_color_mapping: viewport
+                .objects
+                .get("color_mapping")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok()),
             fill_cells: viewport.objects.get("fill_cells").and_then(Value::as_bool),
             show_selection_overlay: viewport
                 .objects

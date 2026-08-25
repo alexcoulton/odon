@@ -866,6 +866,7 @@ fn default_mosaic_object_style() -> Value {
         "fill_opacity":0.30,
         "selected_fill_opacity":0.70,
         "color_property_key":"",
+        "color_mapping":{"mode":"single"},
         "color_level_overrides":{},
         "downsample_factor":1.0,
     })

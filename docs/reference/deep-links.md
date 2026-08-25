@@ -219,6 +219,7 @@ contrast in the UI.
 | `segmentation_source`, `segmentation_layer`, `segmentation_kind` | Segmentation source. Use `geoparquet`, `parquet`, `objects`, or `project` for project object segmentation. Use `labels` or omit the value for bundled OME-Zarr labels. |
 | `load_labels`, `load_segmentation_labels`, `load_ome_zarr_labels`, `load_bundled_labels` | Whether to load bundled OME-Zarr labels. Use `0` or `false` to skip them. |
 | `cell_color_by`, `color_by`, `object_color_by` | Object property used to colour loaded segmentation objects. |
+| `object_color_mapping`, `object_colour_mapping` | Complete JSON-encoded typed object colour mapping. Supports `single`, `categorical`, and `continuous` modes; canonical links emit `object_color_mapping`. |
 | `fill_cells` | Fill object polygons. Accepts `1`, `true`, `0`, or `false`. |
 | `show_selection_overlay`, `selection_overlay` | Show or hide the object selection overlay. |
 | `fast_rendering`, `fast_object_rendering`, `object_fast_rendering` | Enable or disable fast object rendering. Use `0` or `false` to force exact polygon rendering for figure links. |
@@ -233,6 +234,24 @@ segmentation_source=geoparquet&load_labels=0&cell_color_by=broad_cell_type
 This opens the image, loads the project GeoParquet or Parquet object
 segmentation from the ROI's `segpath`, avoids loading bundled OME-Zarr labels,
 and applies the requested object colouring.
+
+For continuous numeric colouring, encode the complete mapping as JSON so it is applied atomically.
+For example, the decoded query value can be:
+
+```json
+{
+  "mode": "continuous",
+  "property": "mean_channel_1",
+  "palette": "viridis",
+  "domain": [810.043, 44586.087],
+  "scale": "linear",
+  "reverse": false,
+  "out_of_range": "clamp",
+  "missing_color_rgb": null
+}
+```
+
+Use `app.deep_links.generate(...)` when possible so JSON and URL encoding are canonical.
 
 For supported object formats and `segpath` conventions, see
 [Object and Overlay Data](../data-sources/object-and-overlay-data.md).

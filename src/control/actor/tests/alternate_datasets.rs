@@ -82,6 +82,7 @@ fn fixture_spatial_object_resource() -> Arc<ControlObjectResource> {
             properties: json!({"score":0.9}).as_object().unwrap().clone(),
         }]),
         property_names: Arc::new(vec!["id".to_string(), "score".to_string()]),
+        numeric_summaries: Arc::new(Default::default()),
         renderer_payload: None,
     })
 }

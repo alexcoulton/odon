@@ -200,6 +200,15 @@ fn save_then_load_preserves_roi_view_masks_groups_and_browser_state() {
         channel: Some("CD3".to_string()),
         visible_channels: vec!["DAPI".to_string(), "CD3".to_string()],
         cell_color_by: Some("cell_type".to_string()),
+        object_color_mapping: Some(odon::model::ObjectColorMapping::Continuous {
+            property: "mean_channel_1".to_string(),
+            palette: odon::model::ContinuousPalette::Named("magma".to_string()),
+            domain: odon::model::ContinuousDomain::Fixed([100.0, 900.0]),
+            scale: odon::model::ContinuousScale::Linear,
+            reverse: true,
+            out_of_range: odon::model::OutOfRangeMode::Hide,
+            missing_color_rgb: Some([64, 64, 64]),
+        }),
         camera: Some(ProjectCameraState {
             center_world_lvl0: [125.0, 250.0],
             zoom_screen_per_lvl0_px: 1.5,

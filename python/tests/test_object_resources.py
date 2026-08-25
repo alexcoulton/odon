@@ -76,6 +76,31 @@ class ObjectResourceTests(unittest.TestCase):
         self.assertEqual(client.calls[2][0], "viewer.objects.legend.set")
         self.assertEqual(client.calls[4][1], {"enabled": False, "if_revision": 6})
 
+    def test_continuous_object_color_helper(self) -> None:
+        client = RecordingClient()
+        objects = Objects(client)  # type: ignore[arg-type]
+
+        objects.color_by_continuous(
+            "mean_channel_1",
+            palette="magma",
+            domain=(100.0, 900.0),
+            out_of_range="hide",
+            fill_cells=True,
+            fill_opacity=0.55,
+            if_revision=7,
+            target="objects",
+        )
+
+        method, params = client.calls[0]
+        self.assertEqual(method, "viewer.objects.style.set")
+        self.assertEqual(params["color_mapping"]["mode"], "continuous")
+        self.assertEqual(params["color_mapping"]["domain"], [100.0, 900.0])
+        self.assertEqual(params["fill_opacity"], 0.55)
+        self.assertEqual(params["target"], "objects")
+
+        with self.assertRaises(ValueError):
+            objects.color_by_continuous("score", domain=(1.0, 1.0))
+
     def test_object_filter_model_wrappers(self) -> None:
         client = RecordingClient()
         objects = Objects(client)  # type: ignore[arg-type]
@@ -211,6 +236,19 @@ class AsyncObjectResourceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls[1][0], "viewer.objects.style.set")
         self.assertEqual(client.calls[4][1], {"enabled": True})
+
+    async def test_async_continuous_object_color_helper(self) -> None:
+        client = AsyncRecordingClient()
+        objects = AsyncObjects(client)  # type: ignore[arg-type]
+
+        await objects.color_by_continuous(
+            "intensity", reverse=True, missing_color_rgb=(40, 50, 60)
+        )
+
+        mapping = client.calls[0][1]["color_mapping"]
+        self.assertEqual(mapping["domain"], "auto")
+        self.assertTrue(mapping["reverse"])
+        self.assertEqual(mapping["missing_color_rgb"], [40, 50, 60])
 
     async def test_async_object_filter_model_wrappers(self) -> None:
         client = AsyncRecordingClient()

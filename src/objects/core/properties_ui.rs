@@ -3,6 +3,8 @@
 use super::*;
 
 mod colors;
+mod continuous_ui;
+mod display_state;
 mod filters;
 mod style;
 
@@ -64,50 +66,195 @@ impl ObjectsLayer {
                 self.color_rgb = [c.r(), c.g(), c.b()];
             }
         });
+        let mut next_color_mode = self.color_mode;
         ui.horizontal(|ui| {
-            ui.label("Color by");
-            let mut next_color_property = match self.color_mode {
-                ObjectColorMode::Single => String::new(),
-                ObjectColorMode::ByProperty => self.color_property_key.clone(),
-            };
+            ui.label("Color mode");
             egui::ComboBox::from_id_salt("seg_objects_color_mode")
-                .selected_text(if next_color_property.is_empty() {
-                    "Single color".to_string()
-                } else {
-                    next_color_property.clone()
+                .selected_text(match next_color_mode {
+                    ObjectColorMode::Single => "Single",
+                    ObjectColorMode::ByProperty => "Categorical",
+                    ObjectColorMode::Continuous => "Continuous",
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut next_color_property, String::new(), "Single color");
-                    for key in &self.color_property_keys {
-                        ui.selectable_value(&mut next_color_property, key.clone(), key);
+                    ui.selectable_value(&mut next_color_mode, ObjectColorMode::Single, "Single");
+                    ui.selectable_value(
+                        &mut next_color_mode,
+                        ObjectColorMode::ByProperty,
+                        "Categorical",
+                    );
+                    ui.selectable_value(
+                        &mut next_color_mode,
+                        ObjectColorMode::Continuous,
+                        "Continuous",
+                    );
+                });
+        });
+        if next_color_mode != self.color_mode {
+            let next_mapping = match next_color_mode {
+                ObjectColorMode::Single => ObjectColorMapping::Single,
+                ObjectColorMode::ByProperty => self
+                    .color_property_keys
+                    .first()
+                    .cloned()
+                    .map(ObjectColorMapping::categorical)
+                    .unwrap_or(ObjectColorMapping::Single),
+                ObjectColorMode::Continuous => {
+                    let property = self
+                        .available_numeric_object_property_keys()
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default();
+                    ObjectColorMapping::Continuous {
+                        property,
+                        palette: ContinuousPalette::default(),
+                        domain: ContinuousDomain::default(),
+                        scale: ContinuousScale::default(),
+                        reverse: false,
+                        out_of_range: OutOfRangeMode::default(),
+                        missing_color_rgb: None,
                     }
-                    if let Some(source) = self.lazy_parquet_source.as_ref() {
-                        let lazy_keys = source
-                            .available_property_columns
-                            .iter()
-                            .filter(|key| !source.loaded_property_columns.contains(*key))
-                            .filter(|key| !self.property_store.has_loaded(key))
-                            .filter(|key| {
-                                !self.color_property_keys.iter().any(|loaded| loaded == *key)
+                }
+            };
+            if next_mapping.validate().is_ok() {
+                let _ = self.set_color_mapping(next_mapping);
+            }
+        }
+
+        match self.color_mode {
+            ObjectColorMode::Single => {}
+            ObjectColorMode::ByProperty => {
+                let mut next_property = self.color_property_key.clone();
+                ui.horizontal(|ui| {
+                    ui.label("Property");
+                    egui::ComboBox::from_id_salt("seg_objects_categorical_property")
+                        .selected_text(if next_property.is_empty() {
+                            "Choose a property".to_string()
+                        } else {
+                            next_property.clone()
+                        })
+                        .show_ui(ui, |ui| {
+                            for key in &self.color_property_keys {
+                                ui.selectable_value(&mut next_property, key.clone(), key);
+                            }
+                            if let Some(source) = self.lazy_parquet_source.as_ref() {
+                                for key in source
+                                    .available_property_columns
+                                    .iter()
+                                    .filter(|key| !self.color_property_keys.contains(*key))
+                                {
+                                    ui.selectable_value(
+                                        &mut next_property,
+                                        key.clone(),
+                                        format!("{key} (load)"),
+                                    );
+                                }
+                            }
+                        });
+                });
+                if next_property != self.color_property_key {
+                    self.set_color_by_property(Some(next_property));
+                }
+            }
+            ObjectColorMode::Continuous => {
+                let numeric_keys = self.available_numeric_object_property_keys();
+                let mut next_mapping = self.color_mapping.clone();
+                if let ObjectColorMapping::Continuous {
+                    property,
+                    palette,
+                    domain,
+                    scale,
+                    reverse,
+                    out_of_range,
+                    missing_color_rgb,
+                } = &mut next_mapping
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("Numeric property");
+                        egui::ComboBox::from_id_salt("seg_objects_continuous_property")
+                            .selected_text(if property.is_empty() {
+                                "Choose a numeric property".to_string()
+                            } else {
+                                property.clone()
                             })
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        if !lazy_keys.is_empty() {
-                            ui.separator();
-                            for key in lazy_keys {
-                                ui.selectable_value(
-                                    &mut next_color_property,
-                                    key.clone(),
-                                    format!("{key} (load)"),
-                                );
+                            .show_ui(ui, |ui| {
+                                for key in &numeric_keys {
+                                    ui.selectable_value(property, key.clone(), key);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Palette");
+                        let selected = match palette {
+                            ContinuousPalette::Named(name) => name.as_str(),
+                            ContinuousPalette::Custom(_) => "Custom",
+                        };
+                        egui::ComboBox::from_id_salt("seg_objects_continuous_palette")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                for name in ContinuousPalette::NAMED {
+                                    if ui.selectable_label(
+                                        matches!(palette, ContinuousPalette::Named(current) if current == name),
+                                        name,
+                                    ).clicked() {
+                                        *palette = ContinuousPalette::Named(name.to_string());
+                                    }
+                                }
+                            });
+                        ui.checkbox(reverse, "Reverse");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Scale");
+                        ui.selectable_value(scale, ContinuousScale::Linear, "Linear");
+                        ui.selectable_value(scale, ContinuousScale::Log10, "Log10");
+                    });
+                    let mut automatic = matches!(domain, ContinuousDomain::Automatic(_));
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut automatic, "Automatic range").changed() {
+                            *domain = if automatic {
+                                ContinuousDomain::default()
+                            } else {
+                                ContinuousDomain::Fixed(
+                                    self.resolved_continuous_domain.unwrap_or([0.0, 1.0]),
+                                )
+                            };
+                        }
+                        if let ContinuousDomain::Fixed(range) = domain {
+                            ui.add(egui::DragValue::new(&mut range[0]).speed(0.1));
+                            ui.label("to");
+                            ui.add(egui::DragValue::new(&mut range[1]).speed(0.1));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Outside range");
+                        ui.selectable_value(out_of_range, OutOfRangeMode::Clamp, "Clamp");
+                        ui.selectable_value(out_of_range, OutOfRangeMode::Hide, "Hide");
+                    });
+                    ui.horizontal(|ui| {
+                        let mut show_missing = missing_color_rgb.is_some();
+                        if ui
+                            .checkbox(&mut show_missing, "Color missing values")
+                            .changed()
+                        {
+                            *missing_color_rgb = show_missing.then_some([128, 128, 128]);
+                        }
+                        if let Some(rgb) = missing_color_rgb {
+                            let mut color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                            if ui.color_edit_button_srgba(&mut color).changed() {
+                                *rgb = [color.r(), color.g(), color.b()];
                             }
                         }
-                    }
-                });
-            self.set_color_by_property(
-                (!next_color_property.is_empty()).then_some(next_color_property),
-            );
-        });
+                    });
+                }
+                if next_mapping != self.color_mapping
+                    && let Err(error) = self.set_color_mapping(next_mapping)
+                {
+                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), error);
+                }
+            }
+        }
+        if self.color_mode == ObjectColorMode::Continuous {
+            self.ui_continuous_color_legend(ui);
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.downsample_factor)

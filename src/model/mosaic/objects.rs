@@ -1,6 +1,7 @@
 //! Mosaic object-resource loading lifecycle and projection state.
 
 use super::*;
+use crate::model::ObjectColorMapping;
 
 impl MosaicModel {
     pub(super) fn object_style_snapshot(&self) -> Result<Value, ControlError> {
@@ -58,11 +59,41 @@ impl MosaicModel {
                     }
                     next_object.insert(key.clone(), value.clone());
                 }
-                "color_property_key" => {
-                    value
+                "color_property" | "color_property_key" => {
+                    let property = value
                         .as_str()
                         .ok_or_else(|| invalid("color_property_key must be a string"))?;
-                    next_object.insert(key.clone(), value.clone());
+                    next_object.insert("color_property_key".to_string(), value.clone());
+                    if !patch.contains_key("color_mapping") {
+                        next_object.insert(
+                            "color_mapping".to_string(),
+                            if property.trim().is_empty() {
+                                json!({"mode":"single"})
+                            } else {
+                                json!({"mode":"categorical","property":property.trim()})
+                            },
+                        );
+                    }
+                }
+                "color_mapping" => {
+                    let mapping = serde_json::from_value::<ObjectColorMapping>(value.clone())
+                        .map_err(|error| invalid(format!("invalid color_mapping: {error}")))?;
+                    mapping
+                        .validate()
+                        .map_err(|error| invalid(format!("invalid color_mapping: {error}")))?;
+                    next_object.insert(
+                        "color_property_key".to_string(),
+                        mapping
+                            .property()
+                            .map(|property| Value::String(property.to_string()))
+                            .unwrap_or_else(|| Value::String(String::new())),
+                    );
+                    next_object.insert(
+                        key.clone(),
+                        serde_json::to_value(mapping).map_err(|error| {
+                            invalid(format!("failed to normalize color_mapping: {error}"))
+                        })?,
+                    );
                 }
                 "color_level_overrides" => {
                     value

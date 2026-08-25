@@ -88,6 +88,10 @@ impl ObjectsLayer {
         }
         self.ensure_filter_cache();
         self.ensure_color_groups();
+        let continuous_colors = self.ensure_continuous_color_payload().cloned();
+        if self.color_mode == ObjectColorMode::Continuous && continuous_colors.is_none() {
+            return;
+        }
 
         let visible_local = self.world_to_local_rect(visible_world, local_to_world_offset);
         let display_scale = self.display_scale();
@@ -214,6 +218,7 @@ impl ObjectsLayer {
                 ObjectColorMode::ByProperty => color_groups_binding
                     .as_ref()
                     .filter(|g| g.property_key == self.color_property_key),
+                ObjectColorMode::Continuous => None,
             };
 
             if self.fill_cells
@@ -251,6 +256,9 @@ impl ObjectsLayer {
                                     object_count: fill_mesh.object_count,
                                     selection_generation: group.fill_generation,
                                     selection_state: Arc::clone(&group.fill_state),
+                                    color_cache_id: 0,
+                                    color_generation: 0,
+                                    object_colors_rgba: None,
                                 },
                                 params: ObjectFillGlDrawParams {
                                     center_world: camera.center_world_lvl0,
@@ -260,6 +268,7 @@ impl ObjectsLayer {
                                     visible: self.visible,
                                     local_to_world_offset: display_offset,
                                     local_to_world_scale: display_scale,
+                                    object_color_opacity: 1.0,
                                 },
                                 visible_world: fill_mesh.bounds_local,
                             });
@@ -284,6 +293,13 @@ impl ObjectsLayer {
                                 object_count: fill_mesh.object_count,
                                 selection_generation: render_generation,
                                 selection_state: Arc::new(visible_fill_state),
+                                color_cache_id: object_render_cache_id(0x4a24, 0),
+                                color_generation: continuous_colors
+                                    .as_ref()
+                                    .map_or(0, |payload| payload.generation),
+                                object_colors_rgba: continuous_colors
+                                    .as_ref()
+                                    .map(|payload| Arc::clone(&payload.colors_rgba)),
                             },
                             params: ObjectFillGlDrawParams {
                                 center_world: camera.center_world_lvl0,
@@ -293,6 +309,7 @@ impl ObjectsLayer {
                                 visible: self.visible,
                                 local_to_world_offset: display_offset,
                                 local_to_world_scale: display_scale,
+                                object_color_opacity: self.fill_opacity,
                             },
                             visible_world: fill_mesh.bounds_local,
                         });
@@ -360,6 +377,22 @@ impl ObjectsLayer {
                         {
                             continue;
                         }
+                        let fill_color = continuous_colors
+                            .as_ref()
+                            .and_then(|payload| payload.colors_rgba.get(object_index))
+                            .map(|rgba| {
+                                egui::Color32::from_rgba_unmultiplied(
+                                    rgba[0],
+                                    rgba[1],
+                                    rgba[2],
+                                    ((rgba[3] as f32) * self.fill_opacity.clamp(0.0, 1.0)).round()
+                                        as u8,
+                                )
+                            })
+                            .unwrap_or(fill_color);
+                        if fill_color.a() == 0 {
+                            continue;
+                        }
                         let points = tri
                             .iter()
                             .map(|p| {
@@ -384,8 +417,9 @@ impl ObjectsLayer {
             if gpu_available {
                 let lod = &render_lods[lod_idx];
                 if active_color_groups.is_none()
-                    && self.show_selection_overlay
-                    && !self.selected_object_indices.is_empty()
+                    && (continuous_colors.is_some()
+                        || (self.show_selection_overlay
+                            && !self.selected_object_indices.is_empty()))
                     && let Some(selection_lods) = self.object_selection_lods.as_ref()
                     && let Some(selection_lod) =
                         selection_lods.get(choose_object_selection_lod_index(
@@ -394,15 +428,55 @@ impl ObjectsLayer {
                         ))
                     && let Some(object_count) = self.objects.as_ref().map(|objects| objects.len())
                 {
+                    let selection_state = if continuous_colors.is_some() {
+                        let mut state = vec![0u8; object_count];
+                        for (index, slot) in state.iter_mut().enumerate() {
+                            if self.is_index_visible(index) {
+                                *slot = 64;
+                            }
+                        }
+                        if self.show_selection_overlay {
+                            for index in &self.selected_object_indices {
+                                if self.is_index_visible(*index)
+                                    && let Some(slot) = state.get_mut(*index)
+                                {
+                                    *slot = 128;
+                                }
+                            }
+                            if let Some(index) = self.selected_object_index
+                                && self.is_index_visible(index)
+                                && let Some(slot) = state.get_mut(index)
+                            {
+                                *slot = 255;
+                            }
+                        }
+                        Arc::new(state)
+                    } else {
+                        Arc::clone(&self.selection_fill_state)
+                    };
                     let item = ObjectLineBinsGlDrawItem {
                         data: ObjectLineBinsGlDrawData {
                             cache_id: object_render_cache_id(0x4a90, selection_lod.lod as u64),
                             state_cache_id: object_render_cache_id(0x4a91, 0),
                             generation: self.generation,
                             bins: Arc::clone(&selection_lod.bins),
-                            selection_generation: self.selection_generation,
-                            selection_state: Arc::clone(&self.selection_fill_state),
+                            selection_generation: if continuous_colors.is_some() {
+                                render_generation
+                                    ^ continuous_colors
+                                        .as_ref()
+                                        .map_or(0, |payload| payload.generation)
+                            } else {
+                                self.selection_generation
+                            },
+                            selection_state,
                             object_count,
+                            color_cache_id: object_render_cache_id(0x4a92, 0),
+                            color_generation: continuous_colors
+                                .as_ref()
+                                .map_or(0, |payload| payload.generation),
+                            object_colors_rgba: continuous_colors
+                                .as_ref()
+                                .map(|payload| Arc::clone(&payload.colors_rgba)),
                         },
                         params: ObjectLineBinsGlDrawParams {
                             center_world: camera.center_world_lvl0,
@@ -417,10 +491,11 @@ impl ObjectsLayer {
                             primary_color: egui::Color32::from_rgba_unmultiplied(
                                 255, 255, 255, 235,
                             ),
-                            draw_unselected: true,
+                            draw_unselected: continuous_colors.is_none(),
                             visible: self.visible,
                             local_to_world_offset: display_offset,
                             local_to_world_scale: display_scale,
+                            object_color_opacity: self.opacity,
                         },
                         visible_world: visible_local,
                     };
@@ -553,6 +628,55 @@ impl ObjectsLayer {
                                 );
                                 ui.painter().line_segment([a, b], stroke);
                             }
+                        }
+                    }
+                }
+            } else if let Some(payload) = continuous_colors.as_ref()
+                && let Some(selection_lods) = self.object_selection_lods.as_ref()
+                && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
+                    selection_lods,
+                    dataset_long_side_screen_px,
+                ))
+            {
+                let (bx0, by0, bx1, by1) =
+                    selection_lod.bins.bin_range_for_world_rect(visible_local);
+                for by in by0..=by1 {
+                    for bx in bx0..=bx1 {
+                        let bin_index = by * selection_lod.bins.bins_w + bx;
+                        for seg in selection_lod.bins.bin_slice(bin_index) {
+                            let object_index = seg[4].round().max(0.0) as usize;
+                            if !self.is_index_visible(object_index) {
+                                continue;
+                            }
+                            let Some(rgba) = payload.colors_rgba.get(object_index) else {
+                                continue;
+                            };
+                            let alpha =
+                                ((rgba[3] as f32) * self.opacity.clamp(0.0, 1.0)).round() as u8;
+                            if alpha == 0 {
+                                continue;
+                            }
+                            let stroke = egui::Stroke::new(
+                                self.width_screen_px.max(0.0),
+                                egui::Color32::from_rgba_unmultiplied(
+                                    rgba[0], rgba[1], rgba[2], alpha,
+                                ),
+                            );
+                            let a = camera.world_to_screen(
+                                self.local_to_world_point(
+                                    egui::pos2(seg[0], seg[1]),
+                                    local_to_world_offset,
+                                ),
+                                viewport,
+                            );
+                            let b = camera.world_to_screen(
+                                self.local_to_world_point(
+                                    egui::pos2(seg[2], seg[3]),
+                                    local_to_world_offset,
+                                ),
+                                viewport,
+                            );
+                            ui.painter().line_segment([a, b], stroke);
                         }
                     }
                 }
@@ -750,6 +874,7 @@ impl ObjectsLayer {
             visible: self.visible,
             local_to_world_offset: display_offset,
             local_to_world_scale: display_scale,
+            object_color_opacity: 1.0,
         };
 
         let mut items = Vec::new();
@@ -764,6 +889,9 @@ impl ObjectsLayer {
                     object_count: fill_mesh.object_count,
                     selection_generation: self.selection_generation,
                     selection_state: Arc::clone(&self.selection_fill_state),
+                    color_cache_id: 0,
+                    color_generation: 0,
+                    object_colors_rgba: None,
                 },
                 params,
                 visible_world: fill_mesh.bounds_local,
@@ -788,6 +916,9 @@ impl ObjectsLayer {
                             object_count: fill_mesh.object_count,
                             selection_generation: self.selection_generation,
                             selection_state: Arc::clone(&self.selection_fill_state),
+                            color_cache_id: 0,
+                            color_generation: 0,
+                            object_colors_rgba: None,
                         },
                         params: params.clone(),
                         visible_world: visible_local,
@@ -897,6 +1028,9 @@ impl ObjectsLayer {
                     selection_generation: self.selection_generation,
                     selection_state: Arc::clone(&self.selection_fill_state),
                     object_count,
+                    color_cache_id: 0,
+                    color_generation: 0,
+                    object_colors_rgba: None,
                 },
                 params: ObjectLineBinsGlDrawParams {
                     center_world: camera.center_world_lvl0,
@@ -911,6 +1045,7 @@ impl ObjectsLayer {
                     visible: self.visible,
                     local_to_world_offset: display_offset,
                     local_to_world_scale: display_scale,
+                    object_color_opacity: 1.0,
                 },
                 visible_world: visible_local,
             }];
@@ -1169,12 +1304,17 @@ impl ObjectsLayer {
         opacity: f32,
         generation_seed: u64,
     ) {
+        let continuous_colors = self.ensure_continuous_color_payload().cloned();
+        if self.color_mode == ObjectColorMode::Continuous && continuous_colors.is_none() {
+            return;
+        }
         let color_groups_binding = self.active_color_groups().cloned();
         let active_color_groups = match self.color_mode {
             ObjectColorMode::Single => None,
             ObjectColorMode::ByProperty => color_groups_binding
                 .as_ref()
                 .filter(|groups| groups.property_key == self.color_property_key),
+            ObjectColorMode::Continuous => None,
         };
 
         if let Some(color_groups) = active_color_groups {
@@ -1200,6 +1340,8 @@ impl ObjectsLayer {
                     &group.point_values,
                     style,
                     group.fill_generation ^ generation_seed,
+                    None,
+                    1.0,
                     Some(&self.gl_proxy_group_points[group_idx]),
                 );
             }
@@ -1219,6 +1361,18 @@ impl ObjectsLayer {
         let (Some(base_positions), Some(base_values)) = (base_positions, base_values) else {
             return;
         };
+        let point_colors = continuous_colors.as_ref().map(|payload| {
+            if let Some(indices) = self.filtered_ordered_indices.as_ref() {
+                Arc::new(
+                    indices
+                        .iter()
+                        .filter_map(|index| payload.colors_rgba.get(*index).copied())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                Arc::clone(&payload.colors_rgba)
+            }
+        });
         self.draw_proxy_point_batch(
             ui,
             camera,
@@ -1230,6 +1384,8 @@ impl ObjectsLayer {
             base_values,
             self.proxy_point_style(self.color_rgb, opacity),
             self.render_cache_generation() ^ generation_seed,
+            point_colors,
+            opacity,
             Some(&self.gl_points),
         );
     }
@@ -1246,6 +1402,8 @@ impl ObjectsLayer {
         values: &Arc<Vec<f32>>,
         style: PointsStyle,
         generation: u64,
+        colors_rgba: Option<Arc<Vec<[u8; 4]>>>,
+        color_opacity: f32,
         renderer: Option<&PointsGlRenderer>,
     ) {
         if positions_world.is_empty() || values.is_empty() {
@@ -1260,6 +1418,7 @@ impl ObjectsLayer {
                 generation,
                 positions_world: Arc::clone(positions_world),
                 values: Arc::clone(values),
+                colors_rgba: colors_rgba.clone(),
             };
             let params = crate::render::points_gl::PointsGlDrawParams {
                 center_world: camera.center_world_lvl0,
@@ -1269,6 +1428,7 @@ impl ObjectsLayer {
                 visible: self.visible,
                 local_to_world_offset: self.display_offset(local_to_world_offset),
                 local_to_world_scale: self.display_scale(),
+                color_opacity,
             };
             let renderer = renderer.clone();
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
@@ -1281,14 +1441,29 @@ impl ObjectsLayer {
             return;
         }
 
-        for pos in positions_world.iter() {
+        for (index, pos) in positions_world.iter().enumerate() {
             let world = self.local_to_world_point(*pos, local_to_world_offset);
             if !visible_world.contains(world) {
                 continue;
             }
             let screen = camera.world_to_screen(world, viewport);
+            let fill = colors_rgba
+                .as_ref()
+                .and_then(|colors| colors.get(index))
+                .map(|rgba| {
+                    egui::Color32::from_rgba_unmultiplied(
+                        rgba[0],
+                        rgba[1],
+                        rgba[2],
+                        ((rgba[3] as f32) * color_opacity.clamp(0.0, 1.0)).round() as u8,
+                    )
+                })
+                .unwrap_or(style.fill_positive);
+            if fill.a() == 0 {
+                continue;
+            }
             ui.painter()
-                .circle_filled(screen, style.radius_screen_px, style.fill_positive);
+                .circle_filled(screen, style.radius_screen_px, fill);
         }
     }
 
@@ -1301,6 +1476,10 @@ impl ObjectsLayer {
         local_to_world_offset: egui::Vec2,
         gpu_available: bool,
     ) {
+        let continuous_colors = self.ensure_continuous_color_payload().cloned();
+        if self.color_mode == ObjectColorMode::Continuous && continuous_colors.is_none() {
+            return;
+        }
         let base_positions = if self.has_active_filter() {
             self.filtered_point_positions_world.as_ref()
         } else {
@@ -1324,6 +1503,7 @@ impl ObjectsLayer {
             ObjectColorMode::ByProperty => color_groups_binding
                 .as_ref()
                 .filter(|groups| groups.property_key == self.color_property_key),
+            ObjectColorMode::Continuous => None,
         };
         if let Some(color_groups) = active_color_groups {
             if self.gl_proxy_group_points.len() < color_groups.groups.len() {
@@ -1347,6 +1527,8 @@ impl ObjectsLayer {
                     &group.point_values,
                     self.point_style_for_rgb(color_rgb),
                     group.fill_generation,
+                    None,
+                    1.0,
                     Some(&self.gl_proxy_group_points[group_idx]),
                 );
             }
@@ -1360,11 +1542,25 @@ impl ObjectsLayer {
             return;
         }
 
+        let point_colors = continuous_colors.as_ref().map(|payload| {
+            if let Some(indices) = self.filtered_ordered_indices.as_ref() {
+                Arc::new(
+                    indices
+                        .iter()
+                        .filter_map(|index| payload.colors_rgba.get(*index).copied())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                Arc::clone(&payload.colors_rgba)
+            }
+        });
+
         if gpu_available {
             let data = crate::render::points_gl::PointsGlDrawData {
                 generation: self.render_cache_generation(),
                 positions_world: Arc::clone(base_positions),
                 values: Arc::clone(base_values),
+                colors_rgba: point_colors.clone(),
             };
             let params = crate::render::points_gl::PointsGlDrawParams {
                 center_world: camera.center_world_lvl0,
@@ -1374,6 +1570,7 @@ impl ObjectsLayer {
                 visible: self.visible,
                 local_to_world_offset: self.display_offset(local_to_world_offset),
                 local_to_world_scale: self.display_scale(),
+                color_opacity: self.opacity,
             };
             let renderer = self.gl_points.clone();
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
@@ -1388,14 +1585,28 @@ impl ObjectsLayer {
                 (self.point_radius_screen_px() + 4.0) / camera.zoom_screen_per_lvl0_px.max(1e-6);
             let visible_world = visible_world.expand(world_margin);
             let radius = self.point_radius_screen_px();
-            for &p in base_positions.iter() {
+            for (index, &p) in base_positions.iter().enumerate() {
                 let world = self.local_to_world_point(p, local_to_world_offset);
                 if !visible_world.contains(world) {
                     continue;
                 }
                 let s = camera.world_to_screen(world, viewport);
-                ui.painter()
-                    .circle_filled(s, radius, self.base_point_style().fill_positive);
+                let fill = point_colors
+                    .as_ref()
+                    .and_then(|colors| colors.get(index))
+                    .map(|rgba| {
+                        egui::Color32::from_rgba_unmultiplied(
+                            rgba[0],
+                            rgba[1],
+                            rgba[2],
+                            ((rgba[3] as f32) * self.opacity.clamp(0.0, 1.0)).round() as u8,
+                        )
+                    })
+                    .unwrap_or(self.base_point_style().fill_positive);
+                if fill.a() == 0 {
+                    continue;
+                }
+                ui.painter().circle_filled(s, radius, fill);
             }
         }
         self.draw_point_selection_overlay(
@@ -1427,6 +1638,7 @@ impl ObjectsLayer {
                     generation: self.selection_generation,
                     positions_world: Arc::clone(sel_positions),
                     values: Arc::clone(sel_values),
+                    colors_rgba: None,
                 };
                 let params = crate::render::points_gl::PointsGlDrawParams {
                     center_world: camera.center_world_lvl0,
@@ -1436,6 +1648,7 @@ impl ObjectsLayer {
                     visible: self.visible,
                     local_to_world_offset: self.display_offset(local_to_world_offset),
                     local_to_world_scale: self.display_scale(),
+                    color_opacity: 1.0,
                 };
                 let renderer = self.gl_points.clone();
                 let cb = egui_glow::CallbackFn::new(move |info, painter| {
@@ -1455,6 +1668,7 @@ impl ObjectsLayer {
                     generation: self.selection_generation.wrapping_mul(1021),
                     positions_world: Arc::clone(primary_positions),
                     values: Arc::clone(primary_values),
+                    colors_rgba: None,
                 };
                 let params = crate::render::points_gl::PointsGlDrawParams {
                     center_world: camera.center_world_lvl0,
@@ -1464,6 +1678,7 @@ impl ObjectsLayer {
                     visible: self.visible,
                     local_to_world_offset: self.display_offset(local_to_world_offset),
                     local_to_world_scale: self.display_scale(),
+                    color_opacity: 1.0,
                 };
                 let renderer = self.gl_points.clone();
                 let cb = egui_glow::CallbackFn::new(move |info, painter| {

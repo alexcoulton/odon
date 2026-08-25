@@ -230,6 +230,7 @@ impl OmeZarrViewerApp {
         if let Some(color_by) = request.cell_color_by.as_deref() {
             let mut display = self.seg_objects.project_display_state();
             display.color_property_key = Some(color_by.to_string());
+            display.color_mapping = Some(odon::model::ObjectColorMapping::categorical(color_by));
             display.fill_cells = request.fill_cells.unwrap_or(true);
             self.seg_objects.apply_project_display_state(&display);
             self.set_active_layer(LayerId::SegmentationObjects);
@@ -237,6 +238,14 @@ impl OmeZarrViewerApp {
             let mut display = self.seg_objects.project_display_state();
             display.fill_cells = fill_cells;
             self.seg_objects.apply_project_display_state(&display);
+        }
+        if let Some(mapping) = request.object_color_mapping.as_ref() {
+            let mut display = self.seg_objects.project_display_state();
+            display.color_property_key = mapping.property().map(str::to_string);
+            display.color_mapping = Some(mapping.clone());
+            display.fill_cells = request.fill_cells.unwrap_or(true);
+            self.seg_objects.apply_project_display_state(&display);
+            self.set_active_layer(LayerId::SegmentationObjects);
         }
 
         if let Some(show_selection_overlay) = request.show_selection_overlay {

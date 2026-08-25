@@ -1384,6 +1384,7 @@ fn viewport_filters_of_the_same_kind_have_independent_readiness() {
             downsample_factor: 1.0,
             features: Arc::new(Vec::new()),
             property_names: Arc::new(vec!["id".to_string()]),
+            numeric_summaries: Arc::new(Default::default()),
             renderer_payload: None,
         }),
     ));
@@ -1486,6 +1487,17 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
             properties: serde_json::Map::from_iter([("score".to_string(), json!(2.5))]),
         }]),
         property_names: Arc::new(vec!["id".to_string(), "score".to_string()]),
+        numeric_summaries: Arc::new(BTreeMap::from([(
+            "score".to_string(),
+            crate::model::ControlObjectNumericSummary {
+                minimum: 2.5,
+                maximum: 2.5,
+                positive_minimum: Some(2.5),
+                positive_count: 1,
+                numeric_count: 1,
+                missing_count: 0,
+            },
+        )])),
         renderer_payload: None,
     });
     model
@@ -1554,6 +1566,76 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
         .response;
     assert_eq!(style["fill_cells"], true);
     assert_eq!(style["color_property"], "score");
+
+    model
+        .dispatch(
+            "viewer.objects.legend.set",
+            &json!({
+                "target":"spatial_shape",
+                "layer_id":7,
+                "entries":[{"value":"high","visible":true,"color_rgb":[1,2,3]}],
+            }),
+        )
+        .unwrap()
+        .unwrap();
+
+    model
+        .dispatch(
+            "viewer.objects.style.set",
+            &json!({
+                "target":"spatial_shape",
+                "layer_id":7,
+                "color_mapping":{
+                    "mode":"continuous",
+                    "property":"score",
+                    "palette":"viridis",
+                    "domain":[0.0,5.0],
+                    "scale":"linear",
+                    "reverse":false,
+                    "out_of_range":"clamp",
+                    "missing_color_rgb":null,
+                },
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    let continuous = model
+        .dispatch("viewer.objects.style.get", &target)
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(continuous["color_mapping"]["mode"], "continuous");
+    assert_eq!(continuous["color_mapping"]["property"], "score");
+    assert_eq!(
+        continuous["color_mapping"]["resolved_domain"],
+        json!([0.0, 5.0])
+    );
+    assert_eq!(continuous["color_mapping"]["numeric_count"], 1);
+    assert_eq!(continuous["legend"], json!([]));
+
+    let invalid = model
+        .dispatch(
+            "viewer.objects.style.set",
+            &json!({
+                "target":"spatial_shape",
+                "layer_id":7,
+                "color_mapping":{
+                    "mode":"continuous",
+                    "property":"score",
+                    "palette":"viridis",
+                    "domain":[5.0,5.0]
+                },
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(invalid.kind, ControlErrorKind::InvalidParams);
+    let unchanged = model
+        .dispatch("viewer.objects.style.get", &target)
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(unchanged["color_mapping"]["domain"], json!([0.0, 5.0]));
 
     let filter = model
         .begin_object_filter_evaluation(&json!({

@@ -49,6 +49,7 @@ pub(super) fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
         segmentation_source: None,
         load_segmentation_labels: None,
         cell_color_by: None,
+        object_color_mapping: None,
         fill_cells: None,
         show_selection_overlay: None,
         fast_object_rendering: None,
@@ -114,6 +115,11 @@ pub(super) fn parse_deep_link(raw: &str) -> anyhow::Result<DeepLinkRequest> {
             | "load_bundled_labels" => req.load_segmentation_labels = parse_bool(&value),
             "cell_color_by" | "color_by" | "object_color_by" => {
                 req.cell_color_by = non_empty(value)
+            }
+            "object_color_mapping" | "object_colour_mapping" => {
+                req.object_color_mapping = serde_json::from_str(&value).ok().filter(
+                    |mapping: &crate::model::ObjectColorMapping| mapping.validate().is_ok(),
+                );
             }
             "fill_cells" => req.fill_cells = parse_bool(&value),
             "show_selection_overlay" | "selection_overlay" => {

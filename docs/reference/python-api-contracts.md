@@ -473,6 +473,15 @@ export dictionaries are validated by Rust. Use runtime method schemas and
 current state snapshots for the supported fields of the connected experimental
 build.
 
+Numeric object properties can be mapped without manufacturing categorical bins. The sync and
+async `objects.color_by_continuous(...)` helpers, viewport-bound equivalent, and
+`mosaic.color_objects_by_continuous(...)` all emit the same `color_mapping` contract. Domains are
+either `"auto"` over the full unfiltered source or an explicit `(minimum, maximum)` pair; use an
+explicit shared domain when comparing sources. Named palettes are `viridis`, `magma`, `plasma`,
+`inferno`, `cividis`, `turbo`, and `gray`. Linear and log10 scales, reversal, clamp/hide handling,
+and a missing-value colour are actor-validated. Existing `color_property="phenotype"` calls remain
+categorical and retain their per-value legend overrides.
+
 ### Point annotations
 
 `app.annotations` manages actor-owned point layers in both single-image and mosaic modes. Layer

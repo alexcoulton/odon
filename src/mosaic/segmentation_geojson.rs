@@ -8,6 +8,9 @@ use crate::objects::{
     SelectedObjectDetails,
 };
 use crate::spatialdata::SpatialDataTransform2;
+use odon::model::{
+    ContinuousDomain, ContinuousPalette, ContinuousScale, ObjectColorMapping, OutOfRangeMode,
+};
 
 #[derive(Debug, Default)]
 struct ItemState {
@@ -44,6 +47,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     samplesheet_dir: Option<PathBuf>,
     items: HashMap<usize, ItemState>,
     color_property_key: String,
+    color_mapping: ObjectColorMapping,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
     actor_load_requested: BTreeSet<usize>,
     force_repaint_frames: u32,
@@ -65,6 +69,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             samplesheet_dir: None,
             items: HashMap::new(),
             color_property_key: String::new(),
+            color_mapping: ObjectColorMapping::Single,
             color_level_overrides: HashMap::new(),
             actor_load_requested: BTreeSet::new(),
             force_repaint_frames: 0,
@@ -83,6 +88,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             "fill_opacity":self.fill_opacity,
             "selected_fill_opacity":self.selected_fill_opacity,
             "color_property_key":self.color_property_key,
+            "color_mapping":self.color_mapping,
             "color_level_overrides":self.color_level_overrides,
             "downsample_factor":self.downsample_factor,
         })
@@ -129,6 +135,18 @@ impl MosaicGeoJsonSegmentationOverlay {
             .and_then(serde_json::Value::as_str)
         {
             self.color_property_key = value.to_string();
+            self.color_mapping = if self.color_property_key.is_empty() {
+                ObjectColorMapping::Single
+            } else {
+                ObjectColorMapping::categorical(self.color_property_key.clone())
+            };
+        }
+        if let Some(value) = style.get("color_mapping") {
+            let mapping: ObjectColorMapping = serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid mosaic object color mapping: {error}"))?;
+            mapping.validate()?;
+            self.color_property_key = mapping.property().unwrap_or_default().to_string();
+            self.color_mapping = mapping;
         }
         if let Some(value) = style.get("color_level_overrides") {
             self.color_level_overrides = serde_json::from_value(value.clone())
@@ -238,6 +256,7 @@ impl MosaicGeoJsonSegmentationOverlay {
         preloaded: &PreloadedObjectLayer,
     ) -> usize {
         let style = self.shared_style();
+        let color_mapping = self.render_color_mapping();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let mut installed = 0usize;
         for st in self.items.values_mut() {
@@ -248,12 +267,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             }
             let mut layer = ObjectsLayer::default();
-            apply_style(
-                &mut layer,
-                style,
-                Some(self.color_property_key.as_str()),
-                &color_level_overrides,
-            );
+            apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
             layer.install_preloaded(preloaded);
             st.status = format!("Using cached objects: {}", path.to_string_lossy());
             st.layer = Some(layer);
@@ -274,17 +288,13 @@ impl MosaicGeoJsonSegmentationOverlay {
             return false;
         };
         let style = self.shared_style();
+        let color_mapping = self.render_color_mapping();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let Some(state) = self.items.get_mut(&item_id) else {
             return false;
         };
         let mut layer = ObjectsLayer::default();
-        apply_style(
-            &mut layer,
-            style,
-            Some(self.color_property_key.as_str()),
-            &color_level_overrides,
-        );
+        apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
         layer.install_preloaded(preloaded);
         state.status = format!("Using actor-loaded objects: {}", resource.source.display());
         state.layer = Some(layer);
@@ -365,26 +375,144 @@ impl MosaicGeoJsonSegmentationOverlay {
                 self.color_rgb = [c.r(), c.g(), c.b()];
             }
         });
-        let available_color_properties = self.available_color_properties();
+        let mut color_mode = match self.color_mapping {
+            ObjectColorMapping::Single => 0u8,
+            ObjectColorMapping::Categorical { .. } => 1u8,
+            ObjectColorMapping::Continuous { .. } => 2u8,
+        };
         ui.horizontal(|ui| {
-            ui.label("Color by");
+            ui.label("Color mode");
             egui::ComboBox::from_id_salt("mosaic_seg_objects_color_mode")
-                .selected_text(if self.color_property_key.is_empty() {
-                    "Single color".to_string()
-                } else {
-                    self.color_property_key.clone()
-                })
+                .selected_text(["Single", "Categorical", "Continuous"][color_mode as usize])
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.color_property_key,
-                        String::new(),
-                        "Single color",
-                    );
-                    for key in &available_color_properties {
-                        ui.selectable_value(&mut self.color_property_key, key.clone(), key);
-                    }
+                    ui.selectable_value(&mut color_mode, 0, "Single");
+                    ui.selectable_value(&mut color_mode, 1, "Categorical");
+                    ui.selectable_value(&mut color_mode, 2, "Continuous");
                 });
         });
+        let current_mode = match self.color_mapping {
+            ObjectColorMapping::Single => 0,
+            ObjectColorMapping::Categorical { .. } => 1,
+            ObjectColorMapping::Continuous { .. } => 2,
+        };
+        if color_mode != current_mode {
+            self.color_mapping = match color_mode {
+                1 => self
+                    .available_color_properties()
+                    .into_iter()
+                    .next()
+                    .map(ObjectColorMapping::categorical)
+                    .unwrap_or(ObjectColorMapping::Single),
+                2 => self
+                    .available_numeric_properties()
+                    .into_iter()
+                    .next()
+                    .map(|property| ObjectColorMapping::Continuous {
+                        property,
+                        palette: ContinuousPalette::default(),
+                        domain: ContinuousDomain::default(),
+                        scale: ContinuousScale::default(),
+                        reverse: false,
+                        out_of_range: OutOfRangeMode::default(),
+                        missing_color_rgb: None,
+                    })
+                    .unwrap_or(ObjectColorMapping::Single),
+                _ => ObjectColorMapping::Single,
+            };
+            self.color_property_key = self
+                .color_mapping
+                .property()
+                .unwrap_or_default()
+                .to_string();
+        }
+        let available_color_properties = self.available_color_properties();
+        let available_numeric_properties = self.available_numeric_properties();
+        match self.color_mapping.clone() {
+            ObjectColorMapping::Single => {}
+            ObjectColorMapping::Categorical { mut property } => {
+                ui.horizontal(|ui| {
+                    ui.label("Property");
+                    egui::ComboBox::from_id_salt("mosaic_seg_objects_categorical_property")
+                        .selected_text(property.clone())
+                        .show_ui(ui, |ui| {
+                            for key in available_color_properties {
+                                ui.selectable_value(&mut property, key.clone(), key);
+                            }
+                        });
+                });
+                self.color_property_key = property.clone();
+                self.color_mapping = ObjectColorMapping::categorical(property);
+            }
+            ObjectColorMapping::Continuous { .. } => {
+                let mut mapping = self.color_mapping.clone();
+                if let ObjectColorMapping::Continuous {
+                    property,
+                    palette,
+                    domain,
+                    scale,
+                    reverse,
+                    out_of_range,
+                    ..
+                } = &mut mapping
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("Numeric property");
+                        egui::ComboBox::from_id_salt("mosaic_seg_objects_continuous_property")
+                            .selected_text(property.clone())
+                            .show_ui(ui, |ui| {
+                                for key in &available_numeric_properties {
+                                    ui.selectable_value(property, key.clone(), key);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Palette");
+                        let label = match palette {
+                            ContinuousPalette::Named(name) => name.as_str(),
+                            ContinuousPalette::Custom(_) => "Custom",
+                        };
+                        egui::ComboBox::from_id_salt("mosaic_seg_objects_continuous_palette")
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for name in ContinuousPalette::NAMED {
+                                    if ui.selectable_label(
+                                        matches!(palette, ContinuousPalette::Named(current) if current == name),
+                                        name,
+                                    ).clicked() {
+                                        *palette = ContinuousPalette::Named(name.to_string());
+                                    }
+                                }
+                            });
+                        ui.checkbox(reverse, "Reverse");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(scale, ContinuousScale::Linear, "Linear");
+                        ui.selectable_value(scale, ContinuousScale::Log10, "Log10");
+                        ui.selectable_value(out_of_range, OutOfRangeMode::Clamp, "Clamp");
+                        ui.selectable_value(out_of_range, OutOfRangeMode::Hide, "Hide");
+                    });
+                    let mut automatic = matches!(domain, ContinuousDomain::Automatic(_));
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut automatic, "Automatic range").changed() {
+                            *domain = if automatic {
+                                ContinuousDomain::default()
+                            } else {
+                                ContinuousDomain::Fixed([0.0, 1.0])
+                            };
+                        }
+                        if let ContinuousDomain::Fixed(range) = domain {
+                            ui.add(egui::DragValue::new(&mut range[0]).speed(0.1));
+                            ui.label("to");
+                            ui.add(egui::DragValue::new(&mut range[1]).speed(0.1));
+                        }
+                    });
+                }
+                if mapping.validate().is_ok() {
+                    self.color_property_key = mapping.property().unwrap_or_default().to_string();
+                    self.color_mapping = mapping;
+                }
+            }
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.downsample_factor)
@@ -393,7 +521,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             )
             .on_hover_text("Scales object coordinates by this factor (use if segmentations were generated on downsampled imagery).");
         });
-        if !self.color_property_key.is_empty() {
+        if matches!(self.color_mapping, ObjectColorMapping::Categorical { .. }) {
             let legend = self.active_color_legend_entries();
             if !legend.is_empty() {
                 ui.separator();
@@ -430,6 +558,49 @@ impl MosaicGeoJsonSegmentationOverlay {
                             });
                         }
                     });
+            }
+        } else if let ObjectColorMapping::Continuous {
+            property,
+            palette,
+            reverse,
+            ..
+        } = self.render_color_mapping()
+        {
+            ui.separator();
+            ui.label(format!("Legend: {property}"));
+            let width = ui.available_width().max(80.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
+            for index in 0..64 {
+                let start = index as f64 / 64.0;
+                let end = (index + 1) as f64 / 64.0;
+                let position = if reverse { 1.0 - start } else { start };
+                let rgb = palette.color_rgb(position);
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left() + rect.width() * start as f32, rect.top()),
+                        egui::pos2(rect.left() + rect.width() * end as f32, rect.bottom()),
+                    ),
+                    0.0,
+                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                );
+            }
+            if let ObjectColorMapping::Continuous {
+                domain: ContinuousDomain::Fixed([minimum, maximum]),
+                ..
+            } = self.render_color_mapping()
+            {
+                ui.columns(3, |columns| {
+                    columns[0].label(format!("{minimum:.4}"));
+                    columns[1].vertical_centered(|ui| {
+                        ui.label(format!("{:.4}", 0.5 * (minimum + maximum)));
+                    });
+                    columns[2].with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(format!("{maximum:.4}"));
+                        },
+                    );
+                });
             }
         }
 
@@ -564,6 +735,7 @@ impl MosaicGeoJsonSegmentationOverlay {
 
         let mut pending_any = false;
         let style = self.shared_style();
+        let color_mapping = self.render_color_mapping();
         let color_level_overrides = self.current_color_level_overrides().clone();
         for (item_id, world_rect, offset, scale) in visible_items {
             if !world_rect.intersects(visible_world) {
@@ -576,12 +748,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             };
             layer.set_display_transform(mosaic_transform(*offset, *scale));
-            apply_style(
-                layer,
-                style,
-                Some(self.color_property_key.as_str()),
-                &color_level_overrides,
-            );
+            apply_style(layer, style, &color_mapping, &color_level_overrides);
             layer.draw(ui, camera, viewport, visible_world, egui::Vec2::ZERO, true);
             pending_any |= layer.is_loading();
         }
@@ -600,15 +767,11 @@ impl MosaicGeoJsonSegmentationOverlay {
         camera: &crate::camera::Camera,
     ) -> Option<Vec<String>> {
         let style = self.shared_style();
+        let color_mapping = self.render_color_mapping();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let st = self.items.get_mut(&item_id)?;
         let layer = st.layer.as_mut()?;
-        apply_style(
-            layer,
-            style,
-            Some(self.color_property_key.as_str()),
-            &color_level_overrides,
-        );
+        apply_style(layer, style, &color_mapping, &color_level_overrides);
         layer.hover_tooltip(pointer_world, egui::Vec2::ZERO, camera)
     }
 
@@ -727,6 +890,66 @@ impl MosaicGeoJsonSegmentationOverlay {
         keys.into_iter().collect()
     }
 
+    fn available_numeric_properties(&mut self) -> Vec<String> {
+        let mut keys = BTreeSet::new();
+        if let ObjectColorMapping::Continuous { property, .. } = &self.color_mapping
+            && !property.is_empty()
+        {
+            keys.insert(property.clone());
+        }
+        for state in self.items.values_mut() {
+            if let Some(layer) = state.layer.as_mut() {
+                keys.extend(layer.available_numeric_object_property_keys());
+            }
+        }
+        keys.into_iter().collect()
+    }
+
+    fn render_color_mapping(&mut self) -> ObjectColorMapping {
+        let ObjectColorMapping::Continuous {
+            property,
+            domain: ContinuousDomain::Automatic(_),
+            palette,
+            scale,
+            reverse,
+            out_of_range,
+            missing_color_rgb,
+        } = &self.color_mapping
+        else {
+            return self.color_mapping.clone();
+        };
+        let property = property.clone();
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        for state in self.items.values_mut() {
+            if let Some(domain) = state
+                .layer
+                .as_mut()
+                .and_then(|layer| layer.numeric_property_domain(&property))
+            {
+                minimum = minimum.min(domain[0]);
+                maximum = maximum.max(domain[1]);
+            }
+        }
+        if !minimum.is_finite() || !maximum.is_finite() {
+            return self.color_mapping.clone();
+        }
+        if minimum >= maximum {
+            let epsilon = minimum.abs().max(1.0) * 1.0e-9;
+            minimum -= epsilon;
+            maximum += epsilon;
+        }
+        ObjectColorMapping::Continuous {
+            property,
+            palette: palette.clone(),
+            domain: ContinuousDomain::Fixed([minimum, maximum]),
+            scale: *scale,
+            reverse: *reverse,
+            out_of_range: *out_of_range,
+            missing_color_rgb: *missing_color_rgb,
+        }
+    }
+
     fn active_color_legend_entries(&mut self) -> Vec<ObjectColorLegendEntry> {
         let mut merged = std::collections::BTreeMap::<String, ([u8; 3], usize)>::new();
         for st in self.items.values_mut() {
@@ -814,7 +1037,7 @@ fn mosaic_transform(offset: egui::Vec2, scale: f32) -> SpatialDataTransform2 {
 fn apply_style(
     layer: &mut ObjectsLayer,
     style: SharedStyle,
-    color_property_key: Option<&str>,
+    color_mapping: &ObjectColorMapping,
     color_level_overrides: &HashMap<String, ObjectColorLevelOverride>,
 ) {
     layer.visible = style.visible;
@@ -826,6 +1049,6 @@ fn apply_style(
     layer.selected_fill_opacity = style.selected_fill_opacity;
     layer.fast_rendering = style.fast_rendering;
     layer.downsample_factor = style.downsample_factor;
-    layer.set_color_by_property(color_property_key.map(str::to_owned));
-    layer.set_color_level_overrides(color_property_key, color_level_overrides);
+    let _ = layer.set_color_mapping(color_mapping.clone());
+    layer.set_color_level_overrides(color_mapping.property(), color_level_overrides);
 }

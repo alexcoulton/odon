@@ -259,6 +259,15 @@ fn canonical_url_round_trips_public_state() {
             color_rgb: [0, 204, 255],
         }],
         fill_cells: Some(true),
+        object_color_mapping: Some(crate::model::ObjectColorMapping::Continuous {
+            property: "mean_channel_1".to_string(),
+            palette: crate::model::ContinuousPalette::Named("viridis".to_string()),
+            domain: crate::model::ContinuousDomain::Fixed([4_000.0, 42_000.0]),
+            scale: crate::model::ContinuousScale::Linear,
+            reverse: false,
+            out_of_range: crate::model::OutOfRangeMode::Clamp,
+            missing_color_rgb: None,
+        }),
         object_filter_logic: Some(DeepLinkObjectFilterLogic::Any),
         object_filters: vec![DeepLinkObjectFilterClause {
             property_key: "cell_type".to_string(),
@@ -286,6 +295,7 @@ fn canonical_url_round_trips_public_state() {
     assert_eq!(parsed.channel_contrasts, request.channel_contrasts);
     assert_eq!(parsed.channel_colors, request.channel_colors);
     assert_eq!(parsed.fill_cells, request.fill_cells);
+    assert_eq!(parsed.object_color_mapping, request.object_color_mapping);
     assert_eq!(parsed.object_filter_logic, request.object_filter_logic);
     assert_eq!(parsed.object_filters, request.object_filters);
     assert_eq!(parsed.center_world, request.center_world);

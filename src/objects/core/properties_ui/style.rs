@@ -40,6 +40,20 @@ impl ObjectsLayer {
         }
     }
 
+    pub(crate) fn control_style_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "visible":self.visible,
+            "opacity":self.opacity,
+            "width_screen_px":self.width_screen_px,
+            "color_rgb":self.color_rgb,
+            "fill_cells":self.fill_cells,
+            "fill_opacity":self.fill_opacity,
+            "selected_fill_opacity":self.selected_fill_opacity,
+            "show_selection_overlay":self.show_selection_overlay,
+            "color_mapping":self.color_mapping,
+        })
+    }
+
     pub(crate) fn apply_actor_style_projection_json(
         &mut self,
         params: &serde_json::Value,
@@ -120,6 +134,13 @@ impl ObjectsLayer {
             let before = self.color_property_key.clone();
             self.set_color_by_property(property.map(str::to_string));
             changed |= before != self.color_property_key;
+        }
+        if let Some(value) = params.get("color_mapping") {
+            let mapping = serde_json::from_value::<ObjectColorMapping>(value.clone())
+                .map_err(|error| format!("invalid object color_mapping: {error}"))?;
+            let before = self.color_mapping.clone();
+            self.set_color_mapping(mapping)?;
+            changed |= before != self.color_mapping;
         }
         if changed {
             self.generation = self.generation.wrapping_add(1).max(1);

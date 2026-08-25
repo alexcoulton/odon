@@ -258,11 +258,18 @@ impl ObjectsLayer {
         self.lazy_parquet_source = msg.lazy_parquet_source;
         self.property_store = msg.property_store;
         self.color_legend_cache = None;
+        self.continuous_color_payload = None;
         self.color_groups_cache.clear();
-        let has_active_color_key = self
-            .color_property_keys
-            .iter()
-            .any(|k| k == &self.color_property_key)
+        let has_active_color_key = (self.color_mode == ObjectColorMode::Continuous
+            && (self
+                .scalar_property_keys
+                .iter()
+                .any(|key| key == &self.color_property_key)
+                || self.property_store.has_loaded(&self.color_property_key)))
+            || self
+                .color_property_keys
+                .iter()
+                .any(|k| k == &self.color_property_key)
             || self.lazy_parquet_source.as_ref().is_some_and(|source| {
                 source
                     .available_property_columns
@@ -272,6 +279,8 @@ impl ObjectsLayer {
         if !has_active_color_key {
             self.color_property_key.clear();
             self.color_mode = ObjectColorMode::Single;
+            self.color_mapping = ObjectColorMapping::Single;
+            self.resolved_continuous_domain = None;
             self.color_level_overrides_property_key.clear();
             self.color_level_overrides.clear();
         }
@@ -326,6 +335,11 @@ impl ObjectsLayer {
                 self.color_property_key
             );
             self.set_color_by_property(Some(self.color_property_key.clone()));
+        } else if self.color_mode == ObjectColorMode::Continuous {
+            let mapping = self.color_mapping.clone();
+            if let Err(error) = self.set_color_mapping(mapping) {
+                self.status = error;
+            }
         }
         self.apply_pending_color_value_colors();
         self.apply_pending_color_value_visibility();
@@ -357,6 +371,9 @@ impl ObjectsLayer {
         self.color_groups = None;
         self.color_groups_cache.clear();
         self.color_property_key.clear();
+        self.color_mapping = ObjectColorMapping::Single;
+        self.resolved_continuous_domain = None;
+        self.continuous_color_payload = None;
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
         self.pending_color_value_visibility = None;

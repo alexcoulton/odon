@@ -74,6 +74,11 @@ impl DeepLinkRequest {
             self.load_segmentation_labels,
         );
         append_option(&mut query, "cell_color_by", self.cell_color_by.as_deref());
+        if let Some(mapping) = self.object_color_mapping.as_ref()
+            && let Ok(value) = serde_json::to_string(mapping)
+        {
+            query.append_pair("object_color_mapping", &value);
+        }
         append_bool(&mut query, "fill_cells", self.fill_cells);
         append_bool(
             &mut query,
