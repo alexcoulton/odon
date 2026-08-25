@@ -12,11 +12,16 @@ pub(super) use components::Interaction;
 use components::render_component;
 
 impl UiRegistry {
-    pub fn render(&self, ctx: &egui::Context, _shell: Option<&serde_json::Value>) {
+    pub fn render(
+        &self,
+        ctx: &egui::Context,
+        _shell: Option<&serde_json::Value>,
+        show_extension_manager: bool,
+    ) {
         let mut native_removed_extensions = Vec::new();
         {
             let mut state = self.state.lock().expect("UI registry poisoned");
-            if !state.extensions.is_empty() {
+            if show_extension_manager && !state.extensions.is_empty() {
                 let mut remove = Vec::new();
                 let mut reset = false;
                 egui::Window::new("Odon Extensions")

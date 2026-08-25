@@ -244,6 +244,7 @@ fn request_schema(shape: RequestShape) -> Value {
             "type": "object",
             "properties": {
                 "fast_object_rendering": {"type": "boolean"},
+                "show_extension_manager": {"type": "boolean", "default": false},
                 "shell_layout_startup_profiles": {
                     "type":"object",
                     "properties":{

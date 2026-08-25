@@ -114,6 +114,49 @@ The shell document revision remains 2 because the command changes actor-derived 
 visibility, not the persisted desired layout. No Python frame callback or follow-up layout patch is
 involved; the canvas takes the released inspector space during native reconciliation.
 
+## Adaptive multiplex-review cockpit
+
+[`examples/python_multiplex_review_cockpit.py`](../../examples/python_multiplex_review_cockpit.py)
+is a fuller dataset-specific application built through the same public Python API. It opens the
+five-channel synthetic fixture and installs a Python-owned **Multiplex review** panel beside the
+native Layers, Project, Properties, Views, and ROI components. Four presets atomically choose
+channels, colors, contrast windows, the active channel, and a fitted camera:
+
+- Multiplex overview: DAPI, PanCK, and Collagen;
+- Nuclear QC: DAPI and Ki67;
+- Immune context: DAPI and CD3; and
+- Stromal context: DAPI and Collagen.
+
+The panel contributes native controls for choosing a preset, fitting the image, binding smooth
+pixel rendering, committing a review note, and flagging the current camera/channel state. Python
+receives semantic component and extension-command events, performs the workflow operation, and
+patches the native status, progress, and Markdown summary components without rebuilding the panel.
+
+Every review command has one actor-owned identity. That same identity is installed into the
+Python panel, a top command toolbar, a **Review** menu in the native macOS menu bar, and the
+searchable command palette (`Shift+Cmd+P` on macOS, `Shift+Ctrl+P` elsewhere). Consequently every
+entry point produces the same namespaced extension event and Python handler result. Predicate
+examples are visible in the UI: **Export review package** is disabled until a mask resource exists,
+while **Inspect selected objects** remains hidden until object data exists and is then disabled
+until at least one object is selected.
+
+Inspect the complete typed plan, run a deterministic command/event smoke test, or leave the
+cockpit open for interaction:
+
+```bash
+uv run --project python python examples/python_multiplex_review_cockpit.py --plan-only
+uv run --project python python examples/python_multiplex_review_cockpit.py --launch
+uv run --project python python examples/python_multiplex_review_cockpit.py --launch --serve
+```
+
+The example defaults to `target/release/odon`, avoiding the rendering artifacts caused by an
+unoptimised debug build. Its machine-readable output includes all evaluated command states and a
+deliberately restricted `ui.shell.read` session: the overview command becomes hidden for that
+session, reports missing `viewer.read`, and direct execution returns a structured permission
+denial. The installed shell is saved as a named session profile while running. On exit, the
+profile, menu, toolbar, palette, layout, and extension are removed or restored; only a process
+launched by the example is terminated.
+
 ## Actor-owned default extension host lifecycle
 
 [`examples/python_extension_host_control.py`](../../examples/python_extension_host_control.py)

@@ -215,6 +215,7 @@ struct CaptureScreenshotRequest {
 struct AppSettingsRequest {
     auto_contrast: Option<AutoContrastRequest>,
     fast_object_rendering: Option<bool>,
+    show_extension_manager: Option<bool>,
     shell_layout_startup_profiles: Option<std::collections::BTreeMap<String, String>>,
 }
 

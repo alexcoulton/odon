@@ -7,6 +7,7 @@ impl AppModel {
         json!({
             "auto_contrast":self.settings.auto_contrast,
             "fast_object_rendering":self.settings.fast_object_rendering,
+            "show_extension_manager":self.settings.show_extension_manager,
             "shell_layout_startup_profiles":self.settings.shell_layout_startup_profiles,
             "shell_layout_startup_restore":self.startup_shell_restore_snapshot(),
             "settings_path":self.settings_path.as_ref().map(|path| path.to_string_lossy().into_owned()),

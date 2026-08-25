@@ -1288,6 +1288,19 @@ impl RootApp {
                     );
                 });
 
+                ui.separator();
+                ui.heading("Extensions");
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.settings_draft.show_extension_manager,
+                        "Show extension manager window",
+                    );
+                    settings_help_button(
+                        ui,
+                        "Shows the floating diagnostics window for inspecting and removing connected Python UI extensions.",
+                    );
+                });
+
                 ui.add_space(8.0);
                 let can_apply_now = matches!(self.mode, Mode::Single(_));
                 ui.horizontal(|ui| {
@@ -1339,6 +1352,7 @@ impl RootApp {
                 serde_json::json!({
                     "auto_contrast":self.settings_draft.auto_contrast,
                     "fast_object_rendering":self.settings_draft.fast_object_rendering,
+                    "show_extension_manager":self.settings_draft.show_extension_manager,
                 }),
             );
             if !submitted {
@@ -1915,8 +1929,11 @@ impl eframe::App for RootApp {
             .filter(|(revision, _, _)| *revision != self.control_external_revision);
         let observed = self.actor_renderer_observation();
         self.control_runtime.prepare_extension_ui(&observed);
-        self.control_runtime
-            .render_extension_hosts(ctx, observed.get("shell"));
+        self.control_runtime.render_extension_hosts(
+            ctx,
+            observed.get("shell"),
+            self.app_settings.show_extension_manager,
+        );
         let extension_ui_registry = self.control_runtime.ui_registry();
         self.sync_control_manifest_to_project();
 

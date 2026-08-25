@@ -1698,10 +1698,13 @@ fn native_settings_are_actor_persisted_and_projection_driven() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_app = source(root.join("src/root_app.rs"));
     let actor = source(root.join("src/control/actor/application.rs"));
+    let extension_render = source(root.join("src/control/ui/render.rs"));
 
     assert!(root_app.contains("settings_draft: AppSettings"));
     assert!(root_app.contains("\"app.settings.set\""));
     assert!(root_app.contains("self.settings_draft = self.app_settings.clone()"));
+    assert!(root_app.contains("Show extension manager window"));
+    assert!(extension_render.contains("show_extension_manager && !state.extensions.is_empty()"));
     for forbidden in ["fn persist_app_settings", "self.app_settings.save()"] {
         assert!(
             !root_app.contains(forbidden),

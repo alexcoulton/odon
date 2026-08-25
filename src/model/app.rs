@@ -3042,6 +3042,7 @@ fn settings_snapshot_for(
     json!({
         "auto_contrast":settings.auto_contrast,
         "fast_object_rendering":settings.fast_object_rendering,
+        "show_extension_manager":settings.show_extension_manager,
         "shell_layout_startup_profiles":settings.shell_layout_startup_profiles,
         "settings_path":path.map(|path| path.to_string_lossy().into_owned()),
         "status":status.into(),

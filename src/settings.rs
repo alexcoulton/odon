@@ -115,6 +115,7 @@ pub struct AppSettings {
     pub auto_contrast: AutoContrastSettings,
     #[serde(default = "default_true")]
     pub fast_object_rendering: bool,
+    pub show_extension_manager: bool,
     pub recent_projects: Vec<RecentProject>,
     pub shell_layout_profiles: std::collections::BTreeMap<String, Value>,
     pub shell_layout_startup_profiles: std::collections::BTreeMap<String, String>,
@@ -125,6 +126,7 @@ impl Default for AppSettings {
         Self {
             auto_contrast: AutoContrastSettings::default(),
             fast_object_rendering: true,
+            show_extension_manager: false,
             recent_projects: Vec::new(),
             shell_layout_profiles: std::collections::BTreeMap::new(),
             shell_layout_startup_profiles: std::collections::BTreeMap::new(),
@@ -247,6 +249,11 @@ impl AppSettings {
             candidate.fast_object_rendering = value
                 .as_bool()
                 .ok_or_else(|| "fast_object_rendering must be a boolean".to_string())?;
+        }
+        if let Some(value) = params.get("show_extension_manager") {
+            candidate.show_extension_manager = value
+                .as_bool()
+                .ok_or_else(|| "show_extension_manager must be a boolean".to_string())?;
         }
         if let Some(value) = params.get("auto_contrast") {
             let settings = value
@@ -425,6 +432,8 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(r#"{"recent_projects":[]}"#).unwrap();
         assert!(settings.fast_object_rendering);
         assert!(AppSettings::default().fast_object_rendering);
+        assert!(!settings.show_extension_manager);
+        assert!(!AppSettings::default().show_extension_manager);
     }
 
     #[test]
@@ -432,10 +441,12 @@ mod tests {
         let settings = AppSettings::default()
             .patched(&serde_json::json!({
                 "fast_object_rendering":false,
+                "show_extension_manager":true,
                 "auto_contrast":{"method":"p1_to_p99","lower_percentile":2,"upper_percentile":98}
             }))
             .unwrap();
         assert!(!settings.fast_object_rendering);
+        assert!(settings.show_extension_manager);
         assert_eq!(settings.auto_contrast.method, AutoContrastMethod::P1ToP99);
         assert!(
             AppSettings::default()

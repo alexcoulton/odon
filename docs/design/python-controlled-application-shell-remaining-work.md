@@ -33,7 +33,7 @@ visibility, and bounded result count. Rust conflict-checks its shortcut, searche
 catalogue, filters by active mode and readiness, and dispatches the selected command through the
 shared path. Typed synchronous and asynchronous Python resources cover the same contract.
 
-The verified checkpoint passes 493 Rust tests (4 ignored) and 131 Python tests. Formatting,
+The verified checkpoint passes 493 Rust tests (4 ignored) and 134 Python tests. Formatting,
 `cargo check --all-targets`, generated-reference validation, JSON-manifest validation, and diff
 checks also pass.
 
@@ -55,11 +55,11 @@ can invoke their defensive native fallback.
 
 Required work:
 
-- extend the macOS checked/disabled capture with a predicate-hidden command and a separate
-  enablement-binding case, then repeat the rendered state matrix on Windows and Linux; and
-- retain capability-denial evidence as a structured narrow-session Python/API case. Native chrome
-  evaluates in Odon's trusted native context, so it intentionally cannot render a denial caused by
-  one remote session's missing capability.
+- capture the multiplex-review cockpit's predicate-hidden command and separate enablement binding
+  on macOS, then repeat the rendered state matrix on Windows and Linux. Its live output already
+  retains the structured narrow-session capability denial as API evidence. Native chrome evaluates
+  in Odon's trusted native context, so it intentionally cannot render a denial caused by one remote
+  session's missing capability.
 
 New fixed context paths remain demand-driven protocol extensions rather than unfinished work.
 
@@ -188,44 +188,39 @@ without reading or changing the normal user profile.
 
 Required work:
 
-- cover menu/toolbar/palette invocation, predicate-hidden state, and enablement on macOS;
+- capture native macOS interaction evidence for menu/toolbar/palette invocation. The checked-in
+  multiplex-review cockpit now implements the shared command routes, predicate-hidden and disabled
+  states, bound Python controls, extension events, and a structured restricted-session denial;
 - run the same nested-layout resize/selection/focus/collapse/recovery suite and retained extension
   lifecycle on Windows and Linux;
 - repeat the locally timed 256-node tree, 128-item toolbar, maximum-predicate, and sustained
   slow-subscriber gates on Windows and Linux, and add platform TCP-disconnect plus GPU/render
   timing evidence; and
-- add further dataset-specific worked Python examples and rendered outputs beyond the checked-in
-  synthetic single-view workflow and existing two-view comparison.
+- add rendered output for the checked-in multiplex-review cockpit and further dataset-specific
+  worked Python examples beyond it and the existing two-view comparison.
 
 The local CPU/backpressure baseline, reproduction commands, broad non-blocking budgets, and
 supporting queue/projection tests are recorded in
 [Python-controlled shell performance evidence](python-shell-performance.md).
 
-### Paused next tranche: command-surface qualification
+### Active next tranche: command-surface qualification
 
-The next implementation/evidence tranche was planned but had not started when this checkpoint was
-created. Preserve it as a bounded follow-up rather than reconstructing the intent from the broader
-checklist:
+The dataset-specific implementation and deterministic API evidence are now checked in as
+`examples/python_multiplex_review_cockpit.py`. Native pointer interaction and rendered evidence
+remain a bounded follow-up:
 
-1. Add `examples/python_command_surface_control.py` and a plan-only Python regression test.
-2. Register one extension command whose enabled predicate follows
-   `presentation.scale_bar.checked`, plus a second command whose visible predicate follows the same
-   state. Mount a Python panel with a button whose enabled binding targets the first command, and
-   install a workflow-specific menu, command toolbar, and palette while retaining their original
-   projections for cleanup.
-3. Capture a disabled macOS checkpoint with the hidden command absent and both the command and
-   bound button disabled. Toggle the scale bar through the public actor API and capture the enabled
-   checkpoint with the hidden command present and both controls enabled.
-4. Invoke the same extension command through the native macOS menu, mounted toolbar, and command
+1. Capture the disabled/hidden multiplex-review controls and their enabled/visible counterparts
+   after loading mask and object resources.
+2. Invoke the same extension command through the native macOS menu, mounted toolbar, and command
    palette. Assert that all three entry points produce the same `ui.commands.execute` result and
    the same namespaced extension event; do not substitute direct Python invocation for the native
    interaction evidence.
-5. Connect a deliberately narrow `ui.shell.read` session and retain its structured
-   missing-capability result as API evidence. Native chrome uses Odon's trusted native capability
-   context, so a denial belonging to one remote session must not be presented as native-menu state.
-6. Restore the original shell, menu, toolbar, palette, and scale-bar state, unregister the
+3. Retain screenshots, checksums, and the live output beside the existing macOS evidence. Native
+   chrome uses Odon's trusted native capability context, so the checked-in narrow-session denial
+   must not be presented as native-menu state.
+4. Restore the original shell, menu, toolbar, palette, and scale-bar state, unregister the
    extension, and terminate only an application process launched by the workflow.
-7. Add the resulting checksums, assertions, and screenshots to the workflow guide and API surface
+5. Add the resulting checksums, assertions, and screenshots to the workflow guide and API surface
    manifest, then run the complete Rust/Python/reference/JSON/format/diff verification suite.
 
 This tranche remains single-window work. It does not reopen docking, floating panels, detached

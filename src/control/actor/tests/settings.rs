@@ -26,6 +26,7 @@ fn settings_and_recent_projects_persist_without_a_ui_frame() {
         "app.settings.set",
         json!({
             "fast_object_rendering":false,
+            "show_extension_manager":true,
             "auto_contrast":{"method":"p1_to_p99","lower_percentile":2,"upper_percentile":98},
         }),
     );
@@ -35,9 +36,11 @@ fn settings_and_recent_projects_persist_without_a_ui_frame() {
         .unwrap()
         .unwrap();
     assert_eq!(updated["fast_object_rendering"], false);
+    assert_eq!(updated["show_extension_manager"], true);
     assert_eq!(updated["auto_contrast"]["method"], "p1_to_p99");
     let persisted = AppSettings::load_from(&settings_path).unwrap();
     assert!(!persisted.fast_object_rendering);
+    assert!(persisted.show_extension_manager);
 
     let (forget, forget_rx) = request(
         "app.recent_projects.forget",

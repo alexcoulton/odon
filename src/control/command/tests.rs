@@ -81,6 +81,7 @@ fn phase_g_commands_have_typed_validation() {
     assert!(ControlCommand::decode("app.settings.set", json!({
         "auto_contrast": {"method": "p1_to_p99", "lower_percentile": 1, "upper_percentile": 99},
         "fast_object_rendering": false,
+        "show_extension_manager": true,
         "shell_layout_startup_profiles":{"single":"Review"}
     })).is_ok());
     assert!(

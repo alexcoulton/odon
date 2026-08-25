@@ -1981,6 +1981,17 @@ fn default_commands() -> Vec<Value> {
             Some(json!({"key":"q","modifiers":["primary"]})),
         ),
         json!({
+            "id":"app.shell.reset",
+            "title":"Reset to Default Layout",
+            "description":"Restore Odon's default application layout for the active mode.",
+            "handler":{"type":"control","method":"ui.shell.reset","params":{}},
+            "availability":{"modes":all},
+            "protected":true,
+            "shortcut":null,
+            "icon":null,
+            "predicates":{},
+        }),
+        json!({
             "id":"app.shell.recover",
             "title":"Recover Application Layout",
             "description":"Install Odon's protected recovery layout for the active mode.",
@@ -2081,6 +2092,8 @@ fn default_menu() -> Value {
                 item("menu-item:roi-info", "viewer.roi_info.show"),
                 separator("menu-separator:view-1"),
                 item("menu-item:scale-bar", "viewer.scale_bar.toggle"),
+                separator("menu-separator:view-2"),
+                item("menu-item:reset-layout", "app.shell.reset"),
             ]),
             menu("menu:help", "Help", vec![
                 item("menu-item:recover-layout", "app.shell.recover"),
@@ -2243,6 +2256,15 @@ mod tests {
                     command["id"] == "app.shell.recover" && command["protected"] == true
                 })
         );
+        assert!(
+            snapshot["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|command| {
+                    command["id"] == "app.shell.reset" && command["protected"] == true
+                })
+        );
 
         let CommandInvocation::Native {
             command_id,
@@ -2276,6 +2298,23 @@ mod tests {
         };
         assert_eq!(command_id, "app.shell.recover");
         assert_eq!(method, "ui.shell.recover");
+        assert_eq!(params, json!({}));
+
+        let CommandInvocation::Control {
+            command_id,
+            method,
+            params,
+        } = model
+            .invocation(
+                &json!({"command_id":"app.shell.reset"}),
+                &evaluation_context("single"),
+            )
+            .unwrap()
+        else {
+            panic!("layout reset should resolve to a control invocation")
+        };
+        assert_eq!(command_id, "app.shell.reset");
+        assert_eq!(method, "ui.shell.reset");
         assert_eq!(params, json!({}));
 
         let unavailable = model

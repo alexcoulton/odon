@@ -32,6 +32,7 @@ class ResourceTests(unittest.TestCase):
         application.update_settings(
             auto_contrast={"method": "p1_to_p99"},
             fast_object_rendering=False,
+            show_extension_manager=True,
             shell_layout_startup_profiles={"single": "Review"},
             if_revision=3,
         )
@@ -40,6 +41,7 @@ class ResourceTests(unittest.TestCase):
         application.clear_recent_projects()
         self.assertEqual(client.calls[1][1]["auto_contrast"]["method"], "p1_to_p99")
         self.assertFalse(client.calls[1][1]["fast_object_rendering"])
+        self.assertTrue(client.calls[1][1]["show_extension_manager"])
         self.assertEqual(
             client.calls[1][1]["shell_layout_startup_profiles"],
             {"single": "Review"},
@@ -89,6 +91,7 @@ class AsyncResourceTests(unittest.IsolatedAsyncioTestCase):
         viewer = AsyncViewer(client)  # type: ignore[arg-type]
         await application.update_settings(
             fast_object_rendering=True,
+            show_extension_manager=False,
             shell_layout_startup_profiles={"project": "Home"},
         )
         await application.request_close(save="save")
@@ -98,6 +101,7 @@ class AsyncResourceTests(unittest.IsolatedAsyncioTestCase):
             client.calls[0][1]["shell_layout_startup_profiles"],
             {"project": "Home"},
         )
+        self.assertFalse(client.calls[0][1]["show_extension_manager"])
         self.assertEqual(client.calls[1][1]["save"], "save")
         self.assertTrue(client.calls[2][1]["visible"])
 

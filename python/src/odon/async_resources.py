@@ -123,6 +123,7 @@ class AsyncApplication:
         *,
         auto_contrast: Mapping[str, Any] | None = None,
         fast_object_rendering: bool | None = None,
+        show_extension_manager: bool | None = None,
         shell_layout_startup_profiles: Mapping[str, str] | None = None,
         if_revision: int | None = None,
     ) -> Any:
@@ -131,6 +132,8 @@ class AsyncApplication:
             params["auto_contrast"] = dict(auto_contrast)
         if fast_object_rendering is not None:
             params["fast_object_rendering"] = fast_object_rendering
+        if show_extension_manager is not None:
+            params["show_extension_manager"] = show_extension_manager
         if shell_layout_startup_profiles is not None:
             params["shell_layout_startup_profiles"] = dict(
                 shell_layout_startup_profiles

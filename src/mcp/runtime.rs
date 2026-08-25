@@ -447,7 +447,7 @@ impl OdonControlRuntime {
 
     pub fn render_extension_ui(&self, ctx: &egui::Context, native_state: &Value) {
         self.prepare_extension_ui(native_state);
-        self.render_extension_hosts(ctx, native_state.get("shell"));
+        self.render_extension_hosts(ctx, native_state.get("shell"), false);
         self.finish_extension_ui(ctx);
     }
 
@@ -456,8 +456,13 @@ impl OdonControlRuntime {
             .sync_native_bindings(native_state, &self.resource_registry.list_layers());
     }
 
-    pub fn render_extension_hosts(&self, ctx: &egui::Context, shell: Option<&Value>) {
-        self.ui_registry.render(ctx, shell);
+    pub fn render_extension_hosts(
+        &self,
+        ctx: &egui::Context,
+        shell: Option<&Value>,
+        show_extension_manager: bool,
+    ) {
+        self.ui_registry.render(ctx, shell, show_extension_manager);
     }
 
     pub fn finish_extension_ui(&self, ctx: &egui::Context) {

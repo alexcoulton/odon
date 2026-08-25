@@ -430,6 +430,7 @@ pub(in crate::control::command) fn validate_params(
                 let _ = auto.enabled_on_open;
             }
             let _ = request.fast_object_rendering;
+            let _ = request.show_extension_manager;
             let _ = request.shell_layout_startup_profiles;
         }
         RequestShape::LifecycleRequest => {

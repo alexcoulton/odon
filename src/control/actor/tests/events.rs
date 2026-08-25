@@ -715,6 +715,14 @@ fn actor_owns_extension_command_registration_invocation_and_disconnect_cleanup()
             },
         ),
         (
+            "app.shell.reset",
+            PlatformEffect::InvokeControlCommand {
+                command_id: "app.shell.reset".to_string(),
+                method: "ui.shell.reset".to_string(),
+                params: json!({}),
+            },
+        ),
+        (
             "app.shell.recover",
             PlatformEffect::InvokeControlCommand {
                 command_id: "app.shell.recover".to_string(),
