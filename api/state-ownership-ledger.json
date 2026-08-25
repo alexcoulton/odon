@@ -221,7 +221,7 @@
       },
       {
         "id": "viewer.panel_settings",
-        "fields": ["show_left_panel", "show_right_panel", "left_tab", "right_tab"],
+        "fields": ["show_left_panel", "show_right_panel", "left_tab", "right_tab", "control_shell_projection"],
         "current_class": "actor_projection",
         "disposition": "retain",
         "canonical_writer": "ControlActor viewport UI settings",
@@ -242,6 +242,30 @@
         "persistence_consumers": "none",
         "native_commit_point": "typed lifecycle decision followed by platform close effect",
         "milestone": 6
+      },
+      {
+        "id": "viewer.shell_layout_reconciliation",
+        "fields": ["control_shell_layout"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "keyed renderer reconciliation of the ControlActor shell projection",
+        "projection_source": "shell layout nodes in the versioned render projection",
+        "renderer_consumers": "stable egui node identity, recursive application/chrome geometry, built-in top-bar mount dispatch, mount visibility, and native panel traversal",
+        "persistence_consumers": "none; canonical desired layout remains actor-owned",
+        "native_commit_point": "none; renderer-local state survives keys but never mutates actor semantics directly",
+        "milestone": 8
+      },
+      {
+        "id": "viewer.extension_ui_registry",
+        "fields": ["extension_ui_registry"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlRuntime UiRegistry",
+        "projection_source": "registered extension, contribution, and extension-owned layout-template resources",
+        "renderer_consumers": "keyed extension_mount leaves in the recursive shell renderer; templates are explicitly imported through the actor shell transaction",
+        "persistence_consumers": "none across process restart; contributions and layout templates follow the owning extension's remove, disable, or retain connection lifecycle",
+        "native_commit_point": "typed extension contribution or layout-template registration, patch, disconnect, reconnect, or removal",
+        "milestone": 8
       },
       {
         "id": "viewer.project_projection_and_ui",
@@ -816,10 +840,34 @@
         "disposition": "retain",
         "canonical_writer": "ControlActor application settings model",
         "projection_source": "settings projection",
-        "renderer_consumers": "recent-project UI and projected renderer configuration",
-        "persistence_consumers": "settings file",
+        "renderer_consumers": "recent-project UI, projected renderer configuration, and per-mode shell startup-profile selection",
+        "persistence_consumers": "settings file, including application shell profiles and their per-mode startup selection; restore outcome diagnostics remain actor runtime state",
         "native_commit_point": "typed settings command",
         "milestone": 5
+      },
+      {
+        "id": "root.shell_projection",
+        "fields": ["control_shell_projection"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor application shell model",
+        "projection_source": "versioned RenderProjection shell tree",
+        "renderer_consumers": "project, viewer, and mosaic recursive content/chrome mount dispatch; actor-tree extension default hosts; and typed ownership/protection metadata",
+        "persistence_consumers": "versioned session profiles, atomic application-settings profiles with per-mode startup restore, and canonical project profiles",
+        "native_commit_point": "typed ui.shell mutation, import/recovery, or profiles command after actor-side extension-node ownership validation",
+        "milestone": 8
+      },
+      {
+        "id": "root.command_surface_projection",
+        "fields": ["control_command_surface_projection"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor command-surface model",
+        "projection_source": "versioned RenderProjection command descriptors with actor-evaluated visible/enabled/checked state, platform-menu tree, command-toolbar tree, and command-palette presentation",
+        "renderer_consumers": "macOS native menu realization, mounted rich command-toolbar realization, searchable native command palette, and shared actor-evaluated command state",
+        "persistence_consumers": "none yet; command-menu persistence policy remains a later milestone",
+        "native_commit_point": "typed ui.menus.replace, ui.toolbars.replace, or ui.palette.replace command after revision, quota, reference, protection, shortcut-conflict, and capability validation; ui.commands.execute resolves all handlers in the actor",
+        "milestone": 8
       },
       {
         "id": "root.settings_draft",
@@ -886,12 +934,12 @@
         "fields": ["native_menu"],
         "current_class": "platform_effect",
         "disposition": "retain",
-        "canonical_writer": "macOS platform integration",
-        "projection_source": "actor projection for enabled/check state",
-        "renderer_consumers": "native menu",
+        "canonical_writer": "macOS realization of the actor-owned command surface",
+        "projection_source": "versioned command descriptors and declarative platform-menu tree",
+        "renderer_consumers": "native menu items, nested submenus, separators, accelerators, mode/readiness enablement, actor-resolved native/control/extension commands, and checked scale-bar state",
         "persistence_consumers": "none",
-        "native_commit_point": "typed command emitted by menu action",
-        "milestone": 6
+        "native_commit_point": "stable command ID resolves to a typed native/control action or an actor-published extension event",
+        "milestone": 8
       }
     ],
     "MosaicViewerApp": [
@@ -1041,7 +1089,7 @@
       },
       {
         "id": "mosaic.panel_tabs",
-        "fields": ["left_tab", "right_tab", "show_left_panel", "show_right_panel"],
+        "fields": ["left_tab", "right_tab", "show_left_panel", "show_right_panel", "control_shell_projection"],
         "current_class": "actor_projection",
         "disposition": "retain",
         "canonical_writer": "ControlActor mosaic UI settings",
@@ -1062,6 +1110,30 @@
         "persistence_consumers": "project mosaic state",
         "native_commit_point": "typed mosaic layout command",
         "milestone": 5
+      },
+      {
+        "id": "mosaic.shell_layout_reconciliation",
+        "fields": ["control_shell_layout"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "keyed renderer reconciliation of the ControlActor shell projection",
+        "projection_source": "shell layout nodes in the versioned render projection",
+        "renderer_consumers": "stable egui node identity, recursive application/chrome geometry, built-in top-bar mount dispatch, mount visibility, and native panel traversal",
+        "persistence_consumers": "none; canonical desired layout remains actor-owned",
+        "native_commit_point": "none; renderer-local state survives keys but never mutates actor semantics directly",
+        "milestone": 8
+      },
+      {
+        "id": "mosaic.extension_ui_registry",
+        "fields": ["extension_ui_registry"],
+        "current_class": "shared_resource",
+        "disposition": "retain",
+        "canonical_writer": "ControlRuntime UiRegistry",
+        "projection_source": "registered extension, contribution, and extension-owned layout-template resources",
+        "renderer_consumers": "keyed extension_mount leaves in the recursive shell renderer; templates are explicitly imported through the actor shell transaction",
+        "persistence_consumers": "none across process restart; contributions and layout templates follow the owning extension's remove, disable, or retain connection lifecycle",
+        "native_commit_point": "typed extension contribution or layout-template registration, patch, disconnect, reconnect, or removal",
+        "milestone": 8
       },
       {
         "id": "mosaic.close_dialog",

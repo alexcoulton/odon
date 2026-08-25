@@ -151,40 +151,56 @@ pub fn validate_application_surface(manifest: &ApplicationSurfaceManifest) -> Re
         }
 
         for method_name in &entry.methods {
-            let Some(descriptor) = registry::method(method_name) else {
+            if let Some(previous) = registered_methods.insert(method_name, entry.id.as_str()) {
+                return Err(format!(
+                    "method {} is assigned to both {} and {}",
+                    method_name, previous, entry.id
+                ));
+            }
+            if let Some(descriptor) = registry::method(method_name) {
+                if descriptor.name != method_name {
+                    return Err(format!(
+                        "surface entry {} uses deprecated alias {}; use canonical {}",
+                        entry.id, method_name, descriptor.name
+                    ));
+                }
+                if !entry
+                    .permissions
+                    .iter()
+                    .any(|permission| permission == descriptor.capability)
+                {
+                    return Err(format!(
+                        "surface entry {} omits method permission {}",
+                        entry.id, descriptor.capability
+                    ));
+                }
+                if let Some(event) = descriptor.event
+                    && !entry.events.iter().any(|candidate| candidate == event)
+                {
+                    return Err(format!(
+                        "surface entry {} omits method event {}",
+                        entry.id, event
+                    ));
+                }
+                continue;
+            }
+            let Some(protocol) = registry::PROTOCOL_METHODS
+                .iter()
+                .find(|descriptor| descriptor.0 == method_name)
+            else {
                 return Err(format!(
                     "surface entry {} references unknown method {}",
                     entry.id, method_name
                 ));
             };
-            if descriptor.name != method_name {
-                return Err(format!(
-                    "surface entry {} uses deprecated alias {}; use canonical {}",
-                    entry.id, method_name, descriptor.name
-                ));
-            }
-            if let Some(previous) = registered_methods.insert(descriptor.name, entry.id.as_str()) {
-                return Err(format!(
-                    "method {} is assigned to both {} and {}",
-                    descriptor.name, previous, entry.id
-                ));
-            }
             if !entry
                 .permissions
                 .iter()
-                .any(|permission| permission == descriptor.capability)
+                .any(|permission| permission == protocol.2)
             {
                 return Err(format!(
                     "surface entry {} omits method permission {}",
-                    entry.id, descriptor.capability
-                ));
-            }
-            if let Some(event) = descriptor.event
-                && !entry.events.iter().any(|candidate| candidate == event)
-            {
-                return Err(format!(
-                    "surface entry {} omits method event {}",
-                    entry.id, event
+                    entry.id, protocol.2
                 ));
             }
         }
@@ -211,12 +227,30 @@ mod tests {
     #[test]
     fn embedded_manifest_is_valid_and_covers_the_registry() {
         let manifest = application_surface().expect("valid application surface");
-        let declared_method_count = manifest
+        let declared_actor_methods = manifest
             .entries
             .iter()
-            .map(|entry| entry.methods.len())
-            .sum::<usize>();
-        assert_eq!(declared_method_count, registry::METHODS.len());
+            .flat_map(|entry| &entry.methods)
+            .filter(|method| {
+                registry::METHODS
+                    .iter()
+                    .any(|item| item.name == method.as_str())
+            })
+            .count();
+        assert_eq!(declared_actor_methods, registry::METHODS.len());
+        for method in [
+            "ui.extensions.layouts.register",
+            "ui.extensions.layouts.list",
+            "ui.extensions.layouts.remove",
+        ] {
+            assert!(
+                manifest
+                    .entries
+                    .iter()
+                    .any(|entry| entry.methods.iter().any(|item| item == method)),
+                "application surface omits protocol service {method}"
+            );
+        }
     }
 
     #[test]

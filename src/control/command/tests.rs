@@ -57,11 +57,41 @@ fn actor_service_commands_share_the_typed_command_envelope() {
 }
 
 #[test]
+fn shell_transaction_ids_are_bounded_and_retained_in_the_command() {
+    let command = ControlCommand::decode(
+        "ui.shell.patch_layout",
+        json!({
+            "visibility":{"layout:panel":false},
+            "transaction_id":"review-layout-42"
+        }),
+    )
+    .expect("valid shell transaction ID");
+    assert_eq!(command.params()["transaction_id"], "review-layout-42");
+    assert!(
+        ControlCommand::decode("ui.shell.reset", json!({"transaction_id":"x".repeat(129)}))
+            .is_err()
+    );
+    assert!(
+        ControlCommand::decode("ui.shell.reset", json!({"transaction_id":"bad\nvalue"})).is_err()
+    );
+}
+
+#[test]
 fn phase_g_commands_have_typed_validation() {
     assert!(ControlCommand::decode("app.settings.set", json!({
         "auto_contrast": {"method": "p1_to_p99", "lower_percentile": 1, "upper_percentile": 99},
-        "fast_object_rendering": false
+        "fast_object_rendering": false,
+        "shell_layout_startup_profiles":{"single":"Review"}
     })).is_ok());
+    assert!(
+        ControlCommand::decode(
+            "app.settings.set",
+            json!({
+                "shell_layout_startup_profiles":{"single":false}
+            })
+        )
+        .is_err()
+    );
     assert!(
         ControlCommand::decode(
             "app.settings.set",

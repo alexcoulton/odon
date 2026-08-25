@@ -5,7 +5,8 @@ use std::sync::LazyLock;
 use super::*;
 
 pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
-    vec![
+    let mut methods = super::shell_catalog::methods();
+    methods.extend(vec![
         method!(
             "app.get_state",
             "Get current application and viewer state.",
@@ -2870,5 +2871,6 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             READY_MODES,
             Object
         ),
-    ]
+    ]);
+    methods
 });

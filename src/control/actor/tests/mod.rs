@@ -209,6 +209,7 @@ mod samplesheets;
 mod saved_views;
 mod screenshots;
 mod settings;
+mod shell_concurrency;
 mod task_cancellation;
 mod thresholds;
 mod workspace;

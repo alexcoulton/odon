@@ -116,6 +116,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub fast_object_rendering: bool,
     pub recent_projects: Vec<RecentProject>,
+    pub shell_layout_profiles: std::collections::BTreeMap<String, Value>,
+    pub shell_layout_startup_profiles: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppSettings {
@@ -124,6 +126,8 @@ impl Default for AppSettings {
             auto_contrast: AutoContrastSettings::default(),
             fast_object_rendering: true,
             recent_projects: Vec::new(),
+            shell_layout_profiles: std::collections::BTreeMap::new(),
+            shell_layout_startup_profiles: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -177,6 +181,18 @@ impl AppSettings {
             }
         });
         self.recent_projects.truncate(MAX_RECENT_PROJECTS);
+        self.shell_layout_profiles
+            .retain(|name, document| valid_shell_profile_name(name) && document.is_object());
+        while self.shell_layout_profiles.len() > 64 {
+            let Some(last) = self.shell_layout_profiles.keys().next_back().cloned() else {
+                break;
+            };
+            self.shell_layout_profiles.remove(&last);
+        }
+        self.shell_layout_startup_profiles.retain(|mode, name| {
+            matches!(mode.as_str(), "project" | "single" | "mosaic")
+                && valid_shell_profile_name(name)
+        });
         self
     }
 
@@ -281,6 +297,37 @@ impl AppSettings {
                 );
             }
         }
+        if let Some(value) = params.get("shell_layout_startup_profiles") {
+            let profiles = value
+                .as_object()
+                .ok_or_else(|| "shell_layout_startup_profiles must be an object".to_string())?;
+            let mut startup = std::collections::BTreeMap::new();
+            for (mode, value) in profiles {
+                if !matches!(mode.as_str(), "project" | "single" | "mosaic") {
+                    return Err(
+                        "shell_layout_startup_profiles keys must be project, single, or mosaic"
+                            .to_string(),
+                    );
+                }
+                let name = value.as_str().filter(|name| valid_shell_profile_name(name)).ok_or_else(
+                    || {
+                        "shell layout startup profile names must contain 1 to 128 characters without control characters"
+                            .to_string()
+                    },
+                )?;
+                let document = candidate
+                    .shell_layout_profiles
+                    .get(name)
+                    .ok_or_else(|| format!("application shell profile '{name}' does not exist"))?;
+                if document.get("mode").and_then(Value::as_str) != Some(mode.as_str()) {
+                    return Err(format!(
+                        "application shell profile '{name}' does not target {mode} mode"
+                    ));
+                }
+                startup.insert(mode.clone(), name.to_string());
+            }
+            candidate.shell_layout_startup_profiles = startup;
+        }
         Ok(candidate.normalized())
     }
 
@@ -321,8 +368,27 @@ impl AppSettings {
     }
 }
 
+fn valid_shell_profile_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= 128
+        && !name.chars().any(|character| character.is_control())
+}
+
 pub fn settings_file_path() -> anyhow::Result<PathBuf> {
-    let base = dirs::config_dir().context("system config directory is not available")?;
+    settings_file_path_from(std::env::var_os("ODON_SETTINGS_PATH"), dirs::config_dir())
+}
+
+fn settings_file_path_from(
+    override_path: Option<std::ffi::OsString>,
+    config_dir: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = override_path {
+        if path.is_empty() {
+            anyhow::bail!("ODON_SETTINGS_PATH must not be empty");
+        }
+        return Ok(PathBuf::from(path));
+    }
+    let base = config_dir.context("system config directory is not available")?;
     Ok(base.join("odon").join("settings.json"))
 }
 
@@ -381,6 +447,56 @@ mod tests {
     }
 
     #[test]
+    fn startup_shell_profiles_reference_matching_application_layouts() {
+        let mut settings = AppSettings::default();
+        settings.shell_layout_profiles.insert(
+            "Review".to_string(),
+            serde_json::json!({
+                "format":"odon.shell-layout",
+                "schema_version":1,
+                "mode":"single",
+                "layout":{}
+            }),
+        );
+        let configured = settings
+            .patched(&serde_json::json!({
+                "shell_layout_startup_profiles":{"single":"Review"}
+            }))
+            .unwrap();
+        assert_eq!(configured.shell_layout_startup_profiles["single"], "Review");
+        assert!(
+            settings
+                .patched(&serde_json::json!({
+                    "shell_layout_startup_profiles":{"project":"Review"}
+                }))
+                .is_err()
+        );
+        assert!(
+            settings
+                .patched(&serde_json::json!({
+                    "shell_layout_startup_profiles":{"single":"Missing"}
+                }))
+                .is_err()
+        );
+        assert!(
+            settings
+                .patched(&serde_json::json!({
+                    "shell_layout_startup_profiles":{"detached":"Review"}
+                }))
+                .is_err()
+        );
+        assert!(
+            configured
+                .patched(&serde_json::json!({
+                    "shell_layout_startup_profiles":{}
+                }))
+                .unwrap()
+                .shell_layout_startup_profiles
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn recent_projects_are_deduped_and_most_recent_first() {
         let mut settings = AppSettings::default();
         let a = PathBuf::from("/tmp/a.project.json");
@@ -391,5 +507,19 @@ mod tests {
         assert_eq!(settings.recent_projects.len(), 2);
         assert_eq!(settings.recent_projects[0].path, a);
         assert_eq!(settings.recent_projects[1].path, b);
+    }
+
+    #[test]
+    fn settings_path_override_is_explicit_and_does_not_require_a_user_config_dir() {
+        let isolated = std::ffi::OsString::from("/tmp/odon-isolated/settings.json");
+        assert_eq!(
+            settings_file_path_from(Some(isolated), None).unwrap(),
+            PathBuf::from("/tmp/odon-isolated/settings.json")
+        );
+        assert_eq!(
+            settings_file_path_from(None, Some(PathBuf::from("/config"))).unwrap(),
+            PathBuf::from("/config/odon/settings.json")
+        );
+        assert!(settings_file_path_from(Some(std::ffi::OsString::new()), None).is_err());
     }
 }

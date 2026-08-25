@@ -16,6 +16,17 @@ fn registry_names_are_unique_and_capabilities_are_sorted() {
     let capabilities = capabilities();
     assert!(capabilities.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(capabilities.contains(&"system.introspect".to_string()));
+    for capability in [
+        "ui.shell.compose",
+        "ui.shell.extension_place",
+        "ui.shell.persistence",
+        "ui.shell.recovery",
+        "ui.shell.chrome",
+        "ui.shell.window_control",
+        "ui.shell.shortcuts",
+    ] {
+        assert!(capabilities.contains(&capability.to_string()));
+    }
 }
 
 #[test]
@@ -298,6 +309,112 @@ fn multi_viewport_registry_contracts_expose_ids_revisions_events_and_modes() {
         "viewer.workspace.screenshot.capture",
     ] {
         assert!(method(name).is_some(), "missing registry method {name}");
+    }
+}
+
+#[test]
+fn shell_registry_contract_exposes_precise_typed_requests() {
+    let describe = method("ui.shell.describe_schema").unwrap();
+    assert!(!describe.mutates);
+    assert_eq!(describe.capability, "ui.shell.read");
+
+    let get = request_schema_for(method("ui.shell.get").unwrap());
+    assert_eq!(get["additionalProperties"], false);
+    assert_eq!(get["properties"]["mode"]["enum"][0], "project");
+
+    let components = method("ui.shell.components.list").unwrap();
+    assert_eq!(components.capability, "ui.shell.read");
+    assert!(!components.mutates);
+    assert_eq!(request_schema_for(components), get);
+
+    let export = method("ui.shell.export_layout").unwrap();
+    assert!(!export.mutates);
+    assert_eq!(export.capability, "ui.shell.persistence");
+    assert_eq!(request_schema_for(export), get);
+
+    let import = request_schema_for(method("ui.shell.import_layout").unwrap());
+    assert_eq!(import["additionalProperties"], false);
+    assert_eq!(import["required"][0], "document");
+    assert_eq!(import["properties"]["if_shell_revision"]["minimum"], 1);
+
+    let recover = method("ui.shell.recover").unwrap();
+    assert!(recover.mutates);
+    assert_eq!(recover.capability, "ui.shell.recovery");
+
+    let profiles = request_schema_for(method("ui.shell.profiles.list").unwrap());
+    assert_eq!(profiles["additionalProperties"], false);
+    assert_eq!(profiles["properties"]["scope"]["default"], "session");
+    let save_profile = request_schema_for(method("ui.shell.profiles.save").unwrap());
+    assert_eq!(save_profile["required"][0], "name");
+    let load_profile = request_schema_for(method("ui.shell.profiles.load").unwrap());
+    assert_eq!(
+        load_profile["properties"]["if_shell_revision"]["minimum"],
+        1
+    );
+
+    let patch = request_schema_for(method("ui.shell.patch").unwrap());
+    assert_eq!(patch["additionalProperties"], false);
+    assert_eq!(patch["properties"]["if_shell_revision"]["minimum"], 1);
+    assert_eq!(
+        patch["properties"]["orders"]["additionalProperties"]["uniqueItems"],
+        true
+    );
+    assert_eq!(patch["properties"]["if_revision"]["minimum"], 0);
+
+    let replace = request_schema_for(method("ui.shell.replace_layout").unwrap());
+    assert_eq!(replace["additionalProperties"], false);
+    assert_eq!(replace["required"][0], "desired_tree");
+    assert_eq!(replace["properties"]["if_shell_revision"]["minimum"], 1);
+
+    let patch_layout = request_schema_for(method("ui.shell.patch_layout").unwrap());
+    assert_eq!(patch_layout["additionalProperties"], false);
+    assert_eq!(
+        patch_layout["properties"]["collapsed"]["additionalProperties"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        patch_layout["properties"]["configurations"]["additionalProperties"]["type"],
+        "object"
+    );
+}
+
+#[test]
+fn settings_schema_exposes_startup_shell_profile_selection() {
+    let settings = request_schema_for(method("app.settings.set").unwrap());
+    let startup = &settings["properties"]["shell_layout_startup_profiles"];
+    assert_eq!(startup["type"], "object");
+    assert_eq!(startup["additionalProperties"], false);
+    assert_eq!(startup["properties"]["single"]["maxLength"], 128);
+}
+
+#[test]
+fn extension_layout_protocol_contract_exposes_precise_requests() {
+    let catalog = catalog_json();
+    let methods = catalog.as_array().expect("method catalogue");
+    for (name, required) in [
+        (
+            "ui.extensions.layouts.register",
+            json!(["extension_id", "name", "document"]),
+        ),
+        ("ui.extensions.layouts.list", json!(["extension_id"])),
+        (
+            "ui.extensions.layouts.remove",
+            json!(["extension_id", "name"]),
+        ),
+        (
+            "ui.extensions.set_readiness",
+            json!(["extension_id", "ready"]),
+        ),
+    ] {
+        let method = methods
+            .iter()
+            .find(|method| method["name"] == name)
+            .unwrap_or_else(|| panic!("missing protocol method {name}"));
+        assert_eq!(method["capability"], "ui.shell.extension_place");
+        assert_eq!(method["request_schema"]["required"], required);
+        assert_eq!(method["request_schema"]["additionalProperties"], false);
+        assert_eq!(method["execution_route"]["summary"], "control_service");
+        assert_eq!(method["result_schema"]["type"], "object");
     }
 }
 

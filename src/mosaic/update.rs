@@ -19,164 +19,71 @@ impl eframe::App for MosaicViewerApp {
             );
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                top_bar::ui_title(ui, format!("Mosaic: {} ROIs", self.items.len()));
-                ui.separator();
-                if top_bar::ui_back(ui, self.show_return_navigation) {
-                    if let Some(path) = self.return_dataset_root.clone() {
-                        self.submit_native_control_intent(
-                            "datasets.open_ome_zarr",
-                            serde_json::json!({"path":path}),
-                        );
-                    } else {
-                        self.submit_native_control_intent(
-                            "app.navigation.show_project",
-                            serde_json::json!({}),
-                        );
-                    }
-                }
-                if top_bar::ui_fit(ui, "Fit Mosaic (F)") {
-                    self.fit_mosaic();
-                }
-                ui.separator();
-                top_bar::ui_status(ui, &self.renderer_status);
-                ui.separator();
-                let have_items = !self.items.is_empty();
-                if let Some(step) = top_bar::ui_prev_next_core(ui, have_items) {
-                    self.step_focused_core(ctx, step);
-                }
-                top_bar::ui_core_index(ui, self.focused_core_summary());
-                ui.separator();
-                let have_channels = !self.channels.is_empty();
-                if let Some(step) = top_bar::ui_prev_next_channel(ui, have_channels) {
-                    self.step_selected_channel_visibility(step);
-                }
-                ui.separator();
-                let mut show_left_panel = self.show_left_panel;
-                let mut show_right_panel = self.show_right_panel;
-                top_bar::ui_panel_toggles(ui, &mut show_left_panel, &mut show_right_panel);
-                if (show_left_panel, show_right_panel)
-                    != (self.show_left_panel, self.show_right_panel)
-                {
-                    self.submit_native_control_intent(
-                        "viewer.panels.set",
-                        serde_json::json!({
-                            "left":show_left_panel,
-                            "right":show_right_panel,
-                        }),
-                    );
-                }
-                let mut smooth_pixels = self.smooth_pixels;
-                if top_bar::ui_smooth_toggle(ui, &mut smooth_pixels) {
-                    self.submit_native_control_intent(
-                        "mosaic.rendering.set",
-                        serde_json::json!({"smooth_pixels":smooth_pixels}),
-                    );
-                }
-                let mut show_tile_debug = self.show_tile_debug;
-                if ui.checkbox(&mut show_tile_debug, "Tile Debug").changed() {
-                    self.submit_native_control_intent(
-                        "mosaic.rendering.set",
-                        serde_json::json!({"show_tile_debug":show_tile_debug}),
-                    );
-                }
-
-                if have_channels {
-                    ui.separator();
-                    self.ui_top_bar_quick_contrast(ui);
-                }
+        let actor_shell_layout = self.control_shell_projection.get("layout").is_some();
+        if !actor_shell_layout {
+            let top_bar_visible = self.shell_node_visible("builtin:mosaic.top-bar", true);
+            egui::TopBottomPanel::top("top").show_animated(ctx, top_bar_visible, |ui| {
+                self.ui_mosaic_top_bar(ui, ctx, &serde_json::Value::Null);
             });
-        });
-
-        if self.show_left_panel {
-            let mut tab = self.left_tab;
-            left_panel::show(
-                ctx,
-                "mosaic-left",
-                &mut tab,
-                &[
-                    left_panel::TabSpec {
-                        tab: LeftTab::Layers,
-                        label: "Layers",
-                        panel_key: "layers",
-                        default_width: 360.0,
-                        scroll: true,
+        }
+        if !actor_shell_layout {
+            let left_tabs = self.shell_left_tabs();
+            if self.show_left_panel && !left_tabs.is_empty() {
+                let mut tab = self.left_tab;
+                left_panel::show(
+                    ctx,
+                    "mosaic-left",
+                    &mut tab,
+                    &left_tabs,
+                    |ui, tab| match tab {
+                        LeftTab::Layers => self.ui_layers(ui, ctx),
+                        LeftTab::Project => self.ui_project(ui),
                     },
-                    left_panel::TabSpec {
-                        tab: LeftTab::Project,
-                        label: "Project",
-                        panel_key: "project",
-                        default_width: 420.0,
-                        scroll: false,
-                    },
-                ],
-                |ui, tab| match tab {
-                    LeftTab::Layers => self.ui_layers(ui, ctx),
-                    LeftTab::Project => self.ui_project(ui),
-                },
-            );
-            if tab != self.left_tab {
-                self.submit_native_control_intent(
-                    "mosaic.ui.set_left_tab",
-                    serde_json::json!({"tab":tab.storage_key()}),
                 );
+                if tab != self.left_tab {
+                    self.submit_native_control_intent(
+                        "mosaic.ui.set_left_tab",
+                        serde_json::json!({"tab":tab.storage_key()}),
+                    );
+                }
+            }
+            let right_tabs = self.shell_right_tabs();
+            if self.show_right_panel && !right_tabs.is_empty() {
+                let mut tab = self.right_tab;
+                right_panel::show(
+                    ctx,
+                    "right",
+                    self.shell_right_panel_width(380.0),
+                    &mut tab,
+                    &right_tabs,
+                    |ui, tab| match tab {
+                        RightTab::Properties => self.ui_properties(ui),
+                        RightTab::Views => {
+                            if let Some(action) = self.project_space.ui_views_panel(ui, None, false)
+                            {
+                                self.handle_project_space_action(action);
+                            }
+                        }
+                        RightTab::Layout => self.ui_layout(ui, ctx),
+                        RightTab::Memory => self.ui_memory(ui),
+                    },
+                );
+                if tab != self.right_tab {
+                    self.submit_native_control_intent(
+                        "mosaic.ui.set_right_tab",
+                        serde_json::json!({"tab":tab.storage_key()}),
+                    );
+                }
             }
         }
         if let Some(action) = self.project_space.ui_floating_windows(ctx, false) {
             self.handle_project_space_action(action);
         }
 
-        if self.show_right_panel {
-            let mut tab = self.right_tab;
-            right_panel::show(
-                ctx,
-                "right",
-                380.0,
-                &mut tab,
-                &[
-                    right_panel::TabSpec {
-                        tab: RightTab::Properties,
-                        label: "Properties",
-                        scroll: true,
-                    },
-                    right_panel::TabSpec {
-                        tab: RightTab::Views,
-                        label: "Views",
-                        scroll: true,
-                    },
-                    right_panel::TabSpec {
-                        tab: RightTab::Layout,
-                        label: "Layout",
-                        scroll: true,
-                    },
-                    right_panel::TabSpec {
-                        tab: RightTab::Memory,
-                        label: "Memory",
-                        scroll: true,
-                    },
-                ],
-                |ui, tab| match tab {
-                    RightTab::Properties => self.ui_properties(ui),
-                    RightTab::Views => {
-                        if let Some(action) = self.project_space.ui_views_panel(ui, None, false) {
-                            self.handle_project_space_action(action);
-                        }
-                    }
-                    RightTab::Layout => self.ui_layout(ui, ctx),
-                    RightTab::Memory => self.ui_memory(ui),
-                },
-            );
-            if tab != self.right_tab {
-                self.submit_native_control_intent(
-                    "mosaic.ui.set_right_tab",
-                    serde_json::json!({"tab":tab.storage_key()}),
-                );
-            }
-        }
-
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.ui_canvas(ui, ctx);
+            if !actor_shell_layout || !self.ui_actor_shell_tree(ui, ctx) {
+                self.ui_canvas(ui, ctx);
+            }
         });
 
         self.ui_group_layers_dialog(ctx);

@@ -10,7 +10,7 @@ use crate::app::{
     LabelPromptSessionPreference, NativeControlIngress, NativeControlIntent, OmeZarrViewerApp,
     S3DatasetSelection, ViewerPlatformEffect,
 };
-use crate::app_support::menu::{NativeMenu, NativeMenuAction};
+use crate::app_support::menu::NativeMenu;
 use crate::app_support::settings::{AppSettings, settings_file_path};
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
@@ -35,9 +35,23 @@ use odon::model::{ModelMode, ProjectObjectPreloadMode, ProjectObjectPreloadProje
 use rfd::FileDialog;
 
 mod actor_projection;
+mod commands;
 mod remote;
 #[cfg(test)]
 mod tests;
+
+fn command_execution_intent(
+    invocation: crate::ui::CommandPresentationInvocation,
+) -> NativeControlIntent {
+    let mut params = serde_json::json!({"command_id":invocation.command_id});
+    if let Some(checked) = invocation.checked {
+        params["checked"] = serde_json::json!(checked);
+    }
+    NativeControlIntent {
+        method: "ui.commands.execute",
+        params,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct SpatialOpenDialog {
@@ -101,6 +115,43 @@ enum Mode {
 
 fn settings_help_button(ui: &mut egui::Ui, text: &'static str) {
     let _ = ui.small_button("?").on_hover_text(text);
+}
+
+fn render_project_top_bar(ui: &mut egui::Ui, configuration: &serde_json::Value) {
+    ui.horizontal(|ui| {
+        if shell_configuration_flag(configuration, "show_title") {
+            ui.heading("odon");
+            ui.add_space(8.0);
+            ui.label("Project");
+        }
+    });
+}
+
+fn shell_configuration_flag(configuration: &serde_json::Value, name: &str) -> bool {
+    configuration
+        .get(name)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn shell_node_visible(shell: &serde_json::Value, id: &str, default: bool) -> bool {
+    if id == "builtin:project.top-bar"
+        && let Some(visible) =
+            crate::ui::shell_layout::projected_mount_visible(shell, "builtin:project-top-bar")
+    {
+        return visible;
+    }
+    shell
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|nodes| {
+            nodes
+                .iter()
+                .find(|node| node.get("id").and_then(serde_json::Value::as_str) == Some(id))
+        })
+        .and_then(|node| node.get("visible"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
 }
 
 #[derive(Debug)]
@@ -188,6 +239,8 @@ pub struct RootApp {
     control_projection_revision_applied: u64,
     control_document_generation_applied: u64,
     control_actor_mode_signature: Option<String>,
+    control_shell_projection: serde_json::Value,
+    control_command_surface_projection: serde_json::Value,
     control_projection_gap: bool,
     deferred_renderer_projection: Option<RenderProjection>,
     native_command_ingress: NativeControlIngress,
@@ -464,12 +517,30 @@ impl RootApp {
         }
     }
 
-    fn process_control_platform_effects(&self, ctx: &egui::Context) {
-        let runtime = &self.control_runtime;
-        while let Ok(effect) = runtime.try_recv_platform_effect() {
+    fn process_control_platform_effects(&mut self, ctx: &egui::Context) {
+        while let Ok(effect) = self.control_runtime.try_recv_platform_effect() {
             match effect {
                 odon::control::actor::PlatformEffect::CloseWindow { .. } => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                odon::control::actor::PlatformEffect::InvokeNativeCommand {
+                    command_id,
+                    action,
+                    checked,
+                } => self.execute_native_command(&command_id, &action, checked),
+                odon::control::actor::PlatformEffect::InvokeControlCommand {
+                    command_id,
+                    method,
+                    params,
+                } => {
+                    if !self
+                        .control_runtime
+                        .submit_native_command(ctx, &method, params)
+                    {
+                        log_warn!(
+                            "control handler for command '{command_id}' could not be submitted"
+                        );
+                    }
                 }
             }
         }
@@ -478,8 +549,23 @@ impl RootApp {
     fn apply_control_presentation(
         &mut self,
         ctx: &egui::Context,
-        projection: RenderProjection,
+        mut projection: RenderProjection,
     ) -> bool {
+        projection.shell["_command_surface"] = projection.command_surface.clone();
+        self.control_runtime
+            .ui_registry()
+            .annotate_shell_snapshot_ownership(&mut projection.shell);
+        #[cfg(target_os = "macos")]
+        if self.control_command_surface_projection != projection.command_surface {
+            match NativeMenu::init("odon", &projection.command_surface) {
+                Ok(menu) => self.native_menu = Some(menu),
+                Err(error) => {
+                    log_warn!("could not realize actor command menu projection: {error}")
+                }
+            }
+        }
+        self.control_command_surface_projection = projection.command_surface.clone();
+        self.control_shell_projection = projection.shell.clone();
         if self.app_settings != projection.settings {
             self.app_settings = projection.settings.clone();
             if !self.settings_open {
@@ -488,6 +574,7 @@ impl RootApp {
             self.apply_app_settings_to_mode();
         }
         if let Mode::Single(app) = &mut self.mode {
+            app.apply_control_shell_projection(&projection.shell);
             app.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
             if let Err(error) =
                 app.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy)
@@ -529,6 +616,7 @@ impl RootApp {
             );
         }
         if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
+            mosaic.apply_control_shell_projection(&projection.shell);
             mosaic.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
         }
         self.apply_project_object_preload_projection(&projection.project_object_preload);
@@ -594,6 +682,7 @@ impl RootApp {
                         }
                     };
                 self.configure_mosaic_app(&mut mosaic);
+                mosaic.apply_control_shell_projection(&projection.shell);
                 mosaic.set_return_dataset_root(ret.dataset_root.clone());
                 mosaic.set_project_space(project_space);
                 if let Err(error) = mosaic.apply_control_actor_state(
@@ -777,6 +866,7 @@ impl RootApp {
             };
             app.set_remote_runtime(document.opened.resource.runtime_guard());
             self.configure_single_app(&mut app);
+            app.apply_control_shell_projection(&projection.shell);
             app.set_project_space_from_actor(project_space);
             self.mode = Mode::Single(app);
             self.control_document_generation_applied = projection.document_generation;
@@ -924,25 +1014,6 @@ impl RootApp {
             log_warn!("single-viewer actor projection has no workspace");
             return false;
         };
-        let projected_scale_bar = workspace
-            .get("active_viewport_id")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|active_id| {
-                workspace
-                    .get("viewports")
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|viewports| {
-                        viewports.iter().find(|viewport| {
-                            viewport
-                                .get("viewport_id")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(active_id)
-                        })
-                    })
-            })
-            .and_then(|viewport| viewport.get("rendering"))
-            .and_then(|rendering| rendering.get("show_scale_bar"))
-            .and_then(serde_json::Value::as_bool);
         let Mode::Single(app) = &mut self.mode else {
             log_warn!("actor projection could not establish a single-image viewer");
             return false;
@@ -986,12 +1057,6 @@ impl RootApp {
         if let Err(error) = app.apply_control_actor_workspace_projection(workspace) {
             log_warn!("actor render projection could not be applied: {error}");
             return false;
-        }
-        if let Some(visible) = projected_scale_bar {
-            #[cfg(target_os = "macos")]
-            if let Some(menu) = self.native_menu.as_ref() {
-                menu.set_scale_bar_visible(visible);
-            }
         }
         true
     }
@@ -1391,6 +1456,8 @@ impl RootApp {
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
+            control_shell_projection: serde_json::json!({}),
+            control_command_surface_projection: serde_json::json!({}),
             control_projection_gap: false,
             deferred_renderer_projection: None,
             native_command_ingress,
@@ -1455,6 +1522,8 @@ impl RootApp {
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
+            control_shell_projection: serde_json::json!({}),
+            control_command_surface_projection: serde_json::json!({}),
             control_projection_gap: false,
             deferred_renderer_projection: None,
             native_command_ingress,
@@ -1520,6 +1589,8 @@ impl RootApp {
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
             control_actor_mode_signature: None,
+            control_shell_projection: serde_json::json!({}),
+            control_command_surface_projection: serde_json::json!({}),
             control_projection_gap: false,
             deferred_renderer_projection: None,
             native_command_ingress,
@@ -1789,7 +1860,7 @@ impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if self.native_menu.is_none() {
-            if let Ok(menu) = NativeMenu::init("odon", true) {
+            if let Ok(menu) = NativeMenu::init("odon", &self.control_command_surface_projection) {
                 self.native_menu = Some(menu);
             }
         }
@@ -1821,205 +1892,32 @@ impl eframe::App for RootApp {
         #[cfg(target_os = "macos")]
         {
             if let Some(menu) = self.native_menu.as_ref() {
-                for action in menu.drain_actions() {
-                    match action {
-                        NativeMenuAction::Settings => {
-                            self.settings_open = true;
-                        }
-                        NativeMenuAction::OpenOmeZarr => {
-                            if let Some(root) =
-                                FileDialog::new().set_title("Open OME-Zarr").pick_folder()
-                            {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: "datasets.open_ome_zarr",
-                                    params: serde_json::json!({"path":root}),
-                                });
-                            }
-                        }
-                        NativeMenuAction::OpenTiff => {
-                            if let Some(root) = FileDialog::new()
-                                .add_filter("TIFF / OME-TIFF", &["tif", "tiff"])
-                                .set_title("Open TIFF / OME-TIFF")
-                                .pick_file()
-                            {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: "datasets.open_tiff",
-                                    params: serde_json::json!({"path":root}),
-                                });
-                            }
-                        }
-                        NativeMenuAction::OpenProject => {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("Project JSON", &["json"])
-                                .set_title("Load Project")
-                                .pick_file()
-                            {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: "project.open",
-                                    params: serde_json::json!({"path": path}),
-                                });
-                            }
-                        }
-                        NativeMenuAction::SaveProject => {
-                            let save_target = match &self.mode {
-                                Mode::Project { project_space } => {
-                                    project_space.saved_project_path()
-                                }
-                                Mode::Single(app) => app.project_space().saved_project_path(),
-                                Mode::Mosaic { mosaic, .. } => {
-                                    mosaic.project_space().saved_project_path()
-                                }
-                                Mode::Transition => None,
-                            };
-                            let save_target = save_target.or_else(|| {
-                                FileDialog::new()
-                                    .add_filter("Project JSON", &["json"])
-                                    .set_file_name("odon.project.json")
-                                    .set_title("Save Project")
-                                    .save_file()
-                            });
-                            if let Some(path) = save_target {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: "project.save_as",
-                                    params: serde_json::json!({"path": path}),
-                                });
-                            }
-                        }
-                        NativeMenuAction::SaveNewProject => {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("Project JSON", &["json"])
-                                .set_file_name("odon.project.json")
-                                .set_title("Save Project As")
-                                .save_file()
-                            {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: "project.save_as",
-                                    params: serde_json::json!({"path": path}),
-                                });
-                            }
-                        }
-                        NativeMenuAction::SaveScreenshot => {
-                            self.save_screenshot_via_dialog();
-                        }
-                        NativeMenuAction::QuickScreenshot => {
-                            self.quick_screenshot();
-                        }
-                        NativeMenuAction::ScreenshotSettings => match &mut self.mode {
-                            Mode::Single(app) => app.open_screenshot_settings(),
-                            Mode::Project { project_space } => project_space.set_status(
-                                "Screenshot Settings: open a dataset first.".to_string(),
-                            ),
-                            Mode::Mosaic { mosaic, .. } => mosaic.open_screenshot_settings(),
-                            Mode::Transition => {}
+                for command in menu.drain_commands() {
+                    native_menu_control_intents.push(command_execution_intent(
+                        crate::ui::CommandPresentationInvocation {
+                            command_id: command.command_id,
+                            checked: command.checked,
                         },
-                        NativeMenuAction::RoiInfo => match &mut self.mode {
-                            Mode::Single(app) => app.open_roi_info_window(),
-                            Mode::Project { project_space } => project_space
-                                .set_status("ROI Info: open a dataset first.".to_string()),
-                            Mode::Mosaic { mosaic, .. } => mosaic
-                                .project_space_mut()
-                                .set_status("ROI Info: open a single ROI first.".to_string()),
-                            Mode::Transition => {}
-                        },
-                        NativeMenuAction::AddAnnotations => match &mut self.mode {
-                            Mode::Single(app) => app.add_annotation_layer_from_menu(),
-                            Mode::Project { project_space } => project_space
-                                .set_status("Add annotations: open a dataset first.".to_string()),
-                            Mode::Mosaic { mosaic, .. } => mosaic.project_space_mut().set_status(
-                                "Add annotations: open a single ROI first.".to_string(),
-                            ),
-                            Mode::Transition => {}
-                        },
-                        NativeMenuAction::LoadSegGeoJson => match &mut self.mode {
-                            Mode::Single(app) => app.open_seg_geojson_dialog(),
-                            Mode::Project { project_space } => project_space
-                                .set_status("Load Seg GeoJSON: open a dataset first.".to_string()),
-                            Mode::Mosaic { mosaic, .. } => mosaic.project_space_mut().set_status(
-                                "Load Seg GeoJSON: open a single ROI first.".to_string(),
-                            ),
-                            Mode::Transition => {}
-                        },
-                        NativeMenuAction::LoadSegObjects => match &mut self.mode {
-                            Mode::Single(app) => app.open_seg_objects_dialog(),
-                            Mode::Project { project_space } => project_space
-                                .set_status("Load Seg Objects: open a dataset first.".to_string()),
-                            Mode::Mosaic { mosaic, .. } => mosaic.project_space_mut().set_status(
-                                "Load Seg Objects: open a single ROI first.".to_string(),
-                            ),
-                            Mode::Transition => {}
-                        },
-                        NativeMenuAction::ExportMasksGeoJson => {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("GeoJSON", &["geojson", "json"])
-                                .set_file_name("masks.geojson")
-                                .set_title("Export Masks GeoJSON")
-                                .save_file()
-                            {
-                                match &mut self.mode {
-                                    Mode::Single(app) => app.request_mask_export(&path, None),
-                                    Mode::Project { project_space } => project_space.set_status(
-                                        "Export masks failed: open a dataset first.".to_string(),
-                                    ),
-                                    Mode::Mosaic { mosaic, .. } => {
-                                        mosaic.project_space_mut().set_status(
-                                            "Export masks failed: open a single ROI first."
-                                                .to_string(),
-                                        )
-                                    }
-                                    Mode::Transition => {}
-                                }
-                            }
-                        }
-                        NativeMenuAction::SetScaleBarVisible(visible) => {
-                            if let Mode::Single(app) = &mut self.mode {
-                                app.submit_native_scale_bar_visibility(visible);
-                            }
-                        }
-                        action @ (NativeMenuAction::CloseWindow | NativeMenuAction::Quit) => {
-                            let quit = matches!(action, NativeMenuAction::Quit);
-                            let should_close = match &mut self.mode {
-                                Mode::Project { .. } => {
-                                    if self.close_dialog_open {
-                                        self.close_dialog_open = false;
-                                        true
-                                    } else {
-                                        self.close_dialog_open = true;
-                                        false
-                                    }
-                                }
-                                Mode::Single(app) => app.confirm_or_request_close_dialog(),
-                                Mode::Mosaic { mosaic, .. } => {
-                                    mosaic.confirm_or_request_close_dialog()
-                                }
-                                Mode::Transition => false,
-                            };
-                            if should_close {
-                                native_menu_control_intents.push(NativeControlIntent {
-                                    method: if quit {
-                                        "app.lifecycle.request_quit"
-                                    } else {
-                                        "app.lifecycle.request_close"
-                                    },
-                                    params: serde_json::json!({"save":"discard"}),
-                                });
-                            }
-                        }
-                    }
+                    ));
                 }
             }
         }
 
-        if !ctx.wants_keyboard_input()
-            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma))
+        #[cfg(not(target_os = "macos"))]
+        if let Some(invocation) =
+            crate::ui::command_shortcuts::resolve(ctx, &self.control_command_surface_projection)
         {
-            self.settings_open = true;
+            native_menu_control_intents.push(command_execution_intent(invocation));
         }
 
         let object_preload_ui = self.object_preload.ui;
         let external_layers = Some(self.control_runtime.external_layers())
             .filter(|(revision, _, _)| *revision != self.control_external_revision);
         let observed = self.actor_renderer_observation();
-        self.control_runtime.render_extension_ui(ctx, &observed);
+        self.control_runtime.prepare_extension_ui(&observed);
+        self.control_runtime
+            .render_extension_hosts(ctx, observed.get("shell"));
+        let extension_ui_registry = self.control_runtime.ui_registry();
         self.sync_control_manifest_to_project();
 
         if let Some(project_space) = self.current_project_space_mut() {
@@ -2052,34 +1950,129 @@ impl eframe::App for RootApp {
                 }
 
                 // Minimal "landing" UI: show the project workspace and let users open datasets.
-                egui::TopBottomPanel::top("top").show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading("odon");
-                        ui.add_space(8.0);
-                        ui.label("Project");
+                let actor_shell_layout = self.control_shell_projection.get("layout").is_some();
+                if !actor_shell_layout {
+                    let top_bar_visible = shell_node_visible(
+                        &self.control_shell_projection,
+                        "builtin:project.top-bar",
+                        true,
+                    );
+                    egui::TopBottomPanel::top("top").show_animated(ctx, top_bar_visible, |ui| {
+                        render_project_top_bar(ui, &serde_json::Value::Null);
                     });
-                });
+                }
+                let mut project_action = None;
+                let shell_projection = self.control_shell_projection.clone();
                 egui::CentralPanel::default().show(ctx, |ui| {
                     project_space.set_object_cache_ui_state(object_preload_ui);
-                    let action = project_space.ui(ui, None);
-                    if let Some(action) = action {
-                        if !project_space.submit_action_control_intent(&action) {
-                            match action {
-                                ProjectSpaceAction::CaptureCurrentView => {}
-                                ProjectSpaceAction::OpenRemoteDialog => {
-                                    self.remote_dialog_open = true;
-                                    self.remote_status.clear();
-                                }
-                                ProjectSpaceAction::ShowHelp(topic) => {
-                                    self.active_help_topic = Some(topic);
-                                }
-                                _ => unreachable!(
-                                    "actor-owned project action was not accepted by its command outbox"
-                                ),
+                    let frame = crate::ui::shell_tree::ShellTreeFrame::from_projection_with_mount_filter(
+                        ctx,
+                        &shell_projection,
+                        "builtin:project-workspace",
+                        ui.available_rect_before_wrap(),
+                        |mount| extension_ui_registry.shell_mount_available(mount, &shell_projection),
+                    );
+                    if let Some(frame) = frame {
+                        let extension_registry = Arc::clone(&extension_ui_registry);
+                        let shell_geometry = frame
+                            .node_rects()
+                            .map(|(id, rect)| {
+                                (
+                                    id.to_string(),
+                                    [rect.min.x, rect.min.y, rect.max.x, rect.max.y],
+                                )
+                            })
+                            .collect::<crate::ui::shell_inspector::ShellGeometry>();
+                        let changes = frame.show(ui, |mount_ui, mount, configuration| match mount {
+                            "builtin:project-top-bar" => {
+                                render_project_top_bar(mount_ui, configuration)
                             }
+                            "builtin:command-toolbar" => {
+                                if let Some(invocation) = crate::ui::command_toolbar::render(
+                                    mount_ui,
+                                    &shell_projection,
+                                ) {
+                                    native_menu_control_intents
+                                        .push(command_execution_intent(invocation));
+                                }
+                            }
+                            "builtin:project-workspace" => {
+                                if project_action.is_none() {
+                                    project_action = project_space.ui(mount_ui, None);
+                                }
+                            }
+                            "builtin:shell-inspector" => crate::ui::shell_inspector::render(
+                                mount_ui,
+                                &shell_projection,
+                                &shell_geometry,
+                            ),
+                            "builtin:help" => {
+                                crate::ui::help::render_help_browser(mount_ui, "project-shell")
+                            }
+                            "builtin:recovery-controls" => {
+                                if crate::ui::shell_recovery::render(mount_ui) {
+                                    native_control_intents.push(NativeControlIntent {
+                                        method: "ui.shell.recover",
+                                        params: serde_json::json!({}),
+                                    });
+                                }
+                            }
+                            mount if mount.starts_with("extension:") => {
+                                if !extension_registry.render_shell_mount_in_layout(
+                                    mount_ui,
+                                    mount,
+                                    Some(&shell_projection),
+                                ) {
+                                    mount_ui.weak(format!(
+                                        "Extension shell mount '{mount}' is not connected to a registered contribution."
+                                    ));
+                                }
+                            }
+                            mount if mount.starts_with("builtin:extension-host.") => {
+                                if !extension_registry.render_shell_mount_in_layout(
+                                    mount_ui,
+                                    mount,
+                                    Some(&shell_projection),
+                                ) {
+                                    mount_ui.weak(
+                                        "No extension contributions are registered for this host.",
+                                    );
+                                }
+                            }
+                            _ => {
+                                mount_ui.colored_label(
+                                    mount_ui.visuals().error_fg_color,
+                                    format!("Unavailable project shell mount: {mount}"),
+                                );
+                            }
+                        });
+                        if !changes.is_empty() {
+                            native_control_intents.push(NativeControlIntent {
+                                method: "ui.shell.patch_layout",
+                                params: changes.patch_params(),
+                            });
                         }
+                    } else {
+                        project_action = project_space.ui(ui, None);
                     }
                 });
+                if let Some(action) = project_action
+                    && !project_space.submit_action_control_intent(&action)
+                {
+                    match action {
+                        ProjectSpaceAction::CaptureCurrentView => {}
+                        ProjectSpaceAction::OpenRemoteDialog => {
+                            self.remote_dialog_open = true;
+                            self.remote_status.clear();
+                        }
+                        ProjectSpaceAction::ShowHelp(topic) => {
+                            self.active_help_topic = Some(topic);
+                        }
+                        _ => unreachable!(
+                            "actor-owned project action was not accepted by its command outbox"
+                        ),
+                    }
+                }
                 if let Some(action) = project_space.ui_floating_windows(ctx, false) {
                     if !project_space.submit_action_control_intent(&action) {
                         match action {
@@ -2099,6 +2092,7 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Single(app) => {
+                app.set_extension_ui_registry(Arc::clone(&extension_ui_registry));
                 if let Some((revision, layers, resources)) = external_layers.as_ref() {
                     app.sync_control_external_layers(layers, resources);
                     self.control_external_revision = *revision;
@@ -2115,6 +2109,7 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Mosaic { mosaic, .. } => {
+                mosaic.set_extension_ui_registry(Arc::clone(&extension_ui_registry));
                 mosaic
                     .project_space_mut()
                     .set_recent_projects(&self.app_settings.recent_projects);
@@ -2139,6 +2134,12 @@ impl eframe::App for RootApp {
                 }
             }
             Mode::Transition => {}
+        }
+        self.control_runtime.finish_extension_ui(ctx);
+        if let Some(invocation) =
+            crate::ui::command_palette::show(ctx, &self.control_command_surface_projection)
+        {
+            native_menu_control_intents.push(command_execution_intent(invocation));
         }
 
         if let Some(project_space) = self.current_project_space_mut() {

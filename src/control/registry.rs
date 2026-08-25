@@ -77,6 +77,24 @@ impl ExecutionClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestShape {
     Empty,
+    ShellGet,
+    MenuReplace,
+    ToolbarReplace,
+    PaletteReplace,
+    CommandRegister,
+    CommandRemove,
+    CommandExecute,
+    CommandCleanup,
+    CommandSync,
+    ShellImportLayout,
+    ShellPatch,
+    ShellPatchLayout,
+    ShellProfileList,
+    ShellProfileLoad,
+    ShellProfileRemove,
+    ShellProfileSave,
+    ShellReplaceLayout,
+    ShellReset,
     SetSidePanels,
     SetSmoothPixels,
     SetVisibleChannels,
@@ -445,9 +463,11 @@ mod actor_methods;
 mod catalog;
 mod protocol_catalog;
 mod schema;
+mod shell_catalog;
 
 pub use actor_methods::ACTOR_CAPABLE_METHODS;
 pub use catalog::METHODS;
+use protocol_catalog::protocol_request_schema;
 pub use protocol_catalog::{METHOD_ALIASES, PROTOCOL_METHODS};
 use schema::request_schema_for;
 
@@ -456,6 +476,16 @@ pub fn method(name: &str) -> Option<&'static MethodDescriptor> {
     METHODS
         .iter()
         .find(|descriptor| descriptor.name == canonical)
+}
+
+pub fn capability_for(name: &str) -> Option<&'static str> {
+    method(name)
+        .map(|descriptor| descriptor.capability)
+        .or_else(|| {
+            PROTOCOL_METHODS
+                .iter()
+                .find_map(|(method, _, capability, _, _)| (*method == name).then_some(*capability))
+        })
 }
 
 pub fn canonical_method(name: &str) -> &str {
@@ -470,7 +500,13 @@ pub fn capabilities() -> Vec<String> {
         .iter()
         .map(|descriptor| descriptor.capability)
         .chain(PROTOCOL_METHODS.iter().map(|method| method.2))
-        .chain(["system.introspect"])
+        .chain([
+            "system.introspect",
+            "ui.shell.application_control",
+            "ui.shell.chrome",
+            "ui.shell.shortcuts",
+            "ui.shell.window_control",
+        ])
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(str::to_string)
@@ -531,7 +567,8 @@ pub fn catalog_json() -> Value {
                             },
                             "variants":[],
                         },
-                        "request_schema": {"type": "object"},
+                        "request_schema": protocol_request_schema(name),
+                        "result_schema": {"type": "object"},
                     })
                 },
             ))

@@ -16,6 +16,8 @@ impl AppModel {
         self.recent_project_exists = recent_project_exists.into_iter().collect();
         self.settings_path = path;
         self.settings_status.clear();
+        self.settings_bootstrapped = true;
+        self.apply_startup_shell_layout_if_needed();
     }
 
     pub fn settings(&self) -> &AppSettings {

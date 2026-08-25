@@ -38,7 +38,14 @@ pub(super) fn finish_request(
             .and_then(Value::as_str)
             .map(|id| format!("viewport:{id}"))
             .unwrap_or_else(|| {
-                if method.starts_with("datasets.") {
+                if method.starts_with("ui.shell.")
+                    || method.starts_with("ui.commands.")
+                    || method.starts_with("ui.menus.")
+                    || method.starts_with("ui.toolbars.")
+                    || method.starts_with("ui.palette.")
+                {
+                    "application:shell".to_string()
+                } else if method.starts_with("datasets.") {
                     "application".to_string()
                 } else if method.starts_with("project.") {
                     "project:active".to_string()
@@ -58,6 +65,18 @@ pub(super) fn finish_request(
             Some(request.session_id.clone()),
             request.request_id.clone(),
         );
+        if primary_event != "ui.shell.changed"
+            && let Some(change) = response.get("shell_change").cloned()
+        {
+            request.event_hub.publish(
+                "ui.shell.changed",
+                "application:shell",
+                revision,
+                json!({"method":method,"change":change}),
+                Some(request.session_id.clone()),
+                request.request_id.clone(),
+            );
+        }
         if response
             .get("active_viewport_changed")
             .and_then(Value::as_bool)

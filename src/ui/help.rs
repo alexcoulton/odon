@@ -649,81 +649,89 @@ pub fn show_help_window(ctx: &egui::Context, active_topic: &mut Option<HelpTopic
         .min_width(480.0)
         .min_height(320.0)
         .open(&mut open)
-        .show(ctx, |ui| {
-            let available = ui.available_size();
-            ui.allocate_ui_with_layout(
-                available,
-                egui::Layout::left_to_right(egui::Align::Min),
-                |ui| {
-                    let nav_width = 210.0;
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(nav_width, available.y),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_min_size(egui::vec2(nav_width, available.y));
-                            ui.set_max_width(nav_width);
-                            ui.heading("Topics");
-                            ui.separator();
-                            let scroll_height = ui.available_height();
-                            egui::ScrollArea::vertical()
-                                .id_salt("odon.help.topic_list")
-                                .max_height(scroll_height)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for candidate in HelpTopic::ALL {
-                                        if ui
-                                            .selectable_label(
-                                                topic == *candidate,
-                                                candidate.title(),
-                                            )
-                                            .clicked()
-                                        {
-                                            topic = *candidate;
-                                        }
-                                    }
-                                });
-                        },
-                    );
-
-                    ui.separator();
-
-                    let content_size = egui::vec2(ui.available_width(), available.y);
-                    ui.allocate_ui_with_layout(
-                        content_size,
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_min_size(content_size);
-                            ui.heading(
-                                egui::RichText::new(topic.title()).color(egui::Color32::WHITE),
-                            );
-                            ui.label(topic.summary());
-                            ui.add_space(8.0);
-                            let scroll_height = ui.available_height();
-                            egui::ScrollArea::vertical()
-                                .id_salt("odon.help.topic_content")
-                                .max_height(scroll_height)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for section in topic.sections() {
-                                        ui.add_space(8.0);
-                                        ui.strong(section.heading);
-                                        for bullet in section.bullets {
-                                            ui.horizontal_wrapped(|ui| {
-                                                ui.label("-");
-                                                ui.label(*bullet);
-                                            });
-                                        }
-                                    }
-                                });
-                        },
-                    );
-                },
-            );
-        });
+        .show(ctx, |ui| render_browser(ui, &mut topic, "window"));
 
     if !open {
         *active_topic = None;
     } else {
         *active_topic = Some(topic);
     }
+}
+
+/// Render the documentation browser as an ordinary actor-shell mount.
+pub(crate) fn render_help_browser(ui: &mut egui::Ui, id_salt: &str) {
+    let state_id = egui::Id::new(("odon.help.mounted-topic", id_salt));
+    let mut topic = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<HelpTopic>(state_id))
+        .unwrap_or(HelpTopic::GettingStarted);
+    render_browser(ui, &mut topic, id_salt);
+    ui.ctx().data_mut(|data| data.insert_temp(state_id, topic));
+}
+
+fn render_browser(ui: &mut egui::Ui, topic: &mut HelpTopic, id_salt: &str) {
+    let available = ui.available_size();
+    ui.allocate_ui_with_layout(
+        available,
+        egui::Layout::left_to_right(egui::Align::Min),
+        |ui| {
+            let nav_width = 210.0_f32.min((available.x * 0.35).max(120.0));
+            ui.allocate_ui_with_layout(
+                egui::vec2(nav_width, available.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(nav_width, available.y));
+                    ui.set_max_width(nav_width);
+                    ui.heading("Topics");
+                    ui.separator();
+                    let scroll_height = ui.available_height();
+                    egui::ScrollArea::vertical()
+                        .id_salt((id_salt, "topic-list"))
+                        .max_height(scroll_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for candidate in HelpTopic::ALL {
+                                if ui
+                                    .selectable_label(*topic == *candidate, candidate.title())
+                                    .clicked()
+                                {
+                                    *topic = *candidate;
+                                }
+                            }
+                        });
+                },
+            );
+
+            ui.separator();
+
+            let content_size = egui::vec2(ui.available_width(), available.y);
+            ui.allocate_ui_with_layout(
+                content_size,
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_size(content_size);
+                    ui.heading(egui::RichText::new(topic.title()).color(egui::Color32::WHITE));
+                    ui.label(topic.summary());
+                    ui.add_space(8.0);
+                    let scroll_height = ui.available_height();
+                    egui::ScrollArea::vertical()
+                        .id_salt((id_salt, "topic-content"))
+                        .max_height(scroll_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for section in topic.sections() {
+                                ui.add_space(8.0);
+                                ui.strong(section.heading);
+                                for bullet in section.bullets {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label("-");
+                                        ui.label(*bullet);
+                                    });
+                                }
+                            }
+                        });
+                },
+            );
+        },
+    );
 }

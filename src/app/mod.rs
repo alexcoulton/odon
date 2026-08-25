@@ -128,6 +128,8 @@ mod projects;
 mod renderer_bridge;
 mod screenshots;
 mod selection;
+mod shell;
+mod shell_components;
 mod thresholds;
 mod tiff;
 mod tile_runtime;
@@ -1907,6 +1909,9 @@ pub struct OmeZarrViewerApp {
     system_memory_last_refresh: Option<Instant>,
     left_tab: LeftTab,
     right_tab: RightTab,
+    control_shell_projection: serde_json::Value,
+    control_shell_layout: crate::ui::shell_layout::ShellLayoutReconciler,
+    extension_ui_registry: Option<Arc<odon::control::UiRegistry>>,
     project_space: ProjectSpace,
     /// Last actor-projected project configuration generation consumed by renderer-only panels.
     control_actor_project_config_generation: u64,

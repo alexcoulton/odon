@@ -6,6 +6,8 @@ mod layers_ui;
 mod memory_navigation;
 mod panels;
 mod segmentation_geojson;
+mod shell;
+mod shell_components;
 mod tiles_gl;
 mod update;
 
@@ -228,6 +230,9 @@ pub struct MosaicViewerApp {
     layer_drag: Option<layer_list::LayerDragState<MosaicLayerId>>,
     left_tab: LeftTab,
     right_tab: RightTab,
+    control_shell_projection: serde_json::Value,
+    control_shell_layout: crate::ui::shell_layout::ShellLayoutReconciler,
+    extension_ui_registry: Option<Arc<odon::control::UiRegistry>>,
     metadata_columns: Vec<String>,
     sort_by: String,
     sort_secondary_enabled: bool,

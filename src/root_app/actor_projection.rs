@@ -26,6 +26,7 @@ impl RootApp {
                 Mode::Single(app) => app.control_object_selection_signature(),
                 _ => serde_json::Value::Null,
             },
+            "shell": self.control_shell_projection,
         })
     }
 

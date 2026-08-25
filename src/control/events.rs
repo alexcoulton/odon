@@ -210,8 +210,21 @@ mod tests {
         hub.register("session".into(), tx);
         hub.subscribe("session", vec!["*".into()])
             .expect("subscribe");
-        hub.publish("one", "app", 0, json!({}), None, None);
-        hub.publish("two", "app", 0, json!({}), None, None);
-        assert_eq!(hub.status("session")["dropped_events"], 1);
+        const EVENT_COUNT: u64 = 10_000;
+        let started = std::time::Instant::now();
+        for index in 0..EVENT_COUNT {
+            hub.publish("pressure", "app", 0, json!({"index":index}), None, None);
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "slow-subscriber pressure: events={EVENT_COUNT} total_us={} average_ns={}",
+            elapsed.as_micros(),
+            elapsed.as_nanos() / u128::from(EVENT_COUNT),
+        );
+        assert_eq!(hub.status("session")["dropped_events"], EVENT_COUNT - 1);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "publishing into a saturated subscriber took {elapsed:?}; publishers must not block"
+        );
     }
 }

@@ -1,0 +1,20 @@
+{
+  "format": "odon.shell-layout",
+  "schema_version": 1,
+  "mode": "single",
+  "layout": {
+    "root_id": "layout:fixture.startup.single.root",
+    "nodes": [
+      {
+        "id": "layout:fixture.startup.single.root",
+        "type": "application",
+        "children": ["layout:fixture.startup.single.canvas"]
+      },
+      {
+        "id": "layout:fixture.startup.single.canvas",
+        "type": "canvas_slot",
+        "mount": "builtin:viewer-canvas"
+      }
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -12,8 +12,7 @@ pub(super) use components::Interaction;
 use components::render_component;
 
 impl UiRegistry {
-    pub fn render(&self, ctx: &egui::Context) {
-        let mut interactions = Vec::new();
+    pub fn render(&self, ctx: &egui::Context, _shell: Option<&serde_json::Value>) {
         let mut native_removed_extensions = Vec::new();
         {
             let mut state = self.state.lock().expect("UI registry poisoned");
@@ -62,142 +61,6 @@ impl UiRegistry {
                     }
                 }
             }
-            let extension_states = state
-                .extensions
-                .iter()
-                .map(|(id, extension)| {
-                    (
-                        id.clone(),
-                        (
-                            extension.connected,
-                            extension.owner_session_id.clone(),
-                            matches!(extension.disconnect_policy, DisconnectPolicy::Retain),
-                        ),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-
-            if has_location(&state.contributions, "top_bar.actions") {
-                egui::TopBottomPanel::top("odon-extension-top-bar").show(ctx, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        render_location(
-                            ui,
-                            &mut state.contributions,
-                            "top_bar.actions",
-                            &extension_states,
-                            &mut interactions,
-                            false,
-                        );
-                    });
-                });
-            }
-            if has_location(&state.contributions, "status_bar") {
-                egui::TopBottomPanel::bottom("odon-extension-status-bar").show(ctx, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        render_location(
-                            ui,
-                            &mut state.contributions,
-                            "status_bar",
-                            &extension_states,
-                            &mut interactions,
-                            false,
-                        );
-                    });
-                });
-            }
-            if has_location(&state.contributions, "left.sections") {
-                egui::SidePanel::left("odon-extension-left-sections")
-                    .default_width(260.0)
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        ui.heading("Extensions");
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            render_location(
-                                ui,
-                                &mut state.contributions,
-                                "left.sections",
-                                &extension_states,
-                                &mut interactions,
-                                true,
-                            );
-                        });
-                    });
-            }
-
-            let right_tabs = state
-                .contributions
-                .iter()
-                .filter(|item| item.location == "right.tabs")
-                .map(|item| (item.contribution_id.clone(), contribution_title(item)))
-                .collect::<Vec<_>>();
-            if !right_tabs.is_empty() {
-                let mut selected = state
-                    .selected_right_tab
-                    .clone()
-                    .filter(|id| right_tabs.iter().any(|(candidate, _)| candidate == id))
-                    .unwrap_or_else(|| right_tabs[0].0.clone());
-                egui::SidePanel::right("odon-extension-right-tabs")
-                    .default_width(300.0)
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            for (id, title) in &right_tabs {
-                                ui.selectable_value(&mut selected, id.clone(), title);
-                            }
-                        });
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            if let Some(contribution) = state
-                                .contributions
-                                .iter_mut()
-                                .find(|item| item.contribution_id == selected)
-                            {
-                                render_contribution(
-                                    ui,
-                                    contribution,
-                                    &extension_states,
-                                    &mut interactions,
-                                    false,
-                                );
-                            }
-                        });
-                    });
-                state.selected_right_tab = Some(selected);
-            }
-
-            if has_location(&state.contributions, "canvas.controls") {
-                egui::Area::new(egui::Id::new("odon-extension-canvas-controls"))
-                    .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
-                    .show(ctx, |ui| {
-                        egui::Frame::window(ui.style()).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                render_location(
-                                    ui,
-                                    &mut state.contributions,
-                                    "canvas.controls",
-                                    &extension_states,
-                                    &mut interactions,
-                                    false,
-                                );
-                            });
-                        });
-                    });
-            }
-            if has_location(&state.contributions, "project.cards") {
-                egui::Window::new("Extension project cards")
-                    .id(egui::Id::new("odon-extension-project-cards"))
-                    .default_width(320.0)
-                    .show(ctx, |ui| {
-                        render_location(
-                            ui,
-                            &mut state.contributions,
-                            "project.cards",
-                            &extension_states,
-                            &mut interactions,
-                            true,
-                        );
-                    });
-            }
         }
         if !native_removed_extensions.is_empty() {
             let revision = self.events.next_revision();
@@ -212,6 +75,70 @@ impl UiRegistry {
                 );
             }
         }
+    }
+
+    pub fn render_shell_mount(&self, ui: &mut egui::Ui, shell_mount: &str) -> bool {
+        self.render_shell_mount_in_layout(ui, shell_mount, None)
+    }
+
+    pub fn shell_mount_available(&self, shell_mount: &str, shell: &serde_json::Value) -> bool {
+        let Some(location) = default_host_location(shell_mount) else {
+            return true;
+        };
+        let state = self.state.lock().expect("UI registry poisoned");
+        let mounted = mounted_extension_contributions(Some(shell));
+        has_location(&state.contributions, location, &mounted)
+    }
+
+    pub fn render_shell_mount_in_layout(
+        &self,
+        ui: &mut egui::Ui,
+        shell_mount: &str,
+        shell: Option<&serde_json::Value>,
+    ) -> bool {
+        let mut interactions = Vec::new();
+        let rendered = {
+            let mut state = self.state.lock().expect("UI registry poisoned");
+            let extension_states = extension_states(&state);
+            if let Some(location) = default_host_location(shell_mount) {
+                let mounted = mounted_extension_contributions(shell);
+                let grouped = matches!(location, "left.sections" | "right.tabs" | "project.cards");
+                render_location(
+                    ui,
+                    &mut state.contributions,
+                    location,
+                    &extension_states,
+                    &mut interactions,
+                    grouped,
+                    &mounted,
+                );
+                true
+            } else if let Some(contribution) = state
+                .contributions
+                .iter_mut()
+                .find(|contribution| contribution.shell_mount == shell_mount)
+            {
+                render_contribution(
+                    ui,
+                    contribution,
+                    &extension_states,
+                    &mut interactions,
+                    false,
+                );
+                true
+            } else {
+                false
+            }
+        };
+        self.commit_interactions(ui.ctx(), interactions);
+        rendered
+    }
+
+    pub(in crate::control::ui) fn commit_interactions(
+        &self,
+        ctx: &egui::Context,
+        interactions: Vec<Interaction>,
+    ) {
         let now = Instant::now();
         let mut deferred = self
             .deferred_interactions
@@ -272,8 +199,57 @@ impl UiRegistry {
     }
 }
 
-fn has_location(contributions: &[ContributionSnapshot], location: &str) -> bool {
-    contributions.iter().any(|item| item.location == location)
+fn extension_states(state: &State) -> HashMap<String, (bool, String, bool)> {
+    state
+        .extensions
+        .iter()
+        .map(|(id, extension)| {
+            (
+                id.clone(),
+                (
+                    extension.connected,
+                    extension.owner_session_id.clone(),
+                    matches!(extension.disconnect_policy, DisconnectPolicy::Retain),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn default_host_location(shell_mount: &str) -> Option<&'static str> {
+    Some(match shell_mount {
+        "builtin:extension-host.top-bar-actions" => "top_bar.actions",
+        "builtin:extension-host.status-bar" => "status_bar",
+        "builtin:extension-host.left-sections" => "left.sections",
+        "builtin:extension-host.right-tabs" => "right.tabs",
+        "builtin:extension-host.canvas-controls" => "canvas.controls",
+        "builtin:extension-host.project-cards" => "project.cards",
+        _ => return None,
+    })
+}
+
+fn has_location(
+    contributions: &[ContributionSnapshot],
+    location: &str,
+    shell_mounts: &HashSet<String>,
+) -> bool {
+    contributions
+        .iter()
+        .any(|item| item.location == location && !shell_mounts.contains(&item.shell_mount))
+}
+
+fn mounted_extension_contributions(shell: Option<&serde_json::Value>) -> HashSet<String> {
+    shell
+        .and_then(|shell| shell.pointer("/layout/nodes"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|node| {
+            node.get("type").and_then(serde_json::Value::as_str) == Some("extension_mount")
+        })
+        .filter_map(|node| node.get("mount").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 fn contribution_title(contribution: &ContributionSnapshot) -> String {
@@ -292,10 +268,11 @@ fn render_location(
     extension_states: &HashMap<String, (bool, String, bool)>,
     interactions: &mut Vec<Interaction>,
     grouped: bool,
+    shell_mounts: &HashSet<String>,
 ) {
     for contribution in contributions
         .iter_mut()
-        .filter(|item| item.location == location)
+        .filter(|item| item.location == location && !shell_mounts.contains(&item.shell_mount))
     {
         render_contribution(ui, contribution, extension_states, interactions, grouped);
     }
@@ -309,13 +286,21 @@ fn render_contribution(
     grouped: bool,
 ) {
     let title = contribution_title(contribution);
-    let (connected, owner_session_id, retain_native_actions) = extension_states
+    let (transport_connected, owner_session_id, retain_native_actions) = extension_states
         .get(&contribution.extension_id)
         .cloned()
         .unwrap_or((false, String::new(), false));
+    let connected = transport_connected && contribution.readiness == "ready";
+    let retain_native_actions = retain_native_actions && contribution.readiness == "disconnected";
     let mut render = |ui: &mut egui::Ui, interactions: &mut Vec<Interaction>| {
-        if !connected {
-            ui.colored_label(egui::Color32::YELLOW, "Extension disconnected");
+        if contribution.readiness != "ready" {
+            let message = match contribution.readiness.as_str() {
+                "disconnected" => "Extension disconnected",
+                "incompatible" => "Extension version is incompatible with this retained mount",
+                "not_ready" => "Extension is connected but not ready",
+                _ => "Extension mount is unavailable",
+            };
+            ui.colored_label(egui::Color32::YELLOW, message);
         }
         render_component(
             ui,

@@ -29,4 +29,7 @@ pub use surface::{
     application_surface_json,
 };
 pub use tasks::{TaskRegistry, TaskServiceHandle, TaskSnapshot, TaskState};
-pub use ui::{Component, ContributionSnapshot, ExtensionSnapshot, UiAction, UiRegistry};
+pub use ui::{
+    Component, ContributionSnapshot, DisconnectPolicy, ExtensionCommandContext, ExtensionSnapshot,
+    UiAction, UiExtensionCleanup, UiRegistry, UiSessionCleanup,
+};

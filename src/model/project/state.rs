@@ -324,6 +324,48 @@ impl ProjectModel {
         ))
     }
 
+    pub(crate) fn shell_layout_profiles(&self) -> Result<Vec<(String, Value)>, ControlError> {
+        let Some(profiles) = self.snapshot.state.get("shell_layout_profiles") else {
+            return Ok(Vec::new());
+        };
+        let profiles = profiles
+            .as_object()
+            .ok_or_else(|| invalid("project shell_layout_profiles must be an object"))?;
+        Ok(profiles
+            .iter()
+            .map(|(name, document)| (name.clone(), document.clone()))
+            .collect())
+    }
+
+    pub(crate) fn set_shell_layout_profile(
+        &mut self,
+        name: &str,
+        document: Option<Value>,
+    ) -> Result<bool, ControlError> {
+        let state = self
+            .snapshot
+            .state
+            .as_object_mut()
+            .ok_or_else(|| invalid("project state must be an object"))?;
+        let profiles = state
+            .entry("shell_layout_profiles")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| invalid("project shell_layout_profiles must be an object"))?;
+        let changed = match document {
+            Some(document) if profiles.get(name) != Some(&document) => {
+                profiles.insert(name.to_string(), document);
+                true
+            }
+            Some(_) => false,
+            None => profiles.remove(name).is_some(),
+        };
+        if changed {
+            self.mark_structural_change();
+        }
+        Ok(changed)
+    }
+
     pub(crate) fn mark_saved(&mut self, path: PathBuf, saved_config_generation: u64) {
         self.snapshot.saved_path = Some(path);
         if self.snapshot.config_generation == saved_config_generation {

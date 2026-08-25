@@ -1,118 +1,32 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{ControlError, ControlErrorKind, EventHub};
 
+mod commands;
+mod layout_templates;
 mod render;
+mod shell_catalog;
+mod types;
 mod validation;
 
 use render::Interaction;
+pub use types::*;
 use validation::{
     component_ids, ensure_contribution_capabilities, patch_component_values,
     sync_component_binding, validate_tree,
 };
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DisconnectPolicy {
-    Remove,
-    Disable,
-    Retain,
-}
-
-impl Default for DisconnectPolicy {
-    fn default() -> Self {
-        Self::Remove
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Component {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub help: Option<String>,
-    #[serde(default = "default_true")]
-    pub visible: bool,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub value: Value,
-    #[serde(default)]
-    pub minimum: Option<f64>,
-    #[serde(default)]
-    pub maximum: Option<f64>,
-    #[serde(default)]
-    pub options: Vec<Value>,
-    #[serde(default)]
-    pub columns: Option<usize>,
-    #[serde(default)]
-    pub action: Option<Value>,
-    #[serde(default)]
-    pub event_policy: Option<Value>,
-    #[serde(default)]
-    pub children: Vec<Component>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegisterExtension {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    #[serde(default)]
-    pub disconnect_policy: DisconnectPolicy,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ExtensionSnapshot {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub requested_capabilities: Vec<String>,
-    pub granted_capabilities: Vec<String>,
-    pub disconnect_policy: DisconnectPolicy,
-    pub owner_session_id: String,
-    pub connected: bool,
-    pub revision: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegisterContribution {
-    pub extension_id: String,
-    #[serde(default)]
-    pub contribution_id: Option<String>,
-    pub location: String,
-    pub root: Component,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContributionSnapshot {
-    pub contribution_id: String,
-    pub extension_id: String,
-    pub location: String,
-    pub root: Component,
-    pub revision: u64,
-}
-
 #[derive(Debug, Default)]
 struct State {
     extensions: HashMap<String, ExtensionSnapshot>,
     contributions: Vec<ContributionSnapshot>,
-    selected_right_tab: Option<String>,
+    extension_layouts: Vec<ExtensionLayoutSnapshot>,
+    session_capabilities: HashMap<String, BTreeSet<String>>,
 }
 
 #[derive(Debug)]
@@ -124,15 +38,6 @@ pub struct UiRegistry {
     last_emitted: Mutex<HashMap<String, Instant>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct UiAction {
-    pub extension_id: String,
-    pub owner_session_id: String,
-    pub component_id: String,
-    pub action: Value,
-    pub value: Value,
-}
-
 impl UiRegistry {
     pub fn shared(events: Arc<EventHub>) -> Arc<Self> {
         Arc::new(Self {
@@ -142,6 +47,29 @@ impl UiRegistry {
             deferred_interactions: Mutex::new(HashMap::new()),
             last_emitted: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn set_session_capabilities(&self, session_id: &str, capabilities: &[String]) {
+        self.state
+            .lock()
+            .expect("UI registry poisoned")
+            .session_capabilities
+            .insert(
+                session_id.to_string(),
+                capabilities.iter().cloned().collect(),
+            );
+    }
+
+    pub fn session_capabilities(&self, session_id: &str) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("UI registry poisoned")
+            .session_capabilities
+            .get(session_id)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     pub fn register_extension(
@@ -170,6 +98,14 @@ impl UiRegistry {
                 "extension name and version must not be empty",
             ));
         }
+        if request.readiness_reason.as_ref().is_some_and(|reason| {
+            reason.is_empty() || reason.len() > 256 || reason.chars().any(char::is_control)
+        }) {
+            return Err(ControlError::invalid_params(
+                "ui.extensions.register",
+                "readiness_reason must contain 1 to 256 non-control bytes",
+            ));
+        }
         let allowed = [
             "ui.panels",
             "ui.actions",
@@ -194,10 +130,6 @@ impl UiRegistry {
                     format!("extension '{}' is already registered", request.id),
                 ));
             }
-            state.extensions.remove(&request.id);
-            state
-                .contributions
-                .retain(|item| item.extension_id != request.id);
         }
         let revision = self.events.next_revision();
         let snapshot = ExtensionSnapshot {
@@ -209,11 +141,31 @@ impl UiRegistry {
             disconnect_policy: request.disconnect_policy,
             owner_session_id: session_id.to_string(),
             connected: true,
+            ready: request.ready,
+            readiness_reason: request.readiness_reason,
             revision,
         };
         state
             .extensions
             .insert(request.id.clone(), snapshot.clone());
+        for contribution in state
+            .contributions
+            .iter_mut()
+            .filter(|contribution| contribution.extension_id == request.id)
+        {
+            contribution.ownership = extension_ownership(&request.id, session_id);
+            contribution.readiness =
+                extension_content_readiness(&contribution.extension_version, &snapshot).to_string();
+        }
+        for layout in state
+            .extension_layouts
+            .iter_mut()
+            .filter(|layout| layout.extension_id == request.id)
+        {
+            layout.ownership = extension_ownership(&request.id, session_id);
+            layout.readiness =
+                extension_content_readiness(&layout.extension_version, &snapshot).to_string();
+        }
         drop(state);
         self.publish(
             "ui.extensions.registered",
@@ -238,6 +190,70 @@ impl UiRegistry {
         extensions
     }
 
+    pub fn set_extension_readiness(
+        &self,
+        params: Value,
+        session_id: &str,
+    ) -> Result<ExtensionSnapshot, ControlError> {
+        let request: SetExtensionReadiness = serde_json::from_value(params).map_err(|error| {
+            ControlError::invalid_params(
+                "ui.extensions.set_readiness",
+                format!("invalid readiness update: {error}"),
+            )
+        })?;
+        if request.reason.as_ref().is_some_and(|reason| {
+            reason.is_empty() || reason.len() > 256 || reason.chars().any(char::is_control)
+        }) {
+            return Err(ControlError::invalid_params(
+                "ui.extensions.set_readiness",
+                "reason must contain 1 to 256 non-control bytes",
+            ));
+        }
+        let mut state = self.state.lock().expect("UI registry poisoned");
+        let extension = state
+            .extensions
+            .get_mut(&request.extension_id)
+            .ok_or_else(|| not_found("extension", &request.extension_id))?;
+        ensure_owner(extension, session_id)?;
+        let changed =
+            extension.ready != request.ready || extension.readiness_reason != request.reason;
+        if !changed {
+            return Ok(extension.clone());
+        }
+        let revision = self.events.next_revision();
+        extension.ready = request.ready;
+        extension.readiness_reason = request.reason;
+        extension.revision = revision;
+        let snapshot = extension.clone();
+        for contribution in state
+            .contributions
+            .iter_mut()
+            .filter(|item| item.extension_id == request.extension_id)
+        {
+            contribution.readiness =
+                extension_content_readiness(&contribution.extension_version, &snapshot).to_string();
+            contribution.revision = revision;
+        }
+        for layout in state
+            .extension_layouts
+            .iter_mut()
+            .filter(|item| item.extension_id == request.extension_id)
+        {
+            layout.readiness =
+                extension_content_readiness(&layout.extension_version, &snapshot).to_string();
+            layout.revision = revision;
+        }
+        drop(state);
+        self.publish(
+            "ui.extensions.readiness_changed",
+            &request.extension_id,
+            revision,
+            &snapshot,
+            session_id,
+        );
+        Ok(snapshot)
+    }
+
     pub fn register_contribution(
         &self,
         params: Value,
@@ -251,7 +267,8 @@ impl UiRegistry {
         })?;
         if !matches!(
             request.location.as_str(),
-            "left.sections"
+            "shell"
+                | "left.sections"
                 | "right.tabs"
                 | "top_bar.actions"
                 | "canvas.controls"
@@ -271,6 +288,22 @@ impl UiRegistry {
                     .unwrap_or_else(|_| "unavailable".to_string())
             )
         });
+        if contribution_id.trim().is_empty()
+            || contribution_id.len() > 128
+            || contribution_id.chars().any(char::is_whitespace)
+        {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                "contribution_id must be 1–128 characters without whitespace",
+            ));
+        }
+        let shell_mount = contribution_shell_mount(&request.extension_id, &contribution_id);
+        if shell_mount.len() > 256 {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                "extension and contribution IDs are too long for a shell mount ID",
+            ));
+        }
         let mut state = self.state.lock().expect("UI registry poisoned");
         let extension = state
             .extensions
@@ -292,8 +325,12 @@ impl UiRegistry {
         let snapshot = ContributionSnapshot {
             contribution_id: contribution_id.clone(),
             extension_id: request.extension_id.clone(),
+            extension_version: extension.version.clone(),
+            shell_mount,
             location: request.location,
             root: request.root,
+            ownership: extension_ownership(&request.extension_id, session_id),
+            readiness: extension_content_readiness(&extension.version, extension).to_string(),
             revision,
         };
         state.contributions.push(snapshot.clone());
@@ -389,6 +426,9 @@ impl UiRegistry {
         state
             .contributions
             .retain(|item| item.extension_id != extension_id);
+        state
+            .extension_layouts
+            .retain(|item| item.extension_id != extension_id);
         let revision = self.events.next_revision();
         drop(state);
         self.events.publish(
@@ -435,8 +475,9 @@ impl UiRegistry {
         Ok(())
     }
 
-    pub fn cleanup_session(&self, session_id: &str) {
+    pub fn cleanup_session(&self, session_id: &str) -> UiSessionCleanup {
         let mut state = self.state.lock().expect("UI registry poisoned");
+        state.session_capabilities.remove(session_id);
         let owned = state
             .extensions
             .values()
@@ -444,8 +485,14 @@ impl UiRegistry {
             .map(|extension| (extension.id.clone(), extension.disconnect_policy.clone()))
             .collect::<Vec<_>>();
         if owned.is_empty() {
-            return;
+            return UiSessionCleanup::default();
         }
+        let unavailable_mounts = state
+            .contributions
+            .iter()
+            .filter(|contribution| owned.iter().any(|(id, _)| id == &contribution.extension_id))
+            .map(|contribution| contribution.shell_mount.clone())
+            .collect::<Vec<_>>();
         let revision = self.events.next_revision();
         let remove = owned
             .iter()
@@ -462,9 +509,28 @@ impl UiRegistry {
                 extension.connected = false;
                 extension.revision = revision;
             }
+            for contribution in state
+                .contributions
+                .iter_mut()
+                .filter(|item| item.extension_id == *id)
+            {
+                contribution.readiness = "disconnected".to_string();
+                contribution.revision = revision;
+            }
+            for layout in state
+                .extension_layouts
+                .iter_mut()
+                .filter(|item| item.extension_id == *id)
+            {
+                layout.readiness = "disconnected".to_string();
+                layout.revision = revision;
+            }
         }
         state
             .contributions
+            .retain(|item| !remove.contains(&item.extension_id));
+        state
+            .extension_layouts
             .retain(|item| !remove.contains(&item.extension_id));
         for id in &remove {
             state.extensions.remove(id);
@@ -489,6 +555,16 @@ impl UiRegistry {
                 Some(session_id.to_string()),
                 None,
             );
+        }
+        UiSessionCleanup {
+            unavailable_mounts,
+            extensions: owned
+                .into_iter()
+                .map(|(extension_id, disconnect_policy)| UiExtensionCleanup {
+                    extension_id,
+                    disconnect_policy,
+                })
+                .collect(),
         }
     }
 
@@ -538,8 +614,56 @@ fn not_found(kind: &str, id: &str) -> ControlError {
     )
 }
 
-fn default_true() -> bool {
-    true
+fn contribution_shell_mount(extension_id: &str, contribution_id: &str) -> String {
+    format!("extension:{extension_id}/{contribution_id}")
+}
+
+fn extension_ownership(extension_id: &str, session_id: &str) -> Value {
+    json!({
+        "scope":"extension",
+        "owner_id":extension_id,
+        "owner_session_id":session_id,
+        "protected":false,
+    })
+}
+
+fn extension_content_readiness<'a>(
+    retained_version: &str,
+    extension: &'a ExtensionSnapshot,
+) -> &'a str {
+    if !extension.connected {
+        "disconnected"
+    } else if retained_version != extension.version {
+        "incompatible"
+    } else if !extension.ready {
+        "not_ready"
+    } else {
+        "ready"
+    }
+}
+
+pub(super) fn contribution_modes(location: &str) -> &'static [&'static str] {
+    match location {
+        "project.cards" => &["project"],
+        "left.sections" | "right.tabs" | "canvas.controls" => &["single", "mosaic"],
+        _ => &["project", "single", "mosaic"],
+    }
+}
+
+pub(super) fn contribution_kind(location: &str) -> &'static str {
+    match location {
+        "top_bar.actions" | "status_bar" | "canvas.controls" => "toolbar",
+        _ => "panel",
+    }
+}
+
+pub(super) fn contribution_legal_parent_types(location: &str) -> &'static [&'static str] {
+    match location {
+        "top_bar.actions" => &["toolbar", "row", "column", "panel"],
+        "status_bar" => &["status_bar", "row", "column", "panel"],
+        "canvas.controls" => &["toolbar", "row", "column", "panel"],
+        _ => &["tabs", "panel", "collapsible", "row", "column", "split"],
+    }
 }
 
 #[cfg(test)]

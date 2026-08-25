@@ -57,8 +57,11 @@ class _ControlHandler(socketserver.StreamRequestHandler):
                         "instance_id": "test-instance",
                         "session_id": "test-session",
                         "capabilities": ["viewer.read", "viewer.write"],
+                        "granted_capabilities": request["params"].get(
+                            "requested_capabilities", []
+                        ),
                         "max_inline_payload_bytes": 1048576,
-                        "permission_policy": "local_authenticated_standard",
+                        "permission_policy": "local_authenticated_explicit_grants",
                         "client": request["params"]["client"],
                     },
                 }
@@ -174,6 +177,9 @@ class _ControlHandler(socketserver.StreamRequestHandler):
                 item = {
                     **request["params"],
                     "contribution_id": "contribution:test",
+                    "shell_mount": (
+                        f"extension:{request['params']['extension_id']}/contribution:test"
+                    ),
                     "revision": 11,
                 }
                 response = {"jsonrpc": "2.0", "id": request_id, "result": item}
@@ -230,6 +236,9 @@ class ClientTests(unittest.TestCase):
         with odon.connect(self.host, self.port) as client:
             self.assertEqual(client.hello.protocol_version, 1)
             self.assertIn("viewer.read", client.hello.capabilities)
+            self.assertIn(
+                "ui.shell.application_control", client.hello.granted_capabilities
+            )
             self.assertIs(client.viewer.viewport_links, client.viewport_links)
             camera = client.viewer.get_camera()
             self.assertEqual(camera["camera"]["center_world_lvl0"], [10.0, 20.0])
@@ -259,8 +268,10 @@ class ClientTests(unittest.TestCase):
                 self.port,
                 client_name="odon-two-viewer-demo",
                 client_version="demo-1",
+                requested_capabilities=("ui.shell.read",),
             ) as client:
                 self.assertEqual(client.hello.instance_id, "test-instance")
+                self.assertEqual(client.hello.granted_capabilities, {"ui.shell.read"})
         finally:
             self.server.expected_client = None
 
@@ -348,6 +359,12 @@ class ClientTests(unittest.TestCase):
                 )
             )
             self.assertEqual(contribution.contribution_id, "contribution:test")
+            self.assertEqual(
+                contribution.shell_mount,
+                "extension:org.example.cellpose/contribution:test",
+            )
+            self.assertEqual(contribution.mount("layout:cellpose").mount, contribution.shell_mount)
+            self.assertEqual(contribution.snapshot["location"], "shell")
 
     def test_discovery_selects_authenticated_instance(self) -> None:
         self.server.expected_token = "manifest-secret"
@@ -431,8 +448,10 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
                 self.port,
                 client_name="odon-async-demo",
                 client_version="demo-2",
+                requested_capabilities=("ui.shell.read",),
             ) as client:
                 self.assertEqual(client.hello.instance_id, "test-instance")
+                self.assertEqual(client.hello.granted_capabilities, {"ui.shell.read"})
         finally:
             self.server.expected_client = None
 

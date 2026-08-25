@@ -604,7 +604,13 @@ removing a descriptor as permission to delete an arbitrary user file.
 ## Declarative UI
 
 Python registers a bounded component tree; Rust validates, retains, and renders
-it on the egui thread. Supported insertion hosts are:
+it on the egui thread. New contributions default to the first-class `shell`
+location. Registration returns a stable `Contribution.shell_mount`, and
+`Contribution.mount(node_id)` creates the corresponding keyed
+`ShellLayoutNode`.
+
+The predefined locations are placement hints backed by application-owned mounts in each default
+desired tree:
 
 ```text
 right.tabs
@@ -615,8 +621,332 @@ canvas.controls
 project.cards
 ```
 
-`project.cards` currently renders through a dedicated extension window. The
-complete component constructor list is generated in the member reference.
+The corresponding components are `builtin:extension-host.top-bar-actions`,
+`builtin:extension-host.status-bar`, `builtin:extension-host.left-sections`,
+`builtin:extension-host.right-tabs`, `builtin:extension-host.canvas-controls`, and
+`builtin:extension-host.project-cards`. They are catalogue-described and can be moved, hidden, or
+removed like other non-protected built-ins. An empty host releases its geometry locally while its
+declared actor visibility remains unchanged. A contribution explicitly mounted elsewhere in the
+tree is excluded from its default host, so it is never rendered twice. No compatibility location
+creates an independent egui panel, overlay, or project-card window. The complete component
+constructor list is generated in the member reference.
+
+The native shell around those hosts is separately inspectable and composable. Shell methods
+return a typed `ShellSnapshot` (which also implements the mapping interface for compatibility),
+and stable version-1 IDs are available through `ShellId`:
+
+```python
+from odon.ui import ShellId, ShellLayout, ShellLayoutNode, ShellSize
+
+schema = app.ui.shell.describe_schema()  # formal draft-2020-12 JSON Schemas
+shell = app.ui.shell.get()
+components = app.ui.shell.list_components(mode="single")
+
+# Hide native chrome and an extension host in one atomic update.
+shell = app.ui.shell.patch(
+    visibility={
+        ShellId.SINGLE_TOP_BAR: False,
+        ShellId.SINGLE_EXTENSION_STATUS_BAR: False,
+    },
+    if_revision=shell.revision,
+)
+
+# Reorder an exact tab child set and select the first tab.
+shell = app.ui.shell.patch(
+    orders={
+        ShellId.SINGLE_LEFT_TABS: [
+            ShellId.SINGLE_PROJECT,
+            ShellId.SINGLE_LAYERS,
+        ]
+    },
+    selected={ShellId.SINGLE_LEFT_TABS: ShellId.SINGLE_PROJECT},
+)
+
+app.ui.shell.reset()  # restore defaults for the active mode
+
+# Replace the active mode's complete topology as one validated transaction.
+layout = ShellLayout(
+    "layout:review.root",
+    (
+        ShellLayoutNode.application("layout:review.root", ["layout:review.body"]),
+        ShellLayoutNode.row(
+            "layout:review.body", ["layout:review.canvas", "layout:review.layers"]
+        ),
+        ShellLayoutNode.canvas("layout:review.canvas", "builtin:viewer-canvas"),
+        ShellLayoutNode.panel(
+            "layout:review.layers",
+            "layout:review.layers-body",
+            size=ShellSize(width=320),
+        ),
+        ShellLayoutNode.builtin("layout:review.layers-body", "builtin:layers"),
+    ),
+)
+shell = app.ui.shell.replace_layout(
+    layout, mode="single", if_revision=shell.revision
+)
+
+# Portable interchange, named profiles, and protected recovery.
+document = app.ui.shell.export_layout(mode="single")
+shell = app.ui.shell.import_layout(document, if_revision=shell.revision)
+app.ui.shell.save_profile("review", scope="session")
+app.ui.shell.save_profile("review-default", scope="application")
+app.ui.shell.save_profile("team-review", scope="project")
+profiles = app.ui.shell.list_profiles(scope="application")
+shell = app.ui.shell.load_profile("review-default", scope="application")
+shell = app.ui.shell.recover(if_revision=shell.revision)
+```
+
+Shell nodes, desired-layout nodes, and component descriptors expose typed `ownership` metadata:
+`scope`, stable `owner_id`, optional `owner_session_id`, and `protected`. Application roots and the
+required project/viewer/mosaic workspace mounts are protected. A control session that owns a
+registered extension can mutate its own extension nodes but receives `PermissionDeniedError` for
+another extension's node. Error data identifies the node, mount, owner, required
+`ui.shell.application_control` capability, and suggested resolution. An authenticated session that
+is explicitly granted `ui.shell.application_control` can compose all registered mounts; native UI
+retains unconditional recovery authority. Authentication by itself grants no shell mutation
+authority.
+
+Method introspection separates shell access into `ui.shell.read`, `ui.shell.compose`,
+`ui.shell.extension_place`, `ui.shell.persistence`, and `ui.shell.recovery`. It also advertises the
+reserved `ui.shell.chrome` and `ui.shell.window_control` boundaries. `ui.shell.shortcuts` is now
+enforced for extension command registration and removal.
+Extension sessions are enforced against these ownership classes inside the actor and can mutate
+only their own extension-mount nodes after receiving `ui.shell.extension_place`.
+`system.hello` negotiates `requested_capabilities` into `granted_capabilities`, and transport
+dispatch enforces the method boundary before actor ownership checks. The standard Python client
+requests the complete current controller set by default; `requested_capabilities=()` or a narrower
+sequence creates a least-privilege session.
+
+Application commands and their platform-menu presentation are separate actor-owned resources.
+`app.ui.commands.list()` returns stable `ApplicationCommand` records with handler, mode
+availability, protected status, icon, and shortcut metadata. `app.ui.menus.get()` returns a
+revisioned `CommandMenuSnapshot`; `CommandMenuNode` builds menu bars, nested menus, command items,
+and separators without duplicating command semantics:
+
+```python
+current = app.ui.menus.get()
+menu = ui.CommandMenuNode.menu_bar(
+    current.menu.id,
+    reversed(current.menu.children),
+)
+updated = app.ui.menus.replace(
+    menu,
+    if_revision=current.revision,
+    transaction_id="reorder-native-menu",
+)
+```
+
+`ui.menus.replace` requires `ui.shell.chrome`, is bounded to 256 nodes and depth 12, validates all
+command references, rejects duplicate node IDs, and returns the same refetch/merge/retry conflict
+metadata pattern under the independent `application_command_surface` domain. Protected close,
+quit, and recovery commands must remain reachable. On macOS, the actual application menu is rebuilt
+from the actor projection; nested menus, separators, labels, accelerators, recovery dispatch, and
+scale-bar checked state are native platform items rather than an egui imitation.
+
+An extension that declared `ui.actions` can register an event command with
+`extension.register_command(...)`. Odon assigns the canonical
+`extension:<extension-id>/<local-id>` identity, rejects shortcuts already claimed in an
+overlapping application mode, and requires the owning session plus `ui.shell.shortcuts`.
+Conflicts use the effective desktop modifier mapping: `primary` means Command on macOS and Ctrl on
+Windows/Linux. `describe_schema()` publishes neutral labels, the active mapping, supported
+modifiers, and the unsupported-modifier policy. Unsupported platform modifiers return diagnostic
+platform and resolution data instead of silently registering an inert shortcut.
+`app.ui.commands.execute(command, checked=...)` uses the same actor-resolved dispatcher as native
+menus, mounted toolbars, the command palette, and shortcuts. Extension handlers publish the declared
+`ui.extension:<extension-id>.<event>` without executing Python on the GUI thread; built-in native
+and control handlers are permission checked before Rust realizes their platform effect. Every
+successful dispatch publishes `ui.commands.executed`. Remove-policy
+disconnects remove the descriptor and every menu item that refers to it; disable/retain
+disconnects preserve it as unavailable. Compatible reconnects and readiness changes update the
+same descriptor, while version mismatches remain non-invokable. The native macOS menu and mounted
+`builtin:command-toolbar` consume the same evaluated command state. Toolbar items can override
+label, icon, tooltip, and label visibility; checked commands render as selected buttons and disabled
+tooltips include actor-provided reasons. Mounted buttons publish their button role, toggled state,
+and tooltip/disabled reason to the native accessibility tree; AccessKit click and keyboard
+activation submit the same toggled command invocation. The actor starts with an empty toolbar
+presentation and default layouts do not mount an empty command-toolbar region. A custom layout or
+saved profile opts in by mounting `ShellMountId.COMMAND_TOOLBAR`.
+
+Extension commands can declare `CommandPredicates` with independent `visible`, `enabled`, and
+`checked` slots. `CommandPredicate` builds bounded `always`, `capability`, published actor `state`,
+`all`, `any`, and `not_` expressions. State access is restricted to the paths advertised by
+`app.ui.commands.describe_schema()`; it covers resource presence, object/mosaic selection counts,
+mode, GPU readiness, panel visibility, and scale-bar state rather than arbitrary model internals.
+The actor evaluates node/depth-bounded predicates for every projection and for direct execution.
+`app.ui.commands.list()` evaluates capability predicates against the calling session, while native
+menu/toolbar/palette projection uses native authority. `ApplicationCommand.state` exposes
+`visible`, `enabled`, optional `checked`, reasons, and missing capabilities.
+
+`app.ui.palette.get()` returns the actor-owned searchable-palette presentation. Python can replace
+its title, placeholder, platform-neutral shortcut, description visibility, and bounded result count
+with `app.ui.palette.replace(ui.CommandPalette.palette(...), if_revision=...)`. Replacement requires
+`ui.shell.chrome`, shares the command-surface revision, publishes `ui.palette.changed`, and rejects
+shortcuts claimed by a command. The native palette searches command ID, title, and description,
+filters unavailable modes and non-ready extensions, and submits the selected command through
+`ui.commands.execute`; it does not maintain a second registry or execute Python on the GUI thread.
+On Windows and Linux, every eligible command descriptor is likewise matched from the latest actor
+projection and dispatched through `ui.commands.execute`. Exact key events are consumed before
+legacy widgets render; visible, enabled, and checked state comes from the actor. Because there is no
+detached OS-side registry, command and palette replacements reconcile on the next projection with
+no stale shortcut registrations.
+
+Desired trees are bounded to 256 nodes and depth 32. Per-mount `configuration` is also bounded by
+encoded bytes per node and per tree, nesting depth, value count, key length, and string length.
+Clients should read the exact current values from `describe_schema()["layout_limits"]`; an
+over-limit replacement or patch is rejected atomically without advancing the shell revision.
+Boundary tests construct and validate all 256 tree nodes, then reject node 257. Command-surface
+tests likewise accept all 128 toolbar items, exercise all 32 predicate nodes and depth 8, and
+reconcile repeated selection-state changes before verifying the next item/node is rejected.
+
+Stale `if_shell_revision` failures include `expected_revision`, `current_revision`,
+`conflicting_domain="application_shell"`, `snapshot_method="ui.shell.get"`, and
+`retry_strategy="refetch_merge_retry"` so clients can implement an explicit merge loop.
+Mutating shell methods also accept an optional 1-to-128-byte `transaction_id`. The same value is
+returned as `ShellChange.transaction_id` and included in `ui.shell.changed`, allowing a client to
+correlate its atomic mutation without relying on timing. It is a correlation identifier, not an
+atomic batch spanning several calls.
+
+An extension contribution can be incorporated into the same transaction with
+`contribution.mount("layout:review.extension")`; its `shell_mount` is also
+available for clients that build layout mappings directly.
+
+`ShellMountId` exposes the stable built-in mount vocabulary. The
+`builtin:shell-inspector` component is implemented in Rust and can be mounted in a panel, tabs,
+collapsible, row, column, or split. It diagnoses the actor revision, active/focused nodes,
+ownership/protection, required mutation capability, readiness, validation problems, and geometry
+without granting additional mutation authority. `odon.layouts` provides complete typed review,
+analysis, comparison, mosaic-triage, and presentation trees; these are SDK-local builders and
+still require the same server-side validation and revision guard when applied.
+
+Extensions can also publish named default templates without mutating the active
+shell implicitly:
+
+```python
+template = extension.register_layout("Review", document)
+templates = extension.list_layouts()
+shell = templates[0].apply(app.ui.shell, if_revision=shell.revision)
+extension.remove_layout("Review")
+```
+
+An extension can register before a long warm-up and then publish its state with
+`extension.set_readiness(False, reason="loading weights")` and
+`extension.set_readiness(True)`. Retained contributions and templates require an exact extension
+version match after reconnect. `ShellLayoutNode.readiness` distinguishes `ready`, `not_ready`,
+`disconnected`, `incompatible`, and `missing`, with expected/current versions and an optional
+reason; a template whose readiness is not `ready` cannot be applied by the typed Python helper.
+
+The service validates the complete document and every referenced extension
+mount, then normalizes accepted v0 or v1 input to canonical v1. Templates are
+owned by the registering extension, capped at 64 per extension, and require
+the granted `ui.panels` capability. Other sessions cannot inspect, replace, or
+remove them. A `remove` disconnect policy deletes templates; `disable` and
+`retain` preserve them for a later registration that reclaims the same
+extension identity. Templates are deliberately not applied automatically:
+application remains a revision-guarded `ui.shell.import_layout` transaction.
+
+Snapshots have `schema_version`, `revision`, `mode`, `root_id`, `active_region_id`, an optional
+`focused_node_id`, and a flat
+`nodes` collection with stable IDs, parents, child order, selection, visibility,
+content identity, and per-property mutability. They also carry `layout`, a typed
+`ShellLayout` desired tree. `get(mode=...)` may inspect an inactive mode. `patch()`,
+`replace_layout()`, and `reset()` mutate only the active mode. Legacy `orders`
+must contain exactly the built-in container's existing direct children, once
+each. `replace_layout()` instead submits a complete keyed tree and can add,
+remove, or reparent layout containers atomically.
+
+`patch_layout(active_region_id=..., focused_node_id=...)` updates interaction ownership through
+the same revision-guarded actor transaction as geometry. `patch_layout(clear_focus=True)` clears
+focus explicitly. Native tabs, collapsibles, mount activation, and completed split drags submit
+that same command; split drag frames are local previews and unchanged final ratios are not sent.
+`ui.shell.changed` reports per-node `visibility`, `order`, `selection`, `size`, `split`, `collapse`,
+`active_region`, and `focus` changes. A topology change is reported as `layout`.
+
+The application root is realized as a vertical chrome/content stack. Menu and toolbar hosts have
+a default 36-point desired height, status hosts 24 points, and explicit node sizing overrides
+those hints. The built-in project, viewer, and mosaic top bars are ordinary catalogue mounts, so
+their order and visibility in the desired tree affect the rendered window. The former fixed native
+top panels are used only if the renderer has no desired-layout projection.
+
+Every mount node carries a `configuration` mapping. Replace-layout/import/profile operations
+persist it, while `patch_layout(configurations={node_id: {...}})` changes it atomically and emits a
+per-node `configuration` change. Component descriptors are authoritative for configuration JSON
+Schema. The native top bars currently expose boolean `show_*` groups (title, navigation, panel,
+viewport/status, rendering, and contrast as applicable); omitted flags default to `true`.
+
+`export_layout()` returns a typed `ShellLayoutDocument` with format
+`odon.shell-layout` and schema version 1. `import_layout()` validates the whole
+document before mutation and currently accepts v1 plus the documented v0
+`{schema_version, mode, desired_tree}` migration shape. Unsupported future
+versions return `UNSUPPORTED` without changing shell state. Missing extension
+mounts remain in the tree as diagnosable placeholders.
+
+Named profiles use the same document contract. Session profiles live in the
+actor until Odon exits. Application profiles are written atomically through
+the settings worker under the current OS user's Odon configuration directory and are available
+after restart; the `application` scope name does not mean machine-global. Project profiles live in
+canonical project state, mark it dirty, and round-trip through ordinary
+`project.save`/`project.open` transactions. Profile lists report invalid or
+unsupported stored documents instead of hiding them. Extension defaults use
+the separately owned `ui.extensions.layouts.*` template resource described
+above. `recover()` replaces the
+active mode with a protected two-node workspace containing its required native
+workspace/canvas, so clients have an explicit safe path after an incompatible
+restore.
+
+Checked-in compatibility fixtures preserve the v0 and v1 inputs and cover corruption, unsupported
+future schemas, startup restore/recovery, and missing or version-incompatible retained extension
+mounts. A newer readable schema must add its migration and fixture together; Odon does not invent
+or predeclare a v2 migration before v2 exists.
+
+An application profile can be selected for automatic startup by updating the
+complete per-mode selection map:
+
+```python
+app.application.update_settings(
+    shell_layout_startup_profiles={"single": "review-default"}
+)
+```
+
+Passing `{}` disables all automatic shell-profile restores. The setting takes
+effect on the next process start. For each configured mode, the actor attempts
+restore once, when that mode is first activated. A missing profile, malformed
+tree, unsupported schema, or mode mismatch installs the protected recovery
+layout instead. `app.application.get_settings()` reports both the configured
+map and per-mode `default`, `restored`, or `recovered` outcome. Application
+profile metadata includes `startup_modes`; invalid profiles include their exact
+`error`, `error_kind`, and `recovery_method`.
+
+Desired layouts support application roots, rows, columns, horizontal or vertical
+splits, tabs, panels, collapsible regions, toolbar/status/menu hosts, canvas
+slots, built-in mounts, and extension mounts. The actor rejects cycles, unknown
+children, multiple parents, unreachable nodes, invalid child counts, duplicate
+singleton mounts, illegal catalogue parent/mode combinations, trees deeper than
+32 levels, trees larger than 256 nodes, and layouts without the mode's required
+workspace/canvas. The recursive native renderer realizes nested row, column,
+split, tab, panel, collapsible, canvas, built-in, and extension nodes. Desired,
+minimum, maximum, and flex sizing constrain geometry; split handles commit
+their ratio through `ui.shell.patch_layout`.
+
+`list_components()` returns typed `ShellComponentDescriptor` records rather
+than requiring clients to guess mount IDs. Each descriptor includes a stable
+component/version identity, supported modes, legal parent node types, readiness,
+singleton policy, configuration schema, commands, events, minimum/recommended
+size, and persistence semantics. Registered extension contributions appear in
+the same catalogue with their stable shell mount and connected/disconnected
+readiness.
+`ShellMountId.CHANNELS`, `VIEWER_VIEWPORT_CONTROLS`, `HELP`, and `RECOVERY_CONTROLS` expose native
+surfaces that were previously nested inside composite chrome. They join `SHELL_INSPECTOR` and
+`COMMAND_TOOLBAR` as independently placeable mounts. The server validates mode and legal parent;
+the native test suite compares every mode-scoped catalogue entry against its renderer dispatcher.
+
+No-op patches, replacements, imports, profile loads, recoveries, and resets preserve the shell revision. Mutation
+results include a typed change summary with old/new shell revisions and each
+changed node property; native panel/tab commands emit the same
+`ui.shell.changed` compatibility event. Rust reconciles projection nodes by
+stable key and retains renderer-local geometry, tab, collapse, scroll, and
+split interaction state for surviving keys. Single-viewer, mosaic, and project content trees use
+the recursive renderer. Native application top bars use ordinary mounts; platform windows remain
+separately hosted.
 
 Actions are one of:
 
@@ -624,15 +954,61 @@ Actions are one of:
 - `ui.command(...)`: execute a known control command natively; or
 - `ui.bind(...)`: bind a supported viewer/layer property natively.
 
+Component values can follow those bounded viewer/channel/layer targets. Visibility and enablement
+can follow the already evaluated actor command state without exposing another arbitrary state path:
+
+```python
+run = ui.Button("run", "Run", action=ui.emit("run"))
+run.when(
+    visible=ui.command_state("extension:org.example.review/run", state="visible"),
+    enabled=ui.command_state("extension:org.example.review/run"),
+)
+```
+
+`state_bindings` accepts only `visible` and `enabled` properties and only `visible`, `enabled`, or
+`checked` command state. Missing command IDs resolve false. Evaluation and reconciliation use the
+actor projection and never execute Python on the GUI thread.
+
+Desired shell nodes use the same descriptor for their `visible` property:
+
+```python
+help_node = ui.ShellLayoutNode.builtin(
+    "layout:context.help",
+    ui.ShellMountId.HELP,
+    state_bindings={
+        "visible": ui.command_state("extension:org.example.review/help", state="enabled")
+    },
+)
+```
+
+The binding round-trips through layout export/import and profiles. Its effective visibility is
+derived for the active actor projection without replacing the persisted desired value.
+
 Command and binding actions require the matching granted capability. Native
 bindings remain responsive while Python is busy. Component IDs must be unique
 within a contribution. Contribution patches are atomic and address components
 by ID. Extension IDs use reverse-domain-style names and are unique while
-connected.
+connected. Contribution IDs form bounded stable mount IDs. Retained or disabled
+contributions survive disconnect and reconnect under a new owning session;
+remove-policy contributions leave a safe missing-component placeholder if a
+retained shell tree still refers to them.
 
-The current API adds UI at predefined hosts; it cannot replace the native
-application shell. Viewport workspace methods can instantiate a second native
-canvas, but not arbitrary shell regions. See
+High-frequency component interactions coalesce by stable extension/component key. Immediate
+events are render-cadence limited; `Throttle` and `Debounce` clamp their interval and retain only
+the latest deferred value. Slow subscribers use bounded drop-on-pressure queues. Python cannot
+synchronously intercept or cancel a native interaction; it can observe the semantic event and
+submit a later revision-guarded command.
+The native command catalogue and Rust realization arms are checked as exact sets. Native shell
+tabs, collapse, focus, activation, and completed split gestures use the semantic shell patch/event
+path rather than an unregistered callback channel.
+
+The current API composes native and extension component bodies in a recursive single-window shell
+and declaratively controls the command catalogue plus its macOS menu, Windows/Linux descriptor
+shortcuts, mounted toolbar, native searchable-palette presentation, and contextual command state.
+Arbitrary docking, detached native windows, monitor placement, and cross-window canvas transfer are
+outside the scope of this API initiative. User-remappable shortcut bindings are not currently
+defined.
+Viewport workspace methods can instantiate a second native canvas. See
 [Python API limitations](../advanced/python-api-limitations.md).
 
 ## Errors

@@ -23,6 +23,7 @@ pub fn show<T: Copy + Eq>(
         tabs.first()
             .expect("ui_left_panel::show requires at least one tab spec")
     });
+    *tab = active.tab;
     let panel_state_id = egui::Id::new((panel_id, active.panel_key));
     let previous_panel_key_id = egui::Id::new((panel_id, "previous-panel-key"));
     let previous_panel_key = ctx.data_mut(|d| d.get_temp::<&'static str>(previous_panel_key_id));

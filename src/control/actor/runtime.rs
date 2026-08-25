@@ -86,6 +86,29 @@ pub fn spawn_control_actor_with_services(
     remote_backend: Option<Arc<dyn RemoteDatasetBackend>>,
     alternate_backend: Option<Arc<dyn AlternateDatasetBackend>>,
 ) -> anyhow::Result<ControlActorChannels> {
+    spawn_control_actor_with_services_and_ui(
+        wake_ui,
+        resource_registry,
+        object_loader,
+        dataset_inspector,
+        task_registry,
+        remote_backend,
+        alternate_backend,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_control_actor_with_services_and_ui(
+    wake_ui: UiWake,
+    resource_registry: Arc<ResourceRegistry>,
+    object_loader: Option<Arc<dyn ObjectResourceLoader>>,
+    dataset_inspector: Option<Arc<dyn DatasetInspector>>,
+    task_registry: Option<Arc<TaskRegistry>>,
+    remote_backend: Option<Arc<dyn RemoteDatasetBackend>>,
+    alternate_backend: Option<Arc<dyn AlternateDatasetBackend>>,
+    ui_registry: Option<Arc<UiRegistry>>,
+) -> anyhow::Result<ControlActorChannels> {
     let (request_tx, request_rx) =
         crossbeam_channel::bounded::<OdonControlRequest>(ACTOR_QUEUE_CAPACITY);
     // The renderer needs only the newest immutable projection. The actor keeps a receiver clone
@@ -181,6 +204,7 @@ pub fn spawn_control_actor_with_services(
                                     &render_document,
                                     &mut remote_session,
                                     &resource_registry,
+                                    ui_registry.as_deref(),
                                     &wake_ui,
                                     &diagnostics,
                                 );
@@ -259,6 +283,7 @@ pub fn spawn_control_actor_with_services(
                                     &render_document,
                                     &mut remote_session,
                                     &resource_registry,
+                                    ui_registry.as_deref(),
                                     &wake_ui,
                                     &diagnostics,
                                 );
@@ -426,6 +451,7 @@ fn apply_model_update(
             height,
         } => model.report_viewport_geometry(&viewport_id, x, y, width, height),
     }
+    model.apply_startup_shell_layout_if_needed();
     if restore_annotations {
         enqueue_restored_annotations(model, load_job_tx, diagnostics);
     }

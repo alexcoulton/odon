@@ -167,6 +167,13 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         wake_ui,
                         diagnostics,
                     );
+                    let close_after_save = platform_effect.as_ref().and_then(|effect| {
+                        if let PlatformEffect::CloseWindow { quit } = effect {
+                            Some(*quit)
+                        } else {
+                            None
+                        }
+                    });
                     if let Some(effect) = platform_effect {
                         if platform_effect_tx.try_send(effect).is_err() {
                             reject_actor_request(
@@ -183,7 +190,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                     }
                     finish_request(
                         request,
-                        if let Some(PlatformEffect::CloseWindow { quit }) = platform_effect {
+                        if let Some(quit) = close_after_save {
                             json!({
                                 "accepted":true,
                                 "action":if quit { "quit" } else { "close" },

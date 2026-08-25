@@ -1,47 +1,17 @@
 use anyhow::Context;
+use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeMenuAction {
-    Settings,
-    OpenOmeZarr,
-    OpenTiff,
-    OpenProject,
-    SaveProject,
-    SaveNewProject,
-    SaveScreenshot,
-    QuickScreenshot,
-    ScreenshotSettings,
-    RoiInfo,
-    AddAnnotations,
-    LoadSegGeoJson,
-    LoadSegObjects,
-    ExportMasksGeoJson,
-    SetScaleBarVisible(bool),
-    CloseWindow,
-    Quit,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMenuCommand {
+    pub command_id: String,
+    pub checked: Option<bool>,
 }
 
 #[cfg(target_os = "macos")]
 pub struct NativeMenu {
     _menu: muda::Menu,
-    id_settings: muda::MenuId,
-    id_open_omezarr: muda::MenuId,
-    id_open_tiff: muda::MenuId,
-    id_open_project: muda::MenuId,
-    id_save_project: muda::MenuId,
-    id_save_new_project: muda::MenuId,
-    id_save_screenshot: muda::MenuId,
-    id_quick_screenshot: muda::MenuId,
-    id_screenshot_settings: muda::MenuId,
-    id_roi_info: muda::MenuId,
-    id_add_annotations: muda::MenuId,
-    id_load_seg_geojson: muda::MenuId,
-    id_load_seg_objects: muda::MenuId,
-    id_export_masks_geojson: muda::MenuId,
-    view_scale_bar: muda::CheckMenuItem,
-    id_view_scale_bar: muda::MenuId,
-    id_close_window: muda::MenuId,
-    id_quit: muda::MenuId,
+    commands: Vec<(muda::MenuId, String)>,
+    checked_commands: Vec<(muda::MenuId, String, muda::CheckMenuItem)>,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -49,217 +19,242 @@ pub struct NativeMenu;
 
 impl NativeMenu {
     #[cfg(target_os = "macos")]
-    pub fn init(app_name: &str, show_scale_bar: bool) -> anyhow::Result<Self> {
-        use muda::accelerator::{Accelerator, Code, Modifiers};
-        use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+    pub fn init(app_name: &str, command_surface: &Value) -> anyhow::Result<Self> {
+        use std::collections::HashMap;
+
+        use muda::Menu;
+
+        let commands = command_surface
+            .get("commands")
+            .and_then(Value::as_array)
+            .context("command surface has no commands")?
+            .iter()
+            .filter_map(|command| Some((command.get("id")?.as_str()?, command)))
+            .collect::<HashMap<_, _>>();
+        let menu_tree = command_surface
+            .get("menu")
+            .context("command surface has no platform menu")?;
+        let top_level = menu_tree
+            .get("children")
+            .and_then(Value::as_array)
+            .context("platform menu has no top-level menus")?;
 
         let menu = Menu::new();
-
-        // macOS expects an "app" menu first. We keep it minimal for now.
-        let about = PredefinedMenuItem::about(Some(&format!("About {app_name}")), None);
-        let settings = MenuItem::new(
-            "Settings...",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Comma)),
-        );
-        let quit = MenuItem::new(
-            format!("Quit {app_name}"),
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
-        );
-        let app_menu = Submenu::with_items(
-            app_name,
-            true,
-            &[
-                &about,
-                &PredefinedMenuItem::separator(),
-                &settings,
-                &PredefinedMenuItem::separator(),
-                &quit,
-            ],
-        )
-        .context("failed to build app menu")?;
-
-        let open_omezarr = MenuItem::new(
-            "Open OME-Zarr...",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyO)),
-        );
-        let open_tiff = MenuItem::new("Open TIFF / OME-TIFF...", true, None);
-        let open_project = MenuItem::new(
-            "Open Project...",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyO,
-            )),
-        );
-        let save_project = MenuItem::new(
-            "Save Project...",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyS)),
-        );
-        let save_new_project = MenuItem::new("Save New Project...", true, None);
-        let save_screenshot = MenuItem::new("Save Screenshot...", true, None);
-        let quick_screenshot = MenuItem::new(
-            "Quick Screenshot",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyS,
-            )),
-        );
-        let screenshot_settings = MenuItem::new("Screenshot Settings...", true, None);
-        let roi_info = MenuItem::new(
-            "ROI Info",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyI)),
-        );
-        let add_annotations = MenuItem::new("Annotations", true, None);
-        let load_seg_geojson = MenuItem::new("Load Seg GeoJSON...", true, None);
-        let load_seg_objects = MenuItem::new("Load Seg Objects...", true, None);
-        let export_masks_geojson = MenuItem::new("Export Masks GeoJSON...", true, None);
-        let close_window = MenuItem::new(
-            "Close Window",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)),
-        );
-        let file_menu = Submenu::with_items(
-            "File",
-            true,
-            &[
-                &open_omezarr,
-                &open_tiff,
-                &PredefinedMenuItem::separator(),
-                &open_project,
-                &save_project,
-                &save_new_project,
-                &PredefinedMenuItem::separator(),
-                &export_masks_geojson,
-                &PredefinedMenuItem::separator(),
-                &save_screenshot,
-                &quick_screenshot,
-                &screenshot_settings,
-                &PredefinedMenuItem::separator(),
-                &close_window,
-            ],
-        )
-        .context("failed to build file menu")?;
-        let add_menu = Submenu::with_items(
-            "Add",
-            true,
-            &[
-                &add_annotations,
-                &PredefinedMenuItem::separator(),
-                &load_seg_geojson,
-                &load_seg_objects,
-            ],
-        )
-        .context("failed to build add menu")?;
-
-        let view_scale_bar = CheckMenuItem::new("Scale Bar", true, show_scale_bar, None);
-        let view_menu = Submenu::with_items(
-            "View",
-            true,
-            &[&roi_info, &PredefinedMenuItem::separator(), &view_scale_bar],
-        )
-        .context("failed to build view menu")?;
-
-        menu.append(&app_menu)
-            .context("failed to append app menu")?;
-        menu.append(&file_menu)
-            .context("failed to append file menu")?;
-        menu.append(&add_menu)
-            .context("failed to append add menu")?;
-        menu.append(&view_menu)
-            .context("failed to append view menu")?;
-
+        let mut commands_by_menu_id = Vec::new();
+        let mut checked_commands = Vec::new();
+        for node in top_level {
+            let submenu = build_submenu(
+                node,
+                app_name,
+                &commands,
+                &mut commands_by_menu_id,
+                &mut checked_commands,
+            )?;
+            menu.append(&submenu)
+                .context("failed to append declarative top-level menu")?;
+        }
         menu.init_for_nsapp();
-
         Ok(Self {
             _menu: menu,
-            id_settings: settings.id().clone(),
-            id_open_omezarr: open_omezarr.id().clone(),
-            id_open_tiff: open_tiff.id().clone(),
-            id_open_project: open_project.id().clone(),
-            id_save_project: save_project.id().clone(),
-            id_save_new_project: save_new_project.id().clone(),
-            id_save_screenshot: save_screenshot.id().clone(),
-            id_quick_screenshot: quick_screenshot.id().clone(),
-            id_screenshot_settings: screenshot_settings.id().clone(),
-            id_roi_info: roi_info.id().clone(),
-            id_add_annotations: add_annotations.id().clone(),
-            id_load_seg_geojson: load_seg_geojson.id().clone(),
-            id_load_seg_objects: load_seg_objects.id().clone(),
-            id_export_masks_geojson: export_masks_geojson.id().clone(),
-            view_scale_bar: view_scale_bar.clone(),
-            id_view_scale_bar: view_scale_bar.id().clone(),
-            id_close_window: close_window.id().clone(),
-            id_quit: quit.id().clone(),
+            commands: commands_by_menu_id,
+            checked_commands,
         })
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn init(_app_name: &str, _show_scale_bar: bool) -> anyhow::Result<Self> {
+    pub fn init(_app_name: &str, _command_surface: &Value) -> anyhow::Result<Self> {
         Ok(Self)
     }
 
     #[cfg(target_os = "macos")]
-    pub fn set_scale_bar_visible(&self, visible: bool) {
-        self.view_scale_bar.set_checked(visible);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn set_scale_bar_visible(&self, _visible: bool) {}
-
-    #[cfg(target_os = "macos")]
-    pub fn drain_actions(&self) -> Vec<NativeMenuAction> {
+    pub fn drain_commands(&self) -> Vec<NativeMenuCommand> {
         let mut out = Vec::new();
-        while let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
-            let id = ev.id();
-            if id == &self.id_settings {
-                out.push(NativeMenuAction::Settings);
-            } else if id == &self.id_open_omezarr {
-                out.push(NativeMenuAction::OpenOmeZarr);
-            } else if id == &self.id_open_tiff {
-                out.push(NativeMenuAction::OpenTiff);
-            } else if id == &self.id_open_project {
-                out.push(NativeMenuAction::OpenProject);
-            } else if id == &self.id_save_project {
-                out.push(NativeMenuAction::SaveProject);
-            } else if id == &self.id_save_new_project {
-                out.push(NativeMenuAction::SaveNewProject);
-            } else if id == &self.id_save_screenshot {
-                out.push(NativeMenuAction::SaveScreenshot);
-            } else if id == &self.id_quick_screenshot {
-                out.push(NativeMenuAction::QuickScreenshot);
-            } else if id == &self.id_screenshot_settings {
-                out.push(NativeMenuAction::ScreenshotSettings);
-            } else if id == &self.id_roi_info {
-                out.push(NativeMenuAction::RoiInfo);
-            } else if id == &self.id_add_annotations {
-                out.push(NativeMenuAction::AddAnnotations);
-            } else if id == &self.id_load_seg_geojson {
-                out.push(NativeMenuAction::LoadSegGeoJson);
-            } else if id == &self.id_load_seg_objects {
-                out.push(NativeMenuAction::LoadSegObjects);
-            } else if id == &self.id_export_masks_geojson {
-                out.push(NativeMenuAction::ExportMasksGeoJson);
-            } else if id == &self.id_view_scale_bar {
-                out.push(NativeMenuAction::SetScaleBarVisible(
-                    self.view_scale_bar.is_checked(),
-                ));
-            } else if id == &self.id_close_window {
-                out.push(NativeMenuAction::CloseWindow);
-            } else if id == &self.id_quit {
-                out.push(NativeMenuAction::Quit);
+        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+            let id = event.id();
+            if let Some((_, command_id, item)) = self
+                .checked_commands
+                .iter()
+                .find(|(candidate, _, _)| candidate == id)
+            {
+                out.push(NativeMenuCommand {
+                    command_id: command_id.clone(),
+                    checked: Some(item.is_checked()),
+                });
+            } else if let Some((_, command_id)) =
+                self.commands.iter().find(|(candidate, _)| candidate == id)
+            {
+                out.push(NativeMenuCommand {
+                    command_id: command_id.clone(),
+                    checked: None,
+                });
             }
         }
         out
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn drain_actions(&self) -> Vec<NativeMenuAction> {
+    pub fn drain_commands(&self) -> Vec<NativeMenuCommand> {
         Vec::new()
     }
+}
+
+#[cfg(target_os = "macos")]
+fn build_submenu(
+    node: &Value,
+    app_name: &str,
+    commands: &std::collections::HashMap<&str, &Value>,
+    commands_by_menu_id: &mut Vec<(muda::MenuId, String)>,
+    checked_commands: &mut Vec<(muda::MenuId, String, muda::CheckMenuItem)>,
+) -> anyhow::Result<muda::Submenu> {
+    use muda::{CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu};
+
+    let title = node
+        .get("title")
+        .and_then(Value::as_str)
+        .context("menu title is missing")?;
+    let title = if node.get("id").and_then(Value::as_str) == Some("menu:application") {
+        app_name
+    } else {
+        title
+    };
+    let submenu = Submenu::new(title, true);
+    let children = node
+        .get("children")
+        .and_then(Value::as_array)
+        .context("menu children are missing")?;
+    for child in children {
+        match child.get("type").and_then(Value::as_str) {
+            Some("menu") => {
+                let nested = build_submenu(
+                    child,
+                    app_name,
+                    commands,
+                    commands_by_menu_id,
+                    checked_commands,
+                )?;
+                submenu
+                    .append(&nested)
+                    .context("failed to append nested menu")?;
+            }
+            Some("separator") => {
+                submenu
+                    .append(&PredefinedMenuItem::separator())
+                    .context("failed to append menu separator")?;
+            }
+            Some("command") => {
+                let command_id = child
+                    .get("command_id")
+                    .and_then(Value::as_str)
+                    .context("menu command ID is missing")?;
+                let command = commands
+                    .get(command_id)
+                    .copied()
+                    .with_context(|| format!("menu references unknown command '{command_id}'"))?;
+                if command.pointer("/state/visible").and_then(Value::as_bool) == Some(false) {
+                    continue;
+                }
+                if command_id == "app.about" {
+                    submenu
+                        .append(&PredefinedMenuItem::about(
+                            Some(&format!("About {app_name}")),
+                            None,
+                        ))
+                        .context("failed to append About command")?;
+                    continue;
+                }
+                let title = child
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .or_else(|| command.get("title").and_then(Value::as_str))
+                    .context("command title is missing")?;
+                let accelerator = command_accelerator(command)?;
+                let enabled = command
+                    .pointer("/state/enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                if let Some(checked) = command.pointer("/state/checked").and_then(Value::as_bool) {
+                    let item = CheckMenuItem::new(title, enabled, checked, accelerator);
+                    checked_commands.push((
+                        item.id().clone(),
+                        command_id.to_string(),
+                        item.clone(),
+                    ));
+                    submenu
+                        .append(&item)
+                        .context("failed to append checked command")?;
+                } else {
+                    let item = MenuItem::new(title, enabled, accelerator);
+                    commands_by_menu_id.push((item.id().clone(), command_id.to_string()));
+                    submenu
+                        .append(&item)
+                        .context("failed to append menu command")?;
+                }
+            }
+            kind => anyhow::bail!("unsupported declarative menu node type {kind:?}"),
+        }
+    }
+    Ok(submenu)
+}
+
+#[cfg(target_os = "macos")]
+fn command_accelerator(command: &Value) -> anyhow::Result<Option<muda::accelerator::Accelerator>> {
+    use muda::accelerator::{Accelerator, Code, Modifiers};
+
+    let Some(shortcut) = command.get("shortcut").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let key = shortcut
+        .get("key")
+        .and_then(Value::as_str)
+        .context("shortcut key is missing")?;
+    let code = match key.to_ascii_lowercase().as_str() {
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        "comma" => Code::Comma,
+        _ => anyhow::bail!("unsupported platform shortcut key '{key}'"),
+    };
+    let mut modifiers = Modifiers::empty();
+    for modifier in shortcut
+        .get("modifiers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        modifiers |= match modifier {
+            "primary" | "super" => Modifiers::SUPER,
+            "shift" => Modifiers::SHIFT,
+            "alt" => Modifiers::ALT,
+            "control" => Modifiers::CONTROL,
+            _ => anyhow::bail!("unsupported platform shortcut modifier '{modifier}'"),
+        };
+    }
+    Ok(Some(Accelerator::new(
+        (!modifiers.is_empty()).then_some(modifiers),
+        code,
+    )))
 }

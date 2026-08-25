@@ -16,6 +16,13 @@ pub fn show<T: Copy + Eq>(
     tabs: &[TabSpec<T>],
     mut body: impl FnMut(&mut egui::Ui, T),
 ) {
+    if let Some(active) = tabs
+        .iter()
+        .find(|spec| spec.tab == *tab)
+        .or_else(|| tabs.first())
+    {
+        *tab = active.tab;
+    }
     egui::SidePanel::right(panel_id)
         .default_width(default_width)
         .resizable(true)

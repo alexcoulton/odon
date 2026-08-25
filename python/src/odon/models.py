@@ -6,6 +6,17 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
+DEFAULT_REQUESTED_CAPABILITIES = (
+    "ui.shell.application_control",
+    "ui.shell.chrome",
+    "ui.shell.compose",
+    "ui.shell.extension_place",
+    "ui.shell.persistence",
+    "ui.shell.read",
+    "ui.shell.recovery",
+)
+
+
 @dataclass(frozen=True)
 class Hello:
     protocol_version: int
@@ -15,6 +26,7 @@ class Hello:
     instance_id: str
     session_id: str
     capabilities: frozenset[str]
+    granted_capabilities: frozenset[str]
     max_inline_payload_bytes: int
     permission_policy: str
 
@@ -28,6 +40,9 @@ class Hello:
             instance_id=str(value["instance_id"]),
             session_id=str(value["session_id"]),
             capabilities=frozenset(str(item) for item in value.get("capabilities", [])),
+            granted_capabilities=frozenset(
+                str(item) for item in value.get("granted_capabilities", [])
+            ),
             max_inline_payload_bytes=int(value["max_inline_payload_bytes"]),
             permission_policy=str(value["permission_policy"]),
         )

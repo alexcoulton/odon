@@ -12,6 +12,7 @@ pub(super) fn dispatch_request(
     render_document: &Option<Arc<RenderDocument>>,
     remote_session: &mut RemoteSessionState,
     resource_registry: &ResourceRegistry,
+    ui_registry: Option<&UiRegistry>,
     wake_ui: &UiWake,
     diagnostics: &ActorDiagnostics,
 ) {
@@ -41,6 +42,312 @@ pub(super) fn dispatch_request(
             "available_in": request.command.available_in(),
             "loading": model.loading_state()["loading"],
         }))));
+        return;
+    }
+
+    if matches!(
+        request.command.method(),
+        "ui.shell.import_layout"
+            | "ui.shell.patch"
+            | "ui.shell.patch_layout"
+            | "ui.shell.profiles.load"
+            | "ui.shell.recover"
+            | "ui.shell.replace_layout"
+            | "ui.shell.reset"
+    ) && let Some(ui_registry) = ui_registry
+    {
+        let candidate = model
+            .shell_mutation_layout_candidate(request.command.method(), request.command.params());
+        let current_shell =
+            model.shell_snapshot(request.command.params().get("mode").and_then(Value::as_str));
+        if let Err(error) = candidate.and_then(|candidate| {
+            current_shell.and_then(|current| {
+                ui_registry.validate_shell_mutation_access(
+                    request.command.method(),
+                    request.command.params(),
+                    &current,
+                    candidate.as_ref(),
+                    &request.session_id,
+                )
+            })
+        }) {
+            reject_actor_request(request, diagnostics, error);
+            return;
+        }
+    }
+
+    if matches!(
+        request.command.method(),
+        "ui.menus.replace" | "ui.toolbars.replace" | "ui.palette.replace"
+    ) && let Some(ui_registry) = ui_registry
+        && let Err(error) = ui_registry.validate_session_capability(
+            &request.session_id,
+            "ui.shell.chrome",
+            request.command.method(),
+        )
+    {
+        reject_actor_request(request, diagnostics, error);
+        return;
+    }
+
+    if matches!(
+        request.command.method(),
+        "ui.commands.list"
+            | "ui.commands.register"
+            | "ui.commands.remove"
+            | "ui.commands.execute"
+            | "ui.commands.cleanup_extensions"
+            | "ui.commands.sync_extension"
+    ) {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        let model_started = Instant::now();
+        let method = request.command.method();
+        let result = (|| -> Result<Value, ControlError> {
+            match method {
+                "ui.commands.list" => {
+                    let capabilities = if request.session_id == "native-ui" {
+                        Vec::new()
+                    } else {
+                        ui_registry
+                            .map(|registry| registry.session_capabilities(&request.session_id))
+                            .unwrap_or_default()
+                    };
+                    Ok(model.command_list_for_session(&capabilities))
+                }
+                "ui.commands.register" | "ui.commands.remove" => {
+                    let registry = ui_registry.ok_or_else(|| {
+                        ControlError::new(
+                            ControlErrorKind::NotReady,
+                            "the declarative UI registry is unavailable",
+                        )
+                    })?;
+                    registry.validate_session_capability(
+                        &request.session_id,
+                        "ui.shell.shortcuts",
+                        method,
+                    )?;
+                    let extension_id = request
+                        .command
+                        .params()
+                        .get("extension_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            ControlError::invalid_params(method, "extension_id is required")
+                        })?;
+                    let context =
+                        registry.extension_command_context(extension_id, &request.session_id)?;
+                    if method == "ui.commands.register" {
+                        model.register_extension_command(request.command.params(), &context)
+                    } else {
+                        model.remove_extension_command(request.command.params(), &context)
+                    }
+                }
+                "ui.commands.execute" => {
+                    let native = request.session_id == "native-ui";
+                    let capabilities = if native {
+                        Vec::new()
+                    } else {
+                        ui_registry
+                            .map(|registry| registry.session_capabilities(&request.session_id))
+                            .unwrap_or_default()
+                    };
+                    let invocation = model.command_invocation(
+                        request.command.params(),
+                        &capabilities,
+                        native,
+                    )?;
+                    let authorize = |capability: &str| -> Result<(), ControlError> {
+                        if request.session_id == "native-ui" {
+                            return Ok(());
+                        }
+                        ui_registry
+                            .ok_or_else(|| {
+                                ControlError::new(
+                                    ControlErrorKind::NotReady,
+                                    "the declarative UI registry is unavailable",
+                                )
+                            })?
+                            .validate_session_capability(&request.session_id, capability, method)
+                    };
+                    match invocation {
+                        CommandInvocation::Native {
+                            command_id,
+                            action,
+                            checked,
+                        } => {
+                            authorize("ui.shell.application_control")?;
+                            platform_effect_tx
+                                .try_send(PlatformEffect::InvokeNativeCommand {
+                                    command_id: command_id.clone(),
+                                    action: action.clone(),
+                                    checked,
+                                })
+                                .map_err(|_| {
+                                    ControlError::new(
+                                        ControlErrorKind::NotReady,
+                                        "platform command queue is unavailable",
+                                    )
+                                })?;
+                            wake_ui();
+                            Ok(json!({
+                                "command_id":command_id,
+                                "handler_type":"native",
+                                "action":action,
+                                "dispatched":true,
+                            }))
+                        }
+                        CommandInvocation::Control {
+                            command_id,
+                            method: control_method,
+                            params,
+                        } => {
+                            let capability = crate::control::registry::capability_for(
+                                &control_method,
+                            )
+                            .ok_or_else(|| {
+                                ControlError::new(
+                                    ControlErrorKind::Application,
+                                    format!(
+                                        "command '{command_id}' targets unknown control method '{control_method}'"
+                                    ),
+                                )
+                            })?;
+                            authorize(capability)?;
+                            platform_effect_tx
+                                .try_send(PlatformEffect::InvokeControlCommand {
+                                    command_id: command_id.clone(),
+                                    method: control_method.clone(),
+                                    params,
+                                })
+                                .map_err(|_| {
+                                    ControlError::new(
+                                        ControlErrorKind::NotReady,
+                                        "platform command queue is unavailable",
+                                    )
+                                })?;
+                            wake_ui();
+                            Ok(json!({
+                                "command_id":command_id,
+                                "handler_type":"control",
+                                "method":control_method,
+                                "dispatched":true,
+                            }))
+                        }
+                        CommandInvocation::ExtensionEvent(invocation) => {
+                            let revision = request.event_hub.revision();
+                            request.event_hub.publish(
+                                &format!(
+                                    "ui.extension:{}.{}",
+                                    invocation.extension_id, invocation.event
+                                ),
+                                &format!("command:{}", invocation.command_id),
+                                revision,
+                                json!({
+                                    "command_id":invocation.command_id,
+                                    "extension_id":invocation.extension_id,
+                                    "owner_session_id":invocation.owner_session_id,
+                                }),
+                                Some(request.session_id.clone()),
+                                request.request_id.clone(),
+                            );
+                            Ok(json!({
+                                "command_id":invocation.command_id,
+                                "handler_type":"event",
+                                "extension_id":invocation.extension_id,
+                                "event":invocation.event,
+                                "dispatched":true,
+                            }))
+                        }
+                    }
+                }
+                "ui.commands.cleanup_extensions" => {
+                    if request.session_id != "native-ui" {
+                        return Err(ControlError::new(
+                            ControlErrorKind::PermissionDenied,
+                            "ui.commands.cleanup_extensions is reserved for the native lifecycle bridge",
+                        ));
+                    }
+                    let extensions: Vec<crate::control::UiExtensionCleanup> =
+                        serde_json::from_value(
+                            request
+                                .command
+                                .params()
+                                .get("extensions")
+                                .cloned()
+                                .unwrap_or_else(|| json!([])),
+                        )
+                        .map_err(|error| {
+                            ControlError::invalid_params(
+                                method,
+                                format!("invalid extension cleanup list: {error}"),
+                            )
+                        })?;
+                    Ok(model.cleanup_extension_commands(&extensions))
+                }
+                "ui.commands.sync_extension" => {
+                    if request.session_id != "native-ui" {
+                        return Err(ControlError::new(
+                            ControlErrorKind::PermissionDenied,
+                            "ui.commands.sync_extension is reserved for the native lifecycle bridge",
+                        ));
+                    }
+                    let context: crate::control::ExtensionCommandContext = serde_json::from_value(
+                        request
+                            .command
+                            .params()
+                            .get("context")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| {
+                        ControlError::invalid_params(
+                            method,
+                            format!("invalid extension command context: {error}"),
+                        )
+                    })?;
+                    Ok(model.sync_extension_commands(&context))
+                }
+                _ => unreachable!("command lifecycle method was checked above"),
+            }
+        })();
+        diagnostics.record_model_time(model_started.elapsed());
+        match result {
+            Ok(response) => {
+                if method == "ui.commands.execute" {
+                    let command_id = response
+                        .get("command_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    request.event_hub.publish(
+                        "ui.commands.executed",
+                        &format!("command:{command_id}"),
+                        request.event_hub.revision(),
+                        response.clone(),
+                        Some(request.session_id.clone()),
+                        request.request_id.clone(),
+                    );
+                }
+                if matches!(
+                    method,
+                    "ui.commands.register"
+                        | "ui.commands.remove"
+                        | "ui.commands.cleanup_extensions"
+                        | "ui.commands.sync_extension"
+                ) && response.get("changed").and_then(Value::as_bool) != Some(false)
+                {
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                }
+                finish_request(request, response, diagnostics);
+            }
+            Err(error) => reject_actor_request(request, diagnostics, error),
+        }
         return;
     }
 
@@ -110,7 +417,11 @@ pub(super) fn dispatch_request(
 
     if matches!(
         request.command.method(),
-        "app.settings.set" | "app.recent_projects.forget" | "app.recent_projects.clear"
+        "app.settings.set"
+            | "app.recent_projects.forget"
+            | "app.recent_projects.clear"
+            | "ui.shell.profiles.save"
+            | "ui.shell.profiles.remove"
     ) {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_settings_mutation(model, request, load_job_tx, diagnostics);

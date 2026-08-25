@@ -44,7 +44,7 @@ from .errors import (
     RequestTimeoutError,
     remote_error_from_message,
 )
-from .models import Hello
+from .models import DEFAULT_REQUESTED_CAPABILITIES, Hello
 from .async_events import AsyncEvents
 from .async_tasks import AsyncTasks
 from .async_data import AsyncDataResources
@@ -147,6 +147,7 @@ class AsyncClient:
         timeout: float = 10.0,
         client_name: str = "odon-client",
         client_version: str = "0.1.0",
+        requested_capabilities: Sequence[str] | None = None,
     ) -> "AsyncClient":
         if host is None and port is None:
             selected = select_instance(instance)
@@ -160,11 +161,24 @@ class AsyncClient:
         )
         client = cls(reader, writer, timeout=timeout)
         try:
+            requested = tuple(
+                DEFAULT_REQUESTED_CAPABILITIES
+                if requested_capabilities is None
+                else requested_capabilities
+            )
+            if any(
+                not isinstance(capability, str) or not capability
+                for capability in requested
+            ):
+                raise ValueError(
+                    "requested_capabilities must contain non-empty strings"
+                )
             result = await client.call(
                 "system.hello",
                 {
                     "client": {"name": client_name, "version": client_version},
                     "protocol_versions": [1],
+                    "requested_capabilities": list(requested),
                     **({"token": token} if token is not None else {}),
                 },
             )
@@ -327,6 +341,7 @@ class _AsyncConnector:
         instance: Instance | str | None,
         client_name: str,
         client_version: str,
+        requested_capabilities: Sequence[str] | None,
     ) -> None:
         self._host = host
         self._port = port
@@ -335,6 +350,7 @@ class _AsyncConnector:
         self._instance = instance
         self._client_name = client_name
         self._client_version = client_version
+        self._requested_capabilities = requested_capabilities
         self._client: AsyncClient | None = None
 
     def __await__(self):
@@ -350,6 +366,7 @@ class _AsyncConnector:
                 instance=self._instance,
                 client_name=self._client_name,
                 client_version=self._client_version,
+                requested_capabilities=self._requested_capabilities,
             )
         return self._client
 
@@ -370,6 +387,7 @@ def connect_async(
     instance: Instance | str | None = None,
     client_name: str = "odon-client",
     client_version: str = "0.1.0",
+    requested_capabilities: Sequence[str] | None = None,
 ) -> _AsyncConnector:
     """Return an awaitable and async-context-manager connection factory."""
 
@@ -381,4 +399,5 @@ def connect_async(
         instance,
         client_name,
         client_version,
+        requested_capabilities,
     )

@@ -188,10 +188,96 @@ fn handle_control_client(
     identity
         .resource_registry
         .cleanup_session(&state.hello_server.session_id);
-    identity
+    let ui_cleanup = identity
         .ui_registry
         .cleanup_session(&state.hello_server.session_id);
+    if !ui_cleanup.extensions.is_empty()
+        && super::dispatch::call_actor_for_cleanup(
+            &tx,
+            &identity,
+            "ui.commands.cleanup_extensions",
+            json!({"extensions":ui_cleanup.extensions}),
+        )
+        .is_ok()
+    {
+        ctx.request_repaint();
+    }
+    reconcile_shell_focus_after_ui_cleanup(&tx, &identity, &ctx, &ui_cleanup.unavailable_mounts);
     identity.event_hub.remove(&state.hello_server.session_id);
+}
+
+fn reconcile_shell_focus_after_ui_cleanup(
+    tx: &Sender<OdonControlRequest>,
+    identity: &ControlServerIdentity,
+    ctx: &egui::Context,
+    unavailable_mounts: &[String],
+) {
+    if unavailable_mounts.is_empty() {
+        return;
+    }
+    let Ok(snapshot) =
+        super::dispatch::call_actor_for_cleanup(tx, identity, "ui.shell.get", json!({}))
+    else {
+        return;
+    };
+    let Some(params) =
+        focus_reconciliation_patch(&snapshot, unavailable_mounts, identity.ui_registry.as_ref())
+    else {
+        return;
+    };
+    if super::dispatch::call_actor_for_cleanup(tx, identity, "ui.shell.patch_layout", params)
+        .is_ok()
+    {
+        ctx.request_repaint();
+    }
+}
+
+pub(super) fn focus_reconciliation_patch(
+    snapshot: &Value,
+    unavailable_mounts: &[String],
+    ui_registry: &UiRegistry,
+) -> Option<Value> {
+    let nodes = snapshot.pointer("/layout/nodes")?.as_array()?;
+    let node = |id: &str| {
+        nodes
+            .iter()
+            .find(|node| node.get("id").and_then(Value::as_str) == Some(id))
+    };
+    let unavailable = |id: &str| {
+        let mount = node(id)?.get("mount").and_then(Value::as_str)?;
+        Some(
+            unavailable_mounts
+                .iter()
+                .any(|candidate| candidate == mount)
+                || (mount.starts_with("builtin:extension-host.")
+                    && !ui_registry.shell_mount_available(mount, snapshot)),
+        )
+    };
+    let active = snapshot.get("active_region_id").and_then(Value::as_str);
+    let focused = snapshot.get("focused_node_id").and_then(Value::as_str);
+    if !active.and_then(&unavailable).unwrap_or(false)
+        && !focused.and_then(&unavailable).unwrap_or(false)
+    {
+        return None;
+    }
+    let required_mount = match snapshot.get("mode").and_then(Value::as_str)? {
+        "project" => "builtin:project-workspace",
+        "single" => "builtin:viewer-canvas",
+        "mosaic" => "builtin:mosaic-canvas",
+        _ => return None,
+    };
+    let fallback = nodes.iter().find_map(|node| {
+        (node.get("mount").and_then(Value::as_str) == Some(required_mount))
+            .then(|| node.get("id").and_then(Value::as_str))
+            .flatten()
+    })?;
+    Some(json!({
+        "mode":snapshot.get("mode")?.clone(),
+        "if_shell_revision":snapshot.get("revision")?.clone(),
+        "active_region_id":fallback,
+        "focused_node_id":fallback,
+        "transaction_id":"extension-disconnect-focus-reconciliation",
+    }))
 }
 
 struct ControlWork {

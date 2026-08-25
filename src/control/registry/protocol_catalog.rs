@@ -1,5 +1,7 @@
 //! Protocol-service metadata and compatibility aliases.
 
+use serde_json::{Value, json};
+
 pub static PROTOCOL_METHODS: &[(&str, &str, &str, bool, bool)] = &[
     (
         "system.hello",
@@ -10,7 +12,7 @@ pub static PROTOCOL_METHODS: &[(&str, &str, &str, bool, bool)] = &[
     ),
     (
         "system.get_capabilities",
-        "List capabilities granted by this Odon build.",
+        "List capabilities supported by this build and explicitly granted to this session.",
         "system.introspect",
         false,
         false,
@@ -193,7 +195,7 @@ pub static PROTOCOL_METHODS: &[(&str, &str, &str, bool, bool)] = &[
     (
         "ui.extensions.register",
         "Register a declarative UI extension.",
-        "ui.panels",
+        "ui.shell.extension_place",
         true,
         false,
     ),
@@ -207,7 +209,35 @@ pub static PROTOCOL_METHODS: &[(&str, &str, &str, bool, bool)] = &[
     (
         "ui.extensions.remove",
         "Remove an owned UI extension.",
-        "ui.panels",
+        "ui.shell.extension_place",
+        true,
+        false,
+    ),
+    (
+        "ui.extensions.set_readiness",
+        "Set the owned extension's connected-session readiness state.",
+        "ui.shell.extension_place",
+        true,
+        false,
+    ),
+    (
+        "ui.extensions.layouts.register",
+        "Register or replace an owned extension layout template.",
+        "ui.shell.extension_place",
+        true,
+        false,
+    ),
+    (
+        "ui.extensions.layouts.list",
+        "List layout templates owned by an extension.",
+        "ui.shell.extension_place",
+        false,
+        false,
+    ),
+    (
+        "ui.extensions.layouts.remove",
+        "Remove an owned extension layout template.",
+        "ui.shell.extension_place",
         true,
         false,
     ),
@@ -240,6 +270,68 @@ pub static PROTOCOL_METHODS: &[(&str, &str, &str, bool, bool)] = &[
         false,
     ),
 ];
+
+pub(super) fn protocol_request_schema(name: &str) -> Value {
+    match name {
+        "system.hello" => json!({
+            "type":"object",
+            "properties":{
+                "token":{"type":"string"},
+                "client":{
+                    "type":"object",
+                    "properties":{
+                        "name":{"type":"string","minLength":1},
+                        "version":{"type":"string","minLength":1}
+                    },
+                    "required":["name","version"],
+                    "additionalProperties":false
+                },
+                "protocol_versions":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"uniqueItems":true},
+                "requested_capabilities":{"type":"array","items":{"type":"string","minLength":1},"uniqueItems":true,"default":[]}
+            },
+            "required":["client","protocol_versions"],
+            "additionalProperties":false
+        }),
+        "ui.extensions.layouts.register" => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256},
+                "name":{"type":"string","minLength":1,"maxLength":128},
+                "document":{"type":"object"}
+            },
+            "required":["extension_id","name","document"],
+            "additionalProperties":false,
+        }),
+        "ui.extensions.set_readiness" => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256},
+                "ready":{"type":"boolean"},
+                "reason":{"type":"string","minLength":1,"maxLength":256}
+            },
+            "required":["extension_id","ready"],
+            "additionalProperties":false
+        }),
+        "ui.extensions.layouts.list" => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256}
+            },
+            "required":["extension_id"],
+            "additionalProperties":false,
+        }),
+        "ui.extensions.layouts.remove" => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256},
+                "name":{"type":"string","minLength":1,"maxLength":128}
+            },
+            "required":["extension_id","name"],
+            "additionalProperties":false,
+        }),
+        _ => json!({"type":"object"}),
+    }
+}
 
 pub static METHOD_ALIASES: &[(&str, &str)] = &[
     ("get_current_view", "app.get_state"),

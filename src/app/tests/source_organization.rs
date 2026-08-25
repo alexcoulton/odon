@@ -1203,6 +1203,52 @@ fn renderer_bridge_is_a_projection_only_boundary() {
 }
 
 #[test]
+fn descriptor_shortcuts_replace_the_platform_settings_fallback() {
+    let root = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app.rs"));
+    let shortcuts =
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ui/command_shortcuts.rs"));
+    assert!(root.contains("crate::ui::command_shortcuts::resolve("));
+    assert!(!root.contains("i.key_pressed(egui::Key::Comma)"));
+    assert!(!shortcuts.contains("ui.commands.execute"));
+    assert!(shortcuts.contains("CommandPresentationInvocation"));
+    assert!(shortcuts.contains("/state/visible"));
+    assert!(shortcuts.contains("/state/enabled"));
+    assert!(shortcuts.contains("input.events.retain"));
+}
+
+#[test]
+fn actor_command_catalogue_matches_every_native_realizer_arm() {
+    use std::collections::BTreeSet;
+
+    let declared = odon::model::command_surface_native_actions();
+
+    let source = source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_app/commands.rs"));
+    let arms = source
+        .split("match action {")
+        .nth(1)
+        .and_then(|tail| tail.split("_ => log_warn!").next())
+        .expect("native command realizer match");
+    let realized = arms
+        .lines()
+        .filter(|line| line.starts_with("            \""))
+        .map(str::trim)
+        .flat_map(|line| line.split("=>").next().unwrap_or_default().split('|'))
+        .filter_map(|candidate| {
+            let candidate = candidate.trim();
+            candidate
+                .strip_prefix('"')
+                .and_then(|candidate| candidate.split('"').next())
+        })
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        declared, realized,
+        "every actor-resolved native action must have exactly one native realization arm"
+    );
+}
+
+#[test]
 fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     let app_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/app");
     let runtime = source(app_dir.join("viewport_runtime.rs"));
@@ -1309,7 +1355,11 @@ fn native_workspace_topology_has_no_renderer_mutation_fallback() {
     assert!(root.contains("report_renderer_observation("));
     assert!(!root.contains("app.set_show_scale_bar(visible)"));
     assert!(!root.contains("view_show_scale_bar"));
-    assert!(root.contains("menu.set_scale_bar_visible(visible)"));
+    assert!(!root.contains("menu.set_scale_bar_visible(visible)"));
+    assert!(
+        source(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/model/command_surface.rs"))
+            .contains("presentation.scale_bar.checked")
+    );
     assert!(root.contains("runtime.bootstrap_project_model(snapshot)"));
     assert!(!root.contains("control_actor_semantic_snapshot"));
     assert!(root.contains("runtime.bootstrap_mosaic_model(mosaic.control_actor_resource())"));
@@ -2216,7 +2266,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 280,
+        total_fields, 288,
         "review the ownership ledger when host fields change"
     );
 }
@@ -2245,4 +2295,40 @@ fn project_persistence_and_roi_ui_have_no_renderer_reverse_sync_path() {
     assert!(!take_project_space.contains("sync_current_view_state_into_project_space"));
     assert!(actor_projects.contains("model.prepare_lifecycle_project_save()"));
     assert!(actor_persistence.contains("self.sync_current_dataset_view_to_project()?"));
+}
+
+#[test]
+fn actor_shell_mount_dispatch_owns_builtin_application_top_bars() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let viewer_update = source(root.join("src/app/update.rs"));
+    let viewer_shell = source(root.join("src/app/shell.rs"));
+    let viewer_components = source(root.join("src/app/shell_components.rs"));
+    assert!(viewer_update.contains("if !actor_shell_layout"));
+    assert!(viewer_update.contains("self.ui_viewer_top_bar(ui, ctx, &serde_json::Value::Null)"));
+    assert!(viewer_shell.contains("self.ui_viewer_top_bar(mount_ui, ctx, configuration)"));
+    assert!(viewer_components.contains("fn ui_viewer_top_bar("));
+
+    let mosaic_update = source(root.join("src/mosaic/update.rs"));
+    let mosaic_shell = source(root.join("src/mosaic/shell.rs"));
+    let mosaic_components = source(root.join("src/mosaic/shell_components.rs"));
+    assert!(mosaic_update.contains("if !actor_shell_layout"));
+    assert!(mosaic_update.contains("self.ui_mosaic_top_bar(ui, ctx, &serde_json::Value::Null)"));
+    assert!(mosaic_shell.contains("self.ui_mosaic_top_bar(mount_ui, ctx, configuration)"));
+    assert!(mosaic_components.contains("fn ui_mosaic_top_bar("));
+
+    let root_app = source(root.join("src/root_app.rs"));
+    assert!(root_app.contains("render_project_top_bar(mount_ui, configuration)"));
+    let shell_tree = source(root.join("src/ui/shell_tree.rs"));
+    assert!(shell_tree.contains("application_chrome_height("));
+    assert!(shell_tree.contains("from_projection_with_mount_filter("));
+    assert!(!shell_tree.contains("fn is_external_chrome_mount("));
+
+    let extension_render = source(root.join("src/control/ui/render.rs"));
+    assert!(extension_render.contains("default_host_location("));
+    assert!(!extension_render.contains("odon-extension-top-bar"));
+    assert!(!extension_render.contains("odon-extension-status-bar"));
+    assert!(!extension_render.contains("odon-extension-left-sections"));
+    assert!(!extension_render.contains("odon-extension-right-tabs"));
+    assert!(!extension_render.contains("odon-extension-canvas-controls"));
+    assert!(!extension_render.contains("odon-extension-project-cards"));
 }

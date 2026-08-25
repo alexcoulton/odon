@@ -41,6 +41,9 @@ impl AppModel {
             settings_status: String::new(),
             settings_operation_generation: 0,
             settings_operation_pending: false,
+            settings_bootstrapped: false,
+            shell_startup_attempted: BTreeSet::new(),
+            shell_startup_results: BTreeMap::new(),
             screenshot_preferences: ScreenshotPreferences::default(),
             screenshot_settings_generation: 0,
             screenshot_settings_pending: false,
@@ -57,6 +60,9 @@ impl AppModel {
             mosaic_operation_pending: false,
             measured_viewports: HashSet::new(),
             renderer_gpu_available: false,
+            command_surface: CommandSurfaceModel::default(),
+            shell: ShellModel::default(),
+            session_shell_profiles: BTreeMap::new(),
         }
     }
 

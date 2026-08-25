@@ -25,6 +25,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = ROOT / "python" / "src"
 REGISTRY_CATALOG = ROOT / "src" / "control" / "registry" / "catalog.rs"
+REGISTRY_SHELL_CATALOG = ROOT / "src" / "control" / "registry" / "shell_catalog.rs"
 PROTOCOL_CATALOG = ROOT / "src" / "control" / "registry" / "protocol_catalog.rs"
 SURFACE = ROOT / "api" / "application-surface.json"
 OUTPUT = ROOT / "docs" / "reference" / "python-api-reference.md"
@@ -88,6 +89,40 @@ CLASS_SPECS = (
     ClassSpec("Task handle", "odon.tasks:Task", "returned by task-starting methods", "Wait for and manage one retained operation."),
     ClassSpec("Events", "odon.events:Events", "`app.events`", "Synchronous subscriptions, callbacks, and queued event consumption."),
     ClassSpec("Declarative UI registry", "odon.ui:Ui", "`app.ui`", "Register extensions, inspect schemas, and list component contributions."),
+    ClassSpec("Application shell", "odon.ui:Shell", "`app.ui.shell`", "Inspect, reorder, select, show, hide, and reset native shell nodes."),
+    ClassSpec("Application commands", "odon.ui:Commands", "`app.ui.commands`", "Discover stable application command descriptors independently of their presentations."),
+    ClassSpec("Application command", "odon.ui:ApplicationCommand", "returned by `app.ui.commands.list`", "Typed command identity, handler, availability, protection, icon, and shortcut metadata."),
+    ClassSpec("Command predicate", "odon.ui:CommandPredicate", "configure extension commands", "A bounded actor-evaluated capability or application-state condition."),
+    ClassSpec("Command predicate slots", "odon.ui:CommandPredicates", "configure extension commands", "Declarative visible, enabled, and checked conditions shared by every command presentation."),
+    ClassSpec("Platform menus", "odon.ui:Menus", "`app.ui.menus`", "Inspect and revision-guard the declarative platform application menu."),
+    ClassSpec("Platform menu snapshot", "odon.ui:CommandMenuSnapshot", "returned by `app.ui.menus`", "Typed revisioned platform-menu presentation snapshot."),
+    ClassSpec("Platform menu node", "odon.ui:CommandMenuNode", "build platform menu trees", "A menu bar, nested menu, command presentation, or separator."),
+    ClassSpec("Command toolbars", "odon.ui:Toolbars", "`app.ui.toolbars`", "Inspect and revision-guard the declarative application command toolbar."),
+    ClassSpec("Command toolbar snapshot", "odon.ui:CommandToolbarSnapshot", "returned by `app.ui.toolbars`", "Typed revisioned command-toolbar presentation snapshot."),
+    ClassSpec("Command toolbar", "odon.ui:CommandToolbar", "build a command toolbar", "A bounded toolbar presentation containing ordered groups."),
+    ClassSpec("Command toolbar group", "odon.ui:CommandToolbarGroup", "contained by `CommandToolbar`", "One labelled or unlabelled group of command presentations."),
+    ClassSpec("Command toolbar item", "odon.ui:CommandToolbarItem", "contained by `CommandToolbarGroup`", "A toolbar presentation referencing one stable command ID."),
+    ClassSpec("Command palette resource", "odon.ui:Palette", "`app.ui.palette`", "Inspect and revision-guard the searchable command-palette presentation."),
+    ClassSpec("Command palette snapshot", "odon.ui:CommandPaletteSnapshot", "returned by `app.ui.palette`", "Typed revisioned command-palette presentation snapshot."),
+    ClassSpec("Command palette", "odon.ui:CommandPalette", "configure `app.ui.palette`", "Palette title, prompt, shortcut, description visibility, and bounded result count."),
+    ClassSpec("Application shell snapshot", "odon.ui:ShellSnapshot", "returned by `app.ui.shell`", "Typed, mapping-compatible versioned shell snapshot."),
+    ClassSpec("Application shell node", "odon.ui:ShellNode", "contained by `ShellSnapshot`", "Typed native or extension-host shell node."),
+    ClassSpec("Application shell mutability", "odon.ui:ShellMutability", "`ShellNode.mutable`", "Per-property native shell mutation capabilities."),
+    ClassSpec("Application shell change", "odon.ui:ShellChange", "`ShellSnapshot.change`", "Old/new revisions and property-level mutation results."),
+    ClassSpec("Application shell property change", "odon.ui:ShellPropertyChange", "contained by `ShellChange`", "One changed shell node property with before/after values."),
+    ClassSpec("Application shell IDs", "odon.ui:ShellId", "use in shell patches", "Stable schema-version-1 built-in and extension-host IDs."),
+    ClassSpec("Application shell mount IDs", "odon.ui:ShellMountId", "use in `ShellLayoutNode` builders", "Stable built-in component and application-owned extension-host mount IDs."),
+    ClassSpec("Application shell desired layout", "odon.ui:ShellLayout", "submit to `app.ui.shell.replace_layout`", "A complete validated keyed application layout tree."),
+    ClassSpec("Application shell layout document", "odon.ui:ShellLayoutDocument", "returned by `app.ui.shell.export_layout`", "A portable versioned layout document for import, migration, and recovery workflows."),
+    ClassSpec("Application shell layout profile", "odon.ui:ShellLayoutProfile", "returned by `app.ui.shell.list_profiles`", "Metadata for one named session, application, or project layout."),
+    ClassSpec("Extension layout template", "odon.ui:ExtensionLayoutTemplate", "returned by `extension.register_layout()`", "A canonical version-1 default layout owned by one extension."),
+    ClassSpec("Application shell layout node", "odon.ui:ShellLayoutNode", "contained by `ShellLayout`", "A row, column, split, tabs, panel, canvas, built-in, or extension mount node."),
+    ClassSpec("Application shell layout node types", "odon.ui:ShellLayoutType", "use in `ShellLayoutNode`", "Supported desired-layout node kinds."),
+    ClassSpec("Application shell ownership", "odon.ui:ShellOwnership", "available on shell nodes and component descriptors", "Server-derived application/extension owner identity, session identity, and protected status."),
+    ClassSpec("Application shell mount readiness", "odon.ui:ShellMountReadiness", "available on extension `ShellLayoutNode` instances", "Ready, not-ready, disconnected, incompatible, or missing retained extension-mount state."),
+    ClassSpec("Application shell size", "odon.ui:ShellSize", "use in `ShellLayoutNode`", "Advisory desired, minimum, maximum, and flex sizing."),
+    ClassSpec("Application shell split", "odon.ui:ShellSplit", "use in split layout nodes", "Validated split ratio and native-resize behavior."),
+    ClassSpec("Application shell component descriptor", "odon.ui:ShellComponentDescriptor", "returned by `app.ui.shell.list_components`", "Introspected built-in mount compatibility, sizing, commands, events, and persistence."),
     ClassSpec("UI extension handle", "odon.ui:Extension", "returned by `app.ui.register_extension()`", "Register component trees owned by one extension."),
     ClassSpec("UI contribution handle", "odon.ui:Contribution", "returned by `extension.register()`", "Patch or remove one retained component tree."),
     ClassSpec("UI component base", "odon.ui:Component", "construct through component subclasses", "Serializable native-egui component contract."),
@@ -140,6 +175,11 @@ ASYNC_CLASS_SPECS = (
     ClassSpec("Async task handle", "odon.async_tasks:AsyncTask", "returned by task-starting methods", "Awaitable retained-task handle."),
     ClassSpec("Async events", "odon.async_events:AsyncEvents", "`app.events`", "Async subscriptions and iteration."),
     ClassSpec("Async UI registry", "odon.async_ui:AsyncUi", "`app.ui`", "Async declarative UI registry."),
+    ClassSpec("Async application shell", "odon.async_ui:AsyncShell", "`app.ui.shell`", "Async native application-shell composition."),
+    ClassSpec("Async application commands", "odon.async_ui:AsyncCommands", "`app.ui.commands`", "Async command discovery."),
+    ClassSpec("Async platform menus", "odon.async_ui:AsyncMenus", "`app.ui.menus`", "Async revision-guarded platform-menu composition."),
+    ClassSpec("Async command toolbars", "odon.async_ui:AsyncToolbars", "`app.ui.toolbars`", "Async revision-guarded command-toolbar composition."),
+    ClassSpec("Async command palette", "odon.async_ui:AsyncPalette", "`app.ui.palette`", "Async revision-guarded command-palette composition."),
     ClassSpec("Async UI extension", "odon.async_ui:AsyncExtension", "returned by `app.ui.register_extension()`", "Async UI extension handle."),
     ClassSpec("Async UI contribution", "odon.async_ui:AsyncContribution", "returned by `extension.register()`", "Async UI contribution handle."),
 )
@@ -155,6 +195,11 @@ FUNCTION_SPECS = (
     FunctionSpec("odon.ui:emit", "Create an action that emits an extension event to Python."),
     FunctionSpec("odon.ui:command", "Create an action that invokes a validated native command."),
     FunctionSpec("odon.ui:bind", "Create a native state binding action."),
+    FunctionSpec("odon.layouts:review", "Build a reusable single-view review shell."),
+    FunctionSpec("odon.layouts:analysis", "Build a reusable single-view analysis shell."),
+    FunctionSpec("odon.layouts:comparison", "Build a shell around the native comparison workspace."),
+    FunctionSpec("odon.layouts:mosaic_triage", "Build a reusable mosaic-triage shell."),
+    FunctionSpec("odon.layouts:presentation", "Build a canvas-first presentation shell."),
 )
 
 UI_COMPONENTS = (
@@ -259,7 +304,10 @@ def direct_methods(value: Any) -> tuple[str, ...]:
 
 
 def registry_methods() -> dict[str, dict[str, Any]]:
-    source = REGISTRY_CATALOG.read_text(encoding="utf-8")
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (REGISTRY_CATALOG, REGISTRY_SHELL_CATALOG)
+    )
     protocol_source = PROTOCOL_CATALOG.read_text(encoding="utf-8")
     modes = {
         "ALL_MODES": "project, single, mosaic, transition",

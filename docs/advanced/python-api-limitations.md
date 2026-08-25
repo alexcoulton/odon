@@ -85,24 +85,85 @@ Filter-sensitive operations require an explicit viewport, standalone filter,
 or all-object choice in a two-view workspace. This is a deliberate safety
 contract, not an omitted convenience.
 
-## Declarative UI extends predefined hosts
+## Declarative single-window shell
 
-Python can add native component trees at `right.tabs`, `left.sections`,
-`top_bar.actions`, `status_bar`, `canvas.controls`, and `project.cards`. It can
-show or hide major side panels and select supported native tabs.
+Python can register first-class extension component trees and mount them beside
+built-in components in a recursive keyed shell. The `right.tabs`,
+`left.sections`, `top_bar.actions`, `status_bar`, `canvas.controls`, and
+`project.cards` placement hints render through application-owned mounts in the actor tree rather
+than external egui panels or windows. It can inspect
+the versioned project, single-viewer, and mosaic shell trees through
+`app.ui.shell`. For the active shell it can atomically replace the topology,
+show or hide nodes, select tabs, resize nested splits, collapse regions, apply
+an optimistic shell-revision guard, and restore defaults.
+Layouts can be exported/imported as versioned documents, saved as session,
+durable application, or project-owned profiles, migrated from the v0 document
+shape, and replaced with a protected minimal recovery layout. Extensions can
+register owned, validated default templates that follow their disconnect
+policy and are applied explicitly through shell import. Application settings
+can select a startup profile per mode; the actor restores it once on first
+activation and falls back to the protected recovery tree with diagnostics.
+Migrations beyond v0-to-v1 remain future work because no newer document schema
+exists yet.
+Inactive shells are inspectable, but must become active before mutation. The
+formal schema is available from `app.ui.shell.describe_schema()`, and Python
+returns typed snapshots/nodes with stable `ShellId` constants.
+Built-in mount IDs and their compatibility, sizing, command, event, and
+persistence metadata are discoverable through `app.ui.shell.list_components()`.
+Snapshots and component descriptors also expose application/extension ownership and protected
+status. Extension-session mutations are checked inside the actor and cannot change a foreign
+extension or ungranted application-owned node. Application-controller authority is negotiated
+explicitly during `system.hello`; authentication alone grants no shell mutation authority. Native
+recovery remains privileged. Per-mutation transaction correlation is implemented, while a true
+multi-method atomic batch remains future work if workflows require it.
+Active region and focus are actor-owned and revision guarded. Native tabs, collapsibles, mount
+activation, and completed split drags emit the same semantic shell changes as Python; focus can be
+cleared explicitly. Disconnect/reconnect focus transfer, cross-mode isolation, and high-contention
+revision races have actor/bridge coverage; cross-platform rendered evidence remains future work.
+Mount configuration is retained and revision guarded. Native top bars publish and honor non-empty
+schemas; most other built-ins intentionally publish empty schemas until they have meaningful
+per-instance options, and extension configuration-version compatibility remains future work.
+Channels, single-view viewport controls, the documentation browser, protected recovery controls,
+the shell inspector, and the command toolbar can be mounted independently. Catalogue/renderer
+conformance is tested for every advertised mode; further subdivision of composite controls remains
+demand-driven rather than exposing arbitrary egui widgets.
 
-It cannot currently:
+Python can inspect stable application commands separately from their menu presentations and
+atomically replace a bounded nested platform-menu tree. On macOS this rebuilds the real native menu,
+including submenus, separators, accelerators, protected recovery, and checked scale-bar state.
+Extensions can register owned, namespaced event commands. Shortcut conflicts are rejected across
+overlapping modes using platform-effective `primary` aliases. macOS uses native menu accelerators;
+Windows and Linux resolve every eligible descriptor from the current actor projection and dispatch
+it through `ui.commands.execute`, so changed shortcuts do not leave stale registrations. The
+schema reports the platform mapping and rejects non-realizable modifiers with diagnostics. The
+native menu, mounted command toolbar, and searchable command palette apply mode and
+extension-readiness enablement. Python can replace the bounded toolbar and palette
+presentations. Bounded capability and actor-state predicates now produce shared visible, enabled,
+checked, reason, and missing-capability state. Toolbar items support checked/icon/tooltip/label
+presentation. Extension components can bind visibility and enablement to that evaluated command
+state with bounded command IDs/state fields, and shell nodes can bind visibility to the same state.
+Arbitrary predicate paths, Python predicate callbacks, and user-remappable shortcuts are
+intentionally not implemented.
 
-- replace or arbitrarily rearrange the complete application shell;
-- instantiate native panels by stable component ID;
-- redefine all menus, toolbars, docking, or shortcuts;
+By design, this initiative does not attempt to:
+
+- define arbitrary docking or create detached native windows;
+- control monitor placement or move canvases between native windows;
+
+The current API also does not:
+
+- define user-remappable shortcut bindings;
+- define arbitrary state expressions or Python callbacks outside the bounded predicate catalogue;
 - create arbitrary egui widgets or run Python on the GUI thread;
 - inject HTML, JavaScript, or CSS; or
 - intercept every native interaction before Odon handles it.
 
-The viewport workspace controls canvas composition while Rust remains
-responsible for native rendering. It does not make the rest of the application
-shell arbitrarily dockable.
+The viewport workspace controls multiple canvases within the mounted viewer
+canvas component, while the shell API controls its surrounding recursive
+composition. Rust remains responsible for native rendering, input, GPU
+resources, platform windows, validation, and safe placeholders. Arbitrary docking and multi-window
+composition are outside the scope of the single-window shell API rather than unfinished work in
+its completion plan.
 
 ## Renderer coverage differs from descriptor coverage
 

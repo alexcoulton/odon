@@ -1,0 +1,15 @@
+{
+  "format": "odon.shell-layout",
+  "schema_version": 1,
+  "mode": "project",
+  "layout": {
+    "root_id": "layout:fixture.corrupt.root",
+    "nodes": [
+      {
+        "id": "layout:fixture.corrupt.root",
+        "type": "application",
+        "children": ["layout:fixture.corrupt.missing-child"]
+      }
+    ]
+  }
+}

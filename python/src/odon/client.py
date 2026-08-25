@@ -16,7 +16,7 @@ from .errors import (
     RequestTimeoutError,
     remote_error_from_message,
 )
-from .models import Hello
+from .models import DEFAULT_REQUESTED_CAPABILITIES, Hello
 from .events import Events
 from .tasks import Tasks
 from .data import DataResources
@@ -48,6 +48,7 @@ class Client:
         timeout: float = 10.0,
         client_name: str = "odon-client",
         client_version: str = "0.1.0",
+        requested_capabilities: Sequence[str] | None = None,
     ) -> None:
         if host is None and port is None:
             selected = select_instance(instance)
@@ -81,11 +82,21 @@ class Client:
         )
         self._reader_thread.start()
 
+        requested = tuple(
+            DEFAULT_REQUESTED_CAPABILITIES
+            if requested_capabilities is None
+            else requested_capabilities
+        )
+        if any(not isinstance(capability, str) or not capability for capability in requested):
+            self.close()
+            raise ValueError("requested_capabilities must contain non-empty strings")
+
         hello_result = self.call(
             "system.hello",
             {
                 "client": {"name": client_name, "version": client_version},
                 "protocol_versions": [1],
+                "requested_capabilities": list(requested),
                 **({"token": token} if token is not None else {}),
             },
         )
@@ -308,6 +319,7 @@ def connect(
     instance: Instance | str | None = None,
     client_name: str = "odon-client",
     client_version: str = "0.1.0",
+    requested_capabilities: Sequence[str] | None = None,
 ) -> Client:
     """Connect to a running Odon instance."""
 
@@ -319,4 +331,5 @@ def connect(
         instance=instance,
         client_name=client_name,
         client_version=client_version,
+        requested_capabilities=requested_capabilities,
     )

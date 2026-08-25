@@ -1,0 +1,32 @@
+{
+  "schema_version": 0,
+  "mode": "project",
+  "desired_tree": {
+    "root_id": "layout:fixture.v0.root",
+    "nodes": [
+      {
+        "id": "layout:fixture.v0.root",
+        "type": "application",
+        "children": ["layout:fixture.v0.column"]
+      },
+      {
+        "id": "layout:fixture.v0.column",
+        "type": "column",
+        "children": [
+          "layout:fixture.v0.workspace",
+          "layout:fixture.v0.extension"
+        ]
+      },
+      {
+        "id": "layout:fixture.v0.workspace",
+        "type": "builtin_mount",
+        "mount": "builtin:project-workspace"
+      },
+      {
+        "id": "layout:fixture.v0.extension",
+        "type": "extension_mount",
+        "mount": "extension:org.example.fixture/panel"
+      }
+    ]
+  }
+}

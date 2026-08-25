@@ -26,8 +26,9 @@ mod waits;
 
 use dispatch::{dispatch_to_app, handle_control_line};
 use services::{
-    cancel_task, forget_task, get_task, list_tasks, patch_ui_values, register_contribution,
-    register_extension, remove_contribution, remove_extension, subscribe_events,
+    cancel_task, forget_task, get_task, list_extension_layouts, list_tasks, patch_ui_values,
+    register_contribution, register_extension, register_extension_layout, remove_contribution,
+    remove_extension, remove_extension_layout, set_extension_readiness, subscribe_events,
     unsubscribe_events,
 };
 use tasks::{run_batch, start_task};

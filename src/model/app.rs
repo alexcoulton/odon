@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,10 +37,12 @@ use super::{
     parse_world_points, parse_world_rect, project_object_preload_candidates,
     project_roi_segmentation_path,
 };
+use super::{CommandSurfaceModel, ShellModel};
 
 mod analysis;
 mod annotations;
 mod channel_compute;
+mod commands;
 mod construction;
 mod dispatch;
 mod masks;
@@ -56,6 +58,7 @@ mod runtime;
 mod screenshots;
 mod segmentation_geojson;
 mod settings_deep_links;
+mod shell;
 mod thresholds;
 mod viewport_commands;
 
@@ -411,6 +414,9 @@ pub struct AppModel {
     settings_status: String,
     settings_operation_generation: u64,
     settings_operation_pending: bool,
+    settings_bootstrapped: bool,
+    shell_startup_attempted: BTreeSet<String>,
+    shell_startup_results: BTreeMap<String, Value>,
     screenshot_preferences: ScreenshotPreferences,
     screenshot_settings_generation: u64,
     screenshot_settings_pending: bool,
@@ -427,6 +433,9 @@ pub struct AppModel {
     mosaic_operation_pending: bool,
     measured_viewports: HashSet<ViewportId>,
     renderer_gpu_available: bool,
+    command_surface: CommandSurfaceModel,
+    shell: ShellModel,
+    session_shell_profiles: BTreeMap<String, Value>,
 }
 
 #[derive(Debug)]
@@ -3033,6 +3042,7 @@ fn settings_snapshot_for(
     json!({
         "auto_contrast":settings.auto_contrast,
         "fast_object_rendering":settings.fast_object_rendering,
+        "shell_layout_startup_profiles":settings.shell_layout_startup_profiles,
         "settings_path":path.map(|path| path.to_string_lossy().into_owned()),
         "status":status.into(),
         "generation":generation,

@@ -118,8 +118,74 @@ fn validate_component(
             ));
         }
     }
+    validate_state_bindings(component)?;
     for child in &component.children {
         validate_component(child, depth + 1, count, ids)?;
+    }
+    Ok(())
+}
+
+fn validate_state_bindings(component: &Component) -> Result<(), ControlError> {
+    for (property, binding) in &component.state_bindings {
+        if !matches!(property.as_str(), "visible" | "enabled") {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                "component state bindings support only visible and enabled properties",
+            ));
+        }
+        let object = binding.as_object().ok_or_else(|| {
+            ControlError::invalid_params(
+                "ui.contributions.register",
+                format!("{property} state binding must be an object"),
+            )
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "type" | "command_id" | "state" | "equals"))
+        {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                format!("{property} state binding contains an unknown field"),
+            ));
+        }
+        if object.get("type").and_then(Value::as_str) != Some("command_state") {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                format!("{property} state binding type must be 'command_state'"),
+            ));
+        }
+        let command_id = object
+            .get("command_id")
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+            })
+            .ok_or_else(|| {
+                ControlError::invalid_params(
+                    "ui.contributions.register",
+                    format!("{property} state binding requires a bounded command_id"),
+                )
+            })?;
+        let _ = command_id;
+        if !object
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| matches!(state, "visible" | "enabled" | "checked"))
+        {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                format!("{property} state binding state must be visible, enabled, or checked"),
+            ));
+        }
+        if object
+            .get("equals")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(ControlError::invalid_params(
+                "ui.contributions.register",
+                format!("{property} state binding equals must be a boolean"),
+            ));
+        }
     }
     Ok(())
 }
@@ -150,6 +216,28 @@ pub(super) fn sync_component_binding(
     native_state: &Value,
     layers: &[crate::control::LayerSnapshot],
 ) {
+    for (property, binding) in &component.state_bindings {
+        let command_id = binding.get("command_id").and_then(Value::as_str);
+        let state = binding.get("state").and_then(Value::as_str);
+        let expected = binding
+            .get("equals")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let value = native_state
+            .pointer("/shell/_command_surface/commands")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|command| command.get("id").and_then(Value::as_str) == command_id)
+            .and_then(|command| state.and_then(|state| command.pointer(&format!("/state/{state}"))))
+            .and_then(Value::as_bool)
+            .is_some_and(|actual| actual == expected);
+        match property.as_str() {
+            "visible" => component.visible = value,
+            "enabled" => component.enabled = value,
+            _ => unreachable!("validated component state binding property"),
+        }
+    }
     let binding = component
         .action
         .as_ref()

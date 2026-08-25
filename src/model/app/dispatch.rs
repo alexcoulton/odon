@@ -11,6 +11,26 @@ impl AppModel {
         let supported = matches!(
             method,
             "app.get_state"
+                | "ui.commands.describe_schema"
+                | "ui.commands.list"
+                | "ui.menus.get"
+                | "ui.menus.replace"
+                | "ui.toolbars.get"
+                | "ui.toolbars.replace"
+                | "ui.palette.get"
+                | "ui.palette.replace"
+                | "ui.shell.describe_schema"
+                | "ui.shell.components.list"
+                | "ui.shell.get"
+                | "ui.shell.export_layout"
+                | "ui.shell.import_layout"
+                | "ui.shell.patch"
+                | "ui.shell.patch_layout"
+                | "ui.shell.profiles.list"
+                | "ui.shell.profiles.load"
+                | "ui.shell.recover"
+                | "ui.shell.replace_layout"
+                | "ui.shell.reset"
                 | "app.settings.get"
                 | "app.recent_projects.list"
                 | "app.lifecycle.get"
@@ -283,6 +303,159 @@ impl AppModel {
                 present: false,
             }));
         }
+        if method == "ui.shell.describe_schema" {
+            return Some(Ok(ModelDispatch {
+                response: self.describe_shell_schema(),
+                present: false,
+            }));
+        }
+        if method == "ui.commands.describe_schema" {
+            return Some(Ok(ModelDispatch {
+                response: self.command_surface_schema(),
+                present: false,
+            }));
+        }
+        if method == "ui.commands.list" {
+            return Some(Ok(ModelDispatch {
+                response: self.command_list(),
+                present: false,
+            }));
+        }
+        if method == "ui.menus.get" {
+            return Some(Ok(ModelDispatch {
+                response: self.platform_menu(),
+                present: false,
+            }));
+        }
+        if method == "ui.menus.replace" {
+            return Some(
+                self.replace_platform_menu(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.toolbars.get" {
+            return Some(Ok(ModelDispatch {
+                response: self.command_toolbar(),
+                present: false,
+            }));
+        }
+        if method == "ui.toolbars.replace" {
+            return Some(
+                self.replace_command_toolbar(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.palette.get" {
+            return Some(Ok(ModelDispatch {
+                response: self.command_palette(),
+                present: false,
+            }));
+        }
+        if method == "ui.palette.replace" {
+            return Some(
+                self.replace_command_palette(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.shell.components.list" {
+            return Some(
+                self.list_shell_components(params.get("mode").and_then(Value::as_str))
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: false,
+                    }),
+            );
+        }
+        if method == "ui.shell.get" {
+            return Some(
+                self.shell_snapshot(params.get("mode").and_then(Value::as_str))
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: false,
+                    }),
+            );
+        }
+        if method == "ui.shell.export_layout" {
+            return Some(
+                self.export_shell_layout(params.get("mode").and_then(Value::as_str))
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: false,
+                    }),
+            );
+        }
+        if method == "ui.shell.import_layout" {
+            return Some(
+                self.import_shell_layout(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.shell.profiles.list" {
+            return Some(
+                self.list_shell_profiles(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: false,
+                    }),
+            );
+        }
+        if method == "ui.shell.profiles.load" {
+            return Some(
+                self.load_shell_profile(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.shell.patch" {
+            return Some(self.patch_shell(params).map(|response| ModelDispatch {
+                response,
+                present: true,
+            }));
+        }
+        if method == "ui.shell.patch_layout" {
+            return Some(
+                self.patch_shell_layout(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.shell.replace_layout" {
+            return Some(
+                self.replace_shell_layout(params)
+                    .map(|response| ModelDispatch {
+                        response,
+                        present: true,
+                    }),
+            );
+        }
+        if method == "ui.shell.reset" {
+            return Some(self.reset_shell(params).map(|response| ModelDispatch {
+                response,
+                present: true,
+            }));
+        }
+        if method == "ui.shell.recover" {
+            return Some(self.recover_shell(params).map(|response| ModelDispatch {
+                response,
+                present: true,
+            }));
+        }
         if method == "app.settings.get" {
             return Some(Ok(ModelDispatch {
                 response: self.settings_snapshot(),
@@ -371,8 +544,18 @@ impl AppModel {
                     format!("unsupported mosaic model method '{method}'"),
                 ))
             });
+            let shell_change = if response.is_ok()
+                && matches!(method, "mosaic.ui.set_left_tab" | "mosaic.ui.set_right_tab")
+            {
+                Some(
+                    self.sync_active_shell_domain_to_layout()
+                        .expect("validated mosaic UI state maps to the shell"),
+                )
+            } else {
+                None
+            };
             let response = response.map(|result| {
-                let response = match method {
+                let mut response = match method {
                     "mosaic.ui.set_left_tab" | "mosaic.ui.set_right_tab" => {
                         json!({"mode":"mosaic","tab":result})
                     }
@@ -391,6 +574,12 @@ impl AppModel {
                     }
                     _ => json!({"mode":"mosaic","result":result}),
                 };
+                if let Some(change) = shell_change.clone() {
+                    response
+                        .as_object_mut()
+                        .expect("mosaic responses are objects")
+                        .insert("shell_change".to_string(), change);
+                }
                 ModelDispatch {
                     response,
                     present: !matches!(
@@ -495,7 +684,23 @@ impl AppModel {
                         "Mosaic pinned memory was unloaded",
                     );
                 }
-                return Some(result.map(|(response, present)| ModelDispatch { response, present }));
+                let shell_change = if result.is_ok() && method == "viewer.panels.set" {
+                    Some(
+                        self.sync_active_shell_domain_to_layout()
+                            .expect("validated mosaic panel state maps to the shell"),
+                    )
+                } else {
+                    None
+                };
+                return Some(result.map(|(mut response, present)| {
+                    if let Some(change) = shell_change {
+                        response
+                            .as_object_mut()
+                            .expect("mosaic shared responses are objects")
+                            .insert("shell_change".to_string(), change);
+                    }
+                    ModelDispatch { response, present }
+                }));
             }
         }
         if matches!(self.mode, ModelMode::Project | ModelMode::Mosaic) {
@@ -835,6 +1040,18 @@ impl AppModel {
                 _ => unreachable!("supported method set and dispatch match diverged"),
             })
         })();
+        let shell_change = if result.is_ok()
+            && matches!(
+                method,
+                "viewer.panels.set" | "viewer.ui.set_left_tab" | "viewer.ui.set_right_tab"
+            ) {
+            Some(
+                self.sync_active_shell_domain_to_layout()
+                    .expect("validated viewer UI state maps to the shell"),
+            )
+        } else {
+            None
+        };
         let present = !matches!(
             method,
             "app.get_loading_state"
@@ -903,6 +1120,14 @@ impl AppModel {
                 | "viewer.masks.persistence.get"
                 | "viewer.viewports.rendering.get"
         );
-        Some(result.map(|response| ModelDispatch { response, present }))
+        Some(result.map(|mut response| {
+            if let Some(change) = shell_change {
+                response
+                    .as_object_mut()
+                    .expect("viewer model responses are objects")
+                    .insert("shell_change".to_string(), change);
+            }
+            ModelDispatch { response, present }
+        }))
     }
 }

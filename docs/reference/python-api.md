@@ -338,17 +338,104 @@ panel = ui.Panel("analysis", title="Analysis", children=[
     ui.Progress("progress", value=0),
     ui.Status("status", "Ready"),
 ])
-contribution = extension.register(panel, location="right.tabs")
+contribution = extension.register(panel)
 app.events.subscribe("ui.extension:org.example.analysis.*", print)
 contribution.patch_values({"progress": 0.5, "status": "Working"})
+# Use contribution.mount("layout:analysis") in a ShellLayout desired tree.
 ```
 
-Rust-owned hosts are available at `right.tabs`, `left.sections`,
-`top_bar.actions`, `status_bar`, and `canvas.controls`. `project.cards` currently
-uses a dedicated extension window. The component vocabulary includes row,
+Contributions default to first-class shell mounts and appear in
+`app.ui.shell.list_components()`. The `right.tabs`, `left.sections`,
+`top_bar.actions`, `status_bar`, `canvas.controls`, and `project.cards`
+locations remain available as placement hints. Their default hosts are ordinary
+`builtin:extension-host.*` components in the actor-owned tree, not separate native panels or
+windows. The component vocabulary includes row,
 column, grid, tabs, scroll, group/collapsible, text/Markdown/status/warning/error,
 spinner/separator/spacer, buttons, toggles/checkboxes, sliders, numeric and text
 inputs, select/radio/multi-select, colour, and progress controls.
+
+`ShellMountId` provides typed stable component IDs. `CHANNELS`,
+`VIEWER_VIEWPORT_CONTROLS`, `HELP`, `RECOVERY_CONTROLS`, `SHELL_INSPECTOR`, and
+`COMMAND_TOOLBAR` expose independently mountable native surfaces. The inspector reports actor
+revision, ownership, mutation capability, readiness, and current geometry. The catalogue remains
+authoritative for modes and legal parents, and native conformance tests cover every advertised
+built-in dispatcher. Reusable application layouts are available from `odon.layouts`; see
+[Python application-shell workflows](../examples/python-shell-workflows.md).
+
+Complete shell layouts can be shared or retained without manually handling the
+tree mapping:
+
+```python
+document = app.ui.shell.export_layout(mode="single")
+app.ui.shell.import_layout(document)
+app.ui.shell.save_profile("review", scope="application")
+app.ui.shell.load_profile("review", scope="application")
+app.application.update_settings(
+    shell_layout_startup_profiles={"single": "review"}
+)
+# Project scope joins the normal project dirty/save/open lifecycle.
+app.ui.shell.save_profile("team-review", scope="project")
+# Explicit protected fallback after an incompatible external document:
+app.ui.shell.recover()
+```
+
+Normal application profiles live in the current OS user's Odon settings file. Restart tests and
+isolated automation can direct one launched process to a disposable file without changing that
+normal profile:
+
+```python
+app = odon.launch(
+    executable,
+    env={"ODON_SETTINGS_PATH": str(temporary_settings_file)},
+)
+```
+
+An empty `ODON_SETTINGS_PATH` is rejected. Omitting it preserves the ordinary platform settings
+location.
+
+An extension can publish one or more owned defaults for users or workflows to
+apply explicitly:
+
+```python
+document = app.ui.shell.export_layout(mode="single")
+template = extension.register_layout("Analysis review", document)
+template = extension.list_layouts()[0]
+template.apply(app.ui.shell)
+extension.remove_layout("Analysis review")
+```
+
+Odon validates extension-mount ownership and normalizes each registered
+template to layout-document v1. Templates are retained across reconnect only
+for `disable` or `retain` extensions and never replace the current layout until
+an import is requested.
+
+The platform application menu is a separate command presentation rather than an egui shell node:
+
+```python
+commands = {command.id: command for command in app.ui.commands.list()}
+current = app.ui.menus.get()
+menu = ui.CommandMenuNode.menu_bar(
+    current.menu.id,
+    reversed(current.menu.children),
+)
+current = app.ui.menus.replace(menu, if_revision=current.revision)
+```
+
+The real macOS menu is rebuilt after the actor commit. Nested menu builders and separators are
+supported; close, quit, and recovery presentations are protected. Python can also replace the
+bounded mounted-toolbar presentation and configure the native searchable palette through
+`app.ui.toolbars` and `app.ui.palette`. Toolbar items support label/icon/tooltip overrides and
+checked presentation. Extension commands can use `ui.CommandPredicates` and
+`ui.CommandPredicate` to declare actor-evaluated visibility, enabled, and checked conditions over a
+bounded capability/resource/selection/presentation context. User-remappable shortcut bindings
+remain future command-surface work, but declared shortcuts are live: macOS realizes menu
+accelerators and Windows/Linux match every eligible descriptor from the latest actor projection.
+`primary` maps to Command or Ctrl, effective aliases are conflict checked, and the schema reports
+platform support plus diagnostics for non-realizable modifiers. Extensions that declared
+`ui.actions` can call
+`extension.register_command(...)`; Odon assigns a namespaced ID, checks overlapping-mode shortcut
+conflicts, follows extension readiness/disconnect policy, and publishes the declared extension
+event when the command is invoked from Python or the native menu.
 
 Actions can:
 
@@ -357,11 +444,28 @@ Actions can:
 - `bind` a supported property directly to layer visibility/opacity, active or
   visible channels, camera zoom, or smooth-pixel state.
 
+Component visibility and enablement can reuse the actor-evaluated command model:
+
+```python
+run = ui.Button("run", "Run", action=ui.emit("run")).when(
+    visible=ui.command_state("extension:org.example.review/run", state="visible"),
+    enabled=ui.command_state("extension:org.example.review/run"),
+)
+```
+
+These bounded bindings reconcile from the actor projection; a missing command resolves false and
+no Python callback runs on the GUI thread.
+`ShellLayoutNode.state_bindings={"visible": ui.command_state(...)}` uses the same projection for a
+shell region and persists through layout export/import and profiles.
+
 Native bindings remain responsive while Python is busy. Commit, immediate,
 throttle, and debounce event policies are supported. Disconnect policies are
 `remove`, `disable`, and `retain`; Odon also exposes native diagnostics and
 removal controls. `odon.run_extension(factory, reconnect=True)` supplies signal
 handling, cleanup, and reconnect/re-registration for packaged extensions.
+Immediate interactions are render-cadence limited, while throttle/debounce changes coalesce to the
+latest value per component. Python observes native semantic outcomes but cannot synchronously
+intercept or cancel native interactions.
 
 ## Cellpose reference extension
 

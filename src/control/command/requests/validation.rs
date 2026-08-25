@@ -2,6 +2,14 @@
 
 use super::*;
 
+mod commands;
+mod shell;
+
+use shell::{
+    validate_shell_id, validate_shell_mode, validate_shell_profile_name,
+    validate_shell_profile_scope, validate_shell_transaction_id,
+};
+
 fn validate_optional_nullable_string(
     method: &str,
     name: &str,
@@ -84,6 +92,215 @@ pub(in crate::control::command) fn validate_params(
                 return Err(ControlError::invalid_params(
                     method,
                     "this method does not accept parameters",
+                ));
+            }
+        }
+        RequestShape::ShellGet => {
+            let request: ShellGetRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+        }
+        RequestShape::MenuReplace => {
+            commands::menu_replace(method, params)?;
+        }
+        RequestShape::ToolbarReplace => {
+            commands::toolbar_replace(method, params)?;
+        }
+        RequestShape::PaletteReplace => {
+            commands::palette_replace(method, params)?;
+        }
+        RequestShape::CommandRegister => {
+            commands::register(method, params)?;
+        }
+        RequestShape::CommandRemove => {
+            commands::remove(method, params)?;
+        }
+        RequestShape::CommandExecute => {
+            commands::execute(method, params)?;
+        }
+        RequestShape::CommandCleanup => {
+            commands::cleanup(method, params)?;
+        }
+        RequestShape::CommandSync => {
+            commands::sync(method, params)?;
+        }
+        RequestShape::ShellImportLayout => {
+            let request: ShellImportLayoutRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
+                ));
+            }
+            if !request.document.is_object() {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "document must be an object",
+                ));
+            }
+        }
+        RequestShape::ShellPatch => {
+            let request: ShellPatchRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
+                ));
+            }
+            if let Some(visibility) = request.visibility {
+                for id in visibility.keys() {
+                    validate_shell_id(method, "visibility", id)?;
+                }
+            }
+            if let Some(orders) = request.orders {
+                for (id, children) in orders {
+                    validate_shell_id(method, "orders", &id)?;
+                    let mut unique = std::collections::BTreeSet::new();
+                    for child in children {
+                        validate_shell_id(method, "orders child", &child)?;
+                        if !unique.insert(child) {
+                            return Err(ControlError::invalid_params(
+                                method,
+                                format!("order for '{id}' contains a duplicate child ID"),
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(selected) = request.selected {
+                for (id, child) in selected {
+                    validate_shell_id(method, "selected container", &id)?;
+                    validate_shell_id(method, "selected child", &child)?;
+                }
+            }
+        }
+        RequestShape::ShellReplaceLayout => {
+            let request: ShellReplaceLayoutRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
+                ));
+            }
+            if !request.desired_tree.is_object() {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "desired_tree must be an object",
+                ));
+            }
+        }
+        RequestShape::ShellPatchLayout => {
+            let request: ShellPatchLayoutRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
+                ));
+            }
+            for id in request
+                .visibility
+                .iter()
+                .flat_map(|values| values.keys())
+                .chain(request.selected.iter().flat_map(|values| values.keys()))
+                .chain(request.sizes.iter().flat_map(|values| values.keys()))
+                .chain(request.splits.iter().flat_map(|values| values.keys()))
+                .chain(request.collapsed.iter().flat_map(|values| values.keys()))
+                .chain(
+                    request
+                        .configurations
+                        .iter()
+                        .flat_map(|values| values.keys()),
+                )
+            {
+                validate_shell_id(method, "layout node", id)?;
+            }
+            if let Some(selected) = request.selected {
+                for child in selected.values() {
+                    validate_shell_id(method, "selected layout child", child)?;
+                }
+            }
+            if let Some(id) = request.active_region_id {
+                validate_shell_id(method, "active_region_id", &id)?;
+            }
+            if let Some(id) = request.focused_node_id {
+                validate_shell_id(method, "focused_node_id", &id)?;
+            }
+            if request.clear_focus == Some(true) && params.get("focused_node_id").is_some() {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "clear_focus and focused_node_id are mutually exclusive",
+                ));
+            }
+            for (label, values) in [
+                ("sizes", request.sizes),
+                ("splits", request.splits),
+                ("configurations", request.configurations),
+            ] {
+                if let Some(values) = values {
+                    for (id, value) in values {
+                        if !value.is_object() {
+                            return Err(ControlError::invalid_params(
+                                method,
+                                format!("{label} value for '{id}' must be an object"),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        RequestShape::ShellProfileList => {
+            let request: ShellProfileListRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_profile_scope(method, request.scope.as_deref())?;
+        }
+        RequestShape::ShellProfileSave => {
+            let request: ShellProfileSaveRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_profile_name(method, &request.name)?;
+            validate_shell_profile_scope(method, request.scope.as_deref())?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+        }
+        RequestShape::ShellProfileLoad => {
+            let request: ShellProfileLoadRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_profile_name(method, &request.name)?;
+            validate_shell_profile_scope(method, request.scope.as_deref())?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
+                ));
+            }
+        }
+        RequestShape::ShellProfileRemove => {
+            let request: ShellProfileRemoveRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_profile_name(method, &request.name)?;
+            validate_shell_profile_scope(method, request.scope.as_deref())?;
+        }
+        RequestShape::ShellReset => {
+            let request: ShellResetRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            validate_shell_mode(method, request.mode.as_deref())?;
+            validate_shell_transaction_id(method, request.transaction_id.as_deref())?;
+            if request.if_shell_revision == Some(0) {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "if_shell_revision must be at least 1",
                 ));
             }
         }
@@ -213,6 +430,7 @@ pub(in crate::control::command) fn validate_params(
                 let _ = auto.enabled_on_open;
             }
             let _ = request.fast_object_rendering;
+            let _ = request.shell_layout_startup_profiles;
         }
         RequestShape::LifecycleRequest => {
             let request: LifecycleRequest =

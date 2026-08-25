@@ -125,6 +125,7 @@ class Application:
         *,
         auto_contrast: Mapping[str, Any] | None = None,
         fast_object_rendering: bool | None = None,
+        shell_layout_startup_profiles: Mapping[str, str] | None = None,
         if_revision: int | None = None,
     ) -> Any:
         params: dict[str, Any] = {}
@@ -132,6 +133,10 @@ class Application:
             params["auto_contrast"] = dict(auto_contrast)
         if fast_object_rendering is not None:
             params["fast_object_rendering"] = fast_object_rendering
+        if shell_layout_startup_profiles is not None:
+            params["shell_layout_startup_profiles"] = dict(
+                shell_layout_startup_profiles
+            )
         return self._client.call(
             "app.settings.set", _with_revision(params, if_revision)
         )

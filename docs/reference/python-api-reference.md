@@ -17,8 +17,8 @@ mode. Availability is still capability- and readiness-checked at runtime.
 
 | Function | Contract |
 | --- | --- |
-| `odon.client.connect(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> 'Client'` | Connect synchronously to a running Odon instance. |
-| `odon.async_client.connect_async(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> '_AsyncConnector'` | Create an asynchronous Odon connection context. |
+| `odon.client.connect(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0', requested_capabilities: 'Sequence[str] \| None' = None) -> 'Client'` | Connect synchronously to a running Odon instance. |
+| `odon.async_client.connect_async(host: 'str \| None' = None, port: 'int \| None' = None, *, timeout: 'float' = 10.0, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0', requested_capabilities: 'Sequence[str] \| None' = None) -> '_AsyncConnector'` | Create an asynchronous Odon connection context. |
 | `odon.discovery.list_instances(*, clean_stale: 'bool' = True) -> 'list[Instance]'` | List discoverable authenticated local Odon instances. |
 | `odon.discovery.select_instance(instance: 'Instance \| str \| None' = None) -> 'Instance'` | Resolve an instance selector or require an unambiguous instance. |
 | `odon.launch.launch(executable: 'str \| Path', args: 'Sequence[str]' = (), *, timeout: 'float' = 20.0, env: 'Mapping[str, str] \| None' = None, terminate_on_failure: 'bool' = True) -> 'Client'` | Launch an installed Odon executable and connect synchronously. |
@@ -27,6 +27,11 @@ mode. Availability is still capability- and readiness-checked at runtime.
 | `odon.ui.emit(event: 'str', **data: 'Any') -> 'dict[str, Any]'` | Create an action that emits an extension event to Python. |
 | `odon.ui.command(method: 'str', params: 'Mapping[str, Any] \| None' = None) -> 'dict[str, Any]'` | Create an action that invokes a validated native command. |
 | `odon.ui.bind(target: 'str', **selector: 'Any') -> 'dict[str, Any]'` | Create a native state binding action. |
+| `odon.layouts.review(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a reusable single-view review shell. |
+| `odon.layouts.analysis(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a reusable single-view analysis shell. |
+| `odon.layouts.comparison(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a shell around the native comparison workspace. |
+| `odon.layouts.mosaic_triage(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a reusable mosaic-triage shell. |
+| `odon.layouts.presentation(*, mode: 'str' = 'single', show_toolbar: 'bool' = False) -> 'ShellLayout'` | Build a canvas-first presentation shell. |
 
 ## Synchronous API
 
@@ -57,7 +62,7 @@ Access: `app.application`. Application state, settings, navigation, lifecycle, a
 | `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. (completion: immediate_semantic) |
 | `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. (completion: immediate_semantic) |
 | `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. (completion: immediate_semantic) |
-| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
+| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, shell_layout_startup_profiles: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
 | `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. (completion: immediate_semantic) |
 | `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
 | `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
@@ -669,10 +674,406 @@ Constructor: `Ui(client: "'Client'") -> 'None'`
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'Extension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
+| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove', ready: 'bool' = True, readiness_reason: 'str \| None' = None) -> 'Extension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
 | `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. (completion: immediate_semantic) |
 | `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. (completion: immediate_semantic) |
 | `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. (completion: immediate_semantic) |
+
+### Application shell
+
+Access: `app.ui.shell`. Inspect, reorder, select, show, hide, and reset native shell nodes.
+
+Constructor: `Shell(ui: "'Ui'") -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.shell.describe_schema` | project, single, mosaic, transition | Describe the versioned shell snapshot, patch, persistence, recovery, and event contracts. (completion: immediate_semantic) |
+| `get(*, mode: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.get` | project, single, mosaic, transition | Inspect the actor-owned application-shell tree and stable built-in node IDs. (completion: immediate_semantic) |
+| `list_components(*, mode: 'str \| None' = None) -> 'tuple[ShellComponentDescriptor, ...]'` | `ui.shell.components.list` | project, single, mosaic, transition | Discover built-in component mounts and their layout constraints. (completion: immediate_semantic) |
+| `export_layout(*, mode: 'str \| None' = None) -> 'ShellLayoutDocument'` | `ui.shell.export_layout` | project, single, mosaic, transition | Export one mode as a portable versioned layout document. (completion: immediate_semantic) |
+| `import_layout(document: 'ShellLayoutDocument \| Mapping[str, Any]', *, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.import_layout` | project, single, mosaic, transition | Atomically validate, migrate, and import a layout document. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `list_profiles(*, scope: 'str' = 'session') -> 'tuple[ShellLayoutProfile, ...]'` | `ui.shell.profiles.list` | project, single, mosaic, transition | List named layouts from session, application, or project scope. (completion: immediate_semantic) |
+| `save_profile(name: 'str', *, scope: 'str' = 'session', mode: 'str \| None' = None) -> 'Mapping[str, Any]'` | `ui.shell.profiles.save` | project, single, mosaic, transition | Save the current layout under a session, application, or project name. (mutates; completion: immediate_semantic; event: ui.shell.profiles.changed) |
+| `load_profile(name: 'str', *, scope: 'str' = 'session', mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.profiles.load` | project, single, mosaic, transition | Atomically load a named layout into the active mode. (mutates; completion: resource_ready; event: ui.shell.changed) |
+| `remove_profile(name: 'str', *, scope: 'str' = 'session') -> 'Mapping[str, Any]'` | `ui.shell.profiles.remove` | project, single, mosaic, transition | Remove a named session, application, or project layout. (mutates; completion: immediate_semantic; event: ui.shell.profiles.changed) |
+| `patch(*, visibility: 'Mapping[str \| ShellId, bool] \| None' = None, orders: 'Mapping[str \| ShellId, Iterable[str \| ShellId]] \| None' = None, selected: 'Mapping[str \| ShellId, str \| ShellId] \| None' = None, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.patch` | project, single, mosaic, transition | Atomically change shell visibility, child order, and selected built-in tabs. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `reset(*, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.reset` | project, single, mosaic, transition | Reset one application mode to Odon's built-in shell layout. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `recover(*, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.recover` | project, single, mosaic, transition | Replace the active shell with Odon's protected minimal recovery layout. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `replace_layout(layout: 'ShellLayout \| Mapping[str, Any]', *, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.replace_layout` | project, single, mosaic, transition | Atomically replace the active mode's complete desired layout tree. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `patch_layout(*, visibility: 'Mapping[str, bool] \| None' = None, selected: 'Mapping[str, str] \| None' = None, sizes: 'Mapping[str, ShellSize \| Mapping[str, Any]] \| None' = None, splits: 'Mapping[str, ShellSplit \| Mapping[str, Any]] \| None' = None, collapsed: 'Mapping[str, bool] \| None' = None, configurations: 'Mapping[str, Mapping[str, Any]] \| None' = None, active_region_id: 'str \| None' = None, focused_node_id: 'str \| None' = None, clear_focus: 'bool' = False, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.patch_layout` | project, single, mosaic, transition | Atomically update interactive state within the active desired tree. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+
+### Application commands
+
+Access: `app.ui.commands`. Discover stable application command descriptors independently of their presentations.
+
+Constructor: `Commands(ui: "'Ui'") -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.commands.describe_schema` | project, single, mosaic, transition | Describe command descriptors, shortcuts, platform-menu nodes, limits, and protection rules. (completion: immediate_semantic) |
+| `list() -> 'tuple[ApplicationCommand, ...]'` | `ui.commands.list` | project, single, mosaic, transition | List actor-owned application command descriptors independently of their presentations. (completion: immediate_semantic) |
+| `execute(command: 'ApplicationCommand \| str', *, checked: 'bool \| None' = None) -> 'Mapping[str, Any]'` | `ui.commands.execute` | project, single, mosaic, transition | Invoke a ready native, control, or extension-event command. (completion: immediate_semantic; event: ui.commands.executed) |
+
+### Application command
+
+Access: returned by `app.ui.commands.list`. Typed command identity, handler, availability, protection, icon, and shortcut metadata.
+
+Constructor: `ApplicationCommand(id: 'str', title: 'str', description: 'str', handler: 'Mapping[str, Any]', modes: 'tuple[str, ...]', protected: 'bool', predicates: 'CommandPredicates' = <factory>, state: 'Mapping[str, Any]' = <factory>, shortcut: 'Mapping[str, Any] \| None' = None, icon: 'str \| None' = None, ownership: 'Mapping[str, Any] \| None' = None, readiness: 'Mapping[str, Any] \| None' = None, disconnect_policy: 'str \| None' = None, _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ApplicationCommand'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command predicate
+
+Access: configure extension commands. A bounded actor-evaluated capability or application-state condition.
+
+Constructor: `CommandPredicate(spec: 'Mapping[str, Any]') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `always(value: 'bool', *, reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | Always. |
+| `capability(capability: 'str', *, reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | Capability. |
+| `state(path: 'str', *, operator: 'str' = 'truthy', value: 'Any' = None, reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | State. |
+| `all(*predicates: "'CommandPredicate \| Mapping[str, Any]'", reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | All. |
+| `any(*predicates: "'CommandPredicate \| Mapping[str, Any]'", reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | Any. |
+| `not_(predicate: "'CommandPredicate \| Mapping[str, Any]'", *, reason: 'str \| None' = None) -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | Not . |
+| `from_result(value: "'CommandPredicate \| Mapping[str, Any]'") -> "'CommandPredicate'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### Command predicate slots
+
+Access: configure extension commands. Declarative visible, enabled, and checked conditions shared by every command presentation.
+
+Constructor: `CommandPredicates(visible: 'CommandPredicate \| None' = None, enabled: 'CommandPredicate \| None' = None, checked: 'CommandPredicate \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `predicates(*, visible: 'CommandPredicate \| Mapping[str, Any] \| None' = None, enabled: 'CommandPredicate \| Mapping[str, Any] \| None' = None, checked: 'CommandPredicate \| Mapping[str, Any] \| None' = None) -> "'CommandPredicates'"` | SDK-local/delegated | Inherited from delegated operation | Predicates. |
+| `from_result(value: "'CommandPredicates \| Mapping[str, Any] \| None'") -> "'CommandPredicates'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### Platform menus
+
+Access: `app.ui.menus`. Inspect and revision-guard the declarative platform application menu.
+
+Constructor: `Menus(ui: "'Ui'") -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandMenuSnapshot'` | `ui.menus.get` | project, single, mosaic, transition | Inspect the revisioned declarative platform application menu. (completion: immediate_semantic) |
+| `replace(menu: 'CommandMenuNode \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandMenuSnapshot'` | `ui.menus.replace` | project, single, mosaic, transition | Atomically replace the platform application-menu presentation while preserving protected commands. (mutates; completion: immediate_semantic; event: ui.menus.changed) |
+
+### Platform menu snapshot
+
+Access: returned by `app.ui.menus`. Typed revisioned platform-menu presentation snapshot.
+
+Constructor: `CommandMenuSnapshot(schema_version: 'int', revision: 'int', menu: 'CommandMenuNode', change: 'Mapping[str, Any] \| None' = None, _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandMenuSnapshot'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Platform menu node
+
+Access: build platform menu trees. A menu bar, nested menu, command presentation, or separator.
+
+Constructor: `CommandMenuNode(id: 'str', type: 'str', title: 'str \| None' = None, command_id: 'str \| None' = None, children: "tuple['CommandMenuNode', ...]" = (), label: 'str \| None' = None, icon: 'str \| None' = None, show_shortcut: 'bool \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandMenuNode'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `menu_bar(id: 'str', children: "Iterable['CommandMenuNode']") -> "'CommandMenuNode'"` | SDK-local/delegated | Inherited from delegated operation | Menu bar. |
+| `menu(id: 'str', title: 'str', children: "Iterable['CommandMenuNode']") -> "'CommandMenuNode'"` | SDK-local/delegated | Inherited from delegated operation | Menu. |
+| `command(id: 'str', command_id: 'str', *, label: 'str \| None' = None, icon: 'str \| None' = None, show_shortcut: 'bool \| None' = None) -> "'CommandMenuNode'"` | SDK-local/delegated | Inherited from delegated operation | Command. |
+| `separator(id: 'str') -> "'CommandMenuNode'"` | SDK-local/delegated | Inherited from delegated operation | Separator. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### Command toolbars
+
+Access: `app.ui.toolbars`. Inspect and revision-guard the declarative application command toolbar.
+
+Constructor: `Toolbars(ui: "'Ui'") -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandToolbarSnapshot'` | `ui.toolbars.get` | project, single, mosaic, transition | Inspect the revisioned declarative application command toolbar. (completion: immediate_semantic) |
+| `replace(toolbar: 'CommandToolbar \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandToolbarSnapshot'` | `ui.toolbars.replace` | project, single, mosaic, transition | Atomically replace toolbar groups and command presentations. (mutates; completion: immediate_semantic; event: ui.toolbars.changed) |
+
+### Command toolbar snapshot
+
+Access: returned by `app.ui.toolbars`. Typed revisioned command-toolbar presentation snapshot.
+
+Constructor: `CommandToolbarSnapshot(schema_version: 'int', revision: 'int', toolbar: 'CommandToolbar', change: 'Mapping[str, Any] \| None' = None, _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandToolbarSnapshot'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command toolbar
+
+Access: build a command toolbar. A bounded toolbar presentation containing ordered groups.
+
+Constructor: `CommandToolbar(id: 'str', groups: 'tuple[CommandToolbarGroup, ...]') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `toolbar(id: 'str', groups: 'Iterable[CommandToolbarGroup]') -> "'CommandToolbar'"` | SDK-local/delegated | Inherited from delegated operation | Toolbar. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandToolbar'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command toolbar group
+
+Access: contained by `CommandToolbar`. One labelled or unlabelled group of command presentations.
+
+Constructor: `CommandToolbarGroup(id: 'str', items: 'tuple[CommandToolbarItem, ...]', title: 'str \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `group(id: 'str', items: 'Iterable[CommandToolbarItem]', *, title: 'str \| None' = None) -> "'CommandToolbarGroup'"` | SDK-local/delegated | Inherited from delegated operation | Group. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandToolbarGroup'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command toolbar item
+
+Access: contained by `CommandToolbarGroup`. A toolbar presentation referencing one stable command ID.
+
+Constructor: `CommandToolbarItem(id: 'str', command_id: 'str', label: 'str \| None' = None, icon: 'str \| None' = None, tooltip: 'str \| None' = None, show_label: 'bool' = True) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `command(id: 'str', command: 'ApplicationCommand \| str', *, label: 'str \| None' = None, icon: 'str \| None' = None, tooltip: 'str \| None' = None, show_label: 'bool' = True) -> "'CommandToolbarItem'"` | SDK-local/delegated | Inherited from delegated operation | Command. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandToolbarItem'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command palette resource
+
+Access: `app.ui.palette`. Inspect and revision-guard the searchable command-palette presentation.
+
+Constructor: `Palette(ui: "'Ui'") -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandPaletteSnapshot'` | `ui.palette.get` | project, single, mosaic, transition | Inspect the revisioned searchable command-palette presentation. (completion: immediate_semantic) |
+| `replace(palette: 'CommandPalette \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandPaletteSnapshot'` | `ui.palette.replace` | project, single, mosaic, transition | Atomically replace command-palette title, prompt, shortcut, description visibility, and result limit. (mutates; completion: immediate_semantic; event: ui.palette.changed) |
+
+### Command palette snapshot
+
+Access: returned by `app.ui.palette`. Typed revisioned command-palette presentation snapshot.
+
+Constructor: `CommandPaletteSnapshot(schema_version: 'int', revision: 'int', palette: 'CommandPalette', change: 'Mapping[str, Any] \| None' = None, _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandPaletteSnapshot'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Command palette
+
+Access: configure `app.ui.palette`. Palette title, prompt, shortcut, description visibility, and bounded result count.
+
+Constructor: `CommandPalette(id: 'str', title: 'str', placeholder: 'str', shortcut: 'Mapping[str, Any]', show_descriptions: 'bool' = True, max_results: 'int' = 20) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `palette(id: 'str', *, title: 'str' = 'Commands', placeholder: 'str' = 'Search commands…', shortcut: 'Mapping[str, Any] \| None' = None, show_descriptions: 'bool' = True, max_results: 'int' = 20) -> "'CommandPalette'"` | SDK-local/delegated | Inherited from delegated operation | Palette. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'CommandPalette'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell snapshot
+
+Access: returned by `app.ui.shell`. Typed, mapping-compatible versioned shell snapshot.
+
+Constructor: `ShellSnapshot(schema_version: 'int', revision: 'int', mode: 'str', root_id: 'str', nodes: 'tuple[ShellNode, ...]', active_region_id: 'str', focused_node_id: 'str \| None', layout: 'ShellLayout \| None' = None, change: 'ShellChange \| None' = None, _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellSnapshot'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `node(node_id: 'str \| ShellId') -> 'ShellNode'` | SDK-local/delegated | Inherited from delegated operation | Node. |
+
+### Application shell node
+
+Access: contained by `ShellSnapshot`. Typed native or extension-host shell node.
+
+Constructor: `ShellNode(id: 'str', type: 'str', parent_id: 'str \| None', content: 'str \| None', visible: 'bool', mutable: 'ShellMutability', children: 'tuple[str, ...]', selected_id: 'str \| None', ownership: 'ShellOwnership \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellNode'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell mutability
+
+Access: `ShellNode.mutable`. Per-property native shell mutation capabilities.
+
+Constructor: `ShellMutability(visibility: 'bool', order: 'bool', selection: 'bool') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellMutability'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell change
+
+Access: `ShellSnapshot.change`. Old/new revisions and property-level mutation results.
+
+Constructor: `ShellChange(operation: 'str', mode: 'str', previous_revision: 'int', revision: 'int', changed: 'bool', transaction_id: 'str \| None', changes: 'tuple[ShellPropertyChange, ...]') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellChange'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell property change
+
+Access: contained by `ShellChange`. One changed shell node property with before/after values.
+
+Constructor: `ShellPropertyChange(node_id: 'str', property: 'str', before: 'Any', after: 'Any') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellPropertyChange'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell IDs
+
+Access: use in shell patches. Stable schema-version-1 built-in and extension-host IDs.
+
+Constructor: `ShellId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+
+This value type has no public methods beyond its fields.
+
+### Application shell mount IDs
+
+Access: use in `ShellLayoutNode` builders. Stable built-in component and application-owned extension-host mount IDs.
+
+Constructor: `ShellMountId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+
+This value type has no public methods beyond its fields.
+
+### Application shell desired layout
+
+Access: submit to `app.ui.shell.replace_layout`. A complete validated keyed application layout tree.
+
+Constructor: `ShellLayout(root_id: 'str', nodes: 'tuple[ShellLayoutNode, ...]', _raw: 'Mapping[str, Any]' = <factory>) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellLayout'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `node(node_id: 'str') -> 'ShellLayoutNode'` | SDK-local/delegated | Inherited from delegated operation | Node. |
+| `validate_for_mode(mode: 'str') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Validate for mode. |
+
+### Application shell layout document
+
+Access: returned by `app.ui.shell.export_layout`. A portable versioned layout document for import, migration, and recovery workflows.
+
+Constructor: `ShellLayoutDocument(mode: 'str', layout: 'ShellLayout', schema_version: 'int' = 1, format: 'str' = 'odon.shell-layout') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellLayoutDocument'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### Application shell layout profile
+
+Access: returned by `app.ui.shell.list_profiles`. Metadata for one named session, application, or project layout.
+
+Constructor: `ShellLayoutProfile(name: 'str', mode: 'str \| None', document_schema_version: 'int \| None', valid: 'bool', error: 'str \| None' = None, startup_modes: 'tuple[str, ...]' = (), error_kind: 'str \| None' = None, recovery_method: 'str \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellLayoutProfile'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Extension layout template
+
+Access: returned by `extension.register_layout()`. A canonical version-1 default layout owned by one extension.
+
+Constructor: `ExtensionLayoutTemplate(extension_id: 'str', name: 'str', document: 'ShellLayoutDocument', revision: 'int', ownership: 'ShellOwnership \| None' = None, extension_version: 'str \| None' = None, readiness: 'str' = 'ready') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ExtensionLayoutTemplate'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `apply(shell: "'Shell'", *, if_revision: 'int \| None' = None) -> "'ShellSnapshot'"` | SDK-local/delegated | Inherited from delegated operation | Atomically apply this template to its document mode. |
+
+### Application shell layout node
+
+Access: contained by `ShellLayout`. A row, column, split, tabs, panel, canvas, built-in, or extension mount node.
+
+Constructor: `ShellLayoutNode(id: 'str', type: 'ShellLayoutType \| str', children: 'tuple[str, ...]' = (), visible: 'bool' = True, title: 'str \| None' = None, mount: 'str \| None' = None, selected_id: 'str \| None' = None, size: 'ShellSize' = <factory>, split: 'ShellSplit \| None' = None, collapsed: 'bool' = False, configuration: 'Mapping[str, Any]' = <factory>, state_bindings: 'Mapping[str, Mapping[str, Any]]' = <factory>, parent_id: 'str \| None' = None, ownership: 'ShellOwnership \| None' = None, readiness: 'ShellMountReadiness \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `to_dict(*, include_parent: 'bool' = False) -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+| `application(id: 'str', children: 'Iterable[str]') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Application. |
+| `row(id: 'str', children: 'Iterable[str]', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Row. |
+| `column(id: 'str', children: 'Iterable[str]', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Column. |
+| `panel(id: 'str', child: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Panel. |
+| `collapsible(id: 'str', child: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Collapsible. |
+| `toolbar(id: 'str', children: 'Iterable[str]', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Toolbar. |
+| `status_bar(id: 'str', children: 'Iterable[str]', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Status bar. |
+| `menu_host(id: 'str', children: 'Iterable[str]', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Menu host. |
+| `tabs(id: 'str', children: 'Iterable[str]', *, selected: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Tabs. |
+| `split_node(id: 'str', first: 'str', second: 'str', *, axis: 'str' = 'horizontal', ratio: 'float' = 0.5, resizable: 'bool' = True, **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Split node. |
+| `builtin(id: 'str', mount: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Builtin. |
+| `canvas(id: 'str', mount: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Canvas. |
+| `extension(id: 'str', mount: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Extension. |
+
+### Application shell layout node types
+
+Access: use in `ShellLayoutNode`. Supported desired-layout node kinds.
+
+Constructor: `ShellLayoutType(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+
+This value type has no public methods beyond its fields.
+
+### Application shell ownership
+
+Access: available on shell nodes and component descriptors. Server-derived application/extension owner identity, session identity, and protected status.
+
+Constructor: `ShellOwnership(scope: 'str', owner_id: 'str', protected: 'bool', owner_session_id: 'str \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellOwnership'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell mount readiness
+
+Access: available on extension `ShellLayoutNode` instances. Ready, not-ready, disconnected, incompatible, or missing retained extension-mount state.
+
+Constructor: `ShellMountReadiness(state: 'str', reason: 'str \| None' = None, expected_extension_version: 'str \| None' = None, current_extension_version: 'str \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellMountReadiness'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell size
+
+Access: use in `ShellLayoutNode`. Advisory desired, minimum, maximum, and flex sizing.
+
+Constructor: `ShellSize(width: 'float \| None' = None, height: 'float \| None' = None, min_width: 'float \| None' = None, min_height: 'float \| None' = None, max_width: 'float \| None' = None, max_height: 'float \| None' = None, flex: 'float \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `to_dict() -> 'dict[str, float]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellSize'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell split
+
+Access: use in split layout nodes. Validated split ratio and native-resize behavior.
+
+Constructor: `ShellSplit(ratio: 'float' = 0.5, resizable: 'bool' = True, axis: 'str' = 'horizontal') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellSplit'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
+
+### Application shell component descriptor
+
+Access: returned by `app.ui.shell.list_components`. Introspected built-in mount compatibility, sizing, commands, events, and persistence.
+
+Constructor: `ShellComponentDescriptor(id: 'str', version: 'int', title: 'str', kind: 'str', modes: 'tuple[str, ...]', readiness: 'tuple[str, ...]', legal_parent_types: 'tuple[str, ...]', singleton: 'bool', configuration_schema: 'Mapping[str, Any]', commands: 'tuple[str, ...]', events: 'tuple[str, ...]', minimum_size: 'Mapping[str, float]', recommended_size: 'Mapping[str, float]', persistence: 'str', ownership: 'ShellOwnership \| None' = None) -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_result(value: 'Mapping[str, Any]') -> "'ShellComponentDescriptor'"` | SDK-local/delegated | Inherited from delegated operation | From result. |
 
 ### UI extension handle
 
@@ -684,7 +1085,13 @@ Constructor: `Extension(ui: "'Ui'", snapshot: 'Mapping[str, Any]') -> 'None'`
 | --- | --- | --- | --- |
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
 | `granted_capabilities (property)` | SDK-local/delegated | Inherited from delegated operation | Granted capabilities. |
-| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'Contribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `set_readiness(ready: 'bool', *, reason: 'str \| None' = None) -> "'Extension'"` | `ui.extensions.set_readiness` | protocol | Publish whether this extension is ready for its retained mounts to render. (mutates; completion: immediate_semantic) |
+| `register(root: 'Component', *, location: 'str' = 'shell', contribution_id: 'str \| None' = None) -> 'Contribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `register_command(id: 'str', title: 'str', description: 'str', event: 'str', *, modes: 'Iterable[str]' = ('project', 'single', 'mosaic'), shortcut: 'Mapping[str, Any] \| None' = None, icon: 'str \| None' = None, predicates: "'CommandPredicates \| Mapping[str, Any] \| None'" = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> "'ApplicationCommand'"` | `ui.commands.register` | project, single, mosaic, transition | Register an owned action as ``extension:<extension-id>/<id>``. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
+| `remove_command(command: "'ApplicationCommand \| str'", *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'None'` | `ui.commands.remove` | project, single, mosaic, transition | Remove an owned command and all menu items that present it. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
+| `register_layout(name: 'str', document: "'ShellLayoutDocument \| Mapping[str, Any]'") -> "'ExtensionLayoutTemplate'"` | `ui.extensions.layouts.register` | protocol | Register or replace a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
+| `list_layouts() -> "tuple['ExtensionLayoutTemplate', ...]"` | `ui.extensions.layouts.list` | protocol | List this extension's registered default layouts by name. (completion: immediate_semantic) |
+| `remove_layout(name: 'str') -> 'None'` | `ui.extensions.layouts.remove` | protocol | Remove a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates; completion: immediate_semantic) |
 
 ### UI contribution handle
@@ -697,6 +1104,9 @@ Constructor: `Contribution(extension: "'Extension'", snapshot: 'Mapping[str, Any
 | --- | --- | --- | --- |
 | `contribution_id (property)` | SDK-local/delegated | Inherited from delegated operation | Contribution id. |
 | `revision (property)` | SDK-local/delegated | Inherited from delegated operation | Revision. |
+| `shell_mount (property)` | SDK-local/delegated | Inherited from delegated operation | Shell mount. |
+| `ownership (property)` | SDK-local/delegated | Inherited from delegated operation | Ownership. |
+| `mount(node_id: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Create a keyed shell node that renders this contribution. |
 | `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'Contribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
 
@@ -704,10 +1114,11 @@ Constructor: `Contribution(extension: "'Extension'", snapshot: 'Mapping[str, Any
 
 Access: construct through component subclasses. Serializable native-egui component contract.
 
-Constructor: `Component(id: 'str', label: 'str \| None' = None, title: 'str \| None' = None, help: 'str \| None' = None, visible: 'bool' = True, enabled: 'bool' = True, value: 'Any' = None, minimum: 'float \| None' = None, maximum: 'float \| None' = None, options: 'list[Any]' = <factory>, columns: 'int \| None' = None, action: 'Mapping[str, Any] \| None' = None, event_policy: 'EventPolicy \| Mapping[str, Any] \| None' = None, children: "list['Component']" = <factory>) -> None`
+Constructor: `Component(id: 'str', label: 'str \| None' = None, title: 'str \| None' = None, help: 'str \| None' = None, visible: 'bool' = True, enabled: 'bool' = True, value: 'Any' = None, minimum: 'float \| None' = None, maximum: 'float \| None' = None, options: 'list[Any]' = <factory>, columns: 'int \| None' = None, action: 'Mapping[str, Any] \| None' = None, event_policy: 'EventPolicy \| Mapping[str, Any] \| None' = None, state_bindings: 'dict[str, Mapping[str, Any]]' = <factory>, children: "list['Component']" = <factory>) -> None`
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
+| `when(*, visible: 'Mapping[str, Any] \| None' = None, enabled: 'Mapping[str, Any] \| None' = None) -> "'Component'"` | SDK-local/delegated | Inherited from delegated operation | Bind visibility or enablement to actor-evaluated command state. |
 | `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
 
 ### UI event policy
@@ -815,7 +1226,7 @@ Access: `await odon.connect_async()`. Async connection and root resource contain
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `connect(host: 'str \| None' = None, port: 'int \| None' = None, *, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, timeout: 'float' = 10.0, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0') -> "'AsyncClient'"` | `system.hello` | protocol | Authenticate and negotiate a control protocol version. (completion: immediate_semantic) |
+| `connect(host: 'str \| None' = None, port: 'int \| None' = None, *, token: 'str \| None' = None, instance: 'Instance \| str \| None' = None, timeout: 'float' = 10.0, client_name: 'str' = 'odon-client', client_version: 'str' = '0.1.0', requested_capabilities: 'Sequence[str] \| None' = None) -> "'AsyncClient'"` | `system.hello` | protocol | Authenticate and negotiate a control protocol version. (completion: immediate_semantic) |
 | `call(method: 'str', params: 'Mapping[str, Any] \| None' = None, *, timeout: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Call. |
 | `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
 | `batch(operations: 'Sequence[tuple[str, Mapping[str, Any] \| None]]', *, atomic: 'bool' = False) -> 'Any'` | `system.batch` | protocol | Execute application commands in order. (mutates; completion: immediate_semantic) |
@@ -837,7 +1248,7 @@ Access: `app.application`. Async application resource.
 | `get_method_availability(methods: 'Iterable[str] \| None' = None) -> 'Any'` | `app.get_method_availability` | project, single, mosaic, transition | Describe whether control methods are available in the current mode. (completion: immediate_semantic) |
 | `get_diagnostics() -> 'Any'` | `system.get_diagnostics` | protocol | Inspect bounded control-server state. (completion: immediate_semantic) |
 | `get_settings() -> 'Any'` | `app.settings.get` | project, single, mosaic, transition | Inspect persistent application preferences. (completion: immediate_semantic) |
-| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
+| `update_settings(*, auto_contrast: 'Mapping[str, Any] \| None' = None, fast_object_rendering: 'bool \| None' = None, shell_layout_startup_profiles: 'Mapping[str, str] \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `app.settings.set` | project, single, mosaic, transition | Validate, persist, and apply application preferences. (mutates; completion: immediate_semantic; event: application.settings.changed) |
 | `list_recent_projects() -> 'Any'` | `app.recent_projects.list` | project, single, mosaic, transition | List recently opened project files. (completion: immediate_semantic) |
 | `forget_recent_project(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.forget` | project, single, mosaic, transition | Forget one recently opened project path. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
 | `clear_recent_projects(*, if_revision: 'int \| None' = None) -> 'Any'` | `app.recent_projects.clear` | project, single, mosaic, transition | Clear the recent-project list. (mutates; completion: immediate_semantic; event: application.recent_projects.changed) |
@@ -1435,10 +1846,68 @@ Access: `app.ui`. Async declarative UI registry.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove') -> 'AsyncExtension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
+| `register_extension(*, id: 'str', name: 'str', version: 'str', capabilities: 'Iterable[str]' = ('ui.panels',), disconnect_policy: 'str' = 'remove', ready: 'bool' = True, readiness_reason: 'str \| None' = None) -> 'AsyncExtension'` | `ui.extensions.register` | protocol | Register a declarative UI extension. (mutates; completion: immediate_semantic) |
 | `list_extensions() -> 'list[Mapping[str, Any]]'` | `ui.extensions.list` | protocol | List UI extensions. (completion: immediate_semantic) |
 | `list_contributions() -> 'list[Mapping[str, Any]]'` | `ui.contributions.list` | protocol | List component trees. (completion: immediate_semantic) |
 | `describe_schema() -> 'Mapping[str, Any]'` | `ui.describe_schema` | protocol | Describe declarative UI schema v1 limits and vocabulary. (completion: immediate_semantic) |
+
+### Async application shell
+
+Access: `app.ui.shell`. Async native application-shell composition.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.shell.describe_schema` | project, single, mosaic, transition | Describe the versioned shell snapshot, patch, persistence, recovery, and event contracts. (completion: immediate_semantic) |
+| `get(*, mode: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.get` | project, single, mosaic, transition | Inspect the actor-owned application-shell tree and stable built-in node IDs. (completion: immediate_semantic) |
+| `list_components(*, mode: 'str \| None' = None) -> 'tuple[ShellComponentDescriptor, ...]'` | `ui.shell.components.list` | project, single, mosaic, transition | List built-in GUI component mounts and their composition constraints. (completion: immediate_semantic) |
+| `export_layout(*, mode: 'str \| None' = None) -> 'ShellLayoutDocument'` | `ui.shell.export_layout` | project, single, mosaic, transition | Export one mode as a portable versioned shell-layout document. (completion: immediate_semantic) |
+| `import_layout(document: 'ShellLayoutDocument \| Mapping[str, Any]', *, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.import_layout` | project, single, mosaic, transition | Atomically validate, migrate, and import a portable shell-layout document. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `list_profiles(*, scope: 'str' = 'session') -> 'tuple[ShellLayoutProfile, ...]'` | `ui.shell.profiles.list` | project, single, mosaic, transition | List named shell layouts in session, application, or project scope. (completion: immediate_semantic) |
+| `save_profile(name: 'str', *, scope: 'str' = 'session', mode: 'str \| None' = None) -> 'Mapping[str, Any]'` | `ui.shell.profiles.save` | project, single, mosaic, transition | Save one mode's current shell layout under a session, application, or project name. (mutates; completion: immediate_semantic; event: ui.shell.profiles.changed) |
+| `load_profile(name: 'str', *, scope: 'str' = 'session', mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.profiles.load` | project, single, mosaic, transition | Atomically load a named shell layout into the active mode. (mutates; completion: resource_ready; event: ui.shell.changed) |
+| `remove_profile(name: 'str', *, scope: 'str' = 'session') -> 'Mapping[str, Any]'` | `ui.shell.profiles.remove` | project, single, mosaic, transition | Remove a named session, application, or project shell layout. (mutates; completion: immediate_semantic; event: ui.shell.profiles.changed) |
+| `patch(*, visibility: 'Mapping[str \| ShellId, bool] \| None' = None, orders: 'Mapping[str \| ShellId, Iterable[str \| ShellId]] \| None' = None, selected: 'Mapping[str \| ShellId, str \| ShellId] \| None' = None, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.patch` | project, single, mosaic, transition | Atomically change shell visibility, child order, and selected built-in tabs. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `reset(*, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.reset` | project, single, mosaic, transition | Reset one application mode to Odon's built-in shell layout. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `recover(*, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.recover` | project, single, mosaic, transition | Replace the active shell with Odon's protected minimal recovery layout. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `replace_layout(layout: 'ShellLayout \| Mapping[str, Any]', *, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.replace_layout` | project, single, mosaic, transition | Atomically replace the active mode's validated keyed application layout tree. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+| `patch_layout(*, visibility: 'Mapping[str, bool] \| None' = None, selected: 'Mapping[str, str] \| None' = None, sizes: 'Mapping[str, Any] \| None' = None, splits: 'Mapping[str, Any] \| None' = None, collapsed: 'Mapping[str, bool] \| None' = None, configurations: 'Mapping[str, Mapping[str, Any]] \| None' = None, active_region_id: 'str \| None' = None, focused_node_id: 'str \| None' = None, clear_focus: 'bool' = False, mode: 'str \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ShellSnapshot'` | `ui.shell.patch_layout` | project, single, mosaic, transition | Atomically update desired-tree visibility, selection, sizing, split, collapse, configuration, active-region, or focus state. (mutates; completion: immediate_semantic; event: ui.shell.changed) |
+
+### Async application commands
+
+Access: `app.ui.commands`. Async command discovery.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `describe_schema() -> 'Mapping[str, Any]'` | `ui.commands.describe_schema` | project, single, mosaic, transition | Describe command descriptors, shortcuts, platform-menu nodes, limits, and protection rules. (completion: immediate_semantic) |
+| `list() -> 'tuple[ApplicationCommand, ...]'` | `ui.commands.list` | project, single, mosaic, transition | List actor-owned application command descriptors independently of their presentations. (completion: immediate_semantic) |
+| `execute(command: 'ApplicationCommand \| str', *, checked: 'bool \| None' = None) -> 'Mapping[str, Any]'` | `ui.commands.execute` | project, single, mosaic, transition | Invoke any ready command through its actor-resolved native, control, or extension-event handler. (completion: immediate_semantic; event: ui.commands.executed) |
+
+### Async platform menus
+
+Access: `app.ui.menus`. Async revision-guarded platform-menu composition.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandMenuSnapshot'` | `ui.menus.get` | project, single, mosaic, transition | Inspect the revisioned declarative platform application menu. (completion: immediate_semantic) |
+| `replace(menu: 'CommandMenuNode \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandMenuSnapshot'` | `ui.menus.replace` | project, single, mosaic, transition | Atomically replace the platform application-menu presentation while preserving protected commands. (mutates; completion: immediate_semantic; event: ui.menus.changed) |
+
+### Async command toolbars
+
+Access: `app.ui.toolbars`. Async revision-guarded command-toolbar composition.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandToolbarSnapshot'` | `ui.toolbars.get` | project, single, mosaic, transition | Inspect the revisioned declarative application command toolbar. (completion: immediate_semantic) |
+| `replace(toolbar: 'CommandToolbar \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandToolbarSnapshot'` | `ui.toolbars.replace` | project, single, mosaic, transition | Atomically replace toolbar groups and command presentations. (mutates; completion: immediate_semantic; event: ui.toolbars.changed) |
+
+### Async command palette
+
+Access: `app.ui.palette`. Async revision-guarded command-palette composition.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `get() -> 'CommandPaletteSnapshot'` | `ui.palette.get` | project, single, mosaic, transition | Inspect the revisioned searchable command-palette presentation. (completion: immediate_semantic) |
+| `replace(palette: 'CommandPalette \| Mapping[str, Any]', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'CommandPaletteSnapshot'` | `ui.palette.replace` | project, single, mosaic, transition | Atomically replace command-palette title, prompt, shortcut, description visibility, and result limit. (mutates; completion: immediate_semantic; event: ui.palette.changed) |
 
 ### Async UI extension
 
@@ -1447,7 +1916,13 @@ Access: returned by `app.ui.register_extension()`. Async UI extension handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
-| `register(root: 'Component', *, location: 'str' = 'right.tabs', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `set_readiness(ready: 'bool', *, reason: 'str \| None' = None) -> "'AsyncExtension'"` | `ui.extensions.set_readiness` | protocol | Set the owned extension's connected-session readiness state. (mutates; completion: immediate_semantic) |
+| `register(root: 'Component', *, location: 'str' = 'shell', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `register_command(id: 'str', title: 'str', description: 'str', event: 'str', *, modes: 'Iterable[str]' = ('project', 'single', 'mosaic'), shortcut: 'Mapping[str, Any] \| None' = None, icon: 'str \| None' = None, predicates: 'CommandPredicates \| Mapping[str, Any] \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ApplicationCommand'` | `ui.commands.register` | project, single, mosaic, transition | Register or update an extension-owned command with a namespaced ID and conflict-checked shortcut. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
+| `remove_command(command: 'ApplicationCommand \| str', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'None'` | `ui.commands.remove` | project, single, mosaic, transition | Remove an owned extension command and every platform-menu presentation that references it. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
+| `register_layout(name: 'str', document: 'ShellLayoutDocument \| Mapping[str, Any]') -> 'ExtensionLayoutTemplate'` | `ui.extensions.layouts.register` | protocol | Register or replace a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
+| `list_layouts() -> 'tuple[ExtensionLayoutTemplate, ...]'` | `ui.extensions.layouts.list` | protocol | List this extension's registered default layouts by name. (completion: immediate_semantic) |
+| `remove_layout(name: 'str') -> 'None'` | `ui.extensions.layouts.remove` | protocol | Remove a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.extensions.remove` | protocol | Remove an owned UI extension. (mutates; completion: immediate_semantic) |
 
 ### Async UI contribution
@@ -1457,6 +1932,8 @@ Access: returned by `extension.register()`. Async UI contribution handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `contribution_id (property)` | SDK-local/delegated | Inherited from delegated operation | Contribution id. |
+| `shell_mount (property)` | SDK-local/delegated | Inherited from delegated operation | Shell mount. |
+| `mount(node_id: 'str', **kwargs: 'Any') -> 'ShellLayoutNode'` | SDK-local/delegated | Inherited from delegated operation | Create a keyed shell node that renders this contribution. |
 | `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'AsyncContribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
 

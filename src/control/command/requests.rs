@@ -13,6 +13,158 @@ pub(super) use validation::validate_params;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ShellGetRequest {
+    mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MenuReplaceRequest {
+    if_command_revision: Option<u64>,
+    transaction_id: Option<String>,
+    menu: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolbarReplaceRequest {
+    if_command_revision: Option<u64>,
+    transaction_id: Option<String>,
+    toolbar: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaletteReplaceRequest {
+    if_command_revision: Option<u64>,
+    transaction_id: Option<String>,
+    palette: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandRegisterRequest {
+    extension_id: String,
+    if_command_revision: Option<u64>,
+    transaction_id: Option<String>,
+    command: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandRemoveRequest {
+    extension_id: String,
+    command_id: String,
+    if_command_revision: Option<u64>,
+    transaction_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandExecuteRequest {
+    command_id: String,
+    checked: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandCleanupRequest {
+    extensions: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandSyncRequest {
+    context: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellImportLayoutRequest {
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+    document: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellPatchRequest {
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+    visibility: Option<std::collections::BTreeMap<String, bool>>,
+    orders: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    selected: Option<std::collections::BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellReplaceLayoutRequest {
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+    desired_tree: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellPatchLayoutRequest {
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+    visibility: Option<std::collections::BTreeMap<String, bool>>,
+    selected: Option<std::collections::BTreeMap<String, String>>,
+    sizes: Option<std::collections::BTreeMap<String, Value>>,
+    splits: Option<std::collections::BTreeMap<String, Value>>,
+    collapsed: Option<std::collections::BTreeMap<String, bool>>,
+    configurations: Option<std::collections::BTreeMap<String, Value>>,
+    active_region_id: Option<String>,
+    focused_node_id: Option<String>,
+    clear_focus: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellResetRequest {
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellProfileListRequest {
+    scope: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellProfileSaveRequest {
+    name: String,
+    scope: Option<String>,
+    mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellProfileLoadRequest {
+    name: String,
+    scope: Option<String>,
+    mode: Option<String>,
+    if_shell_revision: Option<u64>,
+    transaction_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShellProfileRemoveRequest {
+    name: String,
+    scope: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetSidePanelsRequest {
     left: Option<bool>,
     right: Option<bool>,
@@ -63,6 +215,7 @@ struct CaptureScreenshotRequest {
 struct AppSettingsRequest {
     auto_contrast: Option<AutoContrastRequest>,
     fast_object_rendering: Option<bool>,
+    shell_layout_startup_profiles: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]

@@ -1,0 +1,20 @@
+{
+  "format": "odon.shell-layout",
+  "schema_version": 1,
+  "mode": "project",
+  "layout": {
+    "root_id": "layout:fixture.v1.root",
+    "nodes": [
+      {
+        "id": "layout:fixture.v1.root",
+        "type": "application",
+        "children": ["layout:fixture.v1.workspace"]
+      },
+      {
+        "id": "layout:fixture.v1.workspace",
+        "type": "builtin_mount",
+        "mount": "builtin:project-workspace"
+      }
+    ]
+  }
+}

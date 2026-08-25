@@ -121,10 +121,6 @@ pub(super) fn begin_settings_mutation(
     load_job_tx: &Sender<LoadJob>,
     diagnostics: &ActorDiagnostics,
 ) {
-    if load_job_tx.is_full() {
-        reject_worker_submission(request, diagnostics);
-        return;
-    }
     let mutation = match request.command.method() {
         "app.settings.set" => model.prepare_settings_set(request.command.params()),
         "app.recent_projects.forget" => {
@@ -140,6 +136,8 @@ pub(super) fn begin_settings_mutation(
             path.and_then(|path| model.prepare_recent_project_forget(path))
         }
         "app.recent_projects.clear" => model.prepare_recent_projects_clear(),
+        "ui.shell.profiles.save" => model.prepare_shell_profile_save(request.command.params()),
+        "ui.shell.profiles.remove" => model.prepare_shell_profile_remove(request.command.params()),
         _ => unreachable!("settings mutation dispatcher only receives settings methods"),
     };
     let mutation = match mutation {
@@ -156,6 +154,14 @@ pub(super) fn begin_settings_mutation(
         finish_request(request, response, diagnostics);
         return;
     };
+    if load_job_tx.is_full() {
+        model.fail_settings_for_generation(
+            operation.generation,
+            "Settings worker queue is unavailable",
+        );
+        reject_worker_submission(request, diagnostics);
+        return;
+    }
     let generation = operation.generation;
     match load_job_tx.try_send(LoadJob::SettingsSave {
         generation,

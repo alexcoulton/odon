@@ -25,6 +25,8 @@ pub struct RenderProjection {
     pub project: ProjectModelSnapshot,
     pub project_object_preload: crate::model::ProjectObjectPreloadProjection,
     pub settings: AppSettings,
+    pub command_surface: Value,
+    pub shell: Value,
     pub screenshot_preferences: ScreenshotPreferences,
     pub tile_loading_policy: TileLoadingPolicy,
     pub memory_state: Arc<Value>,
@@ -54,9 +56,21 @@ pub struct RenderProjection {
     pub label_resource: Option<Arc<ControlLabelResource>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformEffect {
-    CloseWindow { quit: bool },
+    CloseWindow {
+        quit: bool,
+    },
+    InvokeNativeCommand {
+        command_id: String,
+        action: String,
+        checked: Option<bool>,
+    },
+    InvokeControlCommand {
+        command_id: String,
+        method: String,
+        params: Value,
+    },
 }
 
 pub(super) fn publish_projection(
@@ -67,6 +81,11 @@ pub(super) fn publish_projection(
     wake_ui: &UiWake,
     diagnostics: &ActorDiagnostics,
 ) {
+    model.apply_startup_shell_layout_if_needed();
+    // Keep legacy compatibility fields current before every projection, but do not rewrite the
+    // actor-owned desired layout from their narrower panel/tab vocabulary. Explicit legacy UI
+    // mutations use `sync_active_shell_domain_to_layout` and deliberately update both domains.
+    let _ = model.sync_active_shell_domain();
     let revision = model.mark_projection_dirty();
     let mut projection = RenderProjection {
         revision,
@@ -76,6 +95,12 @@ pub(super) fn publish_projection(
         project: model.project_snapshot(),
         project_object_preload: model.project_object_preload_projection(),
         settings: model.settings().clone(),
+        command_surface: {
+            let mut surface = model.command_surface_projection();
+            surface["active_mode"] = json!(model.mode().as_str());
+            surface
+        },
+        shell: model.shell_projection(),
         screenshot_preferences: model.screenshot_preferences().clone(),
         tile_loading_policy: model.tile_loading_policy().clone(),
         memory_state: model.memory_projection_state(),

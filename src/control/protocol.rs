@@ -70,6 +70,8 @@ pub struct HelloRequest {
     pub token: Option<String>,
     pub client: ClientInfo,
     pub protocol_versions: Vec<u32>,
+    #[serde(default)]
+    pub requested_capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ pub struct HelloResponse {
     pub instance_id: String,
     pub session_id: String,
     pub capabilities: Vec<String>,
+    pub granted_capabilities: Vec<String>,
     pub max_inline_payload_bytes: u64,
     pub permission_policy: &'static str,
     pub client: ClientInfo,
@@ -126,6 +129,26 @@ impl HelloResponse {
                 "server_protocol_versions": [PROTOCOL_VERSION],
             })));
         }
+        let capabilities = registry::capabilities();
+        let unknown_capabilities = request
+            .requested_capabilities
+            .iter()
+            .filter(|capability| !capabilities.contains(capability))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown_capabilities.is_empty() {
+            return Err(ControlError::invalid_params(
+                "system.hello",
+                format!(
+                    "requested unsupported capabilities: {}",
+                    unknown_capabilities.join(", ")
+                ),
+            )
+            .with_data(json!({"unsupported_capabilities":unknown_capabilities})));
+        }
+        let mut granted_capabilities = request.requested_capabilities;
+        granted_capabilities.sort();
+        granted_capabilities.dedup();
         Ok(Self {
             protocol_version: PROTOCOL_VERSION,
             app_name: "odon",
@@ -133,9 +156,10 @@ impl HelloResponse {
             control_api_version: "0.1.0",
             instance_id: server.instance_id.clone(),
             session_id: server.session_id.clone(),
-            capabilities: registry::capabilities(),
+            capabilities,
+            granted_capabilities,
             max_inline_payload_bytes: server.max_inline_payload_bytes,
-            permission_policy: "local_authenticated_standard",
+            permission_policy: "local_authenticated_explicit_grants",
             client: request.client,
         })
     }
@@ -177,7 +201,8 @@ mod tests {
             json!({
                 "token": "secret",
                 "client": {"name": "test-client", "version": "1.2.3"},
-                "protocol_versions": [1]
+                "protocol_versions": [1],
+                "requested_capabilities":["ui.shell.application_control","ui.shell.read"]
             }),
             &server_info(Some("secret")),
         )
@@ -187,6 +212,17 @@ mod tests {
         assert_eq!(response.client.name, "test-client");
         assert_eq!(response.instance_id, "instance-test");
         assert!(response.capabilities.contains(&"viewer.read".to_string()));
+        assert_eq!(
+            response.granted_capabilities,
+            vec![
+                "ui.shell.application_control".to_string(),
+                "ui.shell.read".to_string()
+            ]
+        );
+        assert_eq!(
+            response.permission_policy,
+            "local_authenticated_explicit_grants"
+        );
     }
 
     #[test]
@@ -202,6 +238,24 @@ mod tests {
 
         assert_eq!(error.kind, ControlErrorKind::IncompatibleProtocol);
         assert_eq!(error.kind.json_rpc_code(), -32002);
+    }
+
+    #[test]
+    fn hello_rejects_unsupported_capability_grants() {
+        let error = HelloResponse::negotiate(
+            json!({
+                "client":{"name":"test-client","version":"1"},
+                "protocol_versions":[1],
+                "requested_capabilities":["ui.shell.not-real"]
+            }),
+            &server_info(None),
+        )
+        .expect_err("unsupported grants must not be silently accepted");
+        assert_eq!(error.kind, ControlErrorKind::InvalidParams);
+        assert_eq!(
+            error.data.as_ref().unwrap()["unsupported_capabilities"][0],
+            "ui.shell.not-real"
+        );
     }
 
     #[test]

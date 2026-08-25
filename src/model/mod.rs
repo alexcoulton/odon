@@ -3,6 +3,7 @@
 mod analysis;
 mod annotations;
 mod app;
+mod command_surface;
 mod labels;
 mod layers;
 mod masks;
@@ -17,6 +18,7 @@ mod readiness;
 mod screenshot;
 mod segmentation_geojson;
 mod selection;
+mod shell;
 mod threshold;
 
 pub(crate) use analysis::AnalysisModel;
@@ -30,6 +32,11 @@ pub(crate) use app::{
 pub use app::{
     AppModel, ChannelIntensitySpec, ControlSecondaryObjectProjection, ModelDispatch, ModelMode,
     SettingsMutationOutcome, SettingsSaveOperation,
+};
+#[doc(hidden)]
+pub use command_surface::command_surface_native_actions;
+pub(crate) use command_surface::{
+    CommandEvaluationContext, CommandInvocation, CommandSurfaceModel,
 };
 pub use labels::{ControlLabelResource, LabelZarrDataset, discover_label_names_local};
 pub(crate) use masks::{MaskModel, load_geojson_mask_polylines};
@@ -65,6 +72,29 @@ pub(crate) use screenshot::default_screenshot_filename;
 pub use segmentation_geojson::ControlSegmentationGeoJsonResource;
 pub(crate) use segmentation_geojson::{SegmentationGeoJsonLoadSpec, SegmentationGeoJsonModel};
 pub(crate) use selection::{ObjectSelectionModel, parse_world_points, parse_world_rect};
+pub(crate) use shell::ShellModel;
+
+#[doc(hidden)]
+pub use shell::shell_component_catalog;
+
+#[doc(hidden)]
+pub fn shell_component_minimum_size(id: &str) -> Option<[f32; 2]> {
+    shell::shell_component_minimum_size(id)
+}
+
+#[doc(hidden)]
+pub fn validate_shell_layout_document(
+    document: &serde_json::Value,
+) -> Result<(), crate::control::ControlError> {
+    shell::validate_layout_document(document)
+}
+
+#[doc(hidden)]
+pub fn normalize_shell_layout_document(
+    document: &serde_json::Value,
+) -> Result<serde_json::Value, crate::control::ControlError> {
+    shell::normalize_layout_document(document)
+}
 pub(crate) use threshold::ThresholdPreviewModel;
 pub use threshold::{ControlThresholdPreviewResource, ThresholdScope};
 pub(crate) use threshold::{ThresholdMask, extract_threshold_mask, threshold_mask_polygons};

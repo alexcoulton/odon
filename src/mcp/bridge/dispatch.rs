@@ -51,10 +51,20 @@ fn handle_json_rpc_request(
     }
     let is_notification = request.id.is_none();
     let request_id = request.id.clone();
+    if state.hello_complete
+        && request.method != "system.hello"
+        && let Err(error) = validate_session_method_capability(&request.method, state)
+    {
+        return (!is_notification).then(|| json_rpc_error(id, &error));
+    }
 
     let result = match request.method.as_str() {
         "system.hello" => match HelloResponse::negotiate(request.params, &state.hello_server) {
             Ok(response) => {
+                state.ui_registry.set_session_capabilities(
+                    &state.hello_server.session_id,
+                    &response.granted_capabilities,
+                );
                 state.hello_complete = true;
                 serde_json::to_value(response).map_err(|error| {
                     ControlError::new(
@@ -77,6 +87,9 @@ fn handle_json_rpc_request(
         "system.get_capabilities" => Ok(json!({
             "protocol_version": crate::control::PROTOCOL_VERSION,
             "capabilities": registry::capabilities(),
+            "granted_capabilities":state.ui_registry.session_capabilities(
+                &state.hello_server.session_id
+            ),
         })),
         "system.list_methods" | "system.describe_methods" => Ok(json!({
             "protocol_version": crate::control::PROTOCOL_VERSION,
@@ -93,7 +106,7 @@ fn handle_json_rpc_request(
                 "application.*", "project.*", "viewer.camera.*", "viewer.channels.*",
                 "viewer.layers.*", "viewer.selection.*", "viewer.readiness.*",
                 "data.resources.*", "tasks.*", "ui.extensions.*", "ui.contributions.*",
-                "ui.extension:<extension-id>.*"
+                "ui.commands.*", "ui.menus.*", "ui.toolbars.*", "ui.palette.*", "ui.extension:<extension-id>.*"
             ]
         })),
         "system.get_application_surface" => crate::control::application_surface_json(),
@@ -102,7 +115,7 @@ fn handle_json_rpc_request(
             "max_components": 512,
             "max_depth": 16,
             "locations": [
-                "left.sections", "right.tabs", "top_bar.actions", "canvas.controls",
+                "shell", "left.sections", "right.tabs", "top_bar.actions", "canvas.controls",
                 "status_bar", "project.cards"
             ],
             "components": [
@@ -112,7 +125,29 @@ fn handle_json_rpc_request(
                 "text_input", "select", "radio", "multi_select", "color", "progress"
             ],
             "actions": ["emit", "command", "bind"],
-            "event_policies": ["commit", "immediate", "throttle", "debounce"]
+            "event_policies": ["commit", "immediate", "throttle", "debounce"],
+            "state_bindings": {
+                "properties":["visible","enabled"],
+                "type":"command_state",
+                "command_states":["visible","enabled","checked"],
+                "missing_command_policy":"false",
+                "evaluation":"actor_projection"
+            },
+            "interaction_backpressure": {
+                "coalescing_key":"extension_id:component_id",
+                "deferred_retention":"latest_value",
+                "minimum_cadence_ms":33,
+                "subscriber_pressure":"bounded_drop"
+            },
+            "extension_layouts": {
+                "document_format":"odon.shell-layout",
+                "normalized_schema_version":1,
+                "accepted_schema_versions":[0,1],
+                "max_per_extension":64,
+                "required_capability":"ui.panels",
+                "disconnect_policies":["remove","disable","retain"],
+                "apply_method":"ui.shell.import_layout"
+            }
         })),
         "system.batch" => run_batch(&request.params, tx, ctx, state),
         "system.get_diagnostics" => state.task_service.list(true).map(|tasks| {
@@ -135,12 +170,43 @@ fn handle_json_rpc_request(
         "tasks.list" => list_tasks(&request.params, state),
         "tasks.cancel" => cancel_task(&request.params, state),
         "tasks.forget" => forget_task(&request.params, state),
-        "ui.extensions.register" => register_extension(request.params, state),
+        "ui.extensions.register" => (|| -> Result<Value, ControlError> {
+            let result = register_extension(request.params, state)?;
+            sync_registered_extension_commands(tx, ctx, state, &result)?;
+            Ok(result)
+        })(),
         "ui.extensions.list" => Ok(json!({
             "extensions": state.ui_registry.list_extensions(),
             "revision": state.event_hub.revision(),
         })),
-        "ui.extensions.remove" => remove_extension(&request.params, state),
+        "ui.extensions.remove" => (|| -> Result<Value, ControlError> {
+            let extension_id = request
+                .params
+                .get("extension_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ControlError::invalid_params("ui.extensions.remove", "extension_id is required")
+                })?;
+            let cleanup = state
+                .ui_registry
+                .extension_cleanup_context(extension_id, &state.hello_server.session_id)?;
+            call_actor_for_state_cleanup(
+                tx,
+                state,
+                "ui.commands.cleanup_extensions",
+                json!({"extensions":[cleanup]}),
+            )?;
+            ctx.request_repaint();
+            remove_extension(&request.params, state)
+        })(),
+        "ui.extensions.set_readiness" => (|| -> Result<Value, ControlError> {
+            let result = set_extension_readiness(request.params, state)?;
+            sync_registered_extension_commands(tx, ctx, state, &result)?;
+            Ok(result)
+        })(),
+        "ui.extensions.layouts.register" => register_extension_layout(request.params, state),
+        "ui.extensions.layouts.list" => list_extension_layouts(&request.params, state),
+        "ui.extensions.layouts.remove" => remove_extension_layout(&request.params, state),
         "ui.contributions.register" => register_contribution(request.params, state),
         "ui.contributions.list" => Ok(json!({
             "contributions": state.ui_registry.list_contributions(),
@@ -158,6 +224,38 @@ fn handle_json_rpc_request(
         Ok(value) => json_rpc_result(id, value),
         Err(error) => json_rpc_error(id, &error),
     })
+}
+
+fn validate_session_method_capability(
+    method: &str,
+    state: &ConnectionState,
+) -> Result<(), ControlError> {
+    let Some(required) = registry::capability_for(method) else {
+        return Ok(());
+    };
+    if !required.starts_with("ui.shell.") {
+        return Ok(());
+    }
+    let granted = state
+        .ui_registry
+        .session_capabilities(&state.hello_server.session_id);
+    if granted.iter().any(|capability| {
+        capability == required
+            || capability == "ui.shell.application_control"
+            || (required == "ui.shell.compose" && capability == "ui.shell.extension_place")
+    }) {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        ControlErrorKind::PermissionDenied,
+        format!("{method} requires the '{required}' session capability"),
+    )
+    .with_data(json!({
+        "method":method,
+        "required_capability":required,
+        "granted_capabilities":granted,
+        "resolution":"request the capability during system.hello",
+    })))
 }
 
 fn handle_legacy_request(
@@ -184,6 +282,31 @@ pub(super) fn dispatch_to_app(
     state: &mut ConnectionState,
     request_id: Option<Value>,
 ) -> Result<Value, ControlError> {
+    let component_catalog_mode = (method == "ui.shell.components.list")
+        .then(|| {
+            params
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .flatten();
+    if method == "ui.shell.replace_layout" {
+        if let Some(desired_tree) = params.get("desired_tree") {
+            state
+                .ui_registry
+                .validate_shell_layout_access(desired_tree, &state.hello_server.session_id)?;
+        }
+    }
+    if method == "ui.shell.import_layout"
+        && let Some(document) = params.get("document")
+        && let Some(desired_tree) = document
+            .get("layout")
+            .or_else(|| document.get("desired_tree"))
+    {
+        state
+            .ui_registry
+            .validate_shell_layout_access(desired_tree, &state.hello_server.session_id)?;
+    }
     let command = ControlCommand::decode(method, params)?;
     let (reply_tx, reply_rx) = crossbeam_channel::bounded::<Result<Value, ControlError>>(1);
     match tx.try_send(OdonControlRequest {
@@ -211,7 +334,7 @@ pub(super) fn dispatch_to_app(
     }
     ctx.request_repaint();
     match reply_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(value)) => {
+        Ok(Ok(mut value)) => {
             if let Some(message) = value.get("error").and_then(Value::as_str) {
                 let kind = if message.contains("No dataset viewer")
                     || message.contains("available in single-image mode")
@@ -226,6 +349,23 @@ pub(super) fn dispatch_to_app(
                     "method": method,
                 })))
             } else {
+                if value.get("layout").is_some() {
+                    state
+                        .ui_registry
+                        .annotate_shell_snapshot_ownership(&mut value);
+                }
+                if method == "ui.shell.components.list"
+                    && let Some(components) =
+                        value.get_mut("components").and_then(Value::as_array_mut)
+                {
+                    components.extend(
+                        state
+                            .ui_registry
+                            .shell_component_descriptors(component_catalog_mode.as_deref()),
+                    );
+                    components
+                        .sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+                }
                 Ok(value)
             }
         }
@@ -236,4 +376,100 @@ pub(super) fn dispatch_to_app(
         )
         .with_data(json!({"method": method}))),
     }
+}
+
+/// Dispatches a protected native lifecycle request without coupling the TCP transport to command
+/// decoding. Disconnect cleanup is best effort, so this deliberately uses a shorter timeout than
+/// an ordinary client request.
+pub(super) fn call_actor_for_cleanup(
+    tx: &Sender<OdonControlRequest>,
+    identity: &ControlServerIdentity,
+    method: &str,
+    params: Value,
+) -> Result<Value, ControlError> {
+    let command = ControlCommand::decode(method, params)?;
+    let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+    tx.try_send(OdonControlRequest {
+        command,
+        reply: reply_tx,
+        session_id: "native-ui".to_string(),
+        request_id: None,
+        event_hub: Arc::clone(&identity.event_hub),
+        task_registry: Arc::clone(&identity.task_registry),
+        task_id: None,
+    })
+    .map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::NotReady,
+            "application shell could not reconcile extension disconnect focus",
+        )
+    })?;
+    reply_rx.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::Timeout,
+            "application shell focus reconciliation timed out",
+        )
+    })?
+}
+
+fn call_actor_for_state_cleanup(
+    tx: &Sender<OdonControlRequest>,
+    state: &ConnectionState,
+    method: &str,
+    params: Value,
+) -> Result<Value, ControlError> {
+    let command = ControlCommand::decode(method, params)?;
+    let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+    tx.try_send(OdonControlRequest {
+        command,
+        reply: reply_tx,
+        session_id: "native-ui".to_string(),
+        request_id: None,
+        event_hub: Arc::clone(&state.event_hub),
+        task_registry: Arc::clone(&state.task_registry),
+        task_id: None,
+    })
+    .map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::NotReady,
+            "application command lifecycle could not be reconciled",
+        )
+    })?;
+    reply_rx.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::Timeout,
+            "application command lifecycle reconciliation timed out",
+        )
+    })?
+}
+
+fn sync_registered_extension_commands(
+    tx: &Sender<OdonControlRequest>,
+    ctx: &egui::Context,
+    state: &ConnectionState,
+    extension: &Value,
+) -> Result<(), ControlError> {
+    let has_actions = extension
+        .get("granted_capabilities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|capability| capability.as_str() == Some("ui.actions"));
+    if !has_actions {
+        return Ok(());
+    }
+    let extension_id = extension.get("id").and_then(Value::as_str).ok_or_else(|| {
+        ControlError::new(ControlErrorKind::Internal, "extension snapshot has no ID")
+    })?;
+    let context = state
+        .ui_registry
+        .extension_command_context(extension_id, &state.hello_server.session_id)?;
+    call_actor_for_state_cleanup(
+        tx,
+        state,
+        "ui.commands.sync_extension",
+        json!({"context":context}),
+    )?;
+    ctx.request_repaint();
+    Ok(())
 }

@@ -5,6 +5,1118 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr")
 }
 
+fn shell_layout_fixture(name: &str) -> Value {
+    let source = match name {
+        "v0-project-missing-extension" => {
+            include_str!("../../../tests/fixtures/shell-layouts/v0-project-missing-extension.json")
+        }
+        "v1-project" => {
+            include_str!("../../../tests/fixtures/shell-layouts/v1-project.json")
+        }
+        "v1-single-startup" => {
+            include_str!("../../../tests/fixtures/shell-layouts/v1-single-startup.json")
+        }
+        "v1-corrupt-tree" => {
+            include_str!("../../../tests/fixtures/shell-layouts/v1-corrupt-tree.json")
+        }
+        "v99-future" => {
+            include_str!("../../../tests/fixtures/shell-layouts/v99-future.json")
+        }
+        _ => panic!("unknown shell-layout fixture {name}"),
+    };
+    serde_json::from_str(source).expect("checked-in shell-layout fixtures must be valid JSON")
+}
+
+#[test]
+fn shell_commands_compose_the_active_application_without_a_renderer() {
+    let mut model = AppModel::project();
+    let initial = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(initial["schema_version"], 1);
+    assert_eq!(initial["mode"], "project");
+    assert_eq!(initial["layout"]["root_id"], "layout:project.root");
+
+    let revision = initial["revision"].as_u64().unwrap();
+    let patched = model
+        .dispatch(
+            "ui.shell.patch",
+            &json!({
+                "visibility":{"builtin:project.top-bar":false},
+                "if_shell_revision":revision,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(patched.present);
+    assert_eq!(patched.response["change"]["operation"], "patch");
+    assert_eq!(patched.response["change"]["changed"], true);
+    assert_eq!(
+        patched.response["change"]["changes"][0]["node_id"],
+        "builtin:project.top-bar"
+    );
+    let top_bar = patched.response["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "builtin:project.top-bar")
+        .unwrap();
+    assert_eq!(top_bar["visible"], false);
+    assert!(patched.response["revision"].as_u64().unwrap() > revision);
+
+    let inactive = model
+        .dispatch("ui.shell.get", &json!({"mode":"single"}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(inactive["mode"], "single");
+    assert!(
+        model
+            .dispatch(
+                "ui.shell.patch",
+                &json!({"mode":"single","visibility":{"builtin:single.top-bar":false}}),
+            )
+            .unwrap()
+            .is_err()
+    );
+
+    let reset = model
+        .dispatch("ui.shell.reset", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let top_bar = reset["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "builtin:project.top-bar")
+        .unwrap();
+    assert_eq!(top_bar["visible"], true);
+
+    let revision = reset["revision"].as_u64().unwrap();
+    let no_op = model
+        .dispatch("ui.shell.patch", &json!({"if_shell_revision":revision}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(no_op["revision"], revision);
+    assert_eq!(no_op["change"]["changed"], false);
+
+    let schema = model
+        .dispatch("ui.shell.describe_schema", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(schema["mutation_scope"], "active_mode_only");
+    assert_eq!(schema["layout_limits"]["max_nodes"], 256);
+
+    let components = model
+        .dispatch("ui.shell.components.list", &json!({"mode":"single"}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(components["mode"], "single");
+    let canvas = components["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["id"] == "builtin:viewer-canvas")
+        .unwrap();
+    assert_eq!(canvas["singleton"], true);
+    assert!(
+        canvas["legal_parent_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parent| parent == "split")
+    );
+}
+
+#[test]
+fn command_descriptors_and_platform_menu_presentations_are_independently_actor_owned() {
+    let mut model = AppModel::project();
+    let commands = model
+        .dispatch("ui.commands.list", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let menu = model
+        .dispatch("ui.menus.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(commands["revision"], menu["revision"]);
+    assert!(
+        commands["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|command| {
+                command["id"] == "dataset.open.ome_zarr"
+                    && command["handler"]["action"] == "open_ome_zarr"
+            })
+    );
+    assert!(menu["menu"].get("commands").is_none());
+
+    let mut reordered = menu["menu"].clone();
+    reordered["children"].as_array_mut().unwrap().swap(1, 2);
+    let changed = model
+        .dispatch(
+            "ui.menus.replace",
+            &json!({
+                "if_command_revision":menu["revision"],
+                "transaction_id":"python-menu-layout",
+                "menu":reordered,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(changed.present);
+    assert_eq!(changed.response["revision"], 2);
+    assert_eq!(
+        changed.response["change"]["transaction_id"],
+        "python-menu-layout"
+    );
+    assert_eq!(changed.response["menu"]["children"][1]["id"], "menu:add");
+
+    let stale = model
+        .dispatch(
+            "ui.menus.replace",
+            &json!({
+                "if_command_revision":menu["revision"],
+                "menu":changed.response["menu"],
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(stale.kind, ControlErrorKind::Conflict);
+    assert_eq!(stale.data.unwrap()["snapshot_method"], "ui.menus.get");
+}
+
+#[test]
+fn shell_desired_layout_replacement_is_atomic_and_revision_guarded() {
+    let mut model = AppModel::project();
+    let before = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let revision = before["revision"].as_u64().unwrap();
+    let desired_tree = json!({
+        "root_id":"layout:review.root",
+        "nodes":[
+            {"id":"layout:review.root","type":"application","children":["layout:review.column"]},
+            {"id":"layout:review.column","type":"column","children":["layout:review.workspace","layout:review.cards"]},
+            {"id":"layout:review.workspace","type":"builtin_mount","mount":"builtin:project-workspace","size":{"flex":1.0}},
+            {"id":"layout:review.cards","type":"extension_mount","mount":"extension:review.cards","visible":false}
+        ]
+    });
+    let replaced = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({"desired_tree":desired_tree.clone(),"if_shell_revision":revision}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(replaced["layout"]["root_id"], "layout:review.root");
+    assert_eq!(replaced["change"]["operation"], "replace_layout");
+    assert_eq!(replaced["change"]["changes"][0]["property"], "layout");
+    let layout_nodes = replaced["layout"]["nodes"].as_array().unwrap();
+    let root_node = layout_nodes
+        .iter()
+        .find(|node| node["id"] == "layout:review.root")
+        .unwrap();
+    let extension_node = layout_nodes
+        .iter()
+        .find(|node| node["id"] == "layout:review.cards")
+        .unwrap();
+    assert_eq!(root_node["ownership"]["scope"], "application");
+    assert_eq!(root_node["ownership"]["protected"], true);
+    assert_eq!(extension_node["ownership"]["owner_id"], "review.cards");
+    let replaced_revision = replaced["revision"].as_u64().unwrap();
+    assert!(replaced_revision > revision);
+
+    let no_op = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({"desired_tree":desired_tree.clone(),"if_shell_revision":replaced_revision}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(no_op["revision"], replaced_revision);
+    assert_eq!(no_op["change"]["changed"], false);
+
+    let conflict = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({"desired_tree":desired_tree,"if_shell_revision":revision}),
+        )
+        .unwrap()
+        .unwrap_err();
+    let conflict_data = conflict.data.expect("shell conflict details");
+    assert_eq!(conflict_data["current_revision"], replaced_revision);
+    assert_eq!(conflict_data["snapshot_method"], "ui.shell.get");
+    assert_eq!(conflict_data["retry_strategy"], "refetch_merge_retry");
+
+    let invalid = json!({
+        "root_id":"layout:invalid.root",
+        "nodes":[
+            {"id":"layout:invalid.root","type":"application","children":["layout:invalid.layers"]},
+            {"id":"layout:invalid.layers","type":"builtin_mount","mount":"builtin:layers"}
+        ]
+    });
+    assert!(
+        model
+            .dispatch(
+                "ui.shell.replace_layout",
+                &json!({"desired_tree":invalid,"if_shell_revision":replaced_revision}),
+            )
+            .unwrap()
+            .is_err()
+    );
+    let after_error = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(after_error["revision"], replaced_revision);
+    assert_eq!(after_error["layout"]["root_id"], "layout:review.root");
+}
+
+#[test]
+fn shell_visibility_bindings_follow_actor_evaluated_command_state() {
+    let mut model = AppModel::project();
+    let layout = |command_id: &str| {
+        json!({
+            "root_id":"layout:binding.root",
+            "nodes":[
+                {
+                    "id":"layout:binding.root",
+                    "type":"application",
+                    "children":["layout:binding.workspace"]
+                },
+                {
+                    "id":"layout:binding.workspace",
+                    "type":"builtin_mount",
+                    "mount":"builtin:project-workspace",
+                    "state_bindings":{"visible":{
+                        "type":"command_state",
+                        "command_id":command_id,
+                        "state":"enabled"
+                    }}
+                }
+            ]
+        })
+    };
+    let available = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({"desired_tree":layout("app.shell.recover")}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(available["layout"]["nodes"][1]["visible"], true);
+    assert_eq!(
+        available["layout"]["nodes"][1]["state_bindings"]["visible"]["command_id"],
+        "app.shell.recover"
+    );
+    let exported = model
+        .dispatch("ui.shell.export_layout", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(
+        exported["layout"]["nodes"][1]["state_bindings"]["visible"]["command_id"],
+        "app.shell.recover"
+    );
+
+    let missing = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({
+                "desired_tree":layout("extension:org.example.missing/run"),
+                "if_shell_revision":available["revision"],
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(missing["layout"]["nodes"][1]["visible"], false);
+
+    let invalid = layout("app.shell.recover");
+    let mut invalid = invalid;
+    invalid["nodes"][1]["state_bindings"] = json!({"enabled":{
+        "type":"command_state","command_id":"app.shell.recover","state":"enabled"
+    }});
+    let error = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({"desired_tree":invalid,"if_shell_revision":missing["revision"]}),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::InvalidParams);
+    assert_eq!(
+        model
+            .dispatch("ui.shell.get", &json!({}))
+            .unwrap()
+            .unwrap()
+            .response["revision"],
+        missing["revision"]
+    );
+}
+
+#[test]
+fn shell_layout_documents_migrate_atomically_and_recover_safely() {
+    let mut model = AppModel::project();
+    let exported = model
+        .dispatch("ui.shell.export_layout", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(exported["format"], "odon.shell-layout");
+    assert_eq!(exported["schema_version"], 1);
+    assert_eq!(exported["mode"], "project");
+
+    let initial = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let revision = initial["revision"].as_u64().unwrap();
+    let imported = model
+        .dispatch(
+            "ui.shell.import_layout",
+            &json!({
+                "if_shell_revision":revision,
+                "document":shell_layout_fixture("v0-project-missing-extension")
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(imported["layout"]["root_id"], "layout:fixture.v0.root");
+    assert_eq!(imported["import"]["source_schema_version"], 0);
+    assert_eq!(imported["import"]["migrated"], true);
+    assert_eq!(imported["change"]["operation"], "import_layout");
+
+    let v0_revision = imported["revision"].as_u64().unwrap();
+    let current = model
+        .dispatch(
+            "ui.shell.import_layout",
+            &json!({
+                "if_shell_revision":v0_revision,
+                "document":shell_layout_fixture("v1-project")
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(current["layout"]["root_id"], "layout:fixture.v1.root");
+    assert_eq!(current["import"]["source_schema_version"], 1);
+    assert_eq!(current["import"]["migrated"], false);
+    let stable_revision = current["revision"].as_u64().unwrap();
+
+    let corrupt = model
+        .dispatch(
+            "ui.shell.import_layout",
+            &json!({
+                "if_shell_revision":stable_revision,
+                "document":shell_layout_fixture("v1-corrupt-tree")
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(corrupt.kind, ControlErrorKind::InvalidParams);
+    assert_eq!(
+        model
+            .dispatch("ui.shell.get", &json!({}))
+            .unwrap()
+            .unwrap()
+            .response["revision"],
+        stable_revision
+    );
+
+    let unsupported = model
+        .dispatch(
+            "ui.shell.import_layout",
+            &json!({
+                "if_shell_revision":stable_revision,
+                "document":shell_layout_fixture("v99-future")
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(unsupported.kind, ControlErrorKind::Unsupported);
+    assert_eq!(
+        unsupported.data.unwrap()["recovery_method"],
+        "ui.shell.recover"
+    );
+    assert_eq!(
+        model
+            .dispatch("ui.shell.get", &json!({}))
+            .unwrap()
+            .unwrap()
+            .response["revision"],
+        stable_revision
+    );
+
+    let recovered = model
+        .dispatch(
+            "ui.shell.recover",
+            &json!({"if_shell_revision":stable_revision}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(recovered["recovery"]["protected"], true);
+    assert_eq!(recovered["change"]["operation"], "recover");
+    assert_eq!(recovered["layout"]["nodes"].as_array().unwrap().len(), 2);
+    assert!(
+        recovered["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["mount"] == "builtin:project-workspace")
+    );
+}
+
+#[test]
+fn shell_layout_session_profiles_save_list_load_and_remove() {
+    let mut model = AppModel::project();
+    let custom = json!({
+        "root_id":"layout:profile.root",
+        "nodes":[
+            {"id":"layout:profile.root","type":"application","children":["layout:profile.workspace"]},
+            {"id":"layout:profile.workspace","type":"builtin_mount","mount":"builtin:project-workspace"}
+        ]
+    });
+    model
+        .dispatch("ui.shell.replace_layout", &json!({"desired_tree":custom}))
+        .unwrap()
+        .unwrap();
+    let SettingsMutationOutcome::Immediate(saved) = model
+        .prepare_shell_profile_save(&json!({"name":"Review","scope":"session"}))
+        .unwrap()
+    else {
+        panic!("session profile save must be immediate");
+    };
+    assert_eq!(saved["persisted"], false);
+
+    model
+        .dispatch("ui.shell.reset", &json!({}))
+        .unwrap()
+        .unwrap();
+    let listed = model
+        .dispatch("ui.shell.profiles.list", &json!({"scope":"session"}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(listed["profiles"][0]["name"], "Review");
+    let loaded = model
+        .dispatch(
+            "ui.shell.profiles.load",
+            &json!({"name":"Review","scope":"session"}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(loaded["layout"]["root_id"], "layout:profile.root");
+    assert_eq!(loaded["change"]["operation"], "load_profile");
+    assert_eq!(loaded["profile"]["name"], "Review");
+
+    let SettingsMutationOutcome::Immediate(removed) = model
+        .prepare_shell_profile_remove(&json!({"name":"Review","scope":"session"}))
+        .unwrap()
+    else {
+        panic!("session profile removal must be immediate");
+    };
+    assert_eq!(removed["removed"], true);
+    assert!(
+        model
+            .dispatch(
+                "ui.shell.profiles.load",
+                &json!({"name":"Review","scope":"session"}),
+            )
+            .unwrap()
+            .is_err()
+    );
+}
+
+#[test]
+fn shell_profile_list_reports_complete_validation_diagnostics() {
+    let mut model = AppModel::project();
+    model.session_shell_profiles.insert(
+        "Future".to_string(),
+        json!({
+            "format":"odon.shell-layout",
+            "schema_version":99,
+            "mode":"project",
+            "layout":{}
+        }),
+    );
+
+    let listed = model
+        .dispatch("ui.shell.profiles.list", &json!({"scope":"session"}))
+        .unwrap()
+        .unwrap()
+        .response;
+
+    assert_eq!(listed["profiles"][0]["valid"], false);
+    assert_eq!(listed["profiles"][0]["error_kind"], "UNSUPPORTED");
+    assert!(
+        listed["profiles"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("schema version 99")
+    );
+    assert_eq!(listed["profiles"][0]["recovery_method"], "ui.shell.recover");
+}
+
+#[test]
+fn shell_layout_project_profiles_roundtrip_through_project_state() {
+    let mut model = AppModel::project();
+    let custom = json!({
+        "root_id":"layout:project-profile.root",
+        "nodes":[
+            {"id":"layout:project-profile.root","type":"application","children":["layout:project-profile.workspace"]},
+            {"id":"layout:project-profile.workspace","type":"builtin_mount","mount":"builtin:project-workspace"}
+        ]
+    });
+    model
+        .dispatch("ui.shell.replace_layout", &json!({"desired_tree":custom}))
+        .unwrap()
+        .unwrap();
+    let SettingsMutationOutcome::Immediate(saved) = model
+        .prepare_shell_profile_save(&json!({"name":"Team review","scope":"project"}))
+        .unwrap()
+    else {
+        panic!("project profile save belongs to the project transaction");
+    };
+    assert_eq!(saved["project_dirty"], true);
+    assert_eq!(saved["persisted"], false);
+    let (payload, _) = model.project_persistence_payload().unwrap();
+    assert_eq!(
+        payload["state"]["shell_layout_profiles"]["Team review"]["layout"]["root_id"],
+        "layout:project-profile.root"
+    );
+
+    let config = serde_json::from_value(payload["config"].clone()).unwrap();
+    let mut restored = AppModel::project();
+    let generation = restored.begin_project_operation("restore project profile");
+    assert!(
+        restored
+            .install_project_for_generation(
+                generation,
+                PathBuf::from("/tmp/profiles.odon.project.json"),
+                config,
+                payload["state"].clone(),
+            )
+            .unwrap()
+    );
+    let listed = restored
+        .dispatch("ui.shell.profiles.list", &json!({"scope":"project"}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(listed["profiles"][0]["name"], "Team review");
+    let loaded = restored
+        .dispatch(
+            "ui.shell.profiles.load",
+            &json!({"name":"Team review","scope":"project"}),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(loaded["layout"]["root_id"], "layout:project-profile.root");
+
+    let SettingsMutationOutcome::Immediate(removed) = restored
+        .prepare_shell_profile_remove(&json!({"name":"Team review","scope":"project"}))
+        .unwrap()
+    else {
+        panic!("project profile removal belongs to the project transaction");
+    };
+    assert_eq!(removed["removed"], true);
+    assert!(
+        restored.project_persistence_payload().unwrap().0["state"]["shell_layout_profiles"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn application_startup_shell_profile_restores_once_and_reports_status() {
+    let mut settings = AppSettings::default();
+    settings
+        .shell_layout_profiles
+        .insert("Home".to_string(), shell_layout_fixture("v1-project"));
+    settings
+        .shell_layout_startup_profiles
+        .insert("project".to_string(), "Home".to_string());
+    let mut model = AppModel::project();
+
+    model.bootstrap_settings(settings, None, Vec::new());
+
+    let shell = model.shell_snapshot(None).unwrap();
+    assert_eq!(shell["layout"]["root_id"], "layout:fixture.v1.root");
+    let restore = model.startup_shell_restore_snapshot();
+    assert_eq!(restore["results"]["project"]["status"], "restored");
+    assert_eq!(restore["results"]["project"]["profile"], "Home");
+    model
+        .dispatch("ui.shell.reset", &json!({}))
+        .unwrap()
+        .unwrap();
+    assert!(!model.apply_startup_shell_layout_if_needed());
+    assert_ne!(
+        model.shell_snapshot(None).unwrap()["layout"]["root_id"],
+        "layout:fixture.v1.root"
+    );
+}
+
+#[test]
+fn invalid_application_startup_shell_profile_installs_protected_recovery() {
+    for (profile, fixture_name, error_kind) in [
+        ("Corrupt", "v1-corrupt-tree", "INVALID_PARAMS"),
+        ("Future", "v99-future", "UNSUPPORTED"),
+    ] {
+        let mut settings = AppSettings::default();
+        settings
+            .shell_layout_profiles
+            .insert(profile.to_string(), shell_layout_fixture(fixture_name));
+        settings
+            .shell_layout_startup_profiles
+            .insert("project".to_string(), profile.to_string());
+        let mut model = AppModel::project();
+
+        model.bootstrap_settings(settings, None, Vec::new());
+
+        let shell = model.shell_snapshot(None).unwrap();
+        assert_eq!(shell["layout"]["nodes"].as_array().unwrap().len(), 2);
+        assert!(
+            shell["layout"]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| node["mount"] == "builtin:project-workspace")
+        );
+        let settings = model.settings_snapshot();
+        assert_eq!(
+            settings["shell_layout_startup_restore"]["results"]["project"]["status"],
+            "recovered"
+        );
+        assert_eq!(
+            settings["shell_layout_startup_restore"]["results"]["project"]["error"]["kind"],
+            error_kind
+        );
+        assert!(
+            settings["status"]
+                .as_str()
+                .unwrap()
+                .contains("protected recovery layout installed")
+        );
+    }
+}
+
+#[test]
+fn startup_shell_profiles_restore_each_mode_only_on_first_activation() {
+    let mut settings = AppSettings::default();
+    settings.shell_layout_profiles.insert(
+        "Viewer".to_string(),
+        shell_layout_fixture("v1-single-startup"),
+    );
+    settings
+        .shell_layout_startup_profiles
+        .insert("single".to_string(), "Viewer".to_string());
+    let mut model = AppModel::project();
+    model.bootstrap_settings(settings, None, Vec::new());
+
+    model.set_mode(ModelMode::Single);
+    assert!(model.apply_startup_shell_layout_if_needed());
+    model.set_mode(ModelMode::Project);
+    assert_eq!(
+        model.shell_snapshot(Some("single")).unwrap()["layout"]["root_id"],
+        "layout:fixture.startup.single.root"
+    );
+    model.set_mode(ModelMode::Single);
+    assert!(!model.apply_startup_shell_layout_if_needed());
+    assert_eq!(
+        model.startup_shell_restore_snapshot()["results"]["single"]["status"],
+        "restored"
+    );
+}
+
+#[test]
+fn mode_transitions_restore_each_modes_actor_owned_focus_without_cross_mode_leakage() {
+    fn node_for_mount(snapshot: &Value, mount: &str) -> String {
+        snapshot["layout"]["nodes"]
+            .as_array()
+            .expect("shell layout nodes")
+            .iter()
+            .find(|node| node["mount"] == mount)
+            .and_then(|node| node["id"].as_str())
+            .unwrap_or_else(|| panic!("missing shell mount {mount}"))
+            .to_string()
+    }
+
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    let project = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let project_top_bar = node_for_mount(&project, "builtin:project-top-bar");
+    model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":project["revision"],
+                "active_region_id":project_top_bar,
+                "focused_node_id":project_top_bar,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+
+    model.install_dataset(&dataset);
+    let single = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let single_canvas = node_for_mount(&single, "builtin:viewer-canvas");
+    assert_eq!(single["active_region_id"], single_canvas);
+    assert_eq!(single["focused_node_id"], Value::Null);
+    let single_top_bar = node_for_mount(&single, "builtin:viewer-top-bar");
+    model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":single["revision"],
+                "active_region_id":single_top_bar,
+                "focused_node_id":single_top_bar,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+
+    model.set_mode(ModelMode::Project);
+    let restored_project = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(restored_project["active_region_id"], project_top_bar);
+    assert_eq!(restored_project["focused_node_id"], project_top_bar);
+
+    model.install_dataset(&dataset);
+    let restored_single = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(restored_single["active_region_id"], single_top_bar);
+    assert_eq!(restored_single["focused_node_id"], single_top_bar);
+}
+
+#[test]
+fn shell_layout_state_patch_updates_geometry_selection_and_collapse_atomically() {
+    let mut model = AppModel::project();
+    let initial = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let desired_tree = json!({
+        "root_id":"layout:state.root",
+        "nodes":[
+            {"id":"layout:state.root","type":"application","children":["layout:state.split"]},
+            {"id":"layout:state.split","type":"split","children":["layout:state.workspace","layout:state.panel"],"split":{"axis":"horizontal","ratio":0.7}},
+            {"id":"layout:state.workspace","type":"builtin_mount","mount":"builtin:project-workspace"},
+            {"id":"layout:state.panel","type":"panel","children":["layout:state.collapsible"],"size":{"width":300.0}},
+            {"id":"layout:state.collapsible","type":"collapsible","children":["layout:state.tabs"]},
+            {"id":"layout:state.tabs","type":"tabs","children":["layout:state.first","layout:state.second"],"selected_id":"layout:state.first"},
+            {"id":"layout:state.first","type":"extension_mount","mount":"extension:first"},
+            {"id":"layout:state.second","type":"extension_mount","mount":"extension:second"}
+        ]
+    });
+    let replaced = model
+        .dispatch(
+            "ui.shell.replace_layout",
+            &json!({
+                "desired_tree":desired_tree,
+                "if_shell_revision":initial["revision"],
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    let patched = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":replaced["revision"],
+                "selected":{"layout:state.tabs":"layout:state.second"},
+                "sizes":{"layout:state.panel":{"width":420.0,"min_width":240.0}},
+                "splits":{"layout:state.split":{"axis":"vertical","ratio":0.6,"resizable":false}},
+                "collapsed":{"layout:state.collapsible":true},
+                "visibility":{"layout:state.first":false},
+                "active_region_id":"layout:state.second",
+                "focused_node_id":"layout:state.second",
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(patched["change"]["operation"], "patch_layout");
+    let properties = patched["change"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| change["property"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "visibility",
+            "selection",
+            "size",
+            "split",
+            "collapse",
+            "active_region",
+            "focus",
+        ])
+    );
+    assert_eq!(patched["active_region_id"], "layout:state.second");
+    assert_eq!(patched["focused_node_id"], "layout:state.second");
+    let nodes = patched["layout"]["nodes"].as_array().unwrap();
+    let node = |id: &str| nodes.iter().find(|node| node["id"] == id).unwrap();
+    assert_eq!(
+        node("layout:state.tabs")["selected_id"],
+        "layout:state.second"
+    );
+    assert_eq!(node("layout:state.panel")["size"]["width"], 420.0);
+    assert_eq!(node("layout:state.split")["split"]["axis"], "vertical");
+    assert_eq!(node("layout:state.collapsible")["collapsed"], true);
+    assert_eq!(node("layout:state.first")["visible"], false);
+
+    let cleared = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":patched["revision"],
+                "clear_focus":true,
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(cleared["focused_node_id"], Value::Null);
+    assert_eq!(cleared["change"]["changes"][0]["property"], "focus");
+
+    let revision = cleared["revision"].as_u64().unwrap();
+    let invalid = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":revision,
+                "visibility":{"layout:state.workspace":false},
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(invalid.kind, ControlErrorKind::InvalidParams);
+    let after = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(after["revision"], revision);
+    assert_eq!(
+        after["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == "layout:state.workspace")
+            .unwrap()["visible"],
+        true
+    );
+}
+
+#[test]
+fn passive_legacy_tab_sync_does_not_replace_an_extension_host_selection() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let initial = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let nodes = initial["layout"]["nodes"].as_array().unwrap();
+    let host = nodes
+        .iter()
+        .find(|node| node["mount"] == "builtin:extension-host.left-sections")
+        .unwrap();
+    let host_id = host["id"].as_str().unwrap();
+    let tabs_id = host["parent_id"].as_str().unwrap();
+
+    let selected = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":initial["revision"],
+                "selected":{tabs_id:host_id},
+                "focused_node_id":host_id,
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(
+        selected["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == tabs_id)
+            .unwrap()["selected_id"],
+        host_id
+    );
+
+    model
+        .sync_active_shell_domain()
+        .expect("passive compatibility projection");
+    let projected = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(
+        projected["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == tabs_id)
+            .unwrap()["selected_id"],
+        host_id,
+        "passive legacy projection must not replace a desired extension tab"
+    );
+
+    model
+        .dispatch("viewer.ui.set_left_tab", &json!({"tab":"project"}))
+        .unwrap()
+        .unwrap();
+    let legacy_mutated = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let selected_id = legacy_mutated["layout"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == tabs_id)
+        .unwrap()["selected_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        legacy_mutated["layout"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == selected_id)
+            .unwrap()["mount"],
+        "builtin:project",
+        "an explicit legacy tab command still deliberately updates the desired layout"
+    );
+}
+
+#[test]
+fn shell_mount_configuration_is_schema_validated_and_revisioned() {
+    let mut model = AppModel::project();
+    let initial = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    let configured = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":initial["revision"],
+                "configurations":{
+                    "layout:project.top":{"show_title":false},
+                },
+            }),
+        )
+        .unwrap()
+        .unwrap()
+        .response;
+    let top = configured["layout"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "layout:project.top")
+        .unwrap();
+    assert_eq!(top["configuration"]["show_title"], false);
+    assert_eq!(
+        configured["change"]["changes"][0]["property"],
+        "configuration"
+    );
+
+    let error = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":configured["revision"],
+                "configurations":{
+                    "layout:project.top":{"unknown":true},
+                },
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ControlErrorKind::InvalidParams);
+    let after = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(after["revision"], configured["revision"]);
+    assert_eq!(after["layout"], configured["layout"]);
+
+    let oversized_configuration = (0..100)
+        .map(|index| format!("{index:03}-{}", "x".repeat(180)))
+        .collect::<Vec<_>>();
+    let quota_error = model
+        .dispatch(
+            "ui.shell.patch_layout",
+            &json!({
+                "if_shell_revision":after["revision"],
+                "configurations":{
+                    "layout:project.extensions":{"values":oversized_configuration},
+                },
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(quota_error.kind, ControlErrorKind::InvalidParams);
+    assert!(quota_error.message.contains("per-node limit"));
+    let quota_after = model
+        .dispatch("ui.shell.get", &json!({}))
+        .unwrap()
+        .unwrap()
+        .response;
+    assert_eq!(quota_after["revision"], after["revision"]);
+    assert_eq!(quota_after["layout"], after["layout"]);
+}
+
 #[test]
 fn late_auto_contrast_does_not_replace_a_newer_manual_window() {
     let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");

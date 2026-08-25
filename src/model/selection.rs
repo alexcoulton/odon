@@ -38,6 +38,10 @@ impl ObjectSelectionModel {
         self.selected_indices.iter().copied().collect()
     }
 
+    pub(crate) fn selection_count(&self) -> usize {
+        self.selected_indices.len()
+    }
+
     pub(crate) fn projection_json(&self) -> Value {
         json!({
             "generation": self.generation,

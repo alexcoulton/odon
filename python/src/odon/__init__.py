@@ -43,6 +43,7 @@ from .async_resources import (
 from .extensions import run as run_extension
 from .launch import launch, launch_async
 from . import ui
+from . import layouts
 
 __all__ = [
     "AsyncClient",
@@ -94,6 +95,7 @@ __all__ = [
     "list_instances",
     "launch",
     "launch_async",
+    "layouts",
     "run_extension",
     "select_instance",
     "ui",

@@ -369,6 +369,17 @@ impl MosaicModel {
             .collect()
     }
 
+    pub(crate) fn selected_item_count(&self) -> usize {
+        self.selected_ids.len()
+    }
+
+    pub(crate) fn selected_object_count(&self) -> usize {
+        self.object_selections
+            .values()
+            .map(ObjectSelectionModel::selection_count)
+            .sum()
+    }
+
     pub(crate) fn object_operation_generation(&self) -> u64 {
         self.object_operation_generation
     }

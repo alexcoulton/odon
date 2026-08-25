@@ -60,6 +60,30 @@ fn required_id<'a>(method: &str, field: &str, params: &'a Value) -> Result<&'a s
         .ok_or_else(|| ControlError::invalid_params(method, format!("{field} is required")))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionLayoutListRequest {
+    extension_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionLayoutRemoveRequest {
+    extension_id: String,
+    name: String,
+}
+
+fn extension_layout_id(method: &str, id: String) -> Result<String, ControlError> {
+    if id.trim().is_empty() || id.len() > 256 {
+        Err(ControlError::invalid_params(
+            method,
+            "extension_id must contain 1 to 256 characters",
+        ))
+    } else {
+        Ok(id)
+    }
+}
+
 pub(super) fn register_extension(
     params: Value,
     state: &ConnectionState,
@@ -80,6 +104,70 @@ pub(super) fn remove_extension(
         .ui_registry
         .remove_extension(id, &state.hello_server.session_id)?;
     Ok(json!({"extension_id": id, "removed": true}))
+}
+
+pub(super) fn set_extension_readiness(
+    params: Value,
+    state: &ConnectionState,
+) -> Result<Value, ControlError> {
+    serialize_control(
+        state
+            .ui_registry
+            .set_extension_readiness(params, &state.hello_server.session_id)?,
+    )
+}
+
+pub(super) fn register_extension_layout(
+    params: Value,
+    state: &ConnectionState,
+) -> Result<Value, ControlError> {
+    serialize_control(
+        state
+            .ui_registry
+            .register_extension_layout(params, &state.hello_server.session_id)?,
+    )
+}
+
+pub(super) fn list_extension_layouts(
+    params: &Value,
+    state: &ConnectionState,
+) -> Result<Value, ControlError> {
+    let request: ExtensionLayoutListRequest =
+        serde_json::from_value(params.clone()).map_err(|error| {
+            ControlError::invalid_params(
+                "ui.extensions.layouts.list",
+                format!("invalid extension layout list request: {error}"),
+            )
+        })?;
+    let id = extension_layout_id("ui.extensions.layouts.list", request.extension_id)?;
+    let layouts = state
+        .ui_registry
+        .list_extension_layouts(&id, &state.hello_server.session_id)?;
+    Ok(json!({
+        "extension_id":id,
+        "layouts":layouts,
+        "revision":state.event_hub.revision(),
+    }))
+}
+
+pub(super) fn remove_extension_layout(
+    params: &Value,
+    state: &ConnectionState,
+) -> Result<Value, ControlError> {
+    let request: ExtensionLayoutRemoveRequest =
+        serde_json::from_value(params.clone()).map_err(|error| {
+            ControlError::invalid_params(
+                "ui.extensions.layouts.remove",
+                format!("invalid extension layout removal request: {error}"),
+            )
+        })?;
+    let id = extension_layout_id("ui.extensions.layouts.remove", request.extension_id)?;
+    state.ui_registry.remove_extension_layout(
+        &id,
+        &request.name,
+        &state.hello_server.session_id,
+    )?;
+    Ok(json!({"extension_id":id,"name":request.name,"removed":true}))
 }
 
 pub(super) fn register_contribution(

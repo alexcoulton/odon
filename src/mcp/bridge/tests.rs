@@ -8,6 +8,26 @@ fn read_json(reader: &mut BufReader<TcpStream>) -> Value {
     serde_json::from_str(line.trim()).expect("parse bridge response")
 }
 
+fn rpc(
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Value {
+    writeln!(
+        stream,
+        "{}",
+        json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params})
+    )
+    .expect("write bridge request");
+    stream.flush().expect("flush bridge request");
+    let response = read_json(reader);
+    assert_eq!(response["id"], id, "unexpected RPC response: {response}");
+    assert!(response.get("error").is_none(), "RPC error: {response}");
+    response["result"].clone()
+}
+
 #[test]
 fn optional_tcp_failure_keeps_the_local_actor_available() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("reserve test address");
@@ -33,6 +53,319 @@ fn optional_tcp_failure_keeps_the_local_actor_available() {
         .recv_timeout(Duration::from_secs(2))
         .expect("local actor reply after TCP failure")
         .expect("local actor command succeeds");
+}
+
+#[test]
+fn extension_disconnect_focus_reconciliation_targets_the_required_workspace() {
+    let events = EventHub::shared();
+    let registry = UiRegistry::shared(events);
+    registry
+        .register_extension(
+            json!({
+                "id":"org.example.focus",
+                "name":"Focus",
+                "version":"1",
+                "capabilities":["ui.panels"],
+                "disconnect_policy":"remove"
+            }),
+            "extension-session",
+        )
+        .unwrap();
+    let contribution = registry
+        .register_contribution(
+            json!({
+                "extension_id":"org.example.focus",
+                "contribution_id":"panel",
+                "location":"right.tabs",
+                "root":{"id":"panel","type":"text","value":"Focused"}
+            }),
+            "extension-session",
+        )
+        .unwrap();
+    let cleanup = registry.cleanup_session("extension-session");
+    let snapshot = |focused: &str, mount: &str| {
+        json!({
+            "mode":"single",
+            "revision":12,
+            "active_region_id":focused,
+            "focused_node_id":focused,
+            "layout":{"nodes":[
+                {"id":"canvas","type":"canvas_slot","mount":"builtin:viewer-canvas"},
+                {"id":focused,"type":"extension_mount","mount":mount}
+            ]}
+        })
+    };
+    let patch = transport::focus_reconciliation_patch(
+        &snapshot("extension", &contribution.shell_mount),
+        &cleanup.unavailable_mounts,
+        registry.as_ref(),
+    )
+    .expect("an unavailable explicit mount transfers focus");
+    assert_eq!(patch["active_region_id"], "canvas");
+    assert_eq!(patch["focused_node_id"], "canvas");
+    assert_eq!(patch["if_shell_revision"], 12);
+
+    let patch = transport::focus_reconciliation_patch(
+        &snapshot("host", "builtin:extension-host.right-tabs"),
+        &cleanup.unavailable_mounts,
+        registry.as_ref(),
+    )
+    .expect("an empty default host transfers focus");
+    assert_eq!(patch["focused_node_id"], "canvas");
+
+    assert!(
+        transport::focus_reconciliation_patch(
+            &snapshot("canvas", "builtin:viewer-canvas"),
+            &cleanup.unavailable_mounts,
+            registry.as_ref(),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn extension_disconnect_and_reconnect_reconcile_focus_and_retained_readiness() {
+    let bridge = OdonControlBridge::spawn("127.0.0.1:0", egui::Context::default())
+        .expect("spawn bridge on ephemeral port");
+
+    let mut extension_stream =
+        TcpStream::connect(bridge.local_addr()).expect("connect extension client");
+    extension_stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set extension read timeout");
+    let mut extension_reader = BufReader::new(
+        extension_stream
+            .try_clone()
+            .expect("clone extension client socket"),
+    );
+    rpc(
+        &mut extension_stream,
+        &mut extension_reader,
+        1,
+        "system.hello",
+        json!({
+            "client":{"name":"focus-extension","version":"1"},
+            "protocol_versions":[1],
+            "requested_capabilities":["ui.shell.extension_place","ui.shell.shortcuts"]
+        }),
+    );
+    rpc(
+        &mut extension_stream,
+        &mut extension_reader,
+        2,
+        "ui.extensions.register",
+        json!({
+            "id":"org.example.focus-lifecycle",
+            "name":"Focus lifecycle",
+            "version":"1",
+            "capabilities":["ui.panels","ui.actions"],
+            "disconnect_policy":"retain"
+        }),
+    );
+    let contribution = rpc(
+        &mut extension_stream,
+        &mut extension_reader,
+        3,
+        "ui.contributions.register",
+        json!({
+            "extension_id":"org.example.focus-lifecycle",
+            "contribution_id":"panel",
+            "location":"project.cards",
+            "root":{"id":"panel","type":"text","value":"Focused"}
+        }),
+    );
+    let mount = contribution["shell_mount"]
+        .as_str()
+        .expect("registered contribution mount")
+        .to_string();
+    let command = rpc(
+        &mut extension_stream,
+        &mut extension_reader,
+        4,
+        "ui.commands.register",
+        json!({
+            "extension_id":"org.example.focus-lifecycle",
+            "command":{
+                "id":"focus-panel",
+                "title":"Focus Panel",
+                "description":"Focus the retained panel.",
+                "event":"focus-panel",
+                "modes":["project"]
+            }
+        }),
+    );
+    let command_id = command["command"]["id"].as_str().unwrap().to_string();
+
+    let mut controller_stream =
+        TcpStream::connect(bridge.local_addr()).expect("connect application controller");
+    controller_stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set controller read timeout");
+    let mut controller_reader = BufReader::new(
+        controller_stream
+            .try_clone()
+            .expect("clone controller socket"),
+    );
+    rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        10,
+        "system.hello",
+        json!({
+            "client":{"name":"focus-controller","version":"1"},
+            "protocol_versions":[1],
+            "requested_capabilities":[
+                "ui.shell.application_control",
+                "ui.shell.compose",
+                "ui.shell.read"
+            ]
+        }),
+    );
+    let initial = rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        11,
+        "ui.shell.get",
+        json!({}),
+    );
+    let replaced = rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        12,
+        "ui.shell.replace_layout",
+        json!({
+            "if_shell_revision":initial["revision"],
+            "desired_tree":{
+                "root_id":"layout:focus.root",
+                "nodes":[
+                    {"id":"layout:focus.root","type":"application","children":["layout:focus.workspace","layout:focus.tabs"]},
+                    {"id":"layout:focus.workspace","type":"builtin_mount","mount":"builtin:project-workspace"},
+                    {"id":"layout:focus.tabs","type":"tabs","children":["layout:focus.extension"],"selected_id":"layout:focus.extension"},
+                    {"id":"layout:focus.extension","type":"extension_mount","mount":mount}
+                ]
+            }
+        }),
+    );
+    let focused = rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        13,
+        "ui.shell.patch_layout",
+        json!({
+            "if_shell_revision":replaced["revision"],
+            "active_region_id":"layout:focus.extension",
+            "focused_node_id":"layout:focus.extension"
+        }),
+    );
+    assert_eq!(focused["focused_node_id"], "layout:focus.extension");
+
+    extension_stream
+        .shutdown(std::net::Shutdown::Both)
+        .expect("disconnect extension client");
+    drop(extension_reader);
+    drop(extension_stream);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut request_id = 14;
+    loop {
+        let snapshot = rpc(
+            &mut controller_stream,
+            &mut controller_reader,
+            request_id,
+            "ui.shell.get",
+            json!({}),
+        );
+        request_id += 1;
+        if snapshot["focused_node_id"] == "layout:focus.workspace" {
+            assert_eq!(snapshot["active_region_id"], "layout:focus.workspace");
+            let commands = rpc(
+                &mut controller_stream,
+                &mut controller_reader,
+                request_id,
+                "ui.commands.list",
+                json!({}),
+            );
+            request_id += 1;
+            let retained = commands["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|command| command["id"] == command_id)
+                .expect("retained extension command after disconnect");
+            assert_eq!(retained["readiness"]["state"], "disconnected");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "disconnect focus reconciliation did not commit: {snapshot}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut reconnect_stream =
+        TcpStream::connect(bridge.local_addr()).expect("reconnect extension client");
+    reconnect_stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set reconnect read timeout");
+    let mut reconnect_reader = BufReader::new(
+        reconnect_stream
+            .try_clone()
+            .expect("clone reconnected extension socket"),
+    );
+    rpc(
+        &mut reconnect_stream,
+        &mut reconnect_reader,
+        30,
+        "system.hello",
+        json!({
+            "client":{"name":"focus-extension","version":"1"},
+            "protocol_versions":[1],
+            "requested_capabilities":["ui.shell.extension_place","ui.shell.shortcuts"]
+        }),
+    );
+    rpc(
+        &mut reconnect_stream,
+        &mut reconnect_reader,
+        31,
+        "ui.extensions.register",
+        json!({
+            "id":"org.example.focus-lifecycle",
+            "name":"Focus lifecycle",
+            "version":"1",
+            "capabilities":["ui.panels","ui.actions"],
+            "disconnect_policy":"retain"
+        }),
+    );
+    let reconnected = rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        request_id,
+        "ui.shell.get",
+        json!({}),
+    );
+    let extension_node = reconnected["layout"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "layout:focus.extension")
+        .expect("retained extension node after reconnect");
+    assert_eq!(extension_node["mount"], mount);
+    assert_eq!(extension_node["readiness"]["state"], "ready");
+    assert_eq!(reconnected["focused_node_id"], "layout:focus.workspace");
+    let commands = rpc(
+        &mut controller_stream,
+        &mut controller_reader,
+        request_id + 1,
+        "ui.commands.list",
+        json!({}),
+    );
+    let retained = commands["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["id"] == command_id)
+        .expect("retained extension command after reconnect");
+    assert_eq!(retained["readiness"]["state"], "ready");
 }
 
 #[test]
@@ -163,6 +496,25 @@ fn json_rpc_requires_hello_and_exposes_introspection() {
     assert_eq!(screenshot["completion_contract"], "presentation_dependent");
     assert_eq!(screenshot["cancellation"], "cooperative");
     assert!(screenshot["completion_point"].is_string());
+
+    let denied = handle_control_line(
+        &json!({
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"ui.shell.components.list",
+            "params":{"mode":"single"}
+        })
+        .to_string(),
+        &tx,
+        &ctx,
+        &mut state,
+    )
+    .expect("permission response");
+    assert_eq!(denied["error"]["data"]["kind"], "PERMISSION_DENIED");
+    assert_eq!(
+        denied["error"]["data"]["required_capability"],
+        "ui.shell.read"
+    );
 }
 
 #[test]
@@ -449,9 +801,15 @@ fn comparison_workflow_completes_over_tcp_without_a_ui_frame() {
 fn protocol_registries_roundtrip_data_layers_and_declarative_ui() {
     let ctx = egui::Context::default();
     let mut state = ConnectionState::unauthenticated_test();
-    let actor = crate::control::actor::spawn_control_actor(
+    let actor = crate::control::actor::spawn_control_actor_with_services_and_ui(
         Arc::new(|| {}),
         Arc::clone(&state.resource_registry),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(Arc::clone(&state.ui_registry)),
     )
     .unwrap();
     let tx = actor.request_tx;
@@ -475,7 +833,8 @@ fn protocol_registries_roundtrip_data_layers_and_declarative_ui() {
             "system.hello",
             json!({
                 "client": {"name": "conformance", "version": "1"},
-                "protocol_versions": [1]
+                "protocol_versions": [1],
+                "requested_capabilities":["ui.shell.extension_place","ui.shell.read"]
             }),
         )["result"]
             .is_object()
@@ -517,6 +876,23 @@ fn protocol_registries_roundtrip_data_layers_and_declarative_ui() {
         }),
     );
     assert_eq!(extension["result"]["id"], "org.example.test");
+    let readiness = call(
+        &mut state,
+        50,
+        "ui.extensions.set_readiness",
+        json!({
+            "extension_id":"org.example.test",
+            "ready":false,
+            "reason":"loading model"
+        }),
+    );
+    assert_eq!(readiness["result"]["ready"], false);
+    call(
+        &mut state,
+        51,
+        "ui.extensions.set_readiness",
+        json!({"extension_id":"org.example.test","ready":true}),
+    );
     let contribution = call(
         &mut state,
         6,
@@ -530,6 +906,71 @@ fn protocol_registries_roundtrip_data_layers_and_declarative_ui() {
         }),
     );
     assert_eq!(contribution["result"]["extension_id"], "org.example.test");
+    let shell_mount = contribution["result"]["shell_mount"]
+        .as_str()
+        .expect("stable extension shell mount");
+    assert!(shell_mount.starts_with("extension:org.example.test/"));
+    let components = call(
+        &mut state,
+        7,
+        "ui.shell.components.list",
+        json!({"mode":"single"}),
+    );
+    let extension_component = components["result"]["components"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["id"] == shell_mount))
+        .expect("extension component descriptor");
+    assert_eq!(extension_component["ownership"]["scope"], "extension");
+    assert_eq!(
+        extension_component["ownership"]["owner_session_id"],
+        state.hello_server.session_id
+    );
+    let layout = call(
+        &mut state,
+        8,
+        "ui.extensions.layouts.register",
+        json!({
+            "extension_id":"org.example.test",
+            "name":"Review",
+            "document":{
+                "schema_version":0,
+                "mode":"single",
+                "desired_tree":{
+                    "root_id":"root",
+                    "nodes":[
+                        {"id":"root","type":"application","children":["body"]},
+                        {"id":"body","type":"row","parent_id":"root","children":["canvas","extension"]},
+                        {"id":"canvas","type":"canvas_slot","parent_id":"body","mount":"builtin:viewer-canvas"},
+                        {"id":"extension","type":"extension_mount","parent_id":"body","mount":shell_mount}
+                    ]
+                }
+            }
+        }),
+    );
+    assert_eq!(layout["result"]["name"], "Review");
+    assert_eq!(layout["result"]["document"]["schema_version"], 1);
+    let layouts = call(
+        &mut state,
+        9,
+        "ui.extensions.layouts.list",
+        json!({"extension_id":"org.example.test"}),
+    );
+    assert_eq!(layouts["result"]["layouts"][0]["name"], "Review");
+    let invalid_list = call(
+        &mut state,
+        10,
+        "ui.extensions.layouts.list",
+        json!({"extension_id":"org.example.test","unknown":true}),
+    );
+    assert_eq!(invalid_list["error"]["code"], -32602);
+    assert_eq!(invalid_list["error"]["data"]["kind"], "INVALID_PARAMS");
+    let removed = call(
+        &mut state,
+        11,
+        "ui.extensions.layouts.remove",
+        json!({"extension_id":"org.example.test","name":"Review"}),
+    );
+    assert_eq!(removed["result"]["removed"], true);
 }
 
 #[test]

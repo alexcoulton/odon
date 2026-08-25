@@ -22,10 +22,10 @@ Current executable-ledger baseline:
 
 | Host | Fields | Retain | Narrow | Replace | Delete |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `OmeZarrViewerApp` | 170 | 170 | 0 | 0 | 0 |
-| `RootApp` | 36 | 36 | 0 | 0 | 0 |
-| `MosaicViewerApp` | 74 | 74 | 0 | 0 | 0 |
-| **Total** | **280** | **280** | **0** | **0** | **0** |
+| `OmeZarrViewerApp` | 172 | 172 | 0 | 0 | 0 |
+| `RootApp` | 37 | 37 | 0 | 0 | 0 |
+| `MosaicViewerApp` | 76 | 76 | 0 | 0 | 0 |
+| **Total** | **283** | **283** | **0** | **0** | **0** |
 
 `Retain` does not mean actor ownership: retained fields are renderer resources/observations,
 transient UI, shared-resource handles, or narrow platform effects. There are no remaining
@@ -73,7 +73,7 @@ ledger records the resulting implementation.
 | Plane/render history | `previous_view_selection`, `previous_displayed_view_selection`, `last_render_view_selection`, `last_canvas_rect`, `last_target_level`, `fallback_ceiling_level`, `last_visible_world_tiles`, `zoom_out_floor_level`, `zoom_out_floor_until`, `zoom_out_floor_visible_world_tiles` | Rendering heuristics and measured geometry | Renderer |
 | Channel and plane semantics | `selected_channel`, `view_plane_mode`, `draft_view_slice_level0`, `current_x_level0`, `current_y_level0`, `current_z_level0`, `channels`, `channel_window_overrides`, `fast_object_rendering`, `channel_list_search` | Actor-owned values with compatibility mirrors plus a transient slice draft | Actor semantic except `draft_view_slice_level0`; renderer consumes projection; Wave 7 mirror removal |
 | Active layer/selection UI | `active_layer`, `selected_channel_layers`, `channel_select_anchor_idx`, `selected_channel_group_id`, `quick_contrast_target`, `selected_overlay_layers`, `overlay_select_anchor_pos` | Mixed semantic active target and UI multi-selection | Actor owns active layer/group where externally visible; anchors and multi-select are transient UI; Wave 6/7 |
-| Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab` | Projectable UI settings and platform dialog state | Actor settings for visible panels/tabs; close dialog remains transient platform UI; Wave 6/7 |
+| Panel/application UI | `show_left_panel`, `show_right_panel`, `close_dialog_open`, `left_tab`, `right_tab`, `control_shell_projection`, `control_shell_layout`, `extension_ui_registry` | Projectable shell/UI settings, renderer reconciliation cache, extension contribution/layout-template resource, and platform dialog state | Actor shell model owns stable legacy nodes, the desired keyed tree, active region/focus, typed ownership/protection metadata, actor-side foreign-extension mutation enforcement, versioned interchange, session profiles, application-settings profiles with once-per-mode startup restore and protected-recovery diagnostics, and canonical project profiles; project/viewer/mosaic top bars render through the keyed mount dispatcher and application roots own vertical chrome placement; the control service owns extension-default templates under the extension's remove/disable/retain lifecycle and applies them only through the actor import transaction; renderer keeps only per-key realization state and a shared extension registry handle; close dialog remains transient platform UI; Milestone 8 |
 | Memory/pinning | `memory_selected_channels`, `pending_memory_load`, `pinned_levels`, `control_actor_memory_state`, `system_memory`, `system_memory_last_refresh`, `prefer_pinned_finer_levels` | Channel and confirmation drafts; immutable actor resources and projected lifecycle; non-authoritative OS-memory observation; projected tile-policy preference | Actor owns pin/unpin lifecycle and bounded work; renderer retains only drafts, immutable buffers, projection observation, OS warning sample, and tile-scheduler policy; Milestone 5B complete |
 | Project/ROI panels | `project_space`, `control_actor_project_config_generation`, `roi_selector_ui` | Actor projection plus consumed-generation observation and ROI browse/validation drafts | Actor owns project persistence at a known config generation; UI actions are typed commands; Milestone 5C complete |
 | Legacy cell-threshold points | `legacy_cell_threshold_points`, `cell_points` | Renderer-only compatibility resource adapter and point draw cache with no public semantic surface | Actor analysis/project state remains authoritative; immutable point values are presentation input only; Milestone 5C complete |
@@ -173,8 +173,9 @@ registries (`services.rs`); tests remain in `tests.rs`. A structural regression 
 runtime, façade, or production bridge modules from absorbing one another's responsibilities.
 
 The declarative extension UI remains one `UiRegistry` but no longer one implementation file.
-`control/ui.rs` owns extension/contribution lifecycle and action queues; `ui/render.rs` owns native
-placement; `ui/render/components.rs` owns recursive widget/event-policy rendering; and
+`control/ui.rs` owns extension/contribution lifecycle and action queues; `ui/render.rs` renders
+contributions only through explicit desired-tree mounts (including application-owned default
+hosts); `ui/render/components.rs` owns recursive widget/event-policy rendering; and
 `ui/validation.rs` owns validation, capability authorization, value patching, and native binding
 synchronization. Tests are isolated under `control/ui/tests.rs`. This is a source boundary inside
 the control service, not a second UI registry or semantic owner.

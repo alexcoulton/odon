@@ -9,6 +9,199 @@ fn request_schema(shape: RequestShape) -> Value {
             "properties": {},
             "additionalProperties": false,
         }),
+        RequestShape::ShellGet => json!({
+            "type":"object",
+            "properties":{"mode":{"type":"string","enum":["project","single","mosaic"]}},
+            "additionalProperties":false,
+        }),
+        RequestShape::MenuReplace => json!({
+            "type":"object",
+            "properties":{
+                "if_command_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "menu":{"type":"object"}
+            },
+            "required":["menu"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ToolbarReplace => json!({
+            "type":"object",
+            "properties":{
+                "if_command_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "toolbar":{"type":"object"}
+            },
+            "required":["toolbar"],
+            "additionalProperties":false,
+        }),
+        RequestShape::PaletteReplace => json!({
+            "type":"object",
+            "properties":{
+                "if_command_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "palette":{"type":"object"}
+            },
+            "required":["palette"],
+            "additionalProperties":false,
+        }),
+        RequestShape::CommandRegister => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256},
+                "if_command_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "command":{"type":"object"}
+            },
+            "required":["extension_id","command"],
+            "additionalProperties":false,
+        }),
+        RequestShape::CommandRemove => json!({
+            "type":"object",
+            "properties":{
+                "extension_id":{"type":"string","minLength":1,"maxLength":256},
+                "command_id":{"type":"string","minLength":1,"maxLength":256},
+                "if_command_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128}
+            },
+            "required":["extension_id","command_id"],
+            "additionalProperties":false,
+        }),
+        RequestShape::CommandExecute => json!({
+            "type":"object",
+            "properties":{
+                "command_id":{"type":"string","minLength":1,"maxLength":256},
+                "checked":{"type":"boolean"}
+            },
+            "required":["command_id"],
+            "additionalProperties":false,
+        }),
+        RequestShape::CommandCleanup => json!({
+            "type":"object",
+            "properties":{
+                "extensions":{"type":"array","maxItems":256,"items":{"type":"object"}}
+            },
+            "required":["extensions"],
+            "additionalProperties":false,
+        }),
+        RequestShape::CommandSync => json!({
+            "type":"object",
+            "properties":{"context":{"type":"object"}},
+            "required":["context"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellImportLayout => json!({
+            "type":"object",
+            "properties":{
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "document":{"type":"object"}
+            },
+            "required":["document"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellPatch => json!({
+            "type":"object",
+            "properties":{
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "visibility":{
+                    "type":"object",
+                    "propertyNames":{"type":"string","minLength":1,"maxLength":256},
+                    "additionalProperties":{"type":"boolean"}
+                },
+                "orders":{
+                    "type":"object",
+                    "propertyNames":{"type":"string","minLength":1,"maxLength":256},
+                    "additionalProperties":{
+                        "type":"array",
+                        "items":{"type":"string","minLength":1,"maxLength":256},
+                        "uniqueItems":true
+                    }
+                },
+                "selected":{
+                    "type":"object",
+                    "propertyNames":{"type":"string","minLength":1,"maxLength":256},
+                    "additionalProperties":{"type":"string","minLength":1,"maxLength":256}
+                }
+            },
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellReplaceLayout => json!({
+            "type":"object",
+            "properties":{
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "desired_tree":{"type":"object"}
+            },
+            "required":["desired_tree"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellPatchLayout => json!({
+            "type":"object",
+            "properties":{
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128},
+                "visibility":{"type":"object","additionalProperties":{"type":"boolean"}},
+                "selected":{"type":"object","additionalProperties":{"type":"string","minLength":1,"maxLength":256}},
+                "sizes":{"type":"object","additionalProperties":{"type":"object"}},
+                "splits":{"type":"object","additionalProperties":{"type":"object"}},
+                "collapsed":{"type":"object","additionalProperties":{"type":"boolean"}},
+                "configurations":{"type":"object","additionalProperties":{"type":"object"}},
+                "active_region_id":{"type":"string","minLength":1,"maxLength":256},
+                "focused_node_id":{"type":"string","minLength":1,"maxLength":256},
+                "clear_focus":{"type":"boolean"}
+            },
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellProfileList => json!({
+            "type":"object",
+            "properties":{"scope":{"type":"string","enum":["session","application","project"],"default":"session"}},
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellProfileSave => json!({
+            "type":"object",
+            "properties":{
+                "name":{"type":"string","minLength":1,"maxLength":128},
+                "scope":{"type":"string","enum":["session","application","project"],"default":"session"},
+                "mode":{"type":"string","enum":["project","single","mosaic"]}
+            },
+            "required":["name"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellProfileLoad => json!({
+            "type":"object",
+            "properties":{
+                "name":{"type":"string","minLength":1,"maxLength":128},
+                "scope":{"type":"string","enum":["session","application","project"],"default":"session"},
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128}
+            },
+            "required":["name"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellProfileRemove => json!({
+            "type":"object",
+            "properties":{
+                "name":{"type":"string","minLength":1,"maxLength":128},
+                "scope":{"type":"string","enum":["session","application","project"],"default":"session"}
+            },
+            "required":["name"],
+            "additionalProperties":false,
+        }),
+        RequestShape::ShellReset => json!({
+            "type":"object",
+            "properties":{
+                "mode":{"type":"string","enum":["project","single","mosaic"]},
+                "if_shell_revision":{"type":"integer","minimum":1},
+                "transaction_id":{"type":"string","minLength":1,"maxLength":128}
+            },
+            "additionalProperties":false,
+        }),
         RequestShape::SetSidePanels => json!({
             "type": "object",
             "properties": {"left": {"type": "boolean"}, "right": {"type": "boolean"}},
@@ -51,6 +244,15 @@ fn request_schema(shape: RequestShape) -> Value {
             "type": "object",
             "properties": {
                 "fast_object_rendering": {"type": "boolean"},
+                "shell_layout_startup_profiles": {
+                    "type":"object",
+                    "properties":{
+                        "project":{"type":"string","minLength":1,"maxLength":128},
+                        "single":{"type":"string","minLength":1,"maxLength":128},
+                        "mosaic":{"type":"string","minLength":1,"maxLength":128}
+                    },
+                    "additionalProperties":false
+                },
                 "auto_contrast": {
                     "type": "object",
                     "properties": {

@@ -224,7 +224,7 @@ impl OdonControlRuntime {
         let task_registry = TaskRegistry::shared(Arc::clone(&event_hub));
         let resource_registry = ResourceRegistry::shared(Arc::clone(&event_hub));
         let ui_registry = UiRegistry::shared(Arc::clone(&event_hub));
-        let actor = crate::control::actor::spawn_control_actor_with_services(
+        let actor = crate::control::actor::spawn_control_actor_with_services_and_ui(
             Arc::new({
                 let ctx = ctx.clone();
                 move || ctx.request_repaint()
@@ -235,6 +235,7 @@ impl OdonControlRuntime {
             Some(Arc::clone(&task_registry)),
             None,
             alternate_backend,
+            Some(Arc::clone(&ui_registry)),
         )?;
         let tx = actor.request_tx;
         let presentation_rx = actor.presentation_rx;
@@ -440,10 +441,26 @@ impl OdonControlRuntime {
         self.event_hub.revision()
     }
 
+    pub fn ui_registry(&self) -> Arc<UiRegistry> {
+        Arc::clone(&self.ui_registry)
+    }
+
     pub fn render_extension_ui(&self, ctx: &egui::Context, native_state: &Value) {
+        self.prepare_extension_ui(native_state);
+        self.render_extension_hosts(ctx, native_state.get("shell"));
+        self.finish_extension_ui(ctx);
+    }
+
+    pub fn prepare_extension_ui(&self, native_state: &Value) {
         self.ui_registry
             .sync_native_bindings(native_state, &self.resource_registry.list_layers());
-        self.ui_registry.render(ctx);
+    }
+
+    pub fn render_extension_hosts(&self, ctx: &egui::Context, shell: Option<&Value>) {
+        self.ui_registry.render(ctx, shell);
+    }
+
+    pub fn finish_extension_ui(&self, ctx: &egui::Context) {
         for action in self.ui_registry.drain_actions() {
             match action.action.get("type").and_then(Value::as_str) {
                 Some("command") => {
