@@ -511,11 +511,18 @@ impl ShellTreeFrame {
                 egui::Sense::hover()
             };
             let response = handle_ui.allocate_rect(split.rect, sense);
-            let stroke = if response.dragged() || response.hovered() {
-                handle_ui.visuals().widgets.active.fg_stroke
+            let widget_visuals = if response.dragged() || response.hovered() {
+                &handle_ui.visuals().widgets.active
             } else {
-                handle_ui.visuals().widgets.inactive.fg_stroke
+                &handle_ui.visuals().widgets.inactive
             };
+            // Split handles are part of the surrounding chrome, so use the dark border colour
+            // rather than the bright foreground colour used for text and icons. Keep the
+            // foreground stroke width so the handle still becomes bolder on hover and drag.
+            let stroke = egui::Stroke::new(
+                widget_visuals.fg_stroke.width,
+                widget_visuals.bg_stroke.color,
+            );
             let points = match split.axis {
                 Axis::Horizontal => [
                     egui::pos2(split.rect.center().x, split.rect.top()),
