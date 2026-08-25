@@ -173,7 +173,7 @@ struct SplitPlacement {
     node_id: String,
     rect: egui::Rect,
     axis: Axis,
-    ratio: f32,
+    projected_ratio: f32,
     min_ratio: f32,
     max_ratio: f32,
     content_extent: f32,
@@ -183,7 +183,6 @@ struct SplitPlacement {
 #[derive(Debug, Clone, Copy)]
 struct SplitUiState {
     revision: u64,
-    drag_origin_ratio: f32,
     live_ratio: f32,
 }
 
@@ -539,23 +538,27 @@ impl ShellTreeFrame {
                 .filter(|state| state.revision == self.revision)
                 .unwrap_or(SplitUiState {
                     revision: self.revision,
-                    drag_origin_ratio: split.ratio,
-                    live_ratio: split.ratio,
+                    live_ratio: split.projected_ratio,
                 });
-            if response.drag_started() {
-                state.drag_origin_ratio = split.ratio;
-            }
-            if response.dragged() || response.drag_stopped() {
+            if response.dragged() {
                 let delta = split.axis.delta(response.drag_delta());
-                state.live_ratio = (state.drag_origin_ratio + delta / split.content_extent)
-                    .clamp(split.min_ratio, split.max_ratio);
+                // `Response::drag_delta` is the movement since the previous frame, not the
+                // movement since the drag began. Accumulate it into renderer-local state so the
+                // handle follows a multi-frame gesture and retains the final value on release.
+                state.live_ratio = accumulate_split_drag_ratio(
+                    state.live_ratio,
+                    delta,
+                    split.content_extent,
+                    split.min_ratio,
+                    split.max_ratio,
+                );
                 handle_ui
                     .ctx()
                     .data_mut(|data| data.insert_temp(state_id, state));
                 handle_ui.ctx().request_repaint();
             }
             if response.drag_stopped() {
-                if (state.live_ratio - split.ratio).abs() > f32::EPSILON {
+                if (state.live_ratio - split.projected_ratio).abs() > f32::EPSILON {
                     changes.changes.push(ShellTreeChange::Split {
                         node_id: split.node_id.clone(),
                         axis: match split.axis {
@@ -582,6 +585,16 @@ impl ShellTreeFrame {
             .iter()
             .map(|(id, rect)| (id.as_str(), *rect))
     }
+}
+
+fn accumulate_split_drag_ratio(
+    live_ratio: f32,
+    frame_delta: f32,
+    content_extent: f32,
+    min_ratio: f32,
+    max_ratio: f32,
+) -> f32 {
+    (live_ratio + frame_delta / content_extent).clamp(min_ratio, max_ratio)
 }
 
 struct FrameBuilder<'a> {
@@ -756,7 +769,10 @@ impl FrameBuilder<'_> {
             node_id: node.id.clone(),
             rect: divider,
             axis: split.axis,
-            ratio,
+            // Keep the actor-owned value separate from `ratio`, which may be a renderer-local
+            // drag preview. Release must compare against this projected baseline or it will
+            // mistake the preview for an already committed change.
+            projected_ratio: split.ratio,
             min_ratio,
             max_ratio,
             content_extent,
@@ -1294,6 +1310,77 @@ mod tests {
         assert!((rects["builtin:layers"].width() - 248.5).abs() < 0.1);
         assert!(rects["builtin:viewer-canvas"].width() > 740.0);
         assert_eq!(frame.splits.len(), 1);
+    }
+
+    #[test]
+    fn split_drag_accumulates_each_frame_delta_without_resetting_to_the_origin() {
+        let origin = 0.25;
+        let after_first_frame = accumulate_split_drag_ratio(origin, 40.0, 1000.0, 0.05, 0.95);
+        let after_second_frame =
+            accumulate_split_drag_ratio(after_first_frame, 40.0, 1000.0, 0.05, 0.95);
+
+        assert!((after_first_frame - 0.29).abs() < 1e-6);
+        assert!((after_second_frame - 0.33).abs() < 1e-6);
+        assert_ne!(after_second_frame, origin);
+    }
+
+    #[test]
+    fn split_drag_release_commits_preview_against_the_actor_projected_ratio() {
+        let ctx = egui::Context::default();
+        let mut split = node("split", "split", &["layers", "canvas"]);
+        split["split"] = json!({
+            "axis":"horizontal",
+            "ratio":0.25,
+            "resizable":true,
+        });
+        let value = shell(json!([
+            node("root", "application", &["split"]),
+            split,
+            mount("layers", "builtin_mount", "builtin:layers"),
+            mount("canvas", "canvas_slot", "builtin:viewer-canvas"),
+        ]));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 500.0));
+        let start = egui::pos2(251.0, 250.0);
+
+        let run_frame = |events: Vec<egui::Event>| {
+            let mut patch = Value::Null;
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            });
+            egui::CentralPanel::default().show(&ctx, |ui| {
+                let frame =
+                    ShellTreeFrame::from_projection(&ctx, &value, "builtin:viewer-canvas", screen)
+                        .unwrap();
+                patch = frame
+                    .show(ui, |_ui, _mount, _configuration| {})
+                    .patch_params();
+            });
+            let _ = ctx.end_pass();
+            patch
+        };
+
+        let _ = run_frame(vec![egui::Event::PointerMoved(start)]);
+        let _ = run_frame(vec![egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let _ = run_frame(vec![egui::Event::PointerMoved(egui::pos2(291.0, 250.0))]);
+        let _ = run_frame(vec![egui::Event::PointerMoved(egui::pos2(331.0, 250.0))]);
+        let patch = run_frame(vec![egui::Event::PointerButton {
+            pos: egui::pos2(331.0, 250.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        let committed = patch["splits"]["split"]["ratio"]
+            .as_f64()
+            .expect("split release commits the live preview against the actor baseline");
+        assert!((committed - (0.25 + 80.0 / 994.0)).abs() < 1e-4);
     }
 
     #[test]
