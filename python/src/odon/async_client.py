@@ -249,6 +249,7 @@ class AsyncClient:
     async def close(self) -> None:
         if self._cleanup_complete:
             return
+        await self.ui._close()
         self._closed = True
         self.events._close()
         await self.data._close()

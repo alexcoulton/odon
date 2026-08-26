@@ -6,7 +6,12 @@ import threading
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from .errors import RequestTimeoutError, TaskCancelledError, TaskFailedError
+from .errors import (
+    RequestTimeoutError,
+    TaskCancelledError,
+    TaskFailedError,
+    UnsafeCallbackWaitError,
+)
 from .models import Event, TaskSnapshot
 
 if TYPE_CHECKING:
@@ -32,6 +37,8 @@ class Task:
         *,
         progress: Callable[[TaskSnapshot], Any] | None = None,
     ) -> Any:
+        if bool(getattr(self._tasks._client.events, "in_callback", False)):
+            raise UnsafeCallbackWaitError(self.task_id)
         completed = threading.Event()
 
         def receive(event: Event) -> None:
@@ -47,7 +54,11 @@ class Task:
             if self.refresh().done:
                 return self._result()
             if not completed.wait(timeout):
-                raise RequestTimeoutError(f"timed out waiting for task {self.task_id!r}")
+                raise RequestTimeoutError(
+                    f"timed out waiting for task {self.task_id!r}; the retained Odon "
+                    "task may still be running (call task.cancel() explicitly to request "
+                    "cooperative cancellation)"
+                )
             return self._result()
         finally:
             self._tasks._client.events.remove_callback(receive)

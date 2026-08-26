@@ -6,6 +6,7 @@ import queue
 import logging
 import threading
 from collections.abc import Callable, Iterable, Iterator
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .errors import ConnectionClosedError
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
 
 EventCallback = Callable[[Event], Any]
 logger = logging.getLogger("odon.events")
+_callback_scope: ContextVar[bool] = ContextVar(
+    "odon_sync_event_callback_scope", default=False
+)
 
 
 def pattern_matches(pattern: str, event: str) -> bool:
@@ -74,6 +78,12 @@ class Events:
     def status(self) -> Mapping[str, Any]:
         return self._client.call("events.get_status")
 
+    @property
+    def in_callback(self) -> bool:
+        """Whether the caller is currently running in a synchronous event callback."""
+
+        return _callback_scope.get()
+
     def remove_callback(self, callback: EventCallback) -> None:
         with self._lock:
             self._callbacks = [item for item in self._callbacks if item[1] is not callback]
@@ -112,12 +122,15 @@ class Events:
                 callbacks = tuple(self._callbacks)
             for patterns, callback in callbacks:
                 if any(pattern_matches(pattern, event.name) for pattern in patterns):
+                    token = _callback_scope.set(True)
                     try:
                         callback(event)
                     except Exception:
                         # User callbacks are isolated from connection IO and each other.
                         logger.exception("Odon event callback failed for %s", event.name)
                         continue
+                    finally:
+                        _callback_scope.reset(token)
 
     def _close(self) -> None:
         if self._closed:

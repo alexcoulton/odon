@@ -229,6 +229,13 @@ does not assume the Odon operation stopped. Cancellation is cooperative: it can
 cancel queued work and discard late results, but it cannot forcibly interrupt
 an operation already executing inside an indivisible library call.
 
+Do not call synchronous `Task.wait()` from an `app.events` callback. Completion is delivered by
+that same callback worker, so the SDK raises `UnsafeCallbackWaitError` immediately—including for an
+already-complete task—to make behavior independent of timing. Register resource work through
+`extension.on_action(..., execution="serial-worker")`, return from the raw callback and wait on
+another thread, or use the async client. Async event callbacks may await `AsyncTask` because their
+awaitable bodies run as independent asyncio tasks while event dispatch continues.
+
 RAM pinning illustrates risk confirmation and mosaic scopes:
 
 ```python
@@ -271,6 +278,11 @@ Async code can use `await app.events.next()` or `async for event in
 app.events.iter()`. Callbacks are isolated from connection I/O and from each
 other. Queues are bounded; slow consumers can inspect `dropped_events` and
 `events.status()`. Closing a client wakes blocked sync and async iterators.
+
+Synchronous callbacks execute serially on the SDK callback worker. They should decode, validate,
+or enqueue and return; a blocking task wait raises `UnsafeCallbackWaitError` rather than starving
+later event delivery. Raw wildcard subscriptions remain available for diagnostics and advanced
+correlation.
 
 ## Data and layers
 
@@ -356,6 +368,50 @@ app.events.subscribe("ui.extension:org.example.analysis.*", print)
 contribution.patch_values({"progress": 0.5, "status": "Working"})
 # Use contribution.mount("layout:analysis") in a ShellLayout desired tree.
 ```
+
+Extension-scoped normalized interactions remove the difference between `.action` and `.input`
+event envelopes:
+
+```python
+def inspect(interaction):
+    print(
+        interaction.component_id,
+        interaction.action,
+        interaction.value,
+        interaction.kind,
+        interaction.event.revision,
+    )
+
+subscription = extension.on_interaction(inspect, action="run-analysis")
+subscription.remove()
+```
+
+Use the extension-owned action runner when a control starts a task or coordinates viewer state:
+
+```python
+@extension.on_action(
+    "run-analysis",
+    execution="serial-worker",       # documented default
+    coalesce="reject-while-busy",
+    contribution=contribution,
+    status_component_id="status",
+    progress_component_id="progress",
+)
+def run(context, interaction):
+    with context.busy("Loading…"):
+        task = context.attach(app.objects.load(path))
+        result = task.wait(timeout=60, progress=context.report_task)
+```
+
+Execution policies are `callback`, `worker`, and `serial-worker`. Queue policies are `all`,
+`latest`, `accumulate`, and `reject-while-busy`; none is inferred from the component type.
+`extension.action_status()` provides submitted, executed, terminal, coalescing, rejection, queue,
+running-action, and shutdown diagnostics. `context.ensure_current()`, generation-checked
+`patch()`/`commit()`, retained-task cancellation, bounded shutdown, and error callbacks keep rapid
+interactions and failures from leaving channel, source, style, and panel state out of sync. An
+accumulated action already in progress completes; pending relative deltas are then applied against
+its committed state. See the [safe UI action recipes](../examples/python-ui-action-recipes.md) for
+complete runnable patterns and unsafe counterexamples.
 
 Contributions default to first-class shell mounts and appear in
 `app.ui.shell.list_components()`. The `right.tabs`, `left.sections`,

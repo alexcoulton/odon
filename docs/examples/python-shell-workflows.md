@@ -281,6 +281,11 @@ signature-cached beside the pilot outputs.
 
 ## Actor-owned default extension host lifecycle
 
+For native controls that start retained tasks or coordinate channel, source, object style, and
+panel state, use the [safe Python UI action recipes](python-ui-action-recipes.md). The guide includes
+a reusable one-view marker comparison controller and shows why synchronous task waits do not
+belong in extension event callbacks.
+
 [`examples/python_extension_host_control.py`](../../examples/python_extension_host_control.py)
 registers a native egui panel from a separate Python extension session and lets the review layout's
 existing `builtin:extension-host.left-sections` mount place it. The controller selects that host by

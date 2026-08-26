@@ -125,6 +125,16 @@ CLASS_SPECS = (
     ClassSpec("Application shell component descriptor", "odon.ui:ShellComponentDescriptor", "returned by `app.ui.shell.list_components`", "Introspected built-in mount compatibility, sizing, commands, events, and persistence."),
     ClassSpec("UI extension handle", "odon.ui:Extension", "returned by `app.ui.register_extension()`", "Register component trees owned by one extension."),
     ClassSpec("UI contribution handle", "odon.ui:Contribution", "returned by `extension.register()`", "Patch or remove one retained component tree."),
+    ClassSpec("Normalized UI interaction", "odon.ui_actions:UiInteraction", "delivered by `extension.on_interaction()` and `extension.on_action()`", "Uniform component ID, semantic action, value, kind, and raw event envelope."),
+    ClassSpec("UI interaction subscription", "odon.ui_actions:InteractionSubscription", "returned by `extension.on_interaction()`", "Removable extension-scoped normalized interaction subscription."),
+    ClassSpec("Action worker snapshot", "odon.ui_actions:ActionWorkerSnapshot", "returned by `extension.action_status()`", "Detached queue, execution, coalescing, rejection, and shutdown diagnostics."),
+    ClassSpec("Action context", "odon.ui_actions:ActionContext", "passed to synchronous action handlers", "Generation-safe status, progress, cancellation, retained-task, and commit helpers."),
+    ClassSpec("Action registration", "odon.ui_actions:ActionRegistration", "returned by `extension.on_action()`", "Callable and removable synchronous action registration."),
+    ClassSpec("Object source/style result", "odon.recipes:ObjectSourceStyleResult", "returned by the safe source/style recipe", "Task, source, property, and final presentation-readiness evidence."),
+    ClassSpec("Object property unavailable", "odon.recipes:ObjectPropertyUnavailableError", "raised by object-property recipes", "Structured failure when a requested numeric property is unavailable."),
+    ClassSpec("Marker comparison state", "odon.recipes:MarkerComparisonState", "owned by `MarkerComparisonController`", "Synchronized ROI, marker, fill, generation, and lifecycle phase."),
+    ClassSpec("Marker comparison components", "odon.recipes:MarkerComparisonComponents", "configure `MarkerComparisonController`", "Native panel component IDs patched by the controller."),
+    ClassSpec("Marker comparison controller", "odon.recipes:MarkerComparisonController", "construct for a one-view comparison extension", "Serializes ROI, marker, fill, channel, object source, continuous style, and panel state."),
     ClassSpec("UI component base", "odon.ui:Component", "construct through component subclasses", "Serializable native-egui component contract."),
     ClassSpec("UI event policy", "odon.ui:EventPolicy", "`Immediate`, `OnCommit`, `Throttle`, or `Debounce`", "Controls native widget event delivery."),
     ClassSpec("Extension lifecycle protocol", "odon.extensions:Extension", "implemented by packaged extensions", "Optional cleanup protocol used by the reconnecting extension runner."),
@@ -182,6 +192,9 @@ ASYNC_CLASS_SPECS = (
     ClassSpec("Async command palette", "odon.async_ui:AsyncPalette", "`app.ui.palette`", "Async revision-guarded command-palette composition."),
     ClassSpec("Async UI extension", "odon.async_ui:AsyncExtension", "returned by `app.ui.register_extension()`", "Async UI extension handle."),
     ClassSpec("Async UI contribution", "odon.async_ui:AsyncContribution", "returned by `extension.register()`", "Async UI contribution handle."),
+    ClassSpec("Async UI interaction subscription", "odon.ui_actions:AsyncInteractionSubscription", "returned by async `extension.on_interaction()`", "Removable asynchronous normalized interaction subscription."),
+    ClassSpec("Async action context", "odon.ui_actions:AsyncActionContext", "passed to asynchronous action handlers", "Async generation-safe status, progress, cancellation, and task helpers."),
+    ClassSpec("Async action registration", "odon.ui_actions:AsyncActionRegistration", "returned by async `extension.on_action()`", "Removable asynchronous action registration."),
 )
 
 FUNCTION_SPECS = (
@@ -200,6 +213,12 @@ FUNCTION_SPECS = (
     FunctionSpec("odon.layouts:comparison", "Build a shell around the native comparison workspace."),
     FunctionSpec("odon.layouts:mosaic_triage", "Build a reusable mosaic-triage shell."),
     FunctionSpec("odon.layouts:presentation", "Build a canvas-first presentation shell."),
+    FunctionSpec("odon.recipes:wait_for_viewer_readiness", "Wait for model, resource, geometry, canvas, and presentation readiness."),
+    FunctionSpec("odon.recipes:async_wait_for_viewer_readiness", "Asynchronously wait for full viewer readiness."),
+    FunctionSpec("odon.recipes:require_numeric_object_property", "Verify and return one loaded numeric object property descriptor."),
+    FunctionSpec("odon.recipes:async_require_numeric_object_property", "Asynchronously verify one loaded numeric object property descriptor."),
+    FunctionSpec("odon.recipes:replace_object_source_and_style", "Neutralize presentation, replace an object source, verify its property, and commit a continuous style."),
+    FunctionSpec("odon.recipes:async_replace_object_source_and_style", "Asynchronous safe object source and continuous style transition."),
 )
 
 UI_COMPONENTS = (
@@ -212,6 +231,8 @@ UI_COMPONENTS = (
 
 ERROR_NAMES = (
     "OdonError", "ConnectionClosedError", "ProtocolError", "RequestTimeoutError",
+    "UnsafeCallbackWaitError", "ActionExecutionError", "ActionQueueFullError",
+    "ActionRejectedError", "ActionCancelledError", "StaleActionError",
     "TaskCancelledError", "TaskFailedError", "InstanceNotFoundError",
     "MultipleInstancesError", "RemoteError", "AuthenticationError",
     "ProtocolVersionError", "InvalidParametersError", "ResourceNotFoundError",

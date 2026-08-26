@@ -32,6 +32,12 @@ mode. Availability is still capability- and readiness-checked at runtime.
 | `odon.layouts.comparison(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a shell around the native comparison workspace. |
 | `odon.layouts.mosaic_triage(*, panel_mounts: 'Iterable[str]' = ()) -> 'ShellLayout'` | Build a reusable mosaic-triage shell. |
 | `odon.layouts.presentation(*, mode: 'str' = 'single', show_toolbar: 'bool' = False) -> 'ShellLayout'` | Build a canvas-first presentation shell. |
+| `odon.recipes.wait_for_viewer_readiness(app: 'Any', *, timeout: 'float' = 30.0, poll_interval: 'float' = 0.05) -> 'Mapping[str, Any]'` | Wait for model, resource, geometry, canvas, and presentation readiness. |
+| `odon.recipes.async_wait_for_viewer_readiness(app: 'Any', *, timeout: 'float' = 30.0, poll_interval: 'float' = 0.05) -> 'Mapping[str, Any]'` | Asynchronously wait for full viewer readiness. |
+| `odon.recipes.require_numeric_object_property(objects: 'Any', property_name: 'str') -> 'Mapping[str, Any]'` | Verify and return one loaded numeric object property descriptor. |
+| `odon.recipes.async_require_numeric_object_property(objects: 'Any', property_name: 'str') -> 'Mapping[str, Any]'` | Asynchronously verify one loaded numeric object property descriptor. |
+| `odon.recipes.replace_object_source_and_style(app: 'Any', path: 'str', property_name: 'str', *, palette: 'Any' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', fill_cells: 'bool' = True, fill_opacity: 'float' = 0.65, downsample_factor: 'float' = 1.0, timeout: 'float' = 60.0, poll_interval: 'float' = 0.05, context: 'Any \| None' = None, presentation_objects: 'Any \| None' = None, publish_ready: 'bool' = True) -> 'ObjectSourceStyleResult'` | Neutralize presentation, replace an object source, verify its property, and commit a continuous style. |
+| `odon.recipes.async_replace_object_source_and_style(app: 'Any', path: 'str', property_name: 'str', *, palette: 'Any' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', fill_cells: 'bool' = True, fill_opacity: 'float' = 0.65, downsample_factor: 'float' = 1.0, timeout: 'float' = 60.0, poll_interval: 'float' = 0.05, context: 'Any \| None' = None, presentation_objects: 'Any \| None' = None, publish_ready: 'bool' = True) -> 'ObjectSourceStyleResult'` | Asynchronous safe object source and continuous style transition. |
 
 ## Synchronous API
 
@@ -665,6 +671,7 @@ Access: `app.events`. Synchronous subscriptions, callbacks, and queued event con
 | `subscribe(events: 'str \| Iterable[str]', callback: 'EventCallback \| None' = None) -> 'Mapping[str, Any]'` | `events.subscribe` | protocol | Subscribe to server-pushed event patterns. (completion: immediate_semantic) |
 | `unsubscribe(events: 'str \| Iterable[str] \| None' = None) -> 'Mapping[str, Any]'` | `events.unsubscribe` | protocol | Remove event subscriptions. (completion: immediate_semantic) |
 | `status() -> 'Mapping[str, Any]'` | `events.get_status` | protocol | Inspect event queue diagnostics. (completion: immediate_semantic) |
+| `in_callback (property)` | SDK-local/delegated | Inherited from delegated operation | Whether the caller is currently running in a synchronous event callback. |
 | `remove_callback(callback: 'EventCallback') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove callback. |
 | `next(timeout: 'float \| None' = None) -> 'Event'` | SDK-local/delegated | Inherited from delegated operation | Block until the next event arrives, or raise ``queue.Empty``. |
 | `iter(timeout: 'float \| None' = None) -> 'Iterator[Event]'` | SDK-local/delegated | Inherited from delegated operation | Iter. |
@@ -1090,6 +1097,9 @@ Constructor: `Extension(ui: "'Ui'", snapshot: 'Mapping[str, Any]') -> 'None'`
 | `granted_capabilities (property)` | SDK-local/delegated | Inherited from delegated operation | Granted capabilities. |
 | `set_readiness(ready: 'bool', *, reason: 'str \| None' = None) -> "'Extension'"` | `ui.extensions.set_readiness` | protocol | Publish whether this extension is ready for its retained mounts to render. (mutates; completion: immediate_semantic) |
 | `register(root: 'Component', *, location: 'str' = 'shell', contribution_id: 'str \| None' = None) -> 'Contribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `on_interaction(callback: 'Callable[[UiInteraction], Any]', *, action: 'str \| None' = None, component_id: 'str \| None' = None) -> 'InteractionSubscription'` | SDK-local/delegated | Inherited from delegated operation | Subscribe to normalized interactions from this extension's components. |
+| `on_action(action: 'str', callback: 'Callable[[ActionContext, UiInteraction], Any] \| None' = None, *, execution: 'ExecutionPolicy' = 'serial-worker', component_id: 'str \| None' = None, queue_key: 'str \| None' = None, coalesce: 'CoalescePolicy' = 'all', delta: 'float' = 1, max_queue: 'int' = 128, concurrent_workers: 'int' = 4, contribution: 'Contribution \| None' = None, status_component_id: 'str \| None' = None, progress_component_id: 'str \| None' = None, on_error: 'Callable[[BaseException, ActionContext \| None], Any] \| None' = None) -> 'ActionRegistration \| Callable[[Callable[[ActionContext, UiInteraction], Any]], ActionRegistration]'` | SDK-local/delegated | Inherited from delegated operation | Register a normalized action with an explicit execution/queue policy. |
+| `action_status() -> 'ActionWorkerSnapshot'` | SDK-local/delegated | Inherited from delegated operation | Return detached queue/execution diagnostics for this extension. |
 | `register_command(id: 'str', title: 'str', description: 'str', event: 'str', *, modes: 'Iterable[str]' = ('project', 'single', 'mosaic'), shortcut: 'Mapping[str, Any] \| None' = None, icon: 'str \| None' = None, predicates: "'CommandPredicates \| Mapping[str, Any] \| None'" = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> "'ApplicationCommand'"` | `ui.commands.register` | project, single, mosaic, transition | Register an owned action as ``extension:<extension-id>/<id>``. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
 | `remove_command(command: "'ApplicationCommand \| str'", *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'None'` | `ui.commands.remove` | project, single, mosaic, transition | Remove an owned command and all menu items that present it. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
 | `register_layout(name: 'str', document: "'ShellLayoutDocument \| Mapping[str, Any]'") -> "'ExtensionLayoutTemplate'"` | `ui.extensions.layouts.register` | protocol | Register or replace a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
@@ -1112,6 +1122,98 @@ Constructor: `Contribution(extension: "'Extension'", snapshot: 'Mapping[str, Any
 | `mount(node_id: 'str', **kwargs: 'Any') -> "'ShellLayoutNode'"` | SDK-local/delegated | Inherited from delegated operation | Create a keyed shell node that renders this contribution. |
 | `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'Contribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
+
+### Normalized UI interaction
+
+Access: delivered by `extension.on_interaction()` and `extension.on_action()`. Uniform component ID, semantic action, value, kind, and raw event envelope.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_event(event: 'Event', *, extension_id: 'str') -> "'UiInteraction'"` | SDK-local/delegated | Inherited from delegated operation | From event. |
+
+### UI interaction subscription
+
+Access: returned by `extension.on_interaction()`. Removable extension-scoped normalized interaction subscription.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `removed (property)` | SDK-local/delegated | Inherited from delegated operation | Removed. |
+| `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
+
+### Action worker snapshot
+
+Access: returned by `extension.action_status()`. Detached queue, execution, coalescing, rejection, and shutdown diagnostics.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `running_action (property)` | SDK-local/delegated | Inherited from delegated operation | Running action. |
+
+### Action context
+
+Access: passed to synchronous action handlers. Generation-safe status, progress, cancellation, retained-task, and commit helpers.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `action (property)` | SDK-local/delegated | Inherited from delegated operation | Action. |
+| `queue_key (property)` | SDK-local/delegated | Inherited from delegated operation | Queue key. |
+| `cancelled (property)` | SDK-local/delegated | Inherited from delegated operation | Cancelled. |
+| `is_current (property)` | SDK-local/delegated | Inherited from delegated operation | Is current. |
+| `task (property)` | SDK-local/delegated | Inherited from delegated operation | Task. |
+| `attach(task: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Attach the currently retained Odon task for progress and cancellation. |
+| `check_cancelled() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Check cancelled. |
+| `ensure_current() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Ensure current. |
+| `cancel() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Cancel. |
+| `patch(values: 'Mapping[str, Any]') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Patch arbitrary contribution values only if this generation still wins. |
+| `commit(callback: 'Callable[[], Any]') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Run a short local/SDK commit while submission generation is stable. |
+| `status(message: 'str') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Status. |
+| `progress(value: 'float \| None', message: 'str \| None' = None) -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Progress. |
+| `report_task(snapshot: 'Any') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Report task. |
+| `result(message: 'str' = 'Ready') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Result. |
+| `busy(message: 'str', *, ready: 'str' = 'Ready')` | SDK-local/delegated | Inherited from delegated operation | Busy. |
+
+### Action registration
+
+Access: returned by `extension.on_action()`. Callable and removable synchronous action registration.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `removed (property)` | SDK-local/delegated | Inherited from delegated operation | Removed. |
+| `submit(interaction: 'UiInteraction') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Submit. |
+| `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
+
+### Object source/style result
+
+Access: returned by the safe source/style recipe. Task, source, property, and final presentation-readiness evidence.
+
+This value type has no public methods beyond its fields.
+
+### Object property unavailable
+
+Access: raised by object-property recipes. Structured failure when a requested numeric property is unavailable.
+
+This value type has no public methods beyond its fields.
+
+### Marker comparison state
+
+Access: owned by `MarkerComparisonController`. Synchronized ROI, marker, fill, generation, and lifecycle phase.
+
+This value type has no public methods beyond its fields.
+
+### Marker comparison components
+
+Access: configure `MarkerComparisonController`. Native panel component IDs patched by the controller.
+
+This value type has no public methods beyond its fields.
+
+### Marker comparison controller
+
+Access: construct for a one-view comparison extension. Serializes ROI, marker, fill, channel, object source, continuous style, and panel state.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `install_actions() -> "'MarkerComparisonController'"` | SDK-local/delegated | Inherited from delegated operation | Register standard selects and previous/next actions on the extension. |
+| `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
+| `apply_initial() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Apply initial state outside callback scope during extension setup. |
 
 ### UI component base
 
@@ -1924,6 +2026,9 @@ Access: returned by `app.ui.register_extension()`. Async UI extension handle.
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
 | `set_readiness(ready: 'bool', *, reason: 'str \| None' = None) -> "'AsyncExtension'"` | `ui.extensions.set_readiness` | protocol | Set the owned extension's connected-session readiness state. (mutates; completion: immediate_semantic) |
 | `register(root: 'Component', *, location: 'str' = 'shell', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
+| `on_interaction(callback: 'Callable[[UiInteraction], Any \| Awaitable[Any]]', *, action: 'str \| None' = None, component_id: 'str \| None' = None) -> 'AsyncInteractionSubscription'` | SDK-local/delegated | Inherited from delegated operation | Subscribe to normalized interactions from this extension's components. |
+| `on_action(action: 'str', callback: 'Callable[[AsyncActionContext, UiInteraction], Any \| Awaitable[Any]]', *, execution: 'ExecutionPolicy' = 'serial-worker', component_id: 'str \| None' = None, queue_key: 'str \| None' = None, coalesce: 'CoalescePolicy' = 'all', delta: 'float' = 1, max_queue: 'int' = 128, contribution: 'AsyncContribution \| None' = None, status_component_id: 'str \| None' = None, progress_component_id: 'str \| None' = None, on_error: 'Callable[[BaseException, AsyncActionContext \| None], Any \| Awaitable[Any]] \| None' = None) -> 'AsyncActionRegistration'` | SDK-local/delegated | Inherited from delegated operation | Register a normalized action with an explicit async execution policy. |
+| `action_status() -> 'ActionWorkerSnapshot'` | SDK-local/delegated | Inherited from delegated operation | Action status. |
 | `register_command(id: 'str', title: 'str', description: 'str', event: 'str', *, modes: 'Iterable[str]' = ('project', 'single', 'mosaic'), shortcut: 'Mapping[str, Any] \| None' = None, icon: 'str \| None' = None, predicates: 'CommandPredicates \| Mapping[str, Any] \| None' = None, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'ApplicationCommand'` | `ui.commands.register` | project, single, mosaic, transition | Register or update an extension-owned command with a namespaced ID and conflict-checked shortcut. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
 | `remove_command(command: 'ApplicationCommand \| str', *, if_revision: 'int \| None' = None, transaction_id: 'str \| None' = None) -> 'None'` | `ui.commands.remove` | project, single, mosaic, transition | Remove an owned extension command and every platform-menu presentation that references it. (mutates; completion: immediate_semantic; event: ui.commands.changed) |
 | `register_layout(name: 'str', document: 'ShellLayoutDocument \| Mapping[str, Any]') -> 'ExtensionLayoutTemplate'` | `ui.extensions.layouts.register` | protocol | Register or replace a named default layout owned by this extension. (mutates; completion: immediate_semantic) |
@@ -1943,6 +2048,48 @@ Access: returned by `extension.register()`. Async UI contribution handle.
 | `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'AsyncContribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |
 
+### Async UI interaction subscription
+
+Access: returned by async `extension.on_interaction()`. Removable asynchronous normalized interaction subscription.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `removed (property)` | SDK-local/delegated | Inherited from delegated operation | Removed. |
+| `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
+
+### Async action context
+
+Access: passed to asynchronous action handlers. Async generation-safe status, progress, cancellation, and task helpers.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `action (property)` | SDK-local/delegated | Inherited from delegated operation | Action. |
+| `queue_key (property)` | SDK-local/delegated | Inherited from delegated operation | Queue key. |
+| `cancelled (property)` | SDK-local/delegated | Inherited from delegated operation | Cancelled. |
+| `is_current (property)` | SDK-local/delegated | Inherited from delegated operation | Is current. |
+| `task (property)` | SDK-local/delegated | Inherited from delegated operation | Task. |
+| `attach(task: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Attach. |
+| `check_cancelled() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Check cancelled. |
+| `ensure_current() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Ensure current. |
+| `cancel() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Cancel. |
+| `patch(values: 'Mapping[str, Any]') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Patch contribution values when this async generation still wins. |
+| `commit(callback: 'Callable[[], Any \| Awaitable[Any]]') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Run a short async commit after a generation check. |
+| `status(message: 'str') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Status. |
+| `progress(value: 'float \| None', message: 'str \| None' = None) -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Progress. |
+| `report_task(snapshot: 'Any') -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Report task. |
+| `result(message: 'str' = 'Ready') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Result. |
+| `busy(message: 'str', *, ready: 'str' = 'Ready')` | SDK-local/delegated | Inherited from delegated operation | Busy. |
+
+### Async action registration
+
+Access: returned by async `extension.on_action()`. Removable asynchronous action registration.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `removed (property)` | SDK-local/delegated | Inherited from delegated operation | Removed. |
+| `submit(interaction: 'UiInteraction') -> 'bool'` | SDK-local/delegated | Inherited from delegated operation | Submit. |
+| `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
+
 ## Error classes
 
 All SDK errors derive from `odon.OdonError`.
@@ -1953,6 +2100,12 @@ All SDK errors derive from `odon.OdonError`.
 | `ConnectionClosedError` | The control connection closed before an operation completed. |
 | `ProtocolError` | Odon or the client sent an invalid control-protocol message. |
 | `RequestTimeoutError` | Python stopped waiting for a response; Odon may still be working. |
+| `UnsafeCallbackWaitError` | A synchronous task wait was attempted from the SDK callback worker. |
+| `ActionExecutionError` | An extension action could not be submitted or executed safely. |
+| `ActionQueueFullError` | An extension action queue reached its configured bound. |
+| `ActionRejectedError` | An extension action was rejected by its queue policy. |
+| `ActionCancelledError` | An extension action was cancelled before it completed. |
+| `StaleActionError` | A newer action generation superseded this action. |
 | `TaskCancelledError` | A long-running Odon task was cancelled. |
 | `TaskFailedError` | A long-running Odon task completed with a structured failure. |
 | `InstanceNotFoundError` | No live Odon instance matched the requested selection. |

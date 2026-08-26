@@ -71,7 +71,9 @@ class AsyncTask:
                     await asyncio.wait_for(completed.wait(), timeout)
             except TimeoutError as error:
                 raise RequestTimeoutError(
-                    f"timed out waiting for task {self.task_id!r}"
+                    f"timed out waiting for task {self.task_id!r}; the retained Odon "
+                    "task may still be running (await task.cancel() explicitly to request "
+                    "cooperative cancellation)"
                 ) from error
             return self._result()
         finally:

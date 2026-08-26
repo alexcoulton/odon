@@ -21,6 +21,52 @@ class RequestTimeoutError(OdonError):
     """Python stopped waiting for a response; Odon may still be working."""
 
 
+class UnsafeCallbackWaitError(OdonError):
+    """A synchronous task wait was attempted from the SDK callback worker."""
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(
+            f"Task.wait() cannot run inside an Odon event callback for task "
+            f"{task_id!r} because task completion is delivered by the same callback "
+            "worker. Submit the operation to an extension action worker, use a native "
+            "command or binding, or return from the callback and wait elsewhere."
+        )
+        self.task_id = task_id
+
+
+class ActionExecutionError(OdonError):
+    """An extension action could not be submitted or executed safely."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        action: str,
+        queue_key: str,
+        generation: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.action = action
+        self.queue_key = queue_key
+        self.generation = generation
+
+
+class ActionQueueFullError(ActionExecutionError):
+    """An extension action queue reached its configured bound."""
+
+
+class ActionRejectedError(ActionExecutionError):
+    """An extension action was rejected by its queue policy."""
+
+
+class ActionCancelledError(ActionExecutionError):
+    """An extension action was cancelled before it completed."""
+
+
+class StaleActionError(ActionCancelledError):
+    """A newer action generation superseded this action."""
+
+
 class TaskCancelledError(OdonError):
     """A long-running Odon task was cancelled."""
 

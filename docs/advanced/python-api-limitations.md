@@ -211,10 +211,35 @@ cancellation is cooperative. A queued operation can be cancelled; a native
 library call that does not expose interruption may finish before Odon can
 discard its result.
 
+Four execution contexts have different contracts:
+
+- the synchronous SDK callback worker delivers raw and normalized events serially; it must not
+  block on `Task.wait()`, which raises `UnsafeCallbackWaitError` there;
+- extension `worker` and `serial-worker` actions run outside callback delivery and may wait for
+  retained tasks; `serial-worker` is the safe default for related viewer mutations;
+- the Odon control actor owns semantic state, revision checks, retained-task lifecycle, and bounded
+  resource workers; Python workers do not bypass actor validation; and
+- the render thread realizes actor projections and acknowledges presentation. Semantic or resource
+  completion does not by itself prove that final pixels have been presented.
+
+The Python `replace_object_source_and_style()` recipe orders existing actor commands and verifies
+the new property, but it is not one actor-atomic command. Its neutral and final states can be
+observed as separate revisions. Generation checks prevent an older Python action from committing a
+newer controller's final state; another independent client can still interleave mutations unless
+the application also uses the exposed revision guards. A future actor-owned compound command would
+be required if no intermediate state may ever be observed.
+
+Synchronous `ActionContext.patch()` and `commit()` hold the runner's generation lock across their
+short commit. Their async counterparts check before and after an awaited actor call, but cannot make
+that call atomic with a UI event arriving on the same event loop. Async workflows should use actor
+revision guards where an intermediate stale patch would be unacceptable and always perform a final
+`ensure_current()` before publishing readiness.
+
 Odon does not embed Python. Cellpose and similar algorithms execute in the
 external Python process. The extension is responsible for worker-process or
-thread management, dependency installation, model lifecycle, chunking, and
-durable output. The current Cellpose example is an end-to-end reference, not a
+thread management for external computation, dependency installation, model lifecycle, chunking,
+and durable output. Native UI task actions do not need a hand-written queue or thread in the common
+case because `extension.on_action()` owns that lifecycle. The current Cellpose example is an end-to-end reference, not a
 tiled production segmentation engine.
 
 ## Large data does not travel through JSON

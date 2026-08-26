@@ -220,6 +220,7 @@ class Client:
     def close(self) -> None:
         if self._cleanup_complete:
             return
+        self.ui._close()
         self._closed = True
         hello = getattr(self, "hello", None)
         logger.debug("closing Odon session=%s", getattr(hello, "session_id", "unnegotiated"))

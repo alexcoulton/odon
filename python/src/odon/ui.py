@@ -5,12 +5,31 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
 import math
 import unicodedata
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+import weakref
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+
+from .models import Event
+from .ui_actions import (
+    ActionContext,
+    ActionRegistration,
+    ActionRunner,
+    ActionWorkerSnapshot,
+    CoalescePolicy,
+    ExecutionPolicy,
+    InteractionSubscription,
+    UiInteraction,
+    UiInteractionDecodeError,
+    _validate_coalesce,
+    _validate_execution,
+)
 
 if TYPE_CHECKING:
     from .client import Client
+
+logger = logging.getLogger("odon.ui")
 
 
 def emit(event: str, **data: Any) -> dict[str, Any]:
@@ -456,6 +475,9 @@ class Extension:
     def __init__(self, ui: "Ui", snapshot: Mapping[str, Any]) -> None:
         self._ui = ui
         self.snapshot = dict(snapshot)
+        self._interaction_callbacks: dict[InteractionSubscription, Callable[[Event], Any]] = {}
+        self._action_runner: ActionRunner | None = None
+        self._action_registrations: set[ActionRegistration] = set()
 
     @property
     def id(self) -> str:
@@ -497,6 +519,154 @@ class Extension:
         return Contribution(
             self, self._ui._client.call("ui.contributions.register", params)
         )
+
+    def on_interaction(
+        self,
+        callback: Callable[[UiInteraction], Any],
+        *,
+        action: str | None = None,
+        component_id: str | None = None,
+    ) -> InteractionSubscription:
+        """Subscribe to normalized interactions from this extension's components."""
+
+        if not callable(callback):
+            raise TypeError("interaction callback must be callable")
+        if action is not None and (not isinstance(action, str) or not action.strip()):
+            raise ValueError("interaction action filter must be a non-empty string")
+        if component_id is not None and (
+            not isinstance(component_id, str) or not component_id.strip()
+        ):
+            raise ValueError("interaction component_id filter must be a non-empty string")
+        pattern = f"ui.extension:{self.id}.*"
+
+        def receive(event: Event) -> Any:
+            try:
+                interaction = UiInteraction.from_event(event, extension_id=self.id)
+            except UiInteractionDecodeError as error:
+                logger.warning("Ignoring malformed Odon UI interaction: %s", error)
+                return None
+            if action is not None and interaction.action != action:
+                return None
+            if component_id is not None and interaction.component_id != component_id:
+                return None
+            return callback(interaction)
+
+        subscription: InteractionSubscription
+
+        def remove() -> None:
+            receive_callback = self._interaction_callbacks.pop(subscription, None)
+            if receive_callback is None:
+                return
+            self._ui._client.events.remove_callback(receive_callback)
+            if not self._interaction_callbacks and not self._ui._client.closed:
+                self._ui._client.events.unsubscribe(pattern)
+
+        subscription = InteractionSubscription(remove)
+        self._ui._client.events.subscribe(pattern, receive)
+        self._interaction_callbacks[subscription] = receive
+        return subscription
+
+    def on_action(
+        self,
+        action: str,
+        callback: Callable[[ActionContext, UiInteraction], Any] | None = None,
+        *,
+        execution: ExecutionPolicy = "serial-worker",
+        component_id: str | None = None,
+        queue_key: str | None = None,
+        coalesce: CoalescePolicy = "all",
+        delta: float = 1,
+        max_queue: int = 128,
+        concurrent_workers: int = 4,
+        contribution: Contribution | None = None,
+        status_component_id: str | None = None,
+        progress_component_id: str | None = None,
+        on_error: Callable[[BaseException, ActionContext | None], Any] | None = None,
+    ) -> ActionRegistration | Callable[
+        [Callable[[ActionContext, UiInteraction], Any]], ActionRegistration
+    ]:
+        """Register a normalized action with an explicit execution/queue policy."""
+
+        if not isinstance(action, str) or not action.strip():
+            raise ValueError("extension action must be a non-empty string")
+        checked_execution = _validate_execution(execution)
+        checked_coalesce = _validate_coalesce(coalesce)
+        checked_key = action if queue_key is None else queue_key
+        if not isinstance(checked_key, str) or not checked_key.strip():
+            raise ValueError("extension action queue_key must be a non-empty string")
+        if isinstance(delta, bool) or not isinstance(delta, (int, float)):
+            raise ValueError("extension action delta must be numeric")
+
+        def register(
+            handler: Callable[[ActionContext, UiInteraction], Any]
+        ) -> ActionRegistration:
+            if not callable(handler):
+                raise TypeError("extension action callback must be callable")
+            if self._action_runner is None:
+                self._action_runner = ActionRunner(
+                    max_queue=max_queue, concurrent_workers=concurrent_workers
+                )
+            elif self._action_runner.max_queue != max_queue:
+                raise ValueError(
+                    "all actions on one extension must use the same max_queue"
+                )
+
+            def removed(registration: ActionRegistration) -> None:
+                self._action_registrations.discard(registration)
+
+            registration = ActionRegistration(
+                self._action_runner,
+                action,
+                handler,
+                execution=checked_execution,
+                coalesce=checked_coalesce,
+                queue_key=checked_key,
+                delta=float(delta),
+                contribution=contribution,
+                status_component_id=status_component_id,
+                progress_component_id=progress_component_id,
+                on_error=on_error,
+                on_remove=removed,
+            )
+            subscription = self.on_interaction(
+                registration.submit,
+                action=action,
+                component_id=component_id,
+            )
+            registration._subscription = subscription
+            self._action_registrations.add(registration)
+            return registration
+
+        return register if callback is None else register(callback)
+
+    def action_status(self) -> ActionWorkerSnapshot:
+        """Return detached queue/execution diagnostics for this extension."""
+
+        if self._action_runner is None:
+            return ActionWorkerSnapshot(
+                submitted=0,
+                executed=0,
+                completed=0,
+                failed=0,
+                cancelled=0,
+                rejected=0,
+                coalesced=0,
+                queue_depth=0,
+                running_actions=(),
+                closed=False,
+            )
+        return self._action_runner.snapshot()
+
+    def _remove_action_registrations(self) -> None:
+        for registration in tuple(self._action_registrations):
+            registration.remove()
+        if self._action_runner is not None:
+            self._action_runner.close()
+            self._action_runner = None
+
+    def _remove_interaction_subscriptions(self) -> None:
+        for subscription in tuple(self._interaction_callbacks):
+            subscription.remove()
 
     def register_command(
         self,
@@ -606,7 +776,23 @@ class Extension:
         )
 
     def remove(self) -> None:
+        self._remove_action_registrations()
+        self._remove_interaction_subscriptions()
         self._ui._client.call("ui.extensions.remove", {"extension_id": self.id})
+        self._ui._extensions.discard(self)
+
+    def _close_local(self) -> None:
+        if self._action_runner is not None:
+            self._action_runner.close()
+            self._action_runner = None
+        for registration in tuple(self._action_registrations):
+            registration._close_local()
+        for subscription in tuple(self._interaction_callbacks):
+            subscription._close_local()
+        for callback in tuple(self._interaction_callbacks.values()):
+            self._ui._client.events.remove_callback(callback)
+        self._interaction_callbacks.clear()
+        self._action_registrations.clear()
 
 
 class ShellId(str, Enum):
@@ -3141,6 +3327,7 @@ class Ui:
         self.toolbars = Toolbars(self)
         self.palette = Palette(self)
         self.shell = Shell(self)
+        self._extensions: weakref.WeakSet[Extension] = weakref.WeakSet()
 
     def register_extension(
         self,
@@ -3171,7 +3358,14 @@ class Ui:
                 ),
             },
         )
-        return Extension(self, result)
+        extension = Extension(self, result)
+        self._extensions.add(extension)
+        return extension
+
+    def _close(self) -> None:
+        for extension in tuple(self._extensions):
+            extension._close_local()
+        self._extensions.clear()
 
     def list_extensions(self) -> list[Mapping[str, Any]]:
         return self._client.call("ui.extensions.list")["extensions"]
