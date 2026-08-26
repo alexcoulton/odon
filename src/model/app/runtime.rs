@@ -415,6 +415,12 @@ impl AppModel {
             })
             .unwrap_or([1, 1, 1]);
         let mut viewport = ViewportModel::new(&descriptor.channels);
+        if let Some(objects) = viewport.objects.as_object_mut() {
+            objects.insert(
+                "fast_rendering".to_string(),
+                Value::Bool(self.settings.fast_object_rendering),
+            );
+        }
         let (logical_workspace_size, geometry_source) =
             retained_geometry.unwrap_or((DEFAULT_LOGICAL_CANVAS, GeometrySource::Bootstrap));
         viewport.logical_size = logical_workspace_size;
@@ -559,6 +565,8 @@ impl AppModel {
         if let Some(view) = self.project.roi_view_state_json(&source_key).cloned() {
             self.restore_project_roi_view(&view)?;
         }
+        let fast_object_rendering = self.settings.fast_object_rendering;
+        self.apply_fast_object_rendering_setting(fast_object_rendering);
         Ok(())
     }
 

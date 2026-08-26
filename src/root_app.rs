@@ -74,6 +74,14 @@ enum RemoteMode {
     S3,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsPage {
+    #[default]
+    General,
+    Rendering,
+    Extensions,
+}
+
 struct RootRemoteS3BrowserState {
     current_prefix: String,
     parent_prefix: Option<String>,
@@ -1188,152 +1196,209 @@ impl RootApp {
 
         let before = self.settings_draft.clone();
         let mut open = self.settings_open;
+        let page_id = egui::Id::new("odon-settings-page");
+        let mut page = ctx.data_mut(|data| data.get_temp(page_id).unwrap_or_default());
         egui::Window::new("Settings")
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_width(520.0)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.heading("Auto Contrast");
                 ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.settings_draft.auto_contrast.enabled_on_open,
-                        "Apply auto contrast when opening a dataset",
-                    );
-                    settings_help_button(
-                        ui,
-                        "Automatically sets channel contrast limits after opening a dataset so the image is immediately visible.",
-                    );
+                    ui.selectable_value(&mut page, SettingsPage::General, "General");
+                    ui.selectable_value(&mut page, SettingsPage::Rendering, "Rendering");
+                    ui.selectable_value(&mut page, SettingsPage::Extensions, "Extensions");
                 });
+                ui.separator();
 
-                ui.horizontal(|ui| {
-                    ui.label("Method");
-                    settings_help_button(
-                        ui,
-                        "Controls how Odon chooses automatic contrast limits from the image intensity distribution.",
-                    );
-                    egui::ComboBox::from_id_salt("global_auto_contrast_method")
-                        .selected_text(self.settings_draft.auto_contrast.method.label())
-                        .show_ui(ui, |ui| {
-                            for method in crate::app_support::settings::AutoContrastMethod::ALL {
-                                ui.selectable_value(
-                                    &mut self.settings_draft.auto_contrast.method,
-                                    method,
-                                    method.label(),
+                match page {
+                    SettingsPage::General => {
+                        ui.heading("Auto Contrast");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(
+                                &mut self.settings_draft.auto_contrast.enabled_on_open,
+                                "Apply auto contrast when opening a dataset",
+                            );
+                            settings_help_button(
+                                ui,
+                                "Automatically sets channel contrast limits after opening a dataset so the image is immediately visible.",
+                            );
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Method");
+                            settings_help_button(
+                                ui,
+                                "Controls how Odon chooses automatic contrast limits from the image intensity distribution.",
+                            );
+                            egui::ComboBox::from_id_salt("global_auto_contrast_method")
+                                .selected_text(self.settings_draft.auto_contrast.method.label())
+                                .show_ui(ui, |ui| {
+                                    for method in
+                                        crate::app_support::settings::AutoContrastMethod::ALL
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.settings_draft.auto_contrast.method,
+                                            method,
+                                            method.label(),
+                                        );
+                                    }
+                                });
+                        });
+                        ui.label(self.settings_draft.auto_contrast.method.description());
+
+                        let settings = &mut self.settings_draft.auto_contrast;
+                        match settings.method {
+                            crate::app_support::settings::AutoContrastMethod::ZeroToP97 => {
+                                ui.horizontal(|ui| {
+                                    ui.label("Upper percentile");
+                                    settings_help_button(
+                                        ui,
+                                        "Pixels brighter than this percentile are clipped for display contrast.",
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut settings.upper_percentile)
+                                            .range(1..=100)
+                                            .speed(0.2)
+                                            .suffix("%"),
+                                    );
+                                });
+                            }
+                            crate::app_support::settings::AutoContrastMethod::P1ToP99 => {
+                                ui.horizontal(|ui| {
+                                    ui.label("Lower percentile");
+                                    settings_help_button(
+                                        ui,
+                                        "Pixels darker than this percentile are clipped for display contrast.",
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut settings.lower_percentile)
+                                            .range(0..=99)
+                                            .speed(0.2)
+                                            .suffix("%"),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Upper percentile");
+                                    settings_help_button(
+                                        ui,
+                                        "Pixels brighter than this percentile are clipped for display contrast.",
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(&mut settings.upper_percentile)
+                                            .range(1..=100)
+                                            .speed(0.2)
+                                            .suffix("%"),
+                                    );
+                                });
+                            }
+                            crate::app_support::settings::AutoContrastMethod::ZeroToMax => {}
+                        }
+                        self.settings_draft.auto_contrast =
+                            self.settings_draft.auto_contrast.normalized();
+
+                        ui.add_space(8.0);
+                        let can_apply_now = matches!(self.mode, Mode::Single(_));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    can_apply_now,
+                                    egui::Button::new("Apply To Current Viewer"),
+                                )
+                                .clicked()
+                            {
+                                let settings = self.settings_draft.auto_contrast;
+                                self.native_command_ingress.push(NativeControlIntent {
+                                    method: "viewer.channels.auto_contrast",
+                                    params: serde_json::json!({
+                                        "overwrite_manual":true,
+                                        "method":settings.method,
+                                        "lower_percentile":settings.lower_percentile,
+                                        "upper_percentile":settings.upper_percentile,
+                                    }),
+                                });
+                                self.settings_status = format!(
+                                    "Applying {} to the current viewer...",
+                                    settings.method.label()
                                 );
                             }
-                        });
-                });
-                ui.label(self.settings_draft.auto_contrast.method.description());
-
-                let settings = &mut self.settings_draft.auto_contrast;
-                match settings.method {
-                    crate::app_support::settings::AutoContrastMethod::ZeroToP97 => {
-                        ui.horizontal(|ui| {
-                            ui.label("Upper percentile");
                             settings_help_button(
                                 ui,
-                                "Pixels brighter than this percentile are clipped for display contrast.",
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut settings.upper_percentile)
-                                    .range(1..=100)
-                                    .speed(0.2)
-                                    .suffix("%"),
+                                "Applies the current auto-contrast method immediately to the open single-image viewer.",
                             );
                         });
+                        if !can_apply_now {
+                            ui.label(
+                                "Open a single dataset viewer to apply these settings immediately.",
+                            );
+                        }
                     }
-                    crate::app_support::settings::AutoContrastMethod::P1ToP99 => {
+                    SettingsPage::Rendering => {
+                        ui.heading("Object Geometry");
                         ui.horizontal(|ui| {
-                            ui.label("Lower percentile");
+                            ui.label("Low-zoom geometry");
                             settings_help_button(
                                 ui,
-                                "Pixels darker than this percentile are clipped for display contrast.",
+                                "Controls whether polygon object layers may use lightweight centroid points when zoomed out. This applies to outlines and filled objects on both GPU and CPU renderers.",
                             );
-                            ui.add(
-                                egui::DragValue::new(&mut settings.lower_percentile)
-                                    .range(0..=99)
-                                    .speed(0.2)
-                                    .suffix("%"),
-                            );
+                            egui::ComboBox::from_id_salt("low_zoom_object_geometry")
+                                .selected_text(if self.settings_draft.fast_object_rendering {
+                                    "Automatic"
+                                } else {
+                                    "Always polygons"
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.settings_draft.fast_object_rendering,
+                                        true,
+                                        "Automatic",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.settings_draft.fast_object_rendering,
+                                        false,
+                                        "Always polygons",
+                                    );
+                                });
                         });
-                        ui.horizontal(|ui| {
-                            ui.label("Upper percentile");
-                            settings_help_button(
-                                ui,
-                                "Pixels brighter than this percentile are clipped for display contrast.",
+                        if self.settings_draft.fast_object_rendering {
+                            ui.label(
+                                "Odon may draw proxy points when polygon objects are very small or numerous on screen.",
                             );
-                            ui.add(
-                                egui::DragValue::new(&mut settings.upper_percentile)
-                                    .range(1..=100)
-                                    .speed(0.2)
-                                    .suffix("%"),
+                        } else {
+                            ui.label(
+                                "Polygon geometry remains visible at every zoom level. Very large object layers may render more slowly.",
                             );
+                        }
+
+                        ui.separator();
+                        ui.heading("Renderer");
+                        ui.label(if self.gpu_available {
+                            "GPU acceleration: active (OpenGL)"
+                        } else {
+                            "GPU acceleration: unavailable; using CPU fallbacks"
                         });
-                    }
-                    crate::app_support::settings::AutoContrastMethod::ZeroToMax => {}
-                }
-                self.settings_draft.auto_contrast =
-                    self.settings_draft.auto_contrast.normalized();
-
-                ui.separator();
-                ui.heading("Object Rendering");
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.settings_draft.fast_object_rendering,
-                        "Fast object rendering",
-                    );
-                    settings_help_button(
-                        ui,
-                        "When viewing many polygon objects at low zoom, draws lightweight proxy points until zoomed in enough for full polygons.",
-                    );
-                });
-
-                ui.separator();
-                ui.heading("Extensions");
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.settings_draft.show_extension_manager,
-                        "Show extension manager window",
-                    );
-                    settings_help_button(
-                        ui,
-                        "Shows the floating diagnostics window for inspecting and removing connected Python UI extensions.",
-                    );
-                });
-
-                ui.add_space(8.0);
-                let can_apply_now = matches!(self.mode, Mode::Single(_));
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(can_apply_now, egui::Button::new("Apply To Current Viewer"))
-                        .clicked()
-                    {
-                        let settings = self.settings_draft.auto_contrast;
-                        self.native_command_ingress.push(NativeControlIntent {
-                                method: "viewer.channels.auto_contrast",
-                                params: serde_json::json!({
-                                    "overwrite_manual":true,
-                                    "method":settings.method,
-                                    "lower_percentile":settings.lower_percentile,
-                                    "upper_percentile":settings.upper_percentile,
-                                }),
-                            });
-                        self.settings_status = format!(
-                            "Applying {} to the current viewer...",
-                            settings.method.label()
+                        ui.label(
+                            "Image smoothing, HUD, scale bar, and tile diagnostics are saved per viewport and remain available in the viewer toolbar.",
                         );
                     }
-                    settings_help_button(
-                        ui,
-                        "Applies the current auto-contrast method immediately to the open single-image viewer.",
-                    );
-                });
-                if !can_apply_now {
-                    ui.label("Open a single dataset viewer to apply these settings immediately.");
+                    SettingsPage::Extensions => {
+                        ui.heading("Extensions");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(
+                                &mut self.settings_draft.show_extension_manager,
+                                "Show extension manager window",
+                            );
+                            settings_help_button(
+                                ui,
+                                "Shows the floating diagnostics window for inspecting and removing connected Python UI extensions.",
+                            );
+                        });
+                    }
                 }
 
+                ui.add_space(12.0);
+                ui.separator();
                 if let Ok(path) = settings_file_path() {
-                    ui.add_space(8.0);
                     ui.label(format!("Settings file: {}", path.display()));
                 }
 
@@ -1343,6 +1408,7 @@ impl RootApp {
                     ui.label(&self.settings_status);
                 }
             });
+        ctx.data_mut(|data| data.insert_temp(page_id, page));
         self.settings_open = open;
 
         if self.settings_draft != before {

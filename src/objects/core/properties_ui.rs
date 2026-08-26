@@ -40,7 +40,10 @@ impl ObjectsLayer {
                 .clamping(egui::SliderClamping::Always),
         );
         ui.add_enabled_ui(self.display_mode == ObjectDisplayMode::Polygons, |ui| {
-            ui.checkbox(&mut self.fast_rendering, "Fast rendering");
+            ui.checkbox(&mut self.fast_rendering, "Use proxy points at low zoom")
+                .on_hover_text(
+                    "Draw lightweight centroid points instead of polygon geometry when objects are too small or numerous to render efficiently.",
+                );
         });
         ui.add_enabled_ui(self.display_mode == ObjectDisplayMode::Polygons, |ui| {
             ui.checkbox(&mut self.fill_cells, "Fill cells");

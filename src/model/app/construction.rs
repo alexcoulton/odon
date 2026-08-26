@@ -195,6 +195,8 @@ impl AppModel {
         let project = self.project.snapshot();
         self.mosaic
             .restore_project_state(&project.state, &project.config.layer_groups)?;
+        self.mosaic
+            .apply_fast_object_rendering_setting(self.settings.fast_object_rendering);
         let annotations = project
             .state
             .get("mosaic")
@@ -227,6 +229,8 @@ impl AppModel {
         let project = self.project.snapshot();
         self.mosaic
             .restore_project_state(&project.state, &project.config.layer_groups)?;
+        self.mosaic
+            .apply_fast_object_rendering_setting(self.settings.fast_object_rendering);
         let annotations = project
             .state
             .get("mosaic")

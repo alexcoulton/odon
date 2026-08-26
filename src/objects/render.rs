@@ -1266,7 +1266,7 @@ impl ObjectsLayer {
     }
 
     fn should_use_fill_proxy_points(&self, lod: &ObjectRenderLod) -> bool {
-        self.fill_cells && self.fill_opacity > 0.0 && lod.lod >= 2
+        self.fast_rendering && self.fill_cells && self.fill_opacity > 0.0 && lod.lod >= 2
     }
 
     fn should_use_fast_proxy_points(&self, dataset_long_side_screen_px: f32) -> bool {

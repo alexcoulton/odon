@@ -222,7 +222,7 @@ contrast in the UI.
 | `object_color_mapping`, `object_colour_mapping` | Complete JSON-encoded typed object colour mapping. Supports `single`, `categorical`, and `continuous` modes; canonical links emit `object_color_mapping`. |
 | `fill_cells` | Fill object polygons. Accepts `1`, `true`, `0`, or `false`. |
 | `show_selection_overlay`, `selection_overlay` | Show or hide the object selection overlay. |
-| `fast_rendering`, `fast_object_rendering`, `object_fast_rendering` | Enable or disable fast object rendering. Use `0` or `false` to force exact polygon rendering for figure links. |
+| `fast_rendering`, `fast_object_rendering`, `object_fast_rendering` | Enable or disable low-zoom proxy points. Use `0` or `false` to keep polygon geometry for both outlined and filled objects at every zoom level. |
 
 For report links that should colour cells by an annotation column, prefer project
 object segmentation:

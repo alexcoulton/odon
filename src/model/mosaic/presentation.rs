@@ -3,6 +3,10 @@
 use super::*;
 
 impl MosaicModel {
+    pub(crate) fn apply_fast_object_rendering_setting(&mut self, enabled: bool) {
+        self.fast_object_rendering = enabled;
+    }
+
     pub(super) fn channel_presentation_snapshot(&self) -> Value {
         json!({
             "search":self.channel_search,

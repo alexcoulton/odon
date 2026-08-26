@@ -13,6 +13,8 @@ impl AppModel {
             return;
         }
         self.settings = settings.normalized();
+        let fast_object_rendering = self.settings.fast_object_rendering;
+        self.apply_fast_object_rendering_setting(fast_object_rendering);
         self.recent_project_exists = recent_project_exists.into_iter().collect();
         self.settings_path = path;
         self.settings_status.clear();

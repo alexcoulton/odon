@@ -103,7 +103,7 @@ For `Segmentation Objects`, common controls include:
 - `Visible`
 - `Opacity`
 - `Width`
-- `Fast rendering`
+- `Use proxy points at low zoom`
 - `Fill cells`
 - `Fill opacity`
 - `Selected fill`
@@ -111,6 +111,11 @@ For `Segmentation Objects`, common controls include:
 - `Color mode` and `Color by` / `Numeric property`
 - `Reload`
 - `Clear`
+
+`Use proxy points at low zoom` is the per-layer version of **Settings → Rendering → Low-zoom
+geometry**. Choose `Always polygons` in application settings to prevent both outlined and filled
+polygon objects from switching to centroid points when zoomed out. This can reduce rendering
+performance for very large object layers.
 
 Use `Color by` to colour objects by a categorical property such as cell type,
 cluster, phenotype, or call state. If the object file uses lazy property loading,

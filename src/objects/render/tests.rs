@@ -2,6 +2,33 @@
 
 use super::*;
 
+#[test]
+fn fill_proxy_points_follow_the_low_zoom_geometry_preference() {
+    let lods = build_render_lods_from_polylines(&[vec![
+        egui::pos2(0.0, 0.0),
+        egui::pos2(100.0, 0.0),
+        egui::pos2(100.0, 100.0),
+        egui::pos2(0.0, 100.0),
+        egui::pos2(0.0, 0.0),
+    ]])
+    .expect("test polygon should produce render LODs");
+    let coarse = lods
+        .iter()
+        .find(|lod| lod.lod >= 2)
+        .expect("test polygon should produce a coarse LOD");
+
+    let mut layer = ObjectsLayer {
+        fill_cells: true,
+        fill_opacity: 0.3,
+        fast_rendering: true,
+        ..ObjectsLayer::default()
+    };
+    assert!(layer.should_use_fill_proxy_points(coarse));
+
+    layer.fast_rendering = false;
+    assert!(!layer.should_use_fill_proxy_points(coarse));
+}
+
 #[cfg(test)]
 mod rectangle_selection_tests {
     use super::*;

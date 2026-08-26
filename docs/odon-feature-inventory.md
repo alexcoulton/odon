@@ -57,8 +57,8 @@ This document groups Odon's current capabilities into presentation-friendly cate
 - Finer levels replace coarse tiles as they arrive.
 - Tile prefetch behavior around the active viewport.
 - Contrast changes without reloading decoded tiles in normal workflows.
-- Fast object rendering for large polygon/object overlays.
-- Option to disable fast object rendering for exact figure links.
+- Automatic proxy-point rendering for large or far-zoomed polygon/object overlays.
+- Application and per-layer controls to keep polygon geometry at every zoom level.
 - Memory tab for inspecting and controlling tile/pyramid memory behavior.
 - Manual channel/level pinning in RAM.
 - RAM estimates and warning/danger labels for pinning.
@@ -160,7 +160,7 @@ This document groups Odon's current capabilities into presentation-friendly cate
 - Categorical legend generation.
 - Legend category show/hide controls.
 - Legend category colour overrides.
-- Fast rendering toggle.
+- Per-layer low-zoom proxy-point toggle.
 - Reload object source.
 - Clear object layer.
 - Polygon object rendering.
@@ -312,7 +312,7 @@ This document groups Odon's current capabilities into presentation-friendly cate
 - Bundled-label loading control from links.
 - Object `Color by` from links.
 - Object fill and selection-overlay controls from links.
-- Fast object rendering control from links.
+- Low-zoom proxy-point control from links.
 - Legend category visibility from links.
 - Legend category colours from links.
 - Object filters from links.

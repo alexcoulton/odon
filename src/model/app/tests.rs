@@ -1370,6 +1370,42 @@ fn settings_writes_cannot_commit_out_of_order() {
 }
 
 #[test]
+fn application_low_zoom_geometry_setting_updates_the_active_workspace() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.bootstrap_settings(
+        AppSettings::default(),
+        Some(PathBuf::from("/tmp/odon-settings-rendering.json")),
+        Vec::new(),
+    );
+    model.install_dataset(&dataset);
+    assert_eq!(
+        model.render_workspace_snapshot().unwrap()["viewports"][0]["objects"]["fast_rendering"],
+        true
+    );
+
+    let SettingsMutationOutcome::Persist(operation) = model
+        .prepare_settings_set(&json!({"fast_object_rendering":false}))
+        .unwrap()
+    else {
+        panic!("low-zoom geometry change should require persistence")
+    };
+    assert!(
+        model
+            .install_settings_for_generation(
+                operation.generation,
+                operation.settings,
+                operation.response,
+            )
+            .is_some()
+    );
+    assert_eq!(
+        model.render_workspace_snapshot().unwrap()["viewports"][0]["objects"]["fast_rendering"],
+        false
+    );
+}
+
+#[test]
 fn viewport_filters_of_the_same_kind_have_independent_readiness() {
     let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
     let mut model = AppModel::project();

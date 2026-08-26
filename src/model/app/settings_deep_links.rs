@@ -442,7 +442,13 @@ impl AppModel {
         if !self.settings_operation_pending || generation != self.settings_operation_generation {
             return None;
         }
+        let fast_object_rendering_changed =
+            self.settings.fast_object_rendering != settings.fast_object_rendering;
         self.settings = settings;
+        if fast_object_rendering_changed {
+            let enabled = self.settings.fast_object_rendering;
+            self.apply_fast_object_rendering_setting(enabled);
+        }
         self.recent_project_exists.retain(|path, _| {
             self.settings
                 .recent_projects
@@ -458,6 +464,22 @@ impl AppModel {
         self.readiness
             .finish(OperationKind::SettingsIo, generation, "Settings saved");
         Some(response)
+    }
+
+    pub(super) fn apply_fast_object_rendering_setting(&mut self, enabled: bool) {
+        if let Some(dataset) = self.dataset.as_mut() {
+            for viewport in dataset.workspace.viewports_mut() {
+                if let Some(objects) = viewport.state.objects.as_object_mut() {
+                    objects.insert("fast_rendering".to_string(), Value::Bool(enabled));
+                }
+                for secondary in viewport.state.secondary_objects.values_mut() {
+                    if let Some(objects) = secondary.objects.as_object_mut() {
+                        objects.insert("fast_rendering".to_string(), Value::Bool(enabled));
+                    }
+                }
+            }
+        }
+        self.mosaic.apply_fast_object_rendering_setting(enabled);
     }
 
     pub fn fail_settings_for_generation(
