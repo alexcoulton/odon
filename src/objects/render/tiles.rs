@@ -19,6 +19,7 @@ pub(in crate::objects) struct ObjectFillTileFrame {
     pub request_items: Vec<ObjectFillTileDrawItem>,
     pub draw_items: Vec<ObjectFillTileDrawItem>,
     pub styles: Vec<ObjectFillTileStyle>,
+    pub selection_overlay: bool,
     pub params: ObjectFillTileGlParams,
 }
 
@@ -102,6 +103,7 @@ impl ObjectsLayer {
         );
 
         let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let selection_overlay = self.object_fill_selection_tile_style(fill_mesh.object_count);
         let mut styles = Vec::new();
         if let Some(color_groups) = active_color_groups {
             styles.reserve(color_groups.groups.len());
@@ -127,6 +129,7 @@ impl ObjectsLayer {
                     selected_color: color,
                     primary_color: color,
                     object_color_opacity: 1.0,
+                    selection_overlay: selection_overlay.clone(),
                 });
             }
         } else {
@@ -150,6 +153,7 @@ impl ObjectsLayer {
                 selected_color: color,
                 primary_color: color,
                 object_color_opacity: self.fill_opacity,
+                selection_overlay: selection_overlay.clone(),
             });
         }
 
@@ -157,6 +161,7 @@ impl ObjectsLayer {
             request_items,
             draw_items,
             styles,
+            selection_overlay: selection_overlay.is_some(),
             params: ObjectFillTileGlParams {
                 center_world: camera.center_world_lvl0,
                 zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
@@ -164,6 +169,32 @@ impl ObjectsLayer {
                 local_to_world_offset: display_offset,
                 local_to_world_scale: display_scale,
             },
+        })
+    }
+
+    pub(in crate::objects) fn object_fill_selection_tile_style(
+        &self,
+        object_count: usize,
+    ) -> Option<ObjectFillTileSelectionStyle> {
+        if !self.show_selection_overlay
+            || self.selected_fill_opacity <= 0.0
+            || self.selected_object_indices.is_empty()
+            || self.selection_fill_state.len() != object_count
+        {
+            return None;
+        }
+        let color = egui::Color32::from_rgba_unmultiplied(
+            255,
+            245,
+            140,
+            (self.selected_fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+        );
+        Some(ObjectFillTileSelectionStyle {
+            state_cache_id: object_render_cache_id(0x4a31, 0),
+            state_generation: self.selection_generation,
+            object_state: Arc::clone(&self.selection_fill_state),
+            selected_color: color,
+            primary_color: color,
         })
     }
 }

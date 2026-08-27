@@ -15,7 +15,7 @@ The target renderer is a hybrid:
 
 - a lazy, world-aligned, multiresolution cell-ID tile pyramid for low and medium zoom fills;
 - spatially culled vector polygons for close zoom, where relatively few cells are visible;
-- live vector outlines for hover, primary selection, and selected cells; and
+- ID-tile selection fills plus live object-indexed outlines for hover and selected cells; and
 - the existing per-object state and RGBA lookup textures for visibility and colour.
 
 This is a renderer change. It does not require changes to the Python SDK contract or the Amy
@@ -30,6 +30,13 @@ levels; coarse-first, centre-prioritized refinement; resumable vertex-budgeted t
 bounded unfinished work; and geometry-only tile invalidation. Workspace performance observations
 report residency, budgets, requests, hits, completions, discards, evictions, exact pending work,
 draw counts, submitted vertices/triangles, and timing.
+
+Analysis and interactive polygon selection now update a per-object state texture over the resident
+ID tiles instead of rebuilding selected-only fill or outline geometry. The selected and normal
+cell colours are resolved in one tile-composition pass, so a previous translucent selection cannot
+survive as a separate retained layer. Close-zoom outlines reuse
+the object-indexed line LODs prepared when the resource loads. Diagnostics separately report
+selection tile-composition draws so this path can be verified without inferring it from appearance.
 
 The scheduler deliberately performs small resumable GPU jobs from the current paint requests
 instead of maintaining a background CPU result queue. Unfinished textures are never composited.
@@ -119,8 +126,9 @@ with explicit aggregation semantics.
   missing visible tiles.
 - At close zoom, switch to spatially culled vector fills so boundaries remain crisp beyond the
   finest tile resolution.
-- Draw active selection, selected-cell fills/outlines, and hover feedback as small live vector
-  overlays above the cached fill.
+- Draw selected-cell fills as a state lookup over the cached IDs. Reuse prebuilt object-indexed line
+  LODs for close-zoom selection outlines and hover feedback rather than rebuilding selected-only
+  geometry after every Analysis brush change.
 - Preserve screen-space outline widths independently of fill LOD.
 
 Disabling **Use proxy points at low zoom** means that the user sees filled segmentation rather
@@ -269,7 +277,7 @@ Route object fills through the new hybrid policy:
 - small object sets may continue to use the direct path;
 - large low/medium-zoom views use cell-ID tiles;
 - close zoom uses the culled direct-vector path;
-- selection and hover remain live overlays; and
+- selection fills reuse ID tiles, while selection outlines and hover reuse prebuilt geometry; and
 - proxy points remain an optional presentation preference, not the only performance safeguard.
 
 Ensure that single-view, explicit viewport, and mosaic presentations share immutable object
@@ -316,7 +324,8 @@ optimization. They are not required to fix the interactive freeze.
   invalidate ID tiles.
 - Geometry reload, source replacement, and transform changes do invalidate the correct namespace.
 - Overlapping polygons have deterministic precedence.
-- Selection/hover overlays remain aligned across tile-to-vector transitions.
+- Selection fills do not invalidate ID tiles, and selection/hover overlays remain aligned across
+  tile-to-vector transitions.
 - Context loss and renderer recreation release and regenerate GPU resources safely.
 
 ## Performance and Failure Tests

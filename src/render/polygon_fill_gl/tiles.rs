@@ -43,6 +43,16 @@ pub struct ObjectFillTileStyle {
     pub selected_color: egui::Color32,
     pub primary_color: egui::Color32,
     pub object_color_opacity: f32,
+    pub selection_overlay: Option<ObjectFillTileSelectionStyle>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectFillTileSelectionStyle {
+    pub state_cache_id: u64,
+    pub state_generation: u64,
+    pub object_state: Arc<Vec<u8>>,
+    pub selected_color: egui::Color32,
+    pub primary_color: egui::Color32,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +105,11 @@ pub(super) struct ObjectFillTileGlObjects {
     compose_u_object_color_opacity: Option<glow::UniformLocation>,
     compose_u_selected_color: Option<glow::UniformLocation>,
     compose_u_primary_color: Option<glow::UniformLocation>,
+    compose_u_selection_tex: Option<glow::UniformLocation>,
+    compose_u_selection_tex_size: Option<glow::UniformLocation>,
+    compose_u_use_selection_overlay: Option<glow::UniformLocation>,
+    compose_u_selection_selected_color: Option<glow::UniformLocation>,
+    compose_u_selection_primary_color: Option<glow::UniformLocation>,
 }
 
 impl ObjectFillTileGlObjects {
@@ -152,6 +167,21 @@ impl ObjectFillTileGlObjects {
             },
             compose_u_primary_color: unsafe {
                 gl.get_uniform_location(compose_program, "u_primary_color")
+            },
+            compose_u_selection_tex: unsafe {
+                gl.get_uniform_location(compose_program, "u_selection_tex")
+            },
+            compose_u_selection_tex_size: unsafe {
+                gl.get_uniform_location(compose_program, "u_selection_tex_size")
+            },
+            compose_u_use_selection_overlay: unsafe {
+                gl.get_uniform_location(compose_program, "u_use_selection_overlay")
+            },
+            compose_u_selection_selected_color: unsafe {
+                gl.get_uniform_location(compose_program, "u_selection_selected_color")
+            },
+            compose_u_selection_primary_color: unsafe {
+                gl.get_uniform_location(compose_program, "u_selection_primary_color")
             },
         })
     }
@@ -221,6 +251,7 @@ impl ObjectFillGlRenderer {
         inner.tile_visible = draw_items.len();
         inner.last_tile_raster_draw_calls = 0;
         inner.last_tile_compose_draw_calls = 0;
+        inner.last_tile_selection_compose_draw_calls = 0;
         inner.tile_requests = inner
             .tile_requests
             .saturating_add(request_items.len() as u64);
@@ -637,6 +668,7 @@ impl ObjectFillInner {
             gl_ref.uniform_1_i32(tile_gl.compose_u_id_tex.as_ref(), 0);
             gl_ref.uniform_1_i32(tile_gl.compose_u_state_tex.as_ref(), 1);
             gl_ref.uniform_1_i32(tile_gl.compose_u_color_tex.as_ref(), 2);
+            gl_ref.uniform_1_i32(tile_gl.compose_u_selection_tex.as_ref(), 3);
         }
 
         for style in styles {
@@ -665,8 +697,26 @@ impl ObjectFillInner {
                 )
                 .map(|color| (color.texture, color.width, color.height))
             });
+            let selection_texture = style.selection_overlay.as_ref().and_then(|selection| {
+                self.ensure_state_uploaded(
+                    gl,
+                    selection.state_cache_id,
+                    selection.state_generation,
+                    style.object_count,
+                    selection.object_state.as_slice(),
+                )
+                .map(|state| (state.texture, state.width, state.height))
+            });
             let selected = color_f32(style.selected_color);
             let primary = color_f32(style.primary_color);
+            let selection_selected = style
+                .selection_overlay
+                .as_ref()
+                .map_or([0.0; 4], |selection| color_f32(selection.selected_color));
+            let selection_primary = style
+                .selection_overlay
+                .as_ref()
+                .map_or([0.0; 4], |selection| color_f32(selection.primary_color));
             unsafe {
                 let gl_ref = gl.as_ref();
                 gl_ref.use_program(Some(tile_gl.compose_program));
@@ -685,6 +735,18 @@ impl ObjectFillInner {
                 );
                 gl_ref.uniform_4_f32_slice(tile_gl.compose_u_selected_color.as_ref(), &selected);
                 gl_ref.uniform_4_f32_slice(tile_gl.compose_u_primary_color.as_ref(), &primary);
+                gl_ref.uniform_1_i32(
+                    tile_gl.compose_u_use_selection_overlay.as_ref(),
+                    i32::from(selection_texture.is_some()),
+                );
+                gl_ref.uniform_4_f32_slice(
+                    tile_gl.compose_u_selection_selected_color.as_ref(),
+                    &selection_selected,
+                );
+                gl_ref.uniform_4_f32_slice(
+                    tile_gl.compose_u_selection_primary_color.as_ref(),
+                    &selection_primary,
+                );
                 gl_ref.active_texture(glow::TEXTURE1);
                 gl_ref.bind_texture(glow::TEXTURE_2D, Some(state_texture));
                 if let Some((texture, width, height)) = color_texture {
@@ -693,6 +755,17 @@ impl ObjectFillInner {
                     gl_ref.bind_texture(glow::TEXTURE_2D, Some(texture));
                 } else {
                     gl_ref.uniform_2_i32(tile_gl.compose_u_color_tex_size.as_ref(), 0, 0);
+                }
+                if let Some((texture, width, height)) = selection_texture {
+                    gl_ref.uniform_2_i32(
+                        tile_gl.compose_u_selection_tex_size.as_ref(),
+                        width,
+                        height,
+                    );
+                    gl_ref.active_texture(glow::TEXTURE3);
+                    gl_ref.bind_texture(glow::TEXTURE_2D, Some(texture));
+                } else {
+                    gl_ref.uniform_2_i32(tile_gl.compose_u_selection_tex_size.as_ref(), 0, 0);
                 }
             }
 
@@ -730,12 +803,22 @@ impl ObjectFillInner {
                 }
                 self.last_tile_compose_draw_calls =
                     self.last_tile_compose_draw_calls.saturating_add(1);
+                if style.selection_overlay.is_some() {
+                    self.last_tile_selection_compose_draw_calls = self
+                        .last_tile_selection_compose_draw_calls
+                        .saturating_add(1);
+                }
             }
         }
 
         unsafe {
             let gl_ref = gl.as_ref();
-            for unit in [glow::TEXTURE2, glow::TEXTURE1, glow::TEXTURE0] {
+            for unit in [
+                glow::TEXTURE3,
+                glow::TEXTURE2,
+                glow::TEXTURE1,
+                glow::TEXTURE0,
+            ] {
                 gl_ref.active_texture(unit);
                 gl_ref.bind_texture(glow::TEXTURE_2D, None);
             }
@@ -859,6 +942,11 @@ uniform int u_use_object_colors;
 uniform float u_object_color_opacity;
 uniform vec4 u_selected_color;
 uniform vec4 u_primary_color;
+uniform sampler2D u_selection_tex;
+uniform ivec2 u_selection_tex_size;
+uniform int u_use_selection_overlay;
+uniform vec4 u_selection_selected_color;
+uniform vec4 u_selection_primary_color;
 
 out vec4 out_color;
 
@@ -876,6 +964,27 @@ void main() {
     float state = texelFetch(u_state_tex, ivec2(state_x, state_y), 0).r;
     if (state < 0.001) {
         discard;
+    }
+    if (u_use_selection_overlay != 0) {
+        if (u_selection_tex_size.x <= 0 || u_selection_tex_size.y <= 0) {
+            discard;
+        }
+        int selection_x = object_id % u_selection_tex_size.x;
+        int selection_y = object_id / u_selection_tex_size.x;
+        if (selection_y < 0 || selection_y >= u_selection_tex_size.y) {
+            discard;
+        }
+        float selection_state = texelFetch(
+            u_selection_tex,
+            ivec2(selection_x, selection_y),
+            0
+        ).r;
+        if (selection_state >= 0.001) {
+            out_color = selection_state > 0.75
+                ? u_selection_primary_color
+                : u_selection_selected_color;
+            return;
+        }
     }
     if (u_use_object_colors != 0) {
         if (u_color_tex_size.x <= 0 || u_color_tex_size.y <= 0) {

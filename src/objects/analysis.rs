@@ -232,6 +232,7 @@ impl ObjectsLayer {
         _spatial_root: Option<&Path>,
         _spatial_tables: &[SpatialDataElement],
     ) -> Option<ObjectUiAction> {
+        let selection_generation_before = self.selection_generation;
         // Analysis always operates on the currently active object snapshot: either the full loaded
         // set or the materialized filtered subset from `ensure_filter_cache`.
         self.ensure_filter_cache();
@@ -265,6 +266,12 @@ impl ObjectsLayer {
             selected_channel,
             suspend_live_selection_sync,
         );
+        // Actor-owned shell layouts may place the canvas before the Analysis mount. In that case
+        // this frame's canvas callback already captured the previous selection state. Schedule one
+        // follow-up frame so the new state texture is presented even when pointer motion stops.
+        if self.selection_generation != selection_generation_before {
+            ui.ctx().request_repaint();
+        }
         action
     }
 

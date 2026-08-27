@@ -17,15 +17,15 @@ impl ObjectsLayer {
         active_color_groups: Option<&ObjectColorGroups>,
         continuous_colors: Option<&ObjectContinuousColorPayload>,
         render_generation: u64,
-    ) {
+    ) -> bool {
         if !self.fill_cells || self.fill_opacity <= 0.0 {
-            return;
+            return false;
         }
         let Some(fill_mesh) = self.object_fill_mesh.as_ref() else {
-            return;
+            return false;
         };
         if !fill_mesh.bounds_local.intersects(visible_local) {
-            return;
+            return false;
         }
 
         let tile_frame = gpu_available
@@ -58,6 +58,11 @@ impl ObjectsLayer {
                 .sum::<usize>()
                 <= Self::MAX_DIRECT_FILL_VERTICES
         });
+        let tile_compose = tile_coverage || (!direct_fallback_is_bounded && any_tile_coverage);
+        let selection_overlay_composited = tile_compose
+            && tile_frame
+                .as_ref()
+                .is_some_and(|frame| frame.selection_overlay);
 
         if gpu_available {
             if !tile_coverage && direct_fallback_is_bounded {
@@ -90,7 +95,6 @@ impl ObjectsLayer {
         if let Some(frame) = tile_frame {
             let renderer = self.gl_object_fill.clone();
             let repaint = ui.ctx().clone();
-            let compose = tile_coverage || (!direct_fallback_is_bounded && any_tile_coverage);
             let cb = egui_glow::CallbackFn::new(move |info, painter| {
                 let result = renderer.paint_id_tiles(
                     info,
@@ -99,7 +103,7 @@ impl ObjectsLayer {
                     &frame.draw_items,
                     &frame.styles,
                     &frame.params,
-                    compose,
+                    tile_compose,
                 );
                 if result.pending > 0 {
                     repaint.request_repaint();
@@ -110,6 +114,7 @@ impl ObjectsLayer {
                 callback: Arc::new(cb),
             });
         }
+        selection_overlay_composited
     }
 
     #[allow(clippy::too_many_arguments)]

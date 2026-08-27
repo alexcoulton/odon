@@ -25,8 +25,8 @@ use crate::render::points_gl::PointsGlRenderer;
 use crate::render::polygon_fill_gl::{
     ObjectFillGlDrawData, ObjectFillGlDrawItem, ObjectFillGlDrawParams, ObjectFillGlRenderer,
     ObjectFillTileDrawItem, ObjectFillTileGeometry, ObjectFillTileGlParams, ObjectFillTileKey,
-    ObjectFillTileStyle, PolygonFillGlDrawData, PolygonFillGlDrawItem, PolygonFillGlDrawParams,
-    PolygonFillGlRenderer,
+    ObjectFillTileSelectionStyle, ObjectFillTileStyle, PolygonFillGlDrawData,
+    PolygonFillGlDrawItem, PolygonFillGlDrawParams, PolygonFillGlRenderer,
 };
 use crate::spatialdata::{
     ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,

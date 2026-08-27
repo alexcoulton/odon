@@ -68,10 +68,6 @@ impl ObjectsLayer {
             && self.selected_fill_opacity > 0.0
             && !self.selected_object_indices.is_empty()
             && (!gpu_available || self.selected_object_indices.len() <= SELECTED_FILL_MESH_LIMIT);
-        if use_selected_only_fill_mesh {
-            self.ensure_cpu_selection_fill_mesh();
-        }
-
         let Some(base_render_lods) = self.render_lods.as_ref() else {
             return;
         };
@@ -120,6 +116,7 @@ impl ObjectsLayer {
             (self.selected_fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
         );
 
+        let mut selection_fill_composited_by_tiles = false;
         if use_fast_proxy_points || use_fill_proxy_points {
             let proxy_alpha = if use_fill_proxy_points {
                 self.fill_opacity
@@ -136,8 +133,8 @@ impl ObjectsLayer {
                 proxy_alpha,
                 self.generation ^ 0x4641535450524f58,
             );
-            if gpu_available {
-                let _ = self.draw_selected_outline_overlay_gpu(
+            let drew_selected_outline = gpu_available
+                && self.draw_selected_outline_overlay_gpu(
                     ui,
                     camera,
                     viewport,
@@ -145,10 +142,9 @@ impl ObjectsLayer {
                     dataset_long_side_screen_px,
                     display_offset,
                     display_scale,
-                    false,
+                    true,
                 );
-            }
-            if self.selected_point_positions_world.is_none() {
+            if !drew_selected_outline && self.selected_point_positions_world.is_none() {
                 self.draw_visible_selected_outline_overlay(
                     ui,
                     camera,
@@ -176,7 +172,7 @@ impl ObjectsLayer {
                 ObjectColorMode::Continuous => None,
             };
 
-            self.draw_object_fills(
+            selection_fill_composited_by_tiles = self.draw_object_fills(
                 ui,
                 camera,
                 viewport,
@@ -485,7 +481,12 @@ impl ObjectsLayer {
             }
         }
 
+        if use_selected_only_fill_mesh && !selection_fill_composited_by_tiles {
+            self.ensure_cpu_selection_fill_mesh();
+        }
+
         if !use_fast_proxy_points
+            && !selection_fill_composited_by_tiles
             && self.show_selection_overlay
             && self.selected_fill_opacity > 0.0
             && let Some(fill_mesh) = self.selected_fill_mesh.as_ref()
@@ -539,6 +540,7 @@ impl ObjectsLayer {
                 }
             }
         } else if !use_fast_proxy_points
+            && !selection_fill_composited_by_tiles
             && self.show_selection_overlay
             && gpu_available
             && self.selected_fill_opacity > 0.0

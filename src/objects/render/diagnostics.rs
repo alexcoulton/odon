@@ -63,6 +63,7 @@ impl ObjectsLayer {
                 "last_tile_raster_vertices": gpu.last_tile_raster_vertices,
                 "last_tile_raster_draw_calls": gpu.last_tile_raster_draw_calls,
                 "last_tile_compose_draw_calls": gpu.last_tile_compose_draw_calls,
+                "last_tile_selection_compose_draw_calls": gpu.last_tile_selection_compose_draw_calls,
                 "total_tile_raster_vertices": gpu.total_tile_raster_vertices,
                 "last_tile_raster_ms": gpu.last_tile_raster_ms,
                 "last_tile_compose_ms": gpu.last_tile_compose_ms,

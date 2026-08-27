@@ -531,21 +531,12 @@ impl ObjectsLayer {
         self.selected_point_values = None;
         self.selected_point_lods = None;
         let object_count = objects.len();
-        self.selected_render_lods =
-            if selected_count == 0 || selected_count > Self::SELECTED_RENDER_LOD_LIMIT {
-                None
-            } else {
-                let selected = self
-                    .selected_object_indices
-                    .iter()
-                    .filter_map(|idx| objects.get(*idx).cloned())
-                    .collect::<Vec<_>>();
-                build_render_lods(&selected).ok()
-            };
-        self.primary_selected_render_lods = self
-            .selected_object_index
-            .and_then(|idx| objects.get(idx))
-            .and_then(|object| build_render_lods(std::slice::from_ref(object)).ok());
+        // Polygon selection is a state lookup over geometry prepared at resource load. Rebuilding
+        // selected-only LOD geometry here made Analysis brushes scale with polygon complexity and
+        // blocked the UI thread. GPU outlines use `object_selection_lods` plus this state texture;
+        // CPU fallback already walks only the selected objects.
+        self.selected_render_lods = None;
+        self.primary_selected_render_lods = None;
         self.selected_fill_mesh = None;
         self.rebuild_selection_fill_state(object_count);
         self.selection_cpu_overlay_dirty = true;

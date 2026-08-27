@@ -120,9 +120,10 @@ Large filled segmentations use a hybrid renderer. At overview and medium zoom, O
 world-aligned object-ID tiles and colours them through the current per-object style. At close zoom,
 it switches to spatially culled vector polygons for crisp boundaries. A coarser resident tile may
 appear briefly while the exact visible level refines. Marker/property, palette, domain, filter,
-category visibility, and opacity changes update the colour lookup without rebuilding geometry
-tiles. Proxy points are therefore a display preference rather than the only safeguard for large
-layers.
+category visibility, opacity, and Analysis selection changes update lookup textures without
+rebuilding geometry tiles. Selected-cell fills reuse the cached IDs; close-zoom outlines reuse
+object-indexed line geometry prepared at load. Proxy points are therefore a display preference
+rather than the only safeguard for large layers.
 
 The ID-tile cache and unfinished work have strict GPU byte and work limits. If integer render
 targets are unavailable, Odon reports the degraded mode in performance diagnostics and retains

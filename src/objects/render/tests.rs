@@ -333,13 +333,96 @@ mod object_fill_tile_tests {
             ),
         };
         let before_style_edit = object_fill_tile_key(7, spec);
-        let after_property_palette_domain_filter_and_opacity_edits = object_fill_tile_key(7, spec);
+        let after_property_palette_domain_filter_selection_and_opacity_edits =
+            object_fill_tile_key(7, spec);
         let after_geometry_reload = object_fill_tile_key(8, spec);
 
         assert_eq!(
             before_style_edit,
-            after_property_palette_domain_filter_and_opacity_edits
+            after_property_palette_domain_filter_selection_and_opacity_edits
         );
         assert_ne!(before_style_edit, after_geometry_reload);
+    }
+
+    #[test]
+    fn selection_fill_is_a_state_lookup_attached_to_existing_id_tiles() {
+        let mut layer = ObjectsLayer {
+            show_selection_overlay: true,
+            selected_fill_opacity: 0.4,
+            ..ObjectsLayer::default()
+        };
+        layer.selected_object_indices.extend([1, 2]);
+        layer.selected_object_index = Some(1);
+        layer.rebuild_selection_fill_state(3);
+
+        let style = layer
+            .object_fill_selection_tile_style(3)
+            .expect("visible non-empty selection should provide a tile state lookup");
+
+        assert_eq!(style.state_generation, layer.selection_generation);
+        assert!(Arc::ptr_eq(
+            &style.object_state,
+            &layer.selection_fill_state
+        ));
+        assert_eq!(style.object_state.as_slice(), &[0, 255, 128]);
+        assert_eq!(style.selected_color.a(), 102);
+        assert_eq!(style.primary_color, style.selected_color);
+    }
+
+    #[test]
+    fn selection_overlay_tile_style_requires_visible_matching_state() {
+        let mut layer = ObjectsLayer::default();
+        layer.selected_object_indices.insert(0);
+        layer.selected_object_index = Some(0);
+        layer.rebuild_selection_fill_state(1);
+
+        layer.show_selection_overlay = false;
+        assert!(layer.object_fill_selection_tile_style(1).is_none());
+
+        layer.show_selection_overlay = true;
+        layer.selected_fill_opacity = 0.0;
+        assert!(layer.object_fill_selection_tile_style(1).is_none());
+
+        layer.selected_fill_opacity = 0.5;
+        assert!(layer.object_fill_selection_tile_style(2).is_none());
+    }
+
+    #[test]
+    fn polygon_selection_updates_state_without_rebuilding_selected_geometry() {
+        let object = ObjectFeature {
+            id: "cell-1".to_string(),
+            polygons_world: vec![vec![
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(1.0, 1.0),
+                egui::pos2(0.0, 1.0),
+                egui::pos2(0.0, 0.0),
+            ]],
+            point_position_world: None,
+            bbox_world: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            area_px: 1.0,
+            perimeter_px: 4.0,
+            centroid_world: egui::pos2(0.5, 0.5),
+            inline_properties: serde_json::Map::new(),
+            source_row_index: Some(0),
+        };
+        let mut layer = ObjectsLayer::default();
+        layer.objects = Some(Arc::new(vec![object]));
+        layer.object_selection_lods = Some(Vec::new());
+        layer.selected_render_lods = Some(Vec::new());
+        layer.primary_selected_render_lods = Some(Vec::new());
+        layer.selected_object_indices.insert(0);
+        layer.selected_object_index = Some(0);
+        let before_generation = layer.selection_generation;
+
+        layer.rebuild_selection_render_lods();
+
+        assert!(layer.object_selection_lods.is_some());
+        assert!(layer.selected_render_lods.is_none());
+        assert!(layer.primary_selected_render_lods.is_none());
+        assert!(layer.selected_fill_mesh.is_none());
+        assert!(layer.selection_cpu_overlay_dirty);
+        assert_eq!(layer.selection_fill_state.as_slice(), &[255]);
+        assert!(layer.selection_generation > before_generation);
     }
 }
