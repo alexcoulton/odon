@@ -39,6 +39,7 @@ impl ObjectsLayer {
                     active_color_groups,
                     continuous_colors,
                     render_generation,
+                    ui.ctx().cumulative_frame_nr(),
                 )
             })
             .flatten();
@@ -175,6 +176,8 @@ impl ObjectsLayer {
                 for (cache_id, vertices_local, bounds_local) in &fill_geometry {
                     items.push(ObjectFillGlDrawItem {
                         data: ObjectFillGlDrawData {
+                            resource_cache_id: self.render_resource_cache_id,
+                            style_cache_id: self.render_style_cache_id,
                             cache_id: *cache_id,
                             state_cache_id: object_property_render_cache_id(
                                 0x4a21,
@@ -217,6 +220,8 @@ impl ObjectsLayer {
             for (cache_id, vertices_local, bounds_local) in &fill_geometry {
                 items.push(ObjectFillGlDrawItem {
                     data: ObjectFillGlDrawData {
+                        resource_cache_id: self.render_resource_cache_id,
+                        style_cache_id: self.render_style_cache_id,
                         cache_id: *cache_id,
                         state_cache_id: object_render_cache_id(0x4a23, 0),
                         generation: self.geometry_generation,

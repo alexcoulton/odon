@@ -493,6 +493,7 @@ pub(super) fn load_result_from_objects(
     );
     Ok(LoadResult {
         request_id,
+        render_resource_cache_id: next_object_render_resource_cache_id(),
         path,
         downsample_factor,
         display_transform,

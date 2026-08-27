@@ -7,6 +7,7 @@ use crate::objects::{
     ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectsLayer, PreloadedObjectLayer,
     SelectedObjectDetails,
 };
+use crate::render::polygon_fill_gl::ObjectFillGlRenderer;
 use crate::spatialdata::SpatialDataTransform2;
 use odon::model::{
     ContinuousDomain, ContinuousPalette, ContinuousScale, ObjectColorMapping, OutOfRangeMode,
@@ -49,9 +50,11 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     color_property_key: String,
     color_mapping: ObjectColorMapping,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
+    property_cache_capacity: Option<usize>,
     actor_load_requested: BTreeSet<usize>,
     force_repaint_frames: u32,
     primary_selected_item_id: Option<usize>,
+    object_fill_renderer: ObjectFillGlRenderer,
 }
 
 impl Default for MosaicGeoJsonSegmentationOverlay {
@@ -71,14 +74,38 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             color_property_key: String::new(),
             color_mapping: ObjectColorMapping::Single,
             color_level_overrides: HashMap::new(),
+            property_cache_capacity: None,
             actor_load_requested: BTreeSet::new(),
             force_repaint_frames: 0,
             primary_selected_item_id: None,
+            object_fill_renderer: ObjectFillGlRenderer::application_pool(),
         }
     }
 }
 
 impl MosaicGeoJsonSegmentationOverlay {
+    pub(crate) fn set_object_fill_renderer(&mut self, renderer: ObjectFillGlRenderer) {
+        self.object_fill_renderer = renderer.clone();
+        for state in self.items.values_mut() {
+            if let Some(layer) = state.layer.as_mut() {
+                layer.set_object_fill_renderer(renderer.clone());
+            }
+        }
+    }
+
+    pub(crate) fn set_property_cache_capacity(&mut self, capacity: Option<usize>) {
+        if self.property_cache_capacity == capacity {
+            return;
+        }
+        self.property_cache_capacity = capacity;
+        for state in self.items.values_mut() {
+            if let Some(layer) = state.layer.as_mut() {
+                layer.set_lazy_property_cache_capacity(capacity);
+            }
+        }
+        self.force_repaint_frames = self.force_repaint_frames.max(2);
+    }
+
     pub fn control_style_json(&self) -> serde_json::Value {
         serde_json::json!({
             "opacity":self.opacity,
@@ -267,6 +294,8 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             }
             let mut layer = ObjectsLayer::default();
+            layer.set_object_fill_renderer(self.object_fill_renderer.clone());
+            layer.set_lazy_property_cache_capacity(self.property_cache_capacity);
             apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
             layer.install_preloaded(preloaded);
             st.status = format!("Using cached objects: {}", path.to_string_lossy());
@@ -294,6 +323,8 @@ impl MosaicGeoJsonSegmentationOverlay {
             return false;
         };
         let mut layer = ObjectsLayer::default();
+        layer.set_object_fill_renderer(self.object_fill_renderer.clone());
+        layer.set_lazy_property_cache_capacity(self.property_cache_capacity);
         apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
         layer.install_preloaded(preloaded);
         state.status = format!("Using actor-loaded objects: {}", resource.source.display());
@@ -815,6 +846,7 @@ impl MosaicGeoJsonSegmentationOverlay {
     }
 
     pub fn control_loading_snapshot(&self) -> serde_json::Value {
+        let gpu = self.object_fill_renderer.stats();
         let mut total = 0usize;
         let mut loaded = 0usize;
         let mut layer_allocated = 0usize;
@@ -824,6 +856,8 @@ impl MosaicGeoJsonSegmentationOverlay {
         let mut analyzing = 0usize;
         let mut bulk_measuring = 0usize;
         let mut busy_statuses = Vec::new();
+        let mut resident_lazy_columns = 0usize;
+        let mut property_cache_evictions = 0u64;
         for (item_id, st) in &self.items {
             if st.seg_path.is_none() {
                 continue;
@@ -834,6 +868,12 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             };
             layer_allocated += 1;
+            let property_cache = layer.lazy_property_cache_snapshot();
+            resident_lazy_columns += property_cache["resident_lazy_columns"]
+                .as_u64()
+                .unwrap_or(0) as usize;
+            property_cache_evictions = property_cache_evictions
+                .saturating_add(property_cache["evictions"].as_u64().unwrap_or(0));
             loaded += usize::from(layer.has_data());
             loading_data += usize::from(layer.is_loading());
             loading_properties += usize::from(layer.is_property_loading());
@@ -863,6 +903,31 @@ impl MosaicGeoJsonSegmentationOverlay {
             "layers_analyzing": analyzing,
             "layers_bulk_measuring": bulk_measuring,
             "sample_busy_statuses": busy_statuses,
+            "property_cache": {
+                "policy": if self.property_cache_capacity.is_some() { "lru" } else { "unbounded" },
+                "capacity_per_roi": self.property_cache_capacity,
+                "resident_lazy_columns": resident_lazy_columns,
+                "evictions": property_cache_evictions,
+            },
+            "gpu_object_fill_pool": {
+                "shared": true,
+                "mesh_entries": gpu.mesh_entries,
+                "mesh_bytes": gpu.mesh_bytes,
+                "mesh_budget_bytes": gpu.mesh_budget_bytes,
+                "state_bytes": gpu.state_bytes,
+                "color_bytes": gpu.color_bytes,
+                "texture_budget_bytes": gpu.texture_budget_bytes,
+                "tile_entries": gpu.tile_entries,
+                "tile_bytes": gpu.tile_bytes,
+                "tile_pending_bytes": gpu.tile_pending_bytes,
+                "tile_budget_bytes": gpu.tile_budget_bytes,
+                "tile_pending": gpu.tile_pending,
+                "tile_peak_pending": gpu.tile_peak_pending,
+                "tile_frame_generation": gpu.tile_frame_generation,
+                "tile_frame_generated": gpu.tile_frame_generated,
+                "tile_frame_raster_vertices": gpu.tile_frame_raster_vertices,
+                "tile_evictions": gpu.tile_evictions,
+            },
         })
     }
 

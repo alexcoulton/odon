@@ -1,6 +1,13 @@
 use super::super::*;
 
 impl MosaicViewerApp {
+    pub(crate) fn set_object_fill_renderer(
+        &mut self,
+        renderer: crate::render::polygon_fill_gl::ObjectFillGlRenderer,
+    ) {
+        self.seg_geojson.set_object_fill_renderer(renderer);
+    }
+
     pub fn set_return_dataset_root(&mut self, root: Option<PathBuf>) {
         self.return_dataset_root = root;
     }

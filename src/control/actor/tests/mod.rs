@@ -108,6 +108,22 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
             })
         }
 
+        fn load_with_options(
+            &self,
+            path: PathBuf,
+            downsample_factor: f32,
+            options: Option<Value>,
+        ) -> anyhow::Result<ControlObjectResource> {
+            if let Some(preload) = options
+                .as_ref()
+                .and_then(|value| value.get("project_preload"))
+            {
+                assert_eq!(preload["mode"], "full_geometry");
+                assert_eq!(preload["lazy_properties"], true);
+            }
+            self.load(path, downsample_factor)
+        }
+
         fn evaluate_filter(
             &self,
             resource: Arc<ControlObjectResource>,

@@ -63,6 +63,10 @@ impl ObjectPropertyStore {
         self.loaded_columns.insert(key, column);
     }
 
+    pub(in crate::objects) fn remove_column(&mut self, key: &str) -> bool {
+        self.loaded_columns.remove(key).is_some()
+    }
+
     pub(in crate::objects) fn shares_storage_with(&self, other: &Self) -> bool {
         self.available_columns == other.available_columns
             && self.loaded_columns.len() == other.loaded_columns.len()

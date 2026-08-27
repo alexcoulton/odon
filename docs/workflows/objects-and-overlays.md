@@ -131,6 +131,12 @@ only the bounded vector fallback; it never submits an unculled large segmentatio
 proxy points are disabled. Nearest-ID overview pixels show a deterministic representative cell,
 not an aggregate statistic such as population density or mean marker value.
 
+These limits are shared by every object layer in the application. In particular, opening more
+mosaic ROIs does not give each segmentation a separate full GPU allowance: visible layers compete
+inside one least-recently-used pool and tile refinement is spread over frames. This can make a
+large mosaic refine progressively, but keeps its object-fill memory and per-frame generation work
+bounded.
+
 Use `Color by` to colour objects by a categorical property such as cell type,
 cluster, phenotype, or call state. If the object file uses lazy property loading,
 some properties may appear with `(load)` and are loaded when selected.

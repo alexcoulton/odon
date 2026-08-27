@@ -31,6 +31,14 @@ bounded unfinished work; and geometry-only tile invalidation. Workspace performa
 report residency, budgets, requests, hits, completions, discards, evictions, exact pending work,
 draw counts, submitted vertices/triangles, and timing.
 
+Object-fill GPU residency is application-wide rather than owned independently by each layer or
+mosaic ROI. Meshes, state/colour lookups, completed ID tiles, and unfinished tiles share one pool
+with hard aggregate byte ceilings. Cache keys include a stable object-resource namespace so two
+ROIs cannot alias merely because their local geometry generations match. The resumable tile
+rasterization allowance is also shared across all paint callbacks in one UI frame, preventing the
+work limit from multiplying with the number of visible mosaic ROIs. Changing viewer modes retains
+the same bounded pool; normal LRU eviction replaces destructive per-layer cache clearing.
+
 Analysis and interactive polygon selection now update a per-object state texture over the resident
 ID tiles instead of rebuilding selected-only fill or outline geometry. The selected and normal
 cell colours are resolved in one tile-composition pass, so a previous translucent selection cannot

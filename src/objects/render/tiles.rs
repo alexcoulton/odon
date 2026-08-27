@@ -40,6 +40,7 @@ impl ObjectsLayer {
         active_color_groups: Option<&ObjectColorGroups>,
         continuous_colors: Option<&ObjectContinuousColorPayload>,
         render_generation: u64,
+        frame_generation: u64,
     ) -> Option<ObjectFillTileFrame> {
         const MIN_TILE_VERTEX_COUNT: usize = 500_000;
         const MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL: f32 = 2.0;
@@ -77,7 +78,11 @@ impl ObjectsLayer {
                         })
                         .collect::<Vec<_>>();
                     ObjectFillTileDrawItem {
-                        key: object_fill_tile_key(self.geometry_generation, spec),
+                        key: object_fill_tile_key(
+                            self.render_resource_cache_id,
+                            self.geometry_generation,
+                            spec,
+                        ),
                         bounds_local: spec.bounds_local,
                         geometry,
                     }
@@ -115,6 +120,7 @@ impl ObjectsLayer {
                 let color =
                     egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
                 styles.push(ObjectFillTileStyle {
+                    style_cache_id: self.render_style_cache_id,
                     state_cache_id: object_property_render_cache_id(
                         0x4a21,
                         &color_groups.property_key,
@@ -142,6 +148,7 @@ impl ObjectsLayer {
             let rgb = self.color_rgb;
             let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
             styles.push(ObjectFillTileStyle {
+                style_cache_id: self.render_style_cache_id,
                 state_cache_id: object_render_cache_id(0x4a23, 0),
                 object_count: fill_mesh.object_count,
                 state_generation: render_generation,
@@ -163,6 +170,7 @@ impl ObjectsLayer {
             styles,
             selection_overlay: selection_overlay.is_some(),
             params: ObjectFillTileGlParams {
+                frame_generation,
                 center_world: camera.center_world_lvl0,
                 zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
                 visible: self.visible,
@@ -200,11 +208,12 @@ impl ObjectsLayer {
 }
 
 pub(in crate::objects) fn object_fill_tile_key(
+    resource_cache_id: u64,
     geometry_generation: u64,
     spec: ObjectFillTileSpec,
 ) -> ObjectFillTileKey {
     ObjectFillTileKey {
-        resource_cache_id: object_render_cache_id(0x4ac0, 0),
+        resource_cache_id,
         geometry_generation,
         level: spec.level,
         tile_x: spec.tile_x,

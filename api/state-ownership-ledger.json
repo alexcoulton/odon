@@ -774,6 +774,18 @@
         "milestone": 6
       },
       {
+        "id": "root.object_fill_gpu_pool",
+        "fields": ["object_fill_renderer"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "RootApp construction and renderer cache eviction",
+        "projection_source": "object resource and viewport paint generations",
+        "renderer_consumers": "single-view, SpatialData, and mosaic object-fill layers",
+        "persistence_consumers": "none",
+        "native_commit_point": "renderer observation only",
+        "milestone": 8
+      },
+      {
         "id": "root.platform_dialogs",
         "fields": ["close_dialog_open", "spatial_open", "settings_open", "settings_status", "active_help_topic"],
         "current_class": "transient_ui",
@@ -1245,14 +1257,14 @@
       },
       {
         "id": "mosaic.segmentation",
-        "fields": ["seg_geojson"],
+        "fields": ["seg_geojson", "object_property_cache_capacity"],
         "current_class": "shared_resource",
         "disposition": "retain",
         "canonical_writer": "ControlActor mosaic object/resource presentation model",
         "projection_source": "mosaic object resource generation",
         "renderer_consumers": "mosaic segmentation renderer",
         "persistence_consumers": "project mosaic state",
-        "native_commit_point": "typed mosaic object load, visibility, style, and selection commands",
+        "native_commit_point": "typed mosaic object load, visibility, style, property-cache, and selection commands",
         "milestone": 4
       },
       {

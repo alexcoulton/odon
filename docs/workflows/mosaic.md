@@ -307,6 +307,31 @@ intended for broad review across ROIs; detailed object measurement and editing
 workflows are still better in single-view mode. For object-file conventions, see
 [Object and Overlay Data](../data-sources/object-and-overlay-data.md).
 
+All mosaic segmentations share one application-wide GPU object-fill pool. Its mesh,
+lookup-texture, completed-tile, and unfinished-tile byte limits are aggregate limits rather than
+per-ROI allowances, and the visible ROIs share a bounded tile-generation allowance each frame.
+Consequently, a very large mosaic can show coarser cached fills while detail refines, without GPU
+residency or rasterization work scaling unchecked with the number of ROIs. Marker, Nimbus/median,
+palette, filter, and opacity changes still reuse the cached cell-ID tiles and update the much
+smaller per-object lookup textures.
+
+GeoParquet property columns are hydrated lazily in mosaic mode. Initial object
+loading keeps polygon geometry and identifier columns resident, while a numeric
+column is read only when a fill, filter, or other object operation requests it.
+This is especially important for multiplexed tables with hundreds of marker
+properties: eager loading would multiply RAM use across every open ROI.
+
+Python workflows can also bound the hydrated columns with a per-ROI LRU cache:
+
+```python
+app.mosaic.set_object_property_cache(policy="lru", capacity=2)
+```
+
+The active property and any properties referenced by filters or Analysis
+thresholds are pinned. Older measurement columns are evicted after the
+replacement is ready; segmentation geometry, identifier columns, and cell-ID
+tiles remain resident. Use `policy="unbounded"` to restore retain-all behavior.
+
 ## Memory Tab
 
 The `Memory` tab controls optional RAM pinning for mosaic rendering.

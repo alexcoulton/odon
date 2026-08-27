@@ -661,6 +661,8 @@ impl ObjectsLayer {
         if fill_mesh.vertices_local.len() < 500_000 {
             items.push(ObjectFillGlDrawItem {
                 data: ObjectFillGlDrawData {
+                    resource_cache_id: self.render_resource_cache_id,
+                    style_cache_id: self.render_style_cache_id,
                     cache_id: object_render_cache_id(0x4a32, 0),
                     state_cache_id,
                     generation: self.geometry_generation,
@@ -679,6 +681,8 @@ impl ObjectsLayer {
             for slice in fill_mesh.spatial_slices_for_local_rect(visible_local) {
                 items.push(ObjectFillGlDrawItem {
                     data: ObjectFillGlDrawData {
+                        resource_cache_id: self.render_resource_cache_id,
+                        style_cache_id: self.render_style_cache_id,
                         cache_id: object_render_cache_id_usize(0x4a80, slice.bin_index),
                         state_cache_id,
                         generation: self.geometry_generation,

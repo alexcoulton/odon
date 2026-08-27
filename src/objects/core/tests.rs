@@ -449,6 +449,78 @@ fn reinstalling_identical_control_payload_is_a_complete_no_op() {
 }
 
 #[test]
+fn lazy_property_lru_evicts_old_columns_but_pins_active_references() {
+    let dir = TestObjectDir::new();
+    let path = dir.path("lazy-property-cache.geojson");
+    write_object_fixture(&path);
+    let cancel = AtomicBool::new(false);
+    let result = load_in_thread(path, 1.0, None, 1, &cancel).expect("load object fixture");
+    let mut layer = ObjectsLayer::default();
+    layer.install_load_result(result);
+    layer.lazy_parquet_source = Some(LazyParquetSource {
+        available_property_columns: vec!["a", "b", "c", "d"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        numeric_property_columns: vec!["a", "b", "c", "d"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        loaded_property_columns: HashSet::new(),
+    });
+    layer.set_lazy_property_cache_capacity(Some(2));
+
+    let values = HashMap::from([
+        (0usize, serde_json::json!(1.0)),
+        (1usize, serde_json::json!(2.0)),
+        (2usize, serde_json::json!(3.0)),
+    ]);
+    let activate = |layer: &mut ObjectsLayer, property: &str| {
+        layer.color_mode = ObjectColorMode::Continuous;
+        layer.color_property_key = property.to_string();
+        layer.color_mapping = ObjectColorMapping::Continuous {
+            property: property.to_string(),
+            palette: ContinuousPalette::Named("viridis".to_string()),
+            domain: ContinuousDomain::Fixed([0.0, 4.0]),
+            scale: ContinuousScale::Linear,
+            reverse: false,
+            out_of_range: OutOfRangeMode::Clamp,
+            missing_color_rgb: None,
+        };
+    };
+
+    activate(&mut layer, "a");
+    layer.apply_loaded_property_values("a", &values);
+    activate(&mut layer, "b");
+    layer.apply_loaded_property_values("b", &values);
+    activate(&mut layer, "c");
+    layer.apply_loaded_property_values("c", &values);
+
+    assert!(!layer.property_store.has_loaded("a"));
+    assert!(layer.property_store.has_loaded("b"));
+    assert!(layer.property_store.has_loaded("c"));
+    assert_eq!(
+        layer.lazy_property_lru,
+        VecDeque::from(["b".into(), "c".into()])
+    );
+    assert_eq!(layer.lazy_property_cache_evictions, 1);
+    assert!(layer.property_column_available_but_unloaded("a"));
+
+    layer.filter_clauses = vec![ObjectFilterClause {
+        enabled: true,
+        property_key: "b".to_string(),
+        query: "2".to_string(),
+    }];
+    activate(&mut layer, "d");
+    layer.apply_loaded_property_values("d", &values);
+
+    assert!(layer.property_store.has_loaded("b"));
+    assert!(!layer.property_store.has_loaded("c"));
+    assert!(layer.property_store.has_loaded("d"));
+    assert_eq!(layer.lazy_property_cache_evictions, 2);
+}
+
+#[test]
 fn automatic_analysis_default_does_not_retarget_an_existing_rule() {
     let mut layer = ObjectsLayer::default();
     layer

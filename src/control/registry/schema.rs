@@ -881,6 +881,18 @@ pub(super) fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
             properties.extend(style_properties.clone());
         }
     }
+    if descriptor.name == "mosaic.objects.property_cache.set" {
+        schema = json!({
+            "type":"object",
+            "properties":{
+                "policy":{"type":"string","enum":["lru","unbounded"]},
+                "capacity":{"type":["integer","null"],"minimum":1},
+                "if_revision":{"type":"integer","minimum":0}
+            },
+            "required":["policy"],
+            "additionalProperties":false
+        });
+    }
     if matches!(
         descriptor.name,
         "viewer.workspace.layout.set" | "viewer.viewports.create" | "viewer.viewports.clone"

@@ -23,6 +23,7 @@ use crate::log_warn;
 use crate::mosaic::{MosaicPlatformEffect, MosaicViewerApp};
 use crate::objects::{ObjectPreloadMode, ObjectPreloadSettings, PreloadedObjectLayer};
 use crate::project::{ProjectObjectCacheUiState, ProjectSpace, ProjectSpaceAction};
+use crate::render::polygon_fill_gl::ObjectFillGlRenderer;
 use crate::spatialdata::{SpatialDataDiscovery, discover_spatialdata};
 use crate::ui::top_bar;
 use odon::control::ControlError;
@@ -217,6 +218,7 @@ struct ProjectObjectPreloadRenderProjection {
 pub struct RootApp {
     mode: Mode,
     gpu_available: bool,
+    object_fill_renderer: ObjectFillGlRenderer,
     close_dialog_open: bool,
     spatial_open: Option<SpatialOpenDialog>,
     platform_deep_link_rx: Option<Receiver<DeepLinkRequest>>,
@@ -361,12 +363,14 @@ impl RootApp {
     }
 
     fn configure_single_app(&self, app: &mut OmeZarrViewerApp) {
+        app.set_object_fill_renderer(self.object_fill_renderer.clone());
         app.set_native_command_ingress(self.native_command_ingress.clone());
         app.set_label_prompt_preference(self.label_prompt_preference);
         app.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
 
     fn configure_mosaic_app(&self, mosaic: &mut MosaicViewerApp) {
+        mosaic.set_object_fill_renderer(self.object_fill_renderer.clone());
         mosaic.set_native_command_ingress(self.native_command_ingress.clone());
         mosaic.set_fast_object_rendering(self.app_settings.fast_object_rendering);
     }
@@ -1506,6 +1510,7 @@ impl RootApp {
         let mut root = Self {
             mode: Mode::Project { project_space: ps },
             gpu_available: cc.gl.is_some(),
+            object_fill_renderer: ObjectFillGlRenderer::application_pool(),
             close_dialog_open: false,
             spatial_open: None,
             platform_deep_link_rx: None,
@@ -1559,7 +1564,9 @@ impl RootApp {
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
         let native_command_ingress =
             NativeControlIngress::actor(control_runtime.native_command_ingress());
+        let object_fill_renderer = ObjectFillGlRenderer::application_pool();
         let mut app = OmeZarrViewerApp::new(cc, dataset, store);
+        app.set_object_fill_renderer(object_fill_renderer.clone());
         app.set_native_command_ingress(native_command_ingress.clone());
         app.set_fast_object_rendering(app_settings.fast_object_rendering);
         if let Some(path) = project_path.as_deref() {
@@ -1572,6 +1579,7 @@ impl RootApp {
         let mut root = Self {
             mode: Mode::Single(app),
             gpu_available: cc.gl.is_some(),
+            object_fill_renderer,
             close_dialog_open: false,
             spatial_open: None,
             platform_deep_link_rx: None,
@@ -1624,6 +1632,7 @@ impl RootApp {
         let control_runtime = Self::spawn_control_runtime(&cc.egui_ctx, &mut settings_status)?;
         let native_command_ingress =
             NativeControlIngress::actor(control_runtime.native_command_ingress());
+        let object_fill_renderer = ObjectFillGlRenderer::application_pool();
         let mut ps = ProjectSpace::default();
         if let Some(path) = project_path.as_deref() {
             if let Err(err) = ps.load_from_file(path) {
@@ -1631,6 +1640,7 @@ impl RootApp {
             }
         }
         mosaic.set_fast_object_rendering(app_settings.fast_object_rendering);
+        mosaic.set_object_fill_renderer(object_fill_renderer.clone());
         mosaic.set_native_command_ingress(native_command_ingress.clone());
         mosaic.set_layer_groups(ps.layer_groups().clone());
         let mut root = Self {
@@ -1639,6 +1649,7 @@ impl RootApp {
                 ret: ReturnToSingleState { dataset_root: None },
             },
             gpu_available: cc.gl.is_some(),
+            object_fill_renderer,
             close_dialog_open: false,
             spatial_open: None,
             platform_deep_link_rx: None,

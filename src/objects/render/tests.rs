@@ -332,16 +332,18 @@ mod object_fill_tile_tests {
                 egui::vec2(4096.0, 4096.0),
             ),
         };
-        let before_style_edit = object_fill_tile_key(7, spec);
+        let before_style_edit = object_fill_tile_key(11, 7, spec);
         let after_property_palette_domain_filter_selection_and_opacity_edits =
-            object_fill_tile_key(7, spec);
-        let after_geometry_reload = object_fill_tile_key(8, spec);
+            object_fill_tile_key(11, 7, spec);
+        let after_geometry_reload = object_fill_tile_key(11, 8, spec);
+        let different_resource = object_fill_tile_key(12, 7, spec);
 
         assert_eq!(
             before_style_edit,
             after_property_palette_domain_filter_selection_and_opacity_edits
         );
         assert_ne!(before_style_edit, after_geometry_reload);
+        assert_ne!(before_style_edit, different_resource);
     }
 
     #[test]

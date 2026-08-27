@@ -267,6 +267,8 @@ impl AppModel {
                 | "mosaic.objects.get_state"
                 | "mosaic.objects.style.get"
                 | "mosaic.objects.style.set"
+                | "mosaic.objects.property_cache.get"
+                | "mosaic.objects.property_cache.set"
                 | "mosaic.objects.selection.get"
                 | "mosaic.objects.selection.replace"
                 | "mosaic.objects.selection.clear"
@@ -569,6 +571,7 @@ impl AppModel {
                     "mosaic.focus.get" => json!({"mode":"mosaic","focused":result}),
                     "mosaic.objects.get_state"
                     | "mosaic.objects.style.get"
+                    | "mosaic.objects.property_cache.get"
                     | "mosaic.objects.selection.get" => {
                         json!({"mode":"mosaic","objects":result})
                     }
@@ -590,6 +593,7 @@ impl AppModel {
                             | "mosaic.focus.get"
                             | "mosaic.objects.get_state"
                             | "mosaic.objects.style.get"
+                            | "mosaic.objects.property_cache.get"
                             | "mosaic.objects.selection.get"
                     ),
                 }

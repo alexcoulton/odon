@@ -345,7 +345,16 @@ pub(super) fn load_mosaic_objects_on_worker(
         if spec.is_cancelled() {
             break;
         }
-        match loader.load(path.clone(), spec.downsample_factor) {
+        // A mosaic can retain many ROI resources simultaneously. Loading every
+        // GeoParquet property into every resource makes memory scale as
+        // ROI × cells × columns; wide marker tables can exhaust system RAM
+        // before the first frame. Keep geometry resident and let each
+        // ObjectsLayer materialize only the active style/filter property.
+        match loader.load_with_options(
+            path.clone(),
+            spec.downsample_factor,
+            Some(ProjectObjectPreloadSettings::default().worker_options()),
+        ) {
             Ok(resource) => loaded.push((*item_id, Arc::new(resource))),
             Err(error) => failures.push((*item_id, error.to_string())),
         }

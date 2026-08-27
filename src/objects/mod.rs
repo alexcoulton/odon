@@ -1,9 +1,9 @@
 pub(crate) mod geojson;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Context, anyhow};
 use crossbeam_channel::Receiver;
@@ -371,6 +371,8 @@ pub struct ObjectsLayer {
     pub loaded_geojson: Option<PathBuf>,
     pub downsample_factor: f32,
     control_renderer_payload_identity: Option<usize>,
+    render_resource_cache_id: u64,
+    render_style_cache_id: u64,
     display_transform: SpatialDataTransform2,
     display_mode: ObjectDisplayMode,
 
@@ -387,6 +389,9 @@ pub struct ObjectsLayer {
     color_property_keys: Vec<String>,
     property_store: ObjectPropertyStore,
     lazy_parquet_source: Option<LazyParquetSource>,
+    lazy_property_cache_capacity: Option<usize>,
+    lazy_property_lru: VecDeque<String>,
+    lazy_property_cache_evictions: u64,
     color_legend_cache: Option<ObjectColorLegendCache>,
     color_groups: Option<ObjectColorGroups>,
     color_groups_cache: HashMap<String, ObjectColorGroups>,
@@ -528,6 +533,7 @@ pub type GeoJsonObjectFeature = ObjectFeature;
 #[derive(Debug, Clone)]
 struct LoadResult {
     request_id: u64,
+    render_resource_cache_id: u64,
     path: PathBuf,
     downsample_factor: f32,
     display_transform: SpatialDataTransform2,
@@ -546,6 +552,21 @@ struct LoadResult {
     property_store: ObjectPropertyStore,
     lazy_parquet_source: Option<LazyParquetSource>,
     bounds_local: egui::Rect,
+}
+
+static NEXT_OBJECT_RENDER_RESOURCE_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBJECT_RENDER_STYLE_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_object_render_resource_cache_id() -> u64 {
+    NEXT_OBJECT_RENDER_RESOURCE_CACHE_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .max(1)
+}
+
+fn next_object_render_style_cache_id() -> u64 {
+    NEXT_OBJECT_RENDER_STYLE_CACHE_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .max(1)
 }
 
 #[derive(Debug, Clone)]

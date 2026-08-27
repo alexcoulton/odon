@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::render::polygon_fill_gl::ObjectFillGlRenderer;
 use crate::spatialdata::{SpatialDataElement, SpatialDataTransform2};
 
 mod points;
@@ -14,13 +15,27 @@ pub(crate) use shapes::{PreparedSpatialShape, prepare_spatial_shape_data};
 // into the viewer's native overlay types. The rest of the app should not need to
 // care whether a shape/point layer came from SpatialData or from another source.
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SpatialDataLayers {
     pub root: Option<PathBuf>,
     pub tables: Vec<SpatialDataElement>,
     pub shapes: Vec<SpatialShapesLayer>,
     pub points: Option<SpatialPointsLayer>,
     next_shape_layer_id: u64,
+    object_fill_renderer: ObjectFillGlRenderer,
+}
+
+impl Default for SpatialDataLayers {
+    fn default() -> Self {
+        Self {
+            root: None,
+            tables: Vec::new(),
+            shapes: Vec::new(),
+            points: None,
+            next_shape_layer_id: 0,
+            object_fill_renderer: ObjectFillGlRenderer::application_pool(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +46,15 @@ pub enum PositiveCellSelectionTarget {
 }
 
 impl SpatialDataLayers {
+    pub(crate) fn set_object_fill_renderer(&mut self, renderer: ObjectFillGlRenderer) {
+        self.object_fill_renderer = renderer.clone();
+        for shape in &mut self.shapes {
+            if let Some(objects) = shape.object_layer_mut() {
+                objects.set_object_fill_renderer(renderer.clone());
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.root = None;
         self.tables.clear();
@@ -59,6 +83,7 @@ impl SpatialDataLayers {
             .into_iter()
             .map(SpatialShapesLayer::from_prepared)
             .collect();
+        self.set_object_fill_renderer(self.object_fill_renderer.clone());
     }
 
     pub fn load_external_shapes(
@@ -71,14 +96,18 @@ impl SpatialDataLayers {
     ) -> u64 {
         let id = self.next_shape_layer_id.max(1);
         self.next_shape_layer_id = id.wrapping_add(1).max(1);
-        self.shapes.push(SpatialShapesLayer::new(
+        let mut shape = SpatialShapesLayer::new(
             id,
             Some(external_id),
             Some(external_resource_id),
             name,
             parquet_path,
             transform,
-        ));
+        );
+        if let Some(objects) = shape.object_layer_mut() {
+            objects.set_object_fill_renderer(self.object_fill_renderer.clone());
+        }
+        self.shapes.push(shape);
         id
     }
 

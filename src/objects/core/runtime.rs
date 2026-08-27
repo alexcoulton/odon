@@ -3,6 +3,10 @@
 use super::*;
 
 impl ObjectsLayer {
+    pub(crate) fn set_object_fill_renderer(&mut self, renderer: ObjectFillGlRenderer) {
+        self.gl_object_fill = renderer;
+    }
+
     pub(super) fn cancel_current_load(&mut self) {
         if let Some(cancel) = self.object_load_cancel.take() {
             cancel.store(true, Ordering::Relaxed);
@@ -266,6 +270,7 @@ impl ObjectsLayer {
             _ => true,
         };
         self.control_renderer_payload_identity = None;
+        self.render_resource_cache_id = msg.render_resource_cache_id;
         self.property_load_rx = None;
         self.property_load_key = None;
         self.display_transform = msg.display_transform;
@@ -284,6 +289,8 @@ impl ObjectsLayer {
         self.color_property_keys = msg.color_property_keys;
         self.lazy_parquet_source = msg.lazy_parquet_source;
         self.property_store = msg.property_store;
+        self.lazy_property_lru.clear();
+        self.lazy_property_cache_evictions = 0;
         self.color_legend_cache = None;
         self.continuous_color_payload = None;
         self.color_groups_cache.clear();
@@ -381,7 +388,6 @@ impl ObjectsLayer {
         self.visible = true;
         if geometry_changed {
             self.geometry_generation = self.geometry_generation.wrapping_add(1).max(1);
-            self.gl_object_fill.clear_id_tiles();
         }
         self.generation = self.generation.wrapping_add(1).max(1);
         let n = self.object_count();
@@ -463,7 +469,6 @@ impl ObjectsLayer {
         self.analysis_warm_started = false;
         self.analysis_selection_rx = None;
         self.geometry_generation = self.geometry_generation.wrapping_add(1).max(1);
-        self.gl_object_fill.clear_id_tiles();
         self.generation = self.generation.wrapping_add(1).max(1);
         self.status.clear();
     }

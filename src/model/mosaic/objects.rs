@@ -4,6 +4,58 @@ use super::*;
 use crate::model::ObjectColorMapping;
 
 impl MosaicModel {
+    pub(super) fn object_property_cache_snapshot(&self) -> Value {
+        json!({
+            "policy": if self.object_property_cache_capacity.is_some() { "lru" } else { "unbounded" },
+            "capacity": self.object_property_cache_capacity,
+        })
+    }
+
+    pub(super) fn object_property_cache_get(&self) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        Ok(self.object_property_cache_snapshot())
+    }
+
+    pub(super) fn set_object_property_cache(
+        &mut self,
+        params: &Value,
+    ) -> Result<Value, ControlError> {
+        self.require_resource()?;
+        let policy = params
+            .get("policy")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("property cache policy is required"))?;
+        let capacity = match policy {
+            "unbounded" => {
+                if params.get("capacity").is_some_and(|value| !value.is_null()) {
+                    return Err(invalid(
+                        "capacity must be omitted or null for an unbounded property cache",
+                    ));
+                }
+                None
+            }
+            "lru" => Some(
+                params
+                    .get("capacity")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| invalid("LRU property cache capacity must be at least 1"))?,
+            ),
+            _ => {
+                return Err(invalid(
+                    "property cache policy must be 'lru' or 'unbounded'",
+                ));
+            }
+        };
+        let changed = self.object_property_cache_capacity != capacity;
+        self.object_property_cache_capacity = capacity;
+        Ok(json!({
+            "changed": changed,
+            "cache": self.object_property_cache_snapshot(),
+        }))
+    }
+
     pub(super) fn object_style_snapshot(&self) -> Result<Value, ControlError> {
         self.require_resource()?;
         Ok(json!({"style":self.object_style}))
@@ -401,6 +453,8 @@ impl MosaicModel {
             .collect::<Vec<_>>();
         json!({
             "generation":self.object_operation_generation,
+            "property_loading":"lazy_on_demand",
+            "property_cache":self.object_property_cache_snapshot(),
             "requested_count":self.object_pending_ids.len(),
             "requested_loading":self.object_pending_ids.len(),
             "settled":self.object_pending_ids.is_empty(),

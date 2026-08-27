@@ -197,6 +197,31 @@ class MosaicResourceTests(unittest.TestCase):
             params["style"]["color_mapping"]["domain"], [2000.0, 42000.0]
         )
 
+    def test_mosaic_object_property_cache_wrappers(self) -> None:
+        client = RecordingClient()
+        mosaic = Mosaic(client)  # type: ignore[arg-type]
+
+        mosaic.get_object_property_cache()
+        mosaic.set_object_property_cache(capacity=2, if_revision=7)
+        mosaic.set_object_property_cache(policy="unbounded")
+
+        self.assertEqual(
+            client.calls[0], ("mosaic.objects.property_cache.get", {})
+        )
+        self.assertEqual(
+            client.calls[1],
+            (
+                "mosaic.objects.property_cache.set",
+                {"policy": "lru", "capacity": 2, "if_revision": 7},
+            ),
+        )
+        self.assertEqual(
+            client.calls[2],
+            ("mosaic.objects.property_cache.set", {"policy": "unbounded"}),
+        )
+        with self.assertRaises(ValueError):
+            mosaic.set_object_property_cache(capacity=0)
+
 
 class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_mosaic_focus_wrappers(self) -> None:
@@ -268,6 +293,26 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             client.calls[2],
             ("mosaic.rendering.set", {"show_tile_debug": False}),
+        )
+
+    async def test_async_mosaic_object_property_cache_wrappers(self) -> None:
+        client = AsyncRecordingClient()
+        mosaic = AsyncMosaic(client)  # type: ignore[arg-type]
+
+        await mosaic.get_object_property_cache()
+        await mosaic.set_object_property_cache(capacity=3)
+        await mosaic.set_object_property_cache(policy="unbounded")
+
+        self.assertEqual(
+            client.calls,
+            [
+                ("mosaic.objects.property_cache.get", {}),
+                (
+                    "mosaic.objects.property_cache.set",
+                    {"policy": "lru", "capacity": 3},
+                ),
+                ("mosaic.objects.property_cache.set", {"policy": "unbounded"}),
+            ],
         )
 
 

@@ -347,6 +347,18 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
     let objects = call(&channels, "mosaic.objects.get_state", json!({}));
     assert_eq!(objects["objects"]["loaded_count"], 2);
     assert_eq!(objects["objects"]["settled"], true);
+    assert_eq!(objects["objects"]["property_loading"], "lazy_on_demand");
+    assert_eq!(objects["objects"]["property_cache"]["policy"], "unbounded");
+    let property_cache = call(
+        &channels,
+        "mosaic.objects.property_cache.set",
+        json!({"policy":"lru","capacity":2}),
+    );
+    assert_eq!(property_cache["result"]["cache"]["capacity"], 2);
+    assert_eq!(
+        call(&channels, "mosaic.objects.property_cache.get", json!({}))["objects"]["policy"],
+        "lru"
+    );
     let explicit = call(
         &channels,
         "mosaic.objects.load",

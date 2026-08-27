@@ -208,3 +208,27 @@ fn filtered_mask_contains_uses_dense_membership() {
     layer.filtered_mask = None;
     assert!(layer.filtered_mask_contains(4));
 }
+
+#[test]
+fn object_layers_can_share_one_gpu_pool_without_sharing_resource_keys() {
+    let pool = ObjectFillGlRenderer::application_pool();
+    let mut first = ObjectsLayer::default();
+    let mut second = ObjectsLayer::default();
+
+    assert_ne!(
+        first.render_resource_cache_id,
+        second.render_resource_cache_id
+    );
+    assert_ne!(first.render_style_cache_id, second.render_style_cache_id);
+
+    first.set_object_fill_renderer(pool.clone());
+    second.set_object_fill_renderer(pool.clone());
+
+    assert!(first.gl_object_fill.shares_pool_with(&pool));
+    assert!(second.gl_object_fill.shares_pool_with(&pool));
+    assert!(
+        first
+            .gl_object_fill
+            .shares_pool_with(&second.gl_object_fill)
+    );
+}

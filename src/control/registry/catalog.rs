@@ -2762,6 +2762,26 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "mosaic.objects.property_cache.get",
+            "Get the mosaic lazy object-property retention policy.",
+            "viewer.objects.read",
+            false,
+            false,
+            None,
+            MOSAIC_MODE,
+            Empty
+        ),
+        method!(
+            "mosaic.objects.property_cache.set",
+            "Set a bounded LRU or unbounded mosaic lazy object-property retention policy.",
+            "viewer.objects.write",
+            true,
+            false,
+            Some("mosaic.objects.changed"),
+            MOSAIC_MODE,
+            Object
+        ),
+        method!(
             "mosaic.objects.selection.get",
             "Get actor-owned per-ROI mosaic object selections.",
             "viewer.objects.read",

@@ -3,8 +3,8 @@
 use super::*;
 
 const OBJECT_FILL_ID_TILE_SIZE_PX: i32 = 512;
-const MAX_ID_TILES_COMPLETED_PER_PAINT: usize = 2;
-const MAX_ID_TILE_VERTICES_PER_PAINT: usize = 300_000;
+const MAX_ID_TILES_COMPLETED_PER_FRAME: usize = 2;
+const MAX_ID_TILE_VERTICES_PER_FRAME: usize = 300_000;
 pub(super) const MAX_PENDING_ID_TILES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +33,7 @@ pub struct ObjectFillTileDrawItem {
 
 #[derive(Debug, Clone)]
 pub struct ObjectFillTileStyle {
+    pub style_cache_id: u64,
     pub state_cache_id: u64,
     pub object_count: usize,
     pub state_generation: u64,
@@ -57,6 +58,7 @@ pub struct ObjectFillTileSelectionStyle {
 
 #[derive(Debug, Clone)]
 pub struct ObjectFillTileGlParams {
+    pub frame_generation: u64,
     pub center_world: egui::Pos2,
     pub zoom_screen_per_world: f32,
     pub visible: bool,
@@ -188,20 +190,6 @@ impl ObjectFillTileGlObjects {
 }
 
 impl ObjectFillGlRenderer {
-    pub fn clear_id_tiles(&self) {
-        let mut inner = self.inner.lock();
-        while let Some((_key, tile)) = inner.id_tiles.pop_lru() {
-            inner.textures_to_delete.push(tile.texture);
-        }
-        while let Some((_key, tile)) = inner.pending_id_tiles.pop_lru() {
-            inner.textures_to_delete.push(tile.texture);
-            inner.tile_discarded = inner.tile_discarded.saturating_add(1);
-        }
-        inner.tile_bytes = 0;
-        inner.tile_pending_bytes = 0;
-        inner.tile_pending = 0;
-    }
-
     pub fn id_tiles_have_coverage(&self, keys: &[ObjectFillTileKey]) -> bool {
         let inner = self.inner.lock();
         inner.tile_gl_objects.is_some()
@@ -247,11 +235,8 @@ impl ObjectFillGlRenderer {
         };
         result.supported = true;
         inner.delete_queued(gl);
-        inner.tile_request_generation = inner.tile_request_generation.wrapping_add(1).max(1);
-        inner.tile_visible = draw_items.len();
-        inner.last_tile_raster_draw_calls = 0;
-        inner.last_tile_compose_draw_calls = 0;
-        inner.last_tile_selection_compose_draw_calls = 0;
+        inner.begin_tile_frame(params.frame_generation);
+        inner.tile_visible = inner.tile_visible.saturating_add(draw_items.len());
         inner.tile_requests = inner
             .tile_requests
             .saturating_add(request_items.len() as u64);
@@ -275,30 +260,36 @@ impl ObjectFillGlRenderer {
                 inner.tile_hits = inner.tile_hits.saturating_add(1);
                 continue;
             }
-            if generated >= MAX_ID_TILES_COMPLETED_PER_PAINT
-                || raster_vertices >= MAX_ID_TILE_VERTICES_PER_PAINT
+            if inner.tile_frame_generated >= MAX_ID_TILES_COMPLETED_PER_FRAME
+                || inner.tile_frame_raster_vertices >= MAX_ID_TILE_VERTICES_PER_FRAME
             {
                 break;
             }
-            let remaining = MAX_ID_TILE_VERTICES_PER_PAINT.saturating_sub(raster_vertices);
+            let remaining =
+                MAX_ID_TILE_VERTICES_PER_FRAME.saturating_sub(inner.tile_frame_raster_vertices);
             let Some((tile, consumed)) = inner.advance_id_tile(gl, &tile_gl, item, remaining)
             else {
                 continue;
             };
             raster_vertices = raster_vertices.saturating_add(consumed);
+            inner.tile_frame_raster_vertices =
+                inner.tile_frame_raster_vertices.saturating_add(consumed);
             if let Some(tile) = tile {
                 inner.insert_id_tile(item.key, tile);
                 generated += 1;
+                inner.tile_frame_generated = inner.tile_frame_generated.saturating_add(1);
             }
         }
         result.generated = generated;
         result.raster_vertices = raster_vertices;
         result.discarded = inner.tile_discarded.saturating_sub(discarded_before) as usize;
-        inner.last_tile_raster_vertices = raster_vertices as u64;
+        inner.last_tile_raster_vertices = inner
+            .last_tile_raster_vertices
+            .saturating_add(raster_vertices as u64);
         inner.total_tile_raster_vertices = inner
             .total_tile_raster_vertices
             .saturating_add(raster_vertices as u64);
-        inner.last_tile_raster_ms = raster_started.elapsed().as_secs_f64() * 1_000.0;
+        inner.last_tile_raster_ms += raster_started.elapsed().as_secs_f64() * 1_000.0;
         inner.tile_peak_pending = inner.tile_peak_pending.max(inner.pending_id_tiles.len());
 
         unsafe {
@@ -317,13 +308,13 @@ impl ObjectFillGlRenderer {
             .filter(|item| inner.id_tiles.contains(&item.key))
             .count();
         result.pending = result.requested.saturating_sub(result.ready);
-        inner.tile_pending = result.pending;
+        inner.tile_pending = inner.pending_id_tiles.len();
 
         let compose_started = Instant::now();
         if compose {
             inner.compose_id_tiles(gl, &tile_gl, &info, draw_items, styles, params);
         }
-        inner.last_tile_compose_ms = compose_started.elapsed().as_secs_f64() * 1_000.0;
+        inner.last_tile_compose_ms += compose_started.elapsed().as_secs_f64() * 1_000.0;
 
         unsafe {
             let gl_ref = gl.as_ref();
@@ -345,6 +336,23 @@ impl ObjectFillGlRenderer {
 }
 
 impl ObjectFillInner {
+    fn begin_tile_frame(&mut self, frame_generation: u64) {
+        if self.tile_frame_generation == frame_generation {
+            return;
+        }
+        self.tile_frame_generation = frame_generation;
+        self.tile_frame_generated = 0;
+        self.tile_frame_raster_vertices = 0;
+        self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
+        self.tile_visible = 0;
+        self.last_tile_raster_vertices = 0;
+        self.last_tile_raster_draw_calls = 0;
+        self.last_tile_compose_draw_calls = 0;
+        self.last_tile_selection_compose_draw_calls = 0;
+        self.last_tile_raster_ms = 0.0;
+        self.last_tile_compose_ms = 0.0;
+    }
+
     fn id_tile_has_coverage(&self, key: ObjectFillTileKey) -> bool {
         if self.id_tiles.contains(&key) {
             return true;
@@ -443,6 +451,7 @@ impl ObjectFillInner {
             let Some((vbo, count)) = self
                 .ensure_object_mesh_uploaded(
                     gl,
+                    item.key.resource_cache_id,
                     geometry.cache_id,
                     geometry.generation,
                     geometry.vertices_local.as_slice(),
@@ -678,6 +687,7 @@ impl ObjectFillInner {
             let Some((state_texture, state_width, state_height)) = self
                 .ensure_state_uploaded(
                     gl,
+                    style.style_cache_id,
                     style.state_cache_id,
                     style.state_generation,
                     style.object_count,
@@ -690,6 +700,7 @@ impl ObjectFillInner {
             let color_texture = style.object_colors_rgba.as_ref().and_then(|colors| {
                 self.ensure_color_uploaded(
                     gl,
+                    style.style_cache_id,
                     style.color_cache_id,
                     style.color_generation,
                     style.object_count,
@@ -700,6 +711,7 @@ impl ObjectFillInner {
             let selection_texture = style.selection_overlay.as_ref().and_then(|selection| {
                 self.ensure_state_uploaded(
                     gl,
+                    style.style_cache_id,
                     selection.state_cache_id,
                     selection.state_generation,
                     style.object_count,
@@ -1021,6 +1033,27 @@ mod tests {
         };
         let same_geometry = ObjectFillTileKey { ..key };
         assert_eq!(key, same_geometry);
+    }
+
+    #[test]
+    fn shared_tile_work_budget_resets_once_per_ui_frame() {
+        let renderer = ObjectFillGlRenderer::new(4, 4);
+        let mut inner = renderer.inner.lock();
+
+        inner.begin_tile_frame(41);
+        inner.tile_frame_generated = MAX_ID_TILES_COMPLETED_PER_FRAME;
+        inner.tile_frame_raster_vertices = MAX_ID_TILE_VERTICES_PER_FRAME;
+        inner.begin_tile_frame(41);
+
+        assert_eq!(inner.tile_frame_generated, MAX_ID_TILES_COMPLETED_PER_FRAME);
+        assert_eq!(
+            inner.tile_frame_raster_vertices,
+            MAX_ID_TILE_VERTICES_PER_FRAME
+        );
+
+        inner.begin_tile_frame(42);
+        assert_eq!(inner.tile_frame_generated, 0);
+        assert_eq!(inner.tile_frame_raster_vertices, 0);
     }
 
     #[test]

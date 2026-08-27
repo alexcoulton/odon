@@ -1,6 +1,14 @@
 use super::*;
 
 impl OmeZarrViewerApp {
+    pub(crate) fn set_object_fill_renderer(
+        &mut self,
+        renderer: crate::render::polygon_fill_gl::ObjectFillGlRenderer,
+    ) {
+        self.seg_objects.set_object_fill_renderer(renderer.clone());
+        self.spatial_layers.set_object_fill_renderer(renderer);
+    }
+
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         dataset: OmeZarrDataset,

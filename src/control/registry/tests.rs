@@ -266,6 +266,12 @@ fn multi_viewport_registry_contracts_expose_ids_revisions_events_and_modes() {
             ["out_of_range"]["enum"][1],
         "hide"
     );
+    let property_cache = request_schema_for(method("mosaic.objects.property_cache.set").unwrap());
+    assert_eq!(
+        property_cache["properties"]["policy"]["enum"],
+        json!(["lru", "unbounded"])
+    );
+    assert_eq!(property_cache["properties"]["capacity"]["minimum"], 1);
 
     let links = request_schema_for(method("viewer.viewport_links.create").unwrap());
     assert_eq!(links["required"], json!(["viewports", "fields"]));

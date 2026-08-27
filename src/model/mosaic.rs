@@ -240,6 +240,7 @@ pub(crate) struct MosaicModel {
     objects_visible: bool,
     fast_object_rendering: bool,
     object_style: Value,
+    object_property_cache_capacity: Option<usize>,
     object_selections: HashMap<usize, ObjectSelectionModel>,
     object_resources: BTreeMap<usize, Arc<super::ControlObjectResource>>,
     object_operation_generation: u64,
@@ -295,6 +296,7 @@ impl Default for MosaicModel {
             objects_visible: false,
             fast_object_rendering: true,
             object_style: default_mosaic_object_style(),
+            object_property_cache_capacity: None,
             object_selections: HashMap::new(),
             object_resources: BTreeMap::new(),
             object_operation_generation: 0,
@@ -472,6 +474,7 @@ impl MosaicModel {
         self.objects_visible = false;
         self.fast_object_rendering = true;
         self.object_style = default_mosaic_object_style();
+        self.object_property_cache_capacity = None;
         self.object_selections.clear();
         self.object_resources.clear();
         self.object_failures.clear();
@@ -738,6 +741,7 @@ impl MosaicModel {
             "objects_visible":self.objects_visible,
             "fast_object_rendering":self.fast_object_rendering,
             "object_style":self.object_style,
+            "object_property_cache":self.object_property_cache_snapshot(),
             "object_selections":self.object_selection_projection(),
             "channels":self.channels.iter().map(|channel| json!({
                 "index":channel.index,
@@ -781,6 +785,8 @@ impl MosaicModel {
             "mosaic.objects.get_state" => self.require_resource().map(|_| self.object_state()),
             "mosaic.objects.style.get" => self.object_style_snapshot(),
             "mosaic.objects.style.set" => self.set_object_style(params),
+            "mosaic.objects.property_cache.get" => self.object_property_cache_get(),
+            "mosaic.objects.property_cache.set" => self.set_object_property_cache(params),
             "mosaic.objects.selection.get" => self.object_selection_snapshot(params),
             "mosaic.objects.selection.replace" => self.replace_object_selection(params),
             "mosaic.objects.selection.clear" => self.clear_object_selections(params),

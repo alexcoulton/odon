@@ -348,6 +348,32 @@ impl MosaicViewerApp {
         if let Some(style) = state.get("object_style") {
             self.seg_geojson.apply_control_style(style)?;
         }
+        if let Some(cache) = state.get("object_property_cache") {
+            let capacity = match cache
+                .get("policy")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unbounded")
+            {
+                "unbounded" => None,
+                "lru" => Some(
+                    cache
+                        .get("capacity")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| {
+                            "actor mosaic LRU property cache requires a positive capacity"
+                                .to_string()
+                        })?,
+                ),
+                policy => {
+                    return Err(format!(
+                        "invalid actor mosaic object property cache policy '{policy}'"
+                    ));
+                }
+            };
+            self.seg_geojson.set_property_cache_capacity(capacity);
+        }
         if let Some(channels) = state.get("channels").and_then(serde_json::Value::as_array) {
             for projected in channels {
                 let Some(index) = projected

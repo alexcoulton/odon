@@ -304,6 +304,8 @@ pub struct ObjectFillGlDrawParams {
 
 #[derive(Debug, Clone)]
 pub struct ObjectFillGlDrawData {
+    pub resource_cache_id: u64,
+    pub style_cache_id: u64,
     pub cache_id: u64,
     pub state_cache_id: u64,
     pub generation: u64,
@@ -327,7 +329,7 @@ const DEFAULT_OBJECT_FILL_MESH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_OBJECT_FILL_TEXTURE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_OBJECT_FILL_TILE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub struct ObjectFillGlStats {
     pub mesh_entries: usize,
     pub state_entries: usize,
@@ -348,6 +350,9 @@ pub struct ObjectFillGlStats {
     pub texture_evictions: u64,
     pub tile_requests: u64,
     pub tile_request_generation: u64,
+    pub tile_frame_generation: u64,
+    pub tile_frame_generated: usize,
+    pub tile_frame_raster_vertices: usize,
     pub tile_visible: usize,
     pub tile_hits: u64,
     pub tile_generations: u64,
@@ -425,6 +430,17 @@ impl std::fmt::Debug for ObjectFillGlRenderer {
 }
 
 impl ObjectFillGlRenderer {
+    /// Create the application-wide object-fill pool. Entry counts are deliberately roomy; the
+    /// byte budgets remain the hard aggregate limit across every object layer using the pool.
+    pub fn application_pool() -> Self {
+        Self::new(4096, 4096)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_pool_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub fn new(max_meshes: usize, max_state_textures: usize) -> Self {
         Self::with_byte_budgets(
             max_meshes,
@@ -570,6 +586,7 @@ impl ObjectFillGlRenderer {
             let Some((mesh_vbo, mesh_count)) = inner
                 .ensure_object_mesh_uploaded(
                     gl,
+                    item.data.resource_cache_id,
                     item.data.cache_id,
                     item.data.generation,
                     item.data.vertices_local.as_slice(),
@@ -581,6 +598,7 @@ impl ObjectFillGlRenderer {
             let Some((state_texture, state_width, state_height)) = inner
                 .ensure_state_uploaded(
                     gl,
+                    item.data.style_cache_id,
                     item.data.state_cache_id,
                     item.data.selection_generation,
                     item.data.object_count,
@@ -608,6 +626,7 @@ impl ObjectFillGlRenderer {
                 inner
                     .ensure_color_uploaded(
                         gl,
+                        item.data.style_cache_id,
                         item.data.color_cache_id,
                         item.data.color_generation,
                         item.data.object_count,
@@ -722,9 +741,9 @@ struct ObjectFillColorGpu {
 
 struct ObjectFillInner {
     gl_objects: Option<ObjectFillGlObjects>,
-    meshes: LruCache<(u64, u64), ObjectFillMeshGpu>,
-    states: LruCache<u64, ObjectFillStateGpu>,
-    colors: LruCache<u64, ObjectFillColorGpu>,
+    meshes: LruCache<(u64, u64, u64), ObjectFillMeshGpu>,
+    states: LruCache<(u64, u64), ObjectFillStateGpu>,
+    colors: LruCache<(u64, u64), ObjectFillColorGpu>,
     id_tiles: LruCache<tiles::ObjectFillTileKey, tiles::ObjectFillIdTileGpu>,
     pending_id_tiles: LruCache<tiles::ObjectFillTileKey, tiles::ObjectFillPendingIdTileGpu>,
     tile_gl_objects: Option<tiles::ObjectFillTileGlObjects>,
@@ -746,6 +765,9 @@ struct ObjectFillInner {
     texture_evictions: u64,
     tile_requests: u64,
     tile_request_generation: u64,
+    tile_frame_generation: u64,
+    tile_frame_generated: usize,
+    tile_frame_raster_vertices: usize,
     tile_visible: usize,
     tile_hits: u64,
     tile_generations: u64,
@@ -803,6 +825,9 @@ impl ObjectFillInner {
             texture_evictions: 0,
             tile_requests: 0,
             tile_request_generation: 0,
+            tile_frame_generation: u64::MAX,
+            tile_frame_generated: 0,
+            tile_frame_raster_vertices: 0,
             tile_visible: 0,
             tile_hits: 0,
             tile_generations: 0,
@@ -846,6 +871,9 @@ impl ObjectFillInner {
             texture_evictions: self.texture_evictions,
             tile_requests: self.tile_requests,
             tile_request_generation: self.tile_request_generation,
+            tile_frame_generation: self.tile_frame_generation,
+            tile_frame_generated: self.tile_frame_generated,
+            tile_frame_raster_vertices: self.tile_frame_raster_vertices,
             tile_visible: self.tile_visible,
             tile_hits: self.tile_hits,
             tile_generations: self.tile_generations,
@@ -922,11 +950,12 @@ impl ObjectFillInner {
     fn ensure_object_mesh_uploaded(
         &mut self,
         gl: &Arc<glow::Context>,
+        resource_cache_id: u64,
         cache_id: u64,
         generation: u64,
         vertices_local: &[[f32; 3]],
     ) -> Option<&ObjectFillMeshGpu> {
-        let key = (cache_id, generation);
+        let key = (resource_cache_id, cache_id, generation);
         if self.meshes.contains(&key) {
             return self.meshes.get(&key);
         }
@@ -974,6 +1003,7 @@ impl ObjectFillInner {
     fn ensure_state_uploaded(
         &mut self,
         gl: &Arc<glow::Context>,
+        resource_cache_id: u64,
         cache_id: u64,
         generation: u64,
         object_count: usize,
@@ -983,9 +1013,10 @@ impl ObjectFillInner {
         let width = padded_len.min(4096) as i32;
         let height = ((padded_len + width as usize - 1) / width as usize).max(1) as i32;
 
-        let state = self.states.get(&cache_id);
+        let key = (resource_cache_id, cache_id);
+        let state = self.states.get(&key);
         if state.is_some_and(|state| state.generation == generation) {
-            return self.states.get(&cache_id);
+            return self.states.get(&key);
         }
 
         let texels_len = (width as usize).saturating_mul(height as usize);
@@ -997,7 +1028,7 @@ impl ObjectFillInner {
         let copy_len = selection_state.len().min(object_count).min(texels.len());
         texels[..copy_len].copy_from_slice(&selection_state[..copy_len]);
 
-        let texture = if let Some(existing) = self.states.get(&cache_id) {
+        let texture = if let Some(existing) = self.states.get(&key) {
             existing.texture
         } else {
             unsafe { gl.as_ref().create_texture().map_err(|_| ()).ok()? }
@@ -1042,7 +1073,7 @@ impl ObjectFillInner {
         }
 
         if let Some((_k, evicted)) = self.states.push(
-            cache_id,
+            key,
             ObjectFillStateGpu {
                 texture,
                 width,
@@ -1063,12 +1094,13 @@ impl ObjectFillInner {
         self.evict_textures_to_budget();
 
         self.delete_queued(gl);
-        self.states.get(&cache_id)
+        self.states.get(&key)
     }
 
     fn ensure_color_uploaded(
         &mut self,
         gl: &Arc<glow::Context>,
+        resource_cache_id: u64,
         cache_id: u64,
         generation: u64,
         object_count: usize,
@@ -1077,12 +1109,13 @@ impl ObjectFillInner {
         let padded_len = object_count.max(1);
         let width = padded_len.min(4096) as i32;
         let height = ((padded_len + width as usize - 1) / width as usize).max(1) as i32;
+        let key = (resource_cache_id, cache_id);
         if self
             .colors
-            .get(&cache_id)
+            .get(&key)
             .is_some_and(|color| color.generation == generation)
         {
-            return self.colors.get(&cache_id);
+            return self.colors.get(&key);
         }
         let mut texels = vec![0u8; width as usize * height as usize * 4];
         let bytes = texels.len();
@@ -1091,7 +1124,7 @@ impl ObjectFillInner {
         }
         let copy_len = colors_rgba.len().min(object_count);
         texels[..copy_len * 4].copy_from_slice(bytemuck::cast_slice(&colors_rgba[..copy_len]));
-        let texture = if let Some(existing) = self.colors.get(&cache_id) {
+        let texture = if let Some(existing) = self.colors.get(&key) {
             existing.texture
         } else {
             unsafe { gl.as_ref().create_texture().map_err(|_| ()).ok()? }
@@ -1136,7 +1169,7 @@ impl ObjectFillInner {
             gl.active_texture(glow::TEXTURE0);
         }
         if let Some((_key, evicted)) = self.colors.push(
-            cache_id,
+            key,
             ObjectFillColorGpu {
                 texture,
                 width,
@@ -1155,7 +1188,7 @@ impl ObjectFillInner {
         self.color_uploads = self.color_uploads.saturating_add(1);
         self.evict_textures_to_budget();
         self.delete_queued(gl);
-        self.colors.get(&cache_id)
+        self.colors.get(&key)
     }
 }
 

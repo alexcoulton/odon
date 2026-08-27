@@ -3409,6 +3409,35 @@ class Mosaic:
     def set_object_style(self, **style: Any) -> Any:
         return self._client.call("mosaic.objects.style.set", {"style": style})
 
+    def get_object_property_cache(self) -> Any:
+        """Get the lazy mosaic object-property retention policy."""
+        return self._client.call("mosaic.objects.property_cache.get")
+
+    def set_object_property_cache(
+        self,
+        *,
+        policy: str = "lru",
+        capacity: int | None = 2,
+        if_revision: int | None = None,
+    ) -> Any:
+        """Bound lazily loaded mosaic properties without unloading object geometry.
+
+        ``capacity`` is counted per ROI. Active styling, filter, and Analysis
+        threshold properties remain pinned even when that temporarily exceeds the limit.
+        """
+        if policy not in {"lru", "unbounded"}:
+            raise ValueError("policy must be 'lru' or 'unbounded'")
+        if policy == "lru" and (capacity is None or capacity < 1):
+            raise ValueError("LRU property cache capacity must be at least 1")
+        if policy == "unbounded":
+            capacity = None
+        return self._client.call(
+            "mosaic.objects.property_cache.set",
+            _with_revision(
+                _compact({"policy": policy, "capacity": capacity}), if_revision
+            ),
+        )
+
     def color_objects_by_continuous(
         self,
         property: str,

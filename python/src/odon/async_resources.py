@@ -3352,6 +3352,31 @@ class AsyncMosaic:
     async def set_object_style(self, **style: Any) -> Any:
         return await self._client.call("mosaic.objects.style.set", {"style": style})
 
+    async def get_object_property_cache(self) -> Any:
+        """Get the lazy mosaic object-property retention policy."""
+        return await self._client.call("mosaic.objects.property_cache.get")
+
+    async def set_object_property_cache(
+        self,
+        *,
+        policy: str = "lru",
+        capacity: int | None = 2,
+        if_revision: int | None = None,
+    ) -> Any:
+        """Bound lazily loaded mosaic properties without unloading object geometry."""
+        if policy not in {"lru", "unbounded"}:
+            raise ValueError("policy must be 'lru' or 'unbounded'")
+        if policy == "lru" and (capacity is None or capacity < 1):
+            raise ValueError("LRU property cache capacity must be at least 1")
+        if policy == "unbounded":
+            capacity = None
+        return await self._client.call(
+            "mosaic.objects.property_cache.set",
+            _with_revision(
+                _compact({"policy": policy, "capacity": capacity}), if_revision
+            ),
+        )
+
     async def color_objects_by_continuous(
         self,
         property: str,

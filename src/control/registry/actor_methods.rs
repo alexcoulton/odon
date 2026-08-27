@@ -321,6 +321,8 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "mosaic.objects.get_state",
     "mosaic.objects.style.get",
     "mosaic.objects.style.set",
+    "mosaic.objects.property_cache.get",
+    "mosaic.objects.property_cache.set",
     "mosaic.objects.selection.get",
     "mosaic.objects.selection.replace",
     "mosaic.objects.selection.clear",
