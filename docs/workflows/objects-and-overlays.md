@@ -114,8 +114,21 @@ For `Segmentation Objects`, common controls include:
 
 `Use proxy points at low zoom` is the per-layer version of **Settings → Rendering → Low-zoom
 geometry**. Choose `Always polygons` in application settings to prevent both outlined and filled
-polygon objects from switching to centroid points when zoomed out. This can reduce rendering
-performance for very large object layers.
+polygon objects from switching to centroid points when zoomed out.
+
+Large filled segmentations use a hybrid renderer. At overview and medium zoom, Odon lazily builds
+world-aligned object-ID tiles and colours them through the current per-object style. At close zoom,
+it switches to spatially culled vector polygons for crisp boundaries. A coarser resident tile may
+appear briefly while the exact visible level refines. Marker/property, palette, domain, filter,
+category visibility, and opacity changes update the colour lookup without rebuilding geometry
+tiles. Proxy points are therefore a display preference rather than the only safeguard for large
+layers.
+
+The ID-tile cache and unfinished work have strict GPU byte and work limits. If integer render
+targets are unavailable, Odon reports the degraded mode in performance diagnostics and retains
+only the bounded vector fallback; it never submits an unculled large segmentation merely because
+proxy points are disabled. Nearest-ID overview pixels show a deterministic representative cell,
+not an aggregate statistic such as population density or mean marker value.
 
 Use `Color by` to colour objects by a categorical property such as cell type,
 cluster, phenotype, or call state. If the object file uses lazy property loading,

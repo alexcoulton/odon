@@ -39,6 +39,52 @@ impl ObjectFillMesh {
     ) -> (usize, usize, usize, usize) {
         rect_bins(rect, self.origin, self.bin_size, self.bins_w, self.bins_h)
     }
+
+    pub(in crate::objects) fn bin_local_rect(&self, bin_x: usize, bin_y: usize) -> egui::Rect {
+        let min = egui::pos2(
+            self.origin.x + bin_x as f32 * self.bin_size,
+            self.origin.y + bin_y as f32 * self.bin_size,
+        );
+        egui::Rect::from_min_size(min, egui::vec2(self.bin_size, self.bin_size))
+            .intersect(self.bounds_local)
+    }
+
+    pub(in crate::objects) fn spatial_slices_for_local_rect(
+        &self,
+        rect: egui::Rect,
+    ) -> Vec<ObjectFillSpatialSlice> {
+        if !rect.is_positive() || !self.bounds_local.intersects(rect) {
+            return Vec::new();
+        }
+        let visible = rect.intersect(self.bounds_local);
+        let (bx0, by0, bx1, by1) = self.bin_range_for_local_rect(visible);
+        let mut slices = Vec::with_capacity(
+            bx1.saturating_sub(bx0)
+                .saturating_add(1)
+                .saturating_mul(by1.saturating_sub(by0).saturating_add(1)),
+        );
+        for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                let bin_index = by.saturating_mul(self.bins_w).saturating_add(bx);
+                let Some(vertices_local) = self.bin_vertices.get(bin_index) else {
+                    continue;
+                };
+                if vertices_local.is_empty() {
+                    continue;
+                }
+                let bounds_local = self.bin_local_rect(bx, by).intersect(visible);
+                if !bounds_local.is_positive() {
+                    continue;
+                }
+                slices.push(ObjectFillSpatialSlice {
+                    bin_index,
+                    bounds_local,
+                    vertices_local: Arc::clone(vertices_local),
+                });
+            }
+        }
+        slices
+    }
 }
 
 pub(in crate::objects) fn build_selection_fill_mesh(

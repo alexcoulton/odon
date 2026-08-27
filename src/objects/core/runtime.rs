@@ -236,9 +236,36 @@ impl ObjectsLayer {
     }
 
     pub(super) fn install_load_result(&mut self, msg: LoadResult) {
-        // A successful object reload replaces nearly every derived cache. Keep the raw loaded
-        // payload, then aggressively clear filter/selection/analysis state so no view survives
-        // that still points at the previous object set.
+        // Resource projection may resend an immutable payload on consecutive frames. Treat that
+        // as a complete no-op; for a real update, only discard selection and Analysis state when
+        // the underlying geometry changed and those indices could refer to a different object set.
+        let payload_unchanged = self
+            .objects
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &msg.objects))
+            && self.loaded_geojson.as_ref() == Some(&msg.path)
+            && self.downsample_factor == msg.downsample_factor.max(1e-6)
+            && self.display_transform == msg.display_transform
+            && self.display_mode == msg.display_mode
+            && self.object_property_keys == msg.object_property_keys
+            && self.scalar_property_keys == msg.scalar_property_keys
+            && self.color_property_keys == msg.color_property_keys
+            && self.property_store.shares_storage_with(&msg.property_store)
+            && self.lazy_parquet_source == msg.lazy_parquet_source;
+        if payload_unchanged {
+            return;
+        }
+        let geometry_changed = match (&self.object_fill_mesh, &msg.object_fill_mesh) {
+            (Some(current), Some(incoming)) => {
+                !Arc::ptr_eq(&current.vertices_local, &incoming.vertices_local)
+            }
+            (None, None) => self
+                .objects
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(current, &msg.objects)),
+            _ => true,
+        };
+        self.control_renderer_payload_identity = None;
         self.property_load_rx = None;
         self.property_load_key = None;
         self.display_transform = msg.display_transform;
@@ -293,33 +320,37 @@ impl ObjectsLayer {
         self.filtered_point_values = None;
         self.filtered_point_lods = None;
         self.filtered_color_groups = None;
-        self.selected_object_indices.clear();
-        self.selected_object_index = None;
-        self.selection_elements.clear();
-        self.selection_element_selected = None;
-        self.selection_element_name_draft = "Selection Element 1".to_string();
-        self.selected_render_lods = None;
-        self.primary_selected_render_lods = None;
-        self.selected_fill_mesh = None;
-        self.selection_fill_state = Arc::new(Vec::new());
-        self.selection_cpu_overlay_dirty = false;
-        self.selected_point_positions_world = None;
-        self.selected_point_values = None;
-        self.selected_point_lods = None;
-        self.primary_selected_point_positions_world = None;
-        self.primary_selected_point_values = None;
-        self.visible_selected_render_cache = None;
-        self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
+        if geometry_changed {
+            self.selected_object_indices.clear();
+            self.selected_object_index = None;
+            self.selection_elements.clear();
+            self.selection_element_selected = None;
+            self.selection_element_name_draft = "Selection Element 1".to_string();
+            self.selected_render_lods = None;
+            self.primary_selected_render_lods = None;
+            self.selected_fill_mesh = None;
+            self.selection_fill_state = Arc::new(Vec::new());
+            self.selection_cpu_overlay_dirty = false;
+            self.selected_point_positions_world = None;
+            self.selected_point_values = None;
+            self.selected_point_lods = None;
+            self.primary_selected_point_positions_world = None;
+            self.primary_selected_point_values = None;
+            self.visible_selected_render_cache = None;
+            self.selection_generation = self.selection_generation.wrapping_add(1).max(1);
+        }
         self.clear_measurements();
         self.clear_bulk_measurements();
-        self.clear_analysis();
-        self.analysis_threshold_set_name = "Threshold Set".to_string();
-        self.analysis_threshold_elements.clear();
-        self.analysis_threshold_selected_element = None;
-        self.analysis_live_threshold_channel_name = None;
-        self.analysis_channel_mapping_overrides.clear();
-        self.analysis_channel_mapping_popup_open = false;
-        self.analysis_channel_mapping_search.clear();
+        if geometry_changed {
+            self.clear_analysis();
+            self.analysis_threshold_set_name = "Threshold Set".to_string();
+            self.analysis_threshold_elements.clear();
+            self.analysis_threshold_selected_element = None;
+            self.analysis_live_threshold_channel_name = None;
+            self.analysis_channel_mapping_overrides.clear();
+            self.analysis_channel_mapping_popup_open = false;
+            self.analysis_channel_mapping_search.clear();
+        }
         self.analysis_channel_mapping_suggestions_cache_key = 0;
         self.analysis_channel_mapping_suggestions_cache_channels_len = 0;
         self.analysis_channel_mapping_suggestions_cache_numeric_len = 0;
@@ -343,16 +374,27 @@ impl ObjectsLayer {
         }
         self.apply_pending_color_value_colors();
         self.apply_pending_color_value_visibility();
-        self.analysis_hist_focus_object_index = None;
+        if geometry_changed {
+            self.analysis_hist_focus_object_index = None;
+        }
         self.pending_zoom_object_index = None;
         self.visible = true;
+        if geometry_changed {
+            self.geometry_generation = self.geometry_generation.wrapping_add(1).max(1);
+            self.gl_object_fill.clear_id_tiles();
+        }
         self.generation = self.generation.wrapping_add(1).max(1);
         let n = self.object_count();
-        self.reset_live_analysis_selection_default();
+        if geometry_changed {
+            self.reset_live_analysis_selection_default();
+        } else {
+            self.mark_live_analysis_selection_dirty();
+        }
         self.status = format!("Loaded {n} object(s).");
     }
 
     pub fn clear(&mut self) {
+        self.control_renderer_payload_identity = None;
         self.objects = None;
         self.bins = None;
         self.render_lods = None;
@@ -420,6 +462,8 @@ impl ObjectsLayer {
         self.analysis_warm_rx = None;
         self.analysis_warm_started = false;
         self.analysis_selection_rx = None;
+        self.geometry_generation = self.geometry_generation.wrapping_add(1).max(1);
+        self.gl_object_fill.clear_id_tiles();
         self.generation = self.generation.wrapping_add(1).max(1);
         self.status.clear();
     }
@@ -1111,10 +1155,16 @@ impl ObjectsLayer {
         &mut self,
         resource: &odon::model::ControlObjectResource,
     ) -> bool {
+        let payload_identity = resource.renderer_payload_identity();
+        if payload_identity.is_some() && payload_identity == self.control_renderer_payload_identity
+        {
+            return true;
+        }
         let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
             return false;
         };
         self.install_preloaded(preloaded);
+        self.control_renderer_payload_identity = payload_identity;
         true
     }
 

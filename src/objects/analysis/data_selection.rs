@@ -360,75 +360,6 @@ impl ObjectsLayer {
         default_value: f32,
         channel_name: Option<&str>,
     ) {
-        let desired_channel = channel_name.map(ToOwned::to_owned);
-
-        if let Some(idx) = desired_channel.as_ref().and_then(|channel_name| {
-            self.analysis_property_thresholds
-                .iter()
-                .position(|rule| rule.channel_name.as_deref() == Some(channel_name.as_str()))
-        }) {
-            let rule = &mut self.analysis_property_thresholds[idx];
-            let mut changed = false;
-            if rule.column_key != column_key {
-                rule.column_key = column_key.to_string();
-                changed = true;
-            }
-            if rule.value_transform != self.analysis_hist_value_transform {
-                rule.value_transform = self.analysis_hist_value_transform;
-                changed = true;
-            }
-            if changed {
-                self.sync_active_threshold_element_from_live_rules();
-            }
-            return;
-        }
-
-        if let Some(idx) = self
-            .analysis_property_thresholds
-            .iter()
-            .position(|rule| rule.column_key == column_key)
-        {
-            let rule = &mut self.analysis_property_thresholds[idx];
-            let mut changed = false;
-            if rule.channel_name != desired_channel {
-                rule.channel_name = desired_channel;
-                changed = true;
-            }
-            if rule.value_transform != self.analysis_hist_value_transform {
-                rule.value_transform = self.analysis_hist_value_transform;
-                changed = true;
-            }
-            if changed {
-                self.sync_active_threshold_element_from_live_rules();
-            }
-            return;
-        }
-
-        if self.analysis_follow_active_channel
-            && desired_channel.is_some()
-            && self.analysis_property_thresholds.len() == 1
-        {
-            let rule = &mut self.analysis_property_thresholds[0];
-            let mut changed = false;
-            if rule.column_key != column_key {
-                rule.column_key = column_key.to_string();
-                rule.value = default_value;
-                changed = true;
-            }
-            if rule.channel_name != desired_channel {
-                rule.channel_name = desired_channel;
-                changed = true;
-            }
-            if rule.value_transform != self.analysis_hist_value_transform {
-                rule.value_transform = self.analysis_hist_value_transform;
-                changed = true;
-            }
-            if changed {
-                self.sync_active_threshold_element_from_live_rules();
-            }
-            return;
-        }
-
         if !self.analysis_property_thresholds.is_empty() {
             return;
         }
@@ -440,6 +371,41 @@ impl ObjectsLayer {
                 value: default_value,
                 value_transform: self.analysis_hist_value_transform,
             });
+        self.sync_active_threshold_element_from_live_rules();
+    }
+
+    pub(in crate::objects) fn retarget_object_property_threshold(
+        &mut self,
+        column_key: &str,
+        default_value: f32,
+        channel_name: Option<&str>,
+    ) {
+        let desired_channel = channel_name.map(ToOwned::to_owned);
+        let target = desired_channel
+            .as_ref()
+            .and_then(|channel_name| {
+                self.analysis_property_thresholds
+                    .iter()
+                    .position(|rule| rule.channel_name.as_ref() == Some(channel_name))
+            })
+            .or_else(|| (self.analysis_property_thresholds.len() == 1).then_some(0));
+        let Some(idx) = target else {
+            return;
+        };
+        let rule = &mut self.analysis_property_thresholds[idx];
+        let column_changed = rule.column_key != column_key;
+        let changed = column_changed
+            || rule.channel_name != desired_channel
+            || rule.value_transform != self.analysis_hist_value_transform;
+        if !changed {
+            return;
+        }
+        rule.column_key = column_key.to_string();
+        rule.channel_name = desired_channel;
+        rule.value_transform = self.analysis_hist_value_transform;
+        if column_changed {
+            rule.value = default_value;
+        }
         self.sync_active_threshold_element_from_live_rules();
     }
 
@@ -695,6 +661,35 @@ impl ObjectsLayer {
                 value_transform: self.analysis_hist_value_transform,
             });
         self.sync_active_threshold_element_from_live_rules();
+    }
+
+    pub(in crate::objects) fn preview_histogram_threshold_drag(
+        &mut self,
+        rule_index: usize,
+        column_name: &str,
+        value: f32,
+    ) {
+        let Some(rule) = self.analysis_property_thresholds.get_mut(rule_index) else {
+            return;
+        };
+        if rule.column_key != column_name || rule.value == value {
+            return;
+        }
+        rule.value = value;
+        rule.value_transform = self.analysis_hist_value_transform;
+        self.clear_histogram_snapped_level_for_column(column_name);
+        // Keep pointer motion renderer-local. Copying the live rule into the project Analysis
+        // state here would submit an actor command and restore the previous projection on every
+        // frame, making the line fight the pointer. Live selection may still preview this value.
+        self.mark_live_analysis_selection_dirty();
+    }
+
+    pub(in crate::objects) fn commit_histogram_threshold_drag(&mut self) -> bool {
+        if self.analysis_hist_drag_rule.take().is_none() {
+            return false;
+        }
+        self.sync_active_threshold_element_from_live_rules();
+        true
     }
 
     pub(in crate::objects) fn set_histogram_threshold_snap(

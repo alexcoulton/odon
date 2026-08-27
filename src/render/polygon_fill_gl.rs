@@ -1,11 +1,18 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use eframe::egui;
 use glow::HasContext;
 use lru::LruCache;
 use parking_lot::Mutex;
+
+mod tiles;
+pub use tiles::{
+    ObjectFillTileDrawItem, ObjectFillTileGeometry, ObjectFillTileGlParams, ObjectFillTileKey,
+    ObjectFillTileStyle,
+};
 
 #[derive(Debug, Clone)]
 pub struct PolygonFillGlDrawParams {
@@ -316,6 +323,94 @@ pub struct ObjectFillGlDrawItem {
     pub visible_world: egui::Rect,
 }
 
+const DEFAULT_OBJECT_FILL_MESH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_OBJECT_FILL_TEXTURE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_OBJECT_FILL_TILE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ObjectFillGlStats {
+    pub mesh_entries: usize,
+    pub state_entries: usize,
+    pub color_entries: usize,
+    pub mesh_bytes: usize,
+    pub state_bytes: usize,
+    pub color_bytes: usize,
+    pub tile_entries: usize,
+    pub tile_bytes: usize,
+    pub tile_pending_bytes: usize,
+    pub mesh_budget_bytes: usize,
+    pub texture_budget_bytes: usize,
+    pub tile_budget_bytes: usize,
+    pub mesh_uploads: u64,
+    pub state_uploads: u64,
+    pub color_uploads: u64,
+    pub mesh_evictions: u64,
+    pub texture_evictions: u64,
+    pub tile_requests: u64,
+    pub tile_request_generation: u64,
+    pub tile_visible: usize,
+    pub tile_hits: u64,
+    pub tile_generations: u64,
+    pub tile_discarded: u64,
+    pub tile_evictions: u64,
+    pub tile_pending: usize,
+    pub tile_peak_pending: usize,
+    pub last_tile_raster_vertices: u64,
+    pub last_tile_raster_draw_calls: u64,
+    pub last_tile_compose_draw_calls: u64,
+    pub total_tile_raster_vertices: u64,
+    pub last_tile_raster_ms: f64,
+    pub last_tile_compose_ms: f64,
+    pub tile_supported: Option<bool>,
+    pub last_draw_calls: u64,
+    pub last_triangles: u64,
+    pub total_draw_calls: u64,
+    pub total_triangles: u64,
+    pub last_paint_ms: f64,
+}
+
+fn object_fill_screen_rect(
+    local_rect: egui::Rect,
+    params: &ObjectFillGlDrawParams,
+    viewport: egui::Rect,
+) -> egui::Rect {
+    let local_to_screen = |local: egui::Pos2| {
+        let world = egui::pos2(
+            params.local_to_world_offset.x + local.x * params.local_to_world_scale.x,
+            params.local_to_world_offset.y + local.y * params.local_to_world_scale.y,
+        );
+        viewport.center() + (world - params.center_world) * params.zoom_screen_per_world.max(1.0e-6)
+    };
+    egui::Rect::from_two_pos(
+        local_to_screen(local_rect.min),
+        local_to_screen(local_rect.max),
+    )
+}
+
+fn object_fill_scissor_box(
+    rect: egui::Rect,
+    pixels_per_point: f32,
+    screen_size_px: [u32; 2],
+) -> [i32; 4] {
+    let ppp = pixels_per_point.max(1.0e-6);
+    let screen_width = screen_size_px[0] as i32;
+    let screen_height = screen_size_px[1] as i32;
+    let left = (rect.min.x * ppp).round() as i32;
+    let top = (rect.min.y * ppp).round() as i32;
+    let right = (rect.max.x * ppp).round() as i32;
+    let bottom = (rect.max.y * ppp).round() as i32;
+    let left = left.clamp(0, screen_width);
+    let right = right.clamp(left, screen_width);
+    let top = top.clamp(0, screen_height);
+    let bottom = bottom.clamp(top, screen_height);
+    [
+        left,
+        screen_height.saturating_sub(bottom),
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    ]
+}
+
 #[derive(Clone)]
 pub struct ObjectFillGlRenderer {
     inner: Arc<Mutex<ObjectFillInner>>,
@@ -330,11 +425,51 @@ impl std::fmt::Debug for ObjectFillGlRenderer {
 
 impl ObjectFillGlRenderer {
     pub fn new(max_meshes: usize, max_state_textures: usize) -> Self {
+        Self::with_byte_budgets(
+            max_meshes,
+            max_state_textures,
+            DEFAULT_OBJECT_FILL_MESH_BUDGET_BYTES,
+            DEFAULT_OBJECT_FILL_TEXTURE_BUDGET_BYTES,
+        )
+    }
+
+    pub fn with_byte_budgets(
+        max_meshes: usize,
+        max_state_textures: usize,
+        mesh_budget_bytes: usize,
+        texture_budget_bytes: usize,
+    ) -> Self {
+        Self::with_all_byte_budgets(
+            max_meshes,
+            max_state_textures,
+            mesh_budget_bytes,
+            texture_budget_bytes,
+            DEFAULT_OBJECT_FILL_TILE_BUDGET_BYTES,
+        )
+    }
+
+    pub fn with_all_byte_budgets(
+        max_meshes: usize,
+        max_state_textures: usize,
+        mesh_budget_bytes: usize,
+        texture_budget_bytes: usize,
+        tile_budget_bytes: usize,
+    ) -> Self {
         let mesh_cap = NonZeroUsize::new(max_meshes.max(1)).unwrap();
         let state_cap = NonZeroUsize::new(max_state_textures.max(1)).unwrap();
         Self {
-            inner: Arc::new(Mutex::new(ObjectFillInner::new(mesh_cap, state_cap))),
+            inner: Arc::new(Mutex::new(ObjectFillInner::new(
+                mesh_cap,
+                state_cap,
+                mesh_budget_bytes.max(1),
+                texture_budget_bytes.max(1),
+                tile_budget_bytes.max(1),
+            ))),
         }
+    }
+
+    pub fn stats(&self) -> ObjectFillGlStats {
+        self.inner.lock().stats()
     }
 
     pub fn paint_many(
@@ -343,6 +478,7 @@ impl ObjectFillGlRenderer {
         painter: &egui_glow::Painter,
         items: &[ObjectFillGlDrawItem],
     ) {
+        let paint_started = Instant::now();
         if items.is_empty() {
             return;
         }
@@ -353,6 +489,8 @@ impl ObjectFillGlRenderer {
         }
 
         let mut inner = self.inner.lock();
+        inner.last_draw_calls = 0;
+        inner.last_triangles = 0;
         if inner.gl_objects.is_none() {
             inner.gl_objects = ObjectFillGlObjects::new(gl).ok();
         }
@@ -382,6 +520,14 @@ impl ObjectFillGlRenderer {
         let ppp = info.pixels_per_point.max(1e-6);
         let viewport_min_px = viewport_pt.min * ppp;
         let viewport_size_px = viewport_pt.size() * ppp;
+        let mut previous_scissor = [0i32; 4];
+        let previous_scissor_enabled;
+
+        unsafe {
+            let gl = gl.as_ref();
+            gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut previous_scissor);
+            previous_scissor_enabled = gl.get_parameter_bool(glow::SCISSOR_TEST);
+        }
 
         unsafe {
             let gl = gl.as_ref();
@@ -408,6 +554,16 @@ impl ObjectFillGlRenderer {
 
         for item in items {
             if !item.params.visible || !item.visible_world.is_positive() {
+                continue;
+            }
+            let item_clip = object_fill_screen_rect(item.visible_world, &item.params, viewport_pt)
+                .intersect(info.clip_rect)
+                .intersect(viewport_pt);
+            if !item_clip.is_positive() {
+                continue;
+            }
+            let scissor = object_fill_scissor_box(item_clip, ppp, info.screen_size_px);
+            if scissor[2] <= 0 || scissor[3] <= 0 {
                 continue;
             }
             let Some((mesh_vbo, mesh_count)) = inner
@@ -461,6 +617,8 @@ impl ObjectFillGlRenderer {
 
             unsafe {
                 let gl = gl.as_ref();
+                gl.enable(glow::SCISSOR_TEST);
+                gl.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
                 gl.uniform_2_f32(
                     u_center_world.as_ref(),
                     item.params.center_world.x,
@@ -507,6 +665,11 @@ impl ObjectFillGlRenderer {
                 gl.vertex_attrib_pointer_f32(1, 1, glow::FLOAT, false, 12, 8);
                 gl.draw_arrays(glow::TRIANGLES, 0, mesh_count as i32);
             }
+            let triangles = (mesh_count / 3) as u64;
+            inner.last_draw_calls = inner.last_draw_calls.saturating_add(1);
+            inner.last_triangles = inner.last_triangles.saturating_add(triangles);
+            inner.total_draw_calls = inner.total_draw_calls.saturating_add(1);
+            inner.total_triangles = inner.total_triangles.saturating_add(triangles);
         }
 
         unsafe {
@@ -518,13 +681,26 @@ impl ObjectFillGlRenderer {
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_vertex_array(None);
             gl.use_program(None);
+            if previous_scissor_enabled {
+                gl.enable(glow::SCISSOR_TEST);
+            } else {
+                gl.disable(glow::SCISSOR_TEST);
+            }
+            gl.scissor(
+                previous_scissor[0],
+                previous_scissor[1],
+                previous_scissor[2],
+                previous_scissor[3],
+            );
         }
+        inner.last_paint_ms = paint_started.elapsed().as_secs_f64() * 1_000.0;
     }
 }
 
 struct ObjectFillMeshGpu {
     vbo: glow::Buffer,
     count: usize,
+    bytes: usize,
 }
 
 struct ObjectFillStateGpu {
@@ -532,6 +708,7 @@ struct ObjectFillStateGpu {
     width: i32,
     height: i32,
     generation: u64,
+    bytes: usize,
 }
 
 struct ObjectFillColorGpu {
@@ -539,6 +716,7 @@ struct ObjectFillColorGpu {
     width: i32,
     height: i32,
     generation: u64,
+    bytes: usize,
 }
 
 struct ObjectFillInner {
@@ -546,19 +724,182 @@ struct ObjectFillInner {
     meshes: LruCache<(u64, u64), ObjectFillMeshGpu>,
     states: LruCache<u64, ObjectFillStateGpu>,
     colors: LruCache<u64, ObjectFillColorGpu>,
+    id_tiles: LruCache<tiles::ObjectFillTileKey, tiles::ObjectFillIdTileGpu>,
+    pending_id_tiles: LruCache<tiles::ObjectFillTileKey, tiles::ObjectFillPendingIdTileGpu>,
+    tile_gl_objects: Option<tiles::ObjectFillTileGlObjects>,
+    tile_gl_init_attempted: bool,
     buffers_to_delete: Vec<glow::Buffer>,
     textures_to_delete: Vec<glow::Texture>,
+    mesh_budget_bytes: usize,
+    texture_budget_bytes: usize,
+    tile_budget_bytes: usize,
+    mesh_bytes: usize,
+    state_bytes: usize,
+    color_bytes: usize,
+    tile_bytes: usize,
+    tile_pending_bytes: usize,
+    mesh_uploads: u64,
+    state_uploads: u64,
+    color_uploads: u64,
+    mesh_evictions: u64,
+    texture_evictions: u64,
+    tile_requests: u64,
+    tile_request_generation: u64,
+    tile_visible: usize,
+    tile_hits: u64,
+    tile_generations: u64,
+    tile_discarded: u64,
+    tile_evictions: u64,
+    tile_pending: usize,
+    tile_peak_pending: usize,
+    last_tile_raster_vertices: u64,
+    last_tile_raster_draw_calls: u64,
+    last_tile_compose_draw_calls: u64,
+    total_tile_raster_vertices: u64,
+    last_tile_raster_ms: f64,
+    last_tile_compose_ms: f64,
+    last_draw_calls: u64,
+    last_triangles: u64,
+    total_draw_calls: u64,
+    total_triangles: u64,
+    last_paint_ms: f64,
 }
 
 impl ObjectFillInner {
-    fn new(mesh_cap: NonZeroUsize, state_cap: NonZeroUsize) -> Self {
+    fn new(
+        mesh_cap: NonZeroUsize,
+        state_cap: NonZeroUsize,
+        mesh_budget_bytes: usize,
+        texture_budget_bytes: usize,
+        tile_budget_bytes: usize,
+    ) -> Self {
         Self {
             gl_objects: None,
             meshes: LruCache::new(mesh_cap),
             states: LruCache::new(state_cap),
             colors: LruCache::new(state_cap),
+            id_tiles: LruCache::new(NonZeroUsize::new(1024).unwrap()),
+            pending_id_tiles: LruCache::new(
+                NonZeroUsize::new(tiles::MAX_PENDING_ID_TILES).unwrap(),
+            ),
+            tile_gl_objects: None,
+            tile_gl_init_attempted: false,
             buffers_to_delete: Vec::new(),
             textures_to_delete: Vec::new(),
+            mesh_budget_bytes,
+            texture_budget_bytes,
+            tile_budget_bytes,
+            mesh_bytes: 0,
+            state_bytes: 0,
+            color_bytes: 0,
+            tile_bytes: 0,
+            tile_pending_bytes: 0,
+            mesh_uploads: 0,
+            state_uploads: 0,
+            color_uploads: 0,
+            mesh_evictions: 0,
+            texture_evictions: 0,
+            tile_requests: 0,
+            tile_request_generation: 0,
+            tile_visible: 0,
+            tile_hits: 0,
+            tile_generations: 0,
+            tile_discarded: 0,
+            tile_evictions: 0,
+            tile_pending: 0,
+            tile_peak_pending: 0,
+            last_tile_raster_vertices: 0,
+            last_tile_raster_draw_calls: 0,
+            last_tile_compose_draw_calls: 0,
+            total_tile_raster_vertices: 0,
+            last_tile_raster_ms: 0.0,
+            last_tile_compose_ms: 0.0,
+            last_draw_calls: 0,
+            last_triangles: 0,
+            total_draw_calls: 0,
+            total_triangles: 0,
+            last_paint_ms: 0.0,
+        }
+    }
+
+    fn stats(&self) -> ObjectFillGlStats {
+        ObjectFillGlStats {
+            mesh_entries: self.meshes.len(),
+            state_entries: self.states.len(),
+            color_entries: self.colors.len(),
+            tile_entries: self.id_tiles.len(),
+            mesh_bytes: self.mesh_bytes,
+            state_bytes: self.state_bytes,
+            color_bytes: self.color_bytes,
+            tile_bytes: self.tile_bytes,
+            tile_pending_bytes: self.tile_pending_bytes,
+            mesh_budget_bytes: self.mesh_budget_bytes,
+            texture_budget_bytes: self.texture_budget_bytes,
+            tile_budget_bytes: self.tile_budget_bytes,
+            mesh_uploads: self.mesh_uploads,
+            state_uploads: self.state_uploads,
+            color_uploads: self.color_uploads,
+            mesh_evictions: self.mesh_evictions,
+            texture_evictions: self.texture_evictions,
+            tile_requests: self.tile_requests,
+            tile_request_generation: self.tile_request_generation,
+            tile_visible: self.tile_visible,
+            tile_hits: self.tile_hits,
+            tile_generations: self.tile_generations,
+            tile_discarded: self.tile_discarded,
+            tile_evictions: self.tile_evictions,
+            tile_pending: self.tile_pending,
+            tile_peak_pending: self.tile_peak_pending,
+            last_tile_raster_vertices: self.last_tile_raster_vertices,
+            last_tile_raster_draw_calls: self.last_tile_raster_draw_calls,
+            last_tile_compose_draw_calls: self.last_tile_compose_draw_calls,
+            total_tile_raster_vertices: self.total_tile_raster_vertices,
+            last_tile_raster_ms: self.last_tile_raster_ms,
+            last_tile_compose_ms: self.last_tile_compose_ms,
+            tile_supported: self
+                .tile_gl_init_attempted
+                .then_some(self.tile_gl_objects.is_some()),
+            last_draw_calls: self.last_draw_calls,
+            last_triangles: self.last_triangles,
+            total_draw_calls: self.total_draw_calls,
+            total_triangles: self.total_triangles,
+            last_paint_ms: self.last_paint_ms,
+        }
+    }
+
+    fn evict_meshes_to_budget(&mut self) {
+        while self.mesh_bytes > self.mesh_budget_bytes {
+            let Some((_key, evicted)) = self.meshes.pop_lru() else {
+                break;
+            };
+            self.mesh_bytes = self.mesh_bytes.saturating_sub(evicted.bytes);
+            self.mesh_evictions = self.mesh_evictions.saturating_add(1);
+            self.buffers_to_delete.push(evicted.vbo);
+        }
+    }
+
+    fn evict_textures_to_budget(&mut self) {
+        while self.state_bytes.saturating_add(self.color_bytes) > self.texture_budget_bytes {
+            let evict_state = match (self.states.peek_lru(), self.colors.peek_lru()) {
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (Some(_), Some(_)) => self.state_bytes >= self.color_bytes,
+                (None, None) => break,
+            };
+            if evict_state {
+                let Some((_key, evicted)) = self.states.pop_lru() else {
+                    break;
+                };
+                self.state_bytes = self.state_bytes.saturating_sub(evicted.bytes);
+                self.textures_to_delete.push(evicted.texture);
+            } else {
+                let Some((_key, evicted)) = self.colors.pop_lru() else {
+                    break;
+                };
+                self.color_bytes = self.color_bytes.saturating_sub(evicted.bytes);
+                self.textures_to_delete.push(evicted.texture);
+            }
+            self.texture_evictions = self.texture_evictions.saturating_add(1);
         }
     }
 
@@ -588,6 +929,12 @@ impl ObjectFillInner {
         if vertices_local.is_empty() {
             return None;
         }
+        let bytes = vertices_local
+            .len()
+            .saturating_mul(std::mem::size_of::<[f32; 3]>());
+        if bytes > self.mesh_budget_bytes {
+            return None;
+        }
 
         let vbo = unsafe { gl.as_ref().create_buffer().map_err(|_| ()).ok()? };
         unsafe {
@@ -606,10 +953,16 @@ impl ObjectFillInner {
             ObjectFillMeshGpu {
                 vbo,
                 count: vertices_local.len(),
+                bytes,
             },
         ) {
+            self.mesh_bytes = self.mesh_bytes.saturating_sub(evicted.bytes);
+            self.mesh_evictions = self.mesh_evictions.saturating_add(1);
             self.buffers_to_delete.push(evicted.vbo);
         }
+        self.mesh_bytes = self.mesh_bytes.saturating_add(bytes);
+        self.mesh_uploads = self.mesh_uploads.saturating_add(1);
+        self.evict_meshes_to_budget();
         self.delete_queued(gl);
         self.meshes.get(&key)
     }
@@ -632,6 +985,10 @@ impl ObjectFillInner {
         }
 
         let texels_len = (width as usize).saturating_mul(height as usize);
+        let bytes = texels_len;
+        if bytes > self.texture_budget_bytes {
+            return None;
+        }
         let mut texels = vec![0u8; texels_len];
         let copy_len = selection_state.len().min(object_count).min(texels.len());
         texels[..copy_len].copy_from_slice(&selection_state[..copy_len]);
@@ -687,11 +1044,19 @@ impl ObjectFillInner {
                 width,
                 height,
                 generation,
+                bytes,
             },
-        ) && evicted.texture != texture
-        {
-            self.textures_to_delete.push(evicted.texture);
+        ) {
+            self.state_bytes = self.state_bytes.saturating_sub(evicted.bytes);
+            if evicted.texture != texture {
+                self.textures_to_delete.push(evicted.texture);
+                self.texture_evictions = self.texture_evictions.saturating_add(1);
+            }
         }
+
+        self.state_bytes = self.state_bytes.saturating_add(bytes);
+        self.state_uploads = self.state_uploads.saturating_add(1);
+        self.evict_textures_to_budget();
 
         self.delete_queued(gl);
         self.states.get(&cache_id)
@@ -716,6 +1081,10 @@ impl ObjectFillInner {
             return self.colors.get(&cache_id);
         }
         let mut texels = vec![0u8; width as usize * height as usize * 4];
+        let bytes = texels.len();
+        if bytes > self.texture_budget_bytes {
+            return None;
+        }
         let copy_len = colors_rgba.len().min(object_count);
         texels[..copy_len * 4].copy_from_slice(bytemuck::cast_slice(&colors_rgba[..copy_len]));
         let texture = if let Some(existing) = self.colors.get(&cache_id) {
@@ -769,11 +1138,18 @@ impl ObjectFillInner {
                 width,
                 height,
                 generation,
+                bytes,
             },
-        ) && evicted.texture != texture
-        {
-            self.textures_to_delete.push(evicted.texture);
+        ) {
+            self.color_bytes = self.color_bytes.saturating_sub(evicted.bytes);
+            if evicted.texture != texture {
+                self.textures_to_delete.push(evicted.texture);
+                self.texture_evictions = self.texture_evictions.saturating_add(1);
+            }
         }
+        self.color_bytes = self.color_bytes.saturating_add(bytes);
+        self.color_uploads = self.color_uploads.saturating_add(1);
+        self.evict_textures_to_budget();
         self.delete_queued(gl);
         self.colors.get(&cache_id)
     }
@@ -994,3 +1370,51 @@ void main() {
     }
     out_color = state > 0.75 ? u_primary_color : u_selected_color;
 }"#;
+
+#[cfg(test)]
+mod object_fill_tests {
+    use super::*;
+
+    fn params() -> ObjectFillGlDrawParams {
+        ObjectFillGlDrawParams {
+            center_world: egui::pos2(50.0, 100.0),
+            zoom_screen_per_world: 2.0,
+            selected_color: egui::Color32::WHITE,
+            primary_color: egui::Color32::WHITE,
+            visible: true,
+            local_to_world_offset: egui::vec2(10.0, 20.0),
+            local_to_world_scale: egui::vec2(2.0, 3.0),
+            object_color_opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn object_fill_screen_rect_applies_transform_camera_and_zoom() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(800.0, 600.0));
+        let local = egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(40.0, 50.0));
+        let screen = object_fill_screen_rect(local, &params(), viewport);
+
+        assert_eq!(screen.min, egui::pos2(500.0, 370.0));
+        assert_eq!(screen.max, egui::pos2(580.0, 490.0));
+    }
+
+    #[test]
+    fn object_fill_scissor_box_uses_bottom_left_gl_origin() {
+        let rect = egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(300.0, 150.0));
+        assert_eq!(
+            object_fill_scissor_box(rect, 1.0, [1000, 800]),
+            [100, 650, 200, 100]
+        );
+    }
+
+    #[test]
+    fn object_fill_cache_reports_configured_byte_budgets_before_gl_initializes() {
+        let renderer = ObjectFillGlRenderer::with_byte_budgets(3, 2, 1234, 5678);
+        let stats = renderer.stats();
+        assert_eq!(stats.mesh_budget_bytes, 1234);
+        assert_eq!(stats.texture_budget_bytes, 5678);
+        assert_eq!(stats.mesh_bytes, 0);
+        assert_eq!(stats.state_bytes, 0);
+        assert_eq!(stats.color_bytes, 0);
+    }
+}

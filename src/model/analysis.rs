@@ -41,7 +41,11 @@ impl AnalysisModel {
     pub(crate) fn replace(&mut self, params: &Value) -> Result<(), ControlError> {
         let state = params.get("state").unwrap_or(params);
         validate_analysis_state(state)?;
-        self.state = normalized_analysis_state(state);
+        let next = normalized_analysis_state(state);
+        if self.state == next {
+            return Ok(());
+        }
+        self.state = next;
         self.generation = self.generation.wrapping_add(1).max(1);
         Ok(())
     }
@@ -185,4 +189,43 @@ fn validate_analysis_state(state: &Value) -> Result<(), ControlError> {
 
 fn invalid(message: impl Into<String>) -> ControlError {
     ControlError::new(ControlErrorKind::InvalidParams, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacing_identical_analysis_state_is_idempotent() {
+        let mut model = AnalysisModel::default();
+        let state = model.state().clone();
+        let generation = model.generation();
+
+        model.replace(&json!({ "state": state })).unwrap();
+
+        assert_eq!(model.generation(), generation);
+    }
+
+    #[test]
+    fn replacing_changed_analysis_state_advances_generation_once() {
+        let mut model = AnalysisModel::default();
+        let generation = model.generation();
+        let state = json!({
+            "threshold_set_name": "Changed",
+            "threshold_elements": [],
+            "threshold_selected_element": null,
+            "follow_active_channel": true,
+            "live_threshold_channel_name": null,
+            "channel_mapping_overrides": {},
+            "selection_elements": [],
+            "selection_element_selected": null,
+            "show_selection_overlay": true,
+        });
+
+        model.replace(&json!({ "state": state.clone() })).unwrap();
+        assert_eq!(model.generation(), generation + 1);
+
+        model.replace(&json!({ "state": state })).unwrap();
+        assert_eq!(model.generation(), generation + 1);
+    }
 }

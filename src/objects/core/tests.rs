@@ -361,6 +361,165 @@ fn color_value_colors_are_staged_before_objects_load() {
 }
 
 #[test]
+fn reinstalling_shared_property_resource_preserves_geometry_generation() {
+    let dir = TestObjectDir::new();
+    let path = dir.path("shared-geometry.geojson");
+    write_object_fixture(&path);
+    let cancel = AtomicBool::new(false);
+    let first = load_in_thread(path.clone(), 1.0, None, 1, &cancel).expect("first load");
+    let shared_property_update = first.clone();
+
+    let mut layer = ObjectsLayer::default();
+    layer.install_load_result(first);
+    let shared_generation = layer.geometry_generation;
+    layer.ensure_default_object_property_threshold("score", 2.0, Some("Marker"));
+    layer.selected_object_indices.insert(1);
+    layer.selected_object_index = Some(1);
+    let analysis_before = layer.project_analysis_state();
+    let renderer_generation = layer.generation;
+    let live_selection_generation = layer.analysis_live_selection_generation;
+    for _ in 0..100 {
+        layer.install_load_result(shared_property_update.clone());
+    }
+    assert_eq!(layer.geometry_generation, shared_generation);
+    assert_eq!(layer.generation, renderer_generation);
+    assert_eq!(
+        layer.analysis_live_selection_generation,
+        live_selection_generation
+    );
+    assert_eq!(layer.project_analysis_state(), analysis_before);
+    assert_eq!(layer.selected_object_indices, HashSet::from([1]));
+    assert_eq!(layer.selected_object_index, Some(1));
+
+    let mut property_update = shared_property_update;
+    property_update.property_store.insert_column(
+        "new_score".to_string(),
+        ObjectPropertyColumn::F64(Arc::new(vec![Some(1.0), Some(2.0), Some(3.0)])),
+    );
+    property_update
+        .scalar_property_keys
+        .push("new_score".to_string());
+    layer.install_load_result(property_update);
+    assert_eq!(layer.geometry_generation, shared_generation);
+    assert_eq!(layer.project_analysis_state(), analysis_before);
+    assert_eq!(layer.selected_object_indices, HashSet::from([1]));
+    assert_eq!(layer.selected_object_index, Some(1));
+    assert_eq!(
+        layer.analysis_live_selection_generation,
+        live_selection_generation + 1
+    );
+
+    let replacement = load_in_thread(path, 1.0, None, 2, &cancel).expect("replacement load");
+    layer.install_load_result(replacement);
+    assert_ne!(layer.geometry_generation, shared_generation);
+    assert!(layer.project_analysis_state().threshold_elements.is_empty());
+    assert!(layer.selected_object_indices.is_empty());
+}
+
+#[test]
+fn reinstalling_identical_control_payload_is_a_complete_no_op() {
+    let dir = TestObjectDir::new();
+    let path = dir.path("identical-control-payload.geojson");
+    write_object_fixture(&path);
+    let resource = load_control_object_resource(path, 1.0).expect("load control object resource");
+
+    let mut layer = ObjectsLayer::default();
+    assert!(layer.install_control_resource(&resource));
+    layer.ensure_default_object_property_threshold("score", 2.0, Some("Marker"));
+    layer.selected_object_indices.insert(1);
+    layer.selected_object_index = Some(1);
+    let analysis_before = layer.project_analysis_state();
+    let renderer_generation = layer.generation;
+    let geometry_generation = layer.geometry_generation;
+    let live_selection_generation = layer.analysis_live_selection_generation;
+
+    for _ in 0..100 {
+        assert!(layer.install_control_resource(&resource));
+    }
+
+    assert_eq!(layer.generation, renderer_generation);
+    assert_eq!(layer.geometry_generation, geometry_generation);
+    assert_eq!(
+        layer.analysis_live_selection_generation,
+        live_selection_generation
+    );
+    assert_eq!(layer.project_analysis_state(), analysis_before);
+    assert_eq!(layer.selected_object_indices, HashSet::from([1]));
+    assert_eq!(layer.selected_object_index, Some(1));
+}
+
+#[test]
+fn automatic_analysis_default_does_not_retarget_an_existing_rule() {
+    let mut layer = ObjectsLayer::default();
+    layer
+        .analysis_property_thresholds
+        .push(ObjectPropertyThresholdRule {
+            column_key: "median_marker".to_string(),
+            channel_name: Some("Marker".to_string()),
+            op: AnalysisThresholdOp::GreaterEqual,
+            value: 12.0,
+            value_transform: HistogramValueTransform::None,
+        });
+
+    layer.ensure_default_object_property_threshold("label", 3.0, Some("Marker"));
+
+    let rule = &layer.analysis_property_thresholds[0];
+    assert_eq!(rule.column_key, "median_marker");
+    assert_eq!(rule.value, 12.0);
+}
+
+#[test]
+fn explicit_analysis_column_change_retargets_the_existing_rule() {
+    let mut layer = ObjectsLayer::default();
+    layer
+        .analysis_property_thresholds
+        .push(ObjectPropertyThresholdRule {
+            column_key: "median_marker".to_string(),
+            channel_name: Some("Marker".to_string()),
+            op: AnalysisThresholdOp::GreaterEqual,
+            value: 12.0,
+            value_transform: HistogramValueTransform::None,
+        });
+
+    layer.retarget_object_property_threshold("nimbus_marker", 7.0, Some("Marker"));
+
+    let rule = &layer.analysis_property_thresholds[0];
+    assert_eq!(rule.column_key, "nimbus_marker");
+    assert_eq!(rule.value, 7.0);
+}
+
+#[test]
+fn histogram_threshold_drag_previews_locally_and_commits_once_on_release() {
+    let mut layer = ObjectsLayer::default();
+    layer.ensure_default_object_property_threshold("score", 2.0, Some("Marker"));
+    let committed_before = layer.project_analysis_state();
+    let live_generation_before = layer.analysis_live_selection_generation;
+
+    layer.analysis_hist_drag_rule = Some(0);
+    for value in [2.5, 3.0, 3.5, 4.0] {
+        layer.preview_histogram_threshold_drag(0, "score", value);
+        assert_eq!(
+            layer.project_analysis_state(),
+            committed_before,
+            "pointer motion must not mutate actor-bound Analysis state"
+        );
+    }
+    assert_eq!(layer.analysis_property_thresholds[0].value, 4.0);
+    assert_eq!(
+        layer.analysis_live_selection_generation,
+        live_generation_before + 4,
+        "each distinct preview remains available to live selection"
+    );
+
+    assert!(layer.commit_histogram_threshold_drag());
+    assert!(layer.analysis_hist_drag_rule.is_none());
+    let committed_after = layer.project_analysis_state();
+    assert_ne!(committed_after, committed_before);
+    assert_eq!(committed_after.threshold_elements[0].rules[0].value, 4.0);
+    assert!(!layer.commit_histogram_threshold_drag());
+}
+
+#[test]
 fn geojson_lifecycle_filter_selection_and_exports_round_trip() {
     let dir = TestObjectDir::new();
     let geojson_path = dir.path("objects.geojson");

@@ -327,7 +327,8 @@ impl ObjectsLayer {
                 let Some(column_name) = numeric_columns.get(self.analysis_hist_channel) else {
                     return;
                 };
-                if self.analysis_hist_channel != prev_hist_channel {
+                let histogram_column_changed = self.analysis_hist_channel != prev_hist_channel;
+                if histogram_column_changed {
                     self.analysis_hist_drag_rule = None;
                     self.sync_histogram_editor_to_column(column_name);
                 }
@@ -359,6 +360,13 @@ impl ObjectsLayer {
                     ui.label("No finite values available for the selected column.");
                     return;
                 };
+                if histogram_column_changed {
+                    self.retarget_object_property_threshold(
+                        column_name,
+                        hist.median,
+                        self.active_channel_name(channels, selected_channel),
+                    );
+                }
                 self.ensure_default_object_property_threshold(
                     column_name,
                     hist.median,
@@ -693,16 +701,16 @@ impl ObjectsLayer {
                 self.analysis_hist_drag_rule,
                 response.interact_pointer_pos(),
             )
-            && let Some(rule) = self.analysis_property_thresholds.get_mut(idx)
         {
             let transformed = screen_x_to_value(pointer_pos.x, rect, hist.min, hist.max);
-            rule.value = invert_histogram_value_transform(transformed, value_transform);
-            self.clear_histogram_snapped_level_for_column(column_name);
-            self.sync_active_threshold_element_from_live_rules();
+            let value = invert_histogram_value_transform(transformed, value_transform);
+            self.preview_histogram_threshold_drag(idx, column_name, value);
         }
-        let drag_finished = response.drag_stopped();
+        let pointer_released = self.analysis_hist_drag_rule.is_some()
+            && !ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        let drag_finished = response.drag_stopped() || pointer_released;
         if drag_finished {
-            self.analysis_hist_drag_rule = None;
+            self.commit_histogram_threshold_drag();
         }
 
         for rule in self

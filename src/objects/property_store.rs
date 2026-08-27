@@ -63,6 +63,17 @@ impl ObjectPropertyStore {
         self.loaded_columns.insert(key, column);
     }
 
+    pub(in crate::objects) fn shares_storage_with(&self, other: &Self) -> bool {
+        self.available_columns == other.available_columns
+            && self.loaded_columns.len() == other.loaded_columns.len()
+            && self.loaded_columns.iter().all(|(key, column)| {
+                other
+                    .loaded_columns
+                    .get(key)
+                    .is_some_and(|other| column.shares_storage_with(other))
+            })
+    }
+
     pub(in crate::objects) fn loaded_column_is_categorical(
         &self,
         key: &str,
@@ -117,6 +128,29 @@ pub(in crate::objects) enum ObjectPropertyContainsMatcher {
 }
 
 impl ObjectPropertyColumn {
+    fn shares_storage_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(left), Self::Bool(right)) => Arc::ptr_eq(left, right),
+            (Self::I64(left), Self::I64(right)) => Arc::ptr_eq(left, right),
+            (Self::F64(left), Self::F64(right)) => Arc::ptr_eq(left, right),
+            (
+                Self::Dictionary {
+                    dictionary: left_dictionary,
+                    values: left_values,
+                },
+                Self::Dictionary {
+                    dictionary: right_dictionary,
+                    values: right_values,
+                },
+            ) => {
+                Arc::ptr_eq(left_dictionary, right_dictionary)
+                    && Arc::ptr_eq(left_values, right_values)
+            }
+            (Self::Json(left), Self::Json(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+
     pub(in crate::objects) fn value_json_at(&self, object_index: usize) -> serde_json::Value {
         match self {
             Self::Bool(values) => values

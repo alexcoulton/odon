@@ -24,7 +24,9 @@ use crate::render::points::PointsStyle;
 use crate::render::points_gl::PointsGlRenderer;
 use crate::render::polygon_fill_gl::{
     ObjectFillGlDrawData, ObjectFillGlDrawItem, ObjectFillGlDrawParams, ObjectFillGlRenderer,
-    PolygonFillGlDrawData, PolygonFillGlDrawItem, PolygonFillGlDrawParams, PolygonFillGlRenderer,
+    ObjectFillTileDrawItem, ObjectFillTileGeometry, ObjectFillTileGlParams, ObjectFillTileKey,
+    ObjectFillTileStyle, PolygonFillGlDrawData, PolygonFillGlDrawItem, PolygonFillGlDrawParams,
+    PolygonFillGlRenderer,
 };
 use crate::spatialdata::{
     ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,
@@ -368,6 +370,7 @@ pub struct ObjectsLayer {
 
     pub loaded_geojson: Option<PathBuf>,
     pub downsample_factor: f32,
+    control_renderer_payload_identity: Option<usize>,
     display_transform: SpatialDataTransform2,
     display_mode: ObjectDisplayMode,
 
@@ -498,6 +501,7 @@ pub struct ObjectsLayer {
     table_cache_dirty: bool,
     bounds_local: Option<egui::Rect>,
     generation: u64,
+    geometry_generation: u64,
     gl: LineBinsGlRenderer,
     gl_object_selection: ObjectLineBinsGlRenderer,
     gl_fill: PolygonFillGlRenderer,
@@ -555,7 +559,7 @@ struct PropertyLoadResult {
     values_by_row: HashMap<usize, serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LazyParquetSource {
     available_property_columns: Vec<String>,
     numeric_property_columns: Vec<String>,
@@ -784,6 +788,13 @@ struct ObjectFillMesh {
     bins_w: usize,
     bins_h: usize,
     bin_vertices: Vec<Arc<Vec<[f32; 3]>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectFillSpatialSlice {
+    bin_index: usize,
+    bounds_local: egui::Rect,
+    vertices_local: Arc<Vec<[f32; 3]>>,
 }
 
 #[derive(Debug, Clone)]

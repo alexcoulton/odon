@@ -7,12 +7,16 @@ use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+mod diagnostics;
+mod fills;
 mod lods;
 mod mesh;
 mod selection;
 mod selection_geometry;
 #[cfg(test)]
 mod tests;
+mod tiles;
+mod transforms;
 
 pub(in crate::objects) use lods::*;
 pub(in crate::objects) use mesh::*;
@@ -20,56 +24,7 @@ pub(in crate::objects) use selection_geometry::*;
 
 impl ObjectsLayer {
     pub(super) const SELECTED_RENDER_LOD_LIMIT: usize = 200_000;
-
-    fn display_scale(&self) -> egui::Vec2 {
-        egui::vec2(
-            self.display_transform.scale[0].max(1e-6),
-            self.display_transform.scale[1].max(1e-6),
-        )
-    }
-
-    fn display_offset(&self, local_to_world_offset: egui::Vec2) -> egui::Vec2 {
-        egui::vec2(
-            local_to_world_offset.x + self.display_transform.translation[0],
-            local_to_world_offset.y + self.display_transform.translation[1],
-        )
-    }
-
-    fn local_to_world_point(
-        &self,
-        local: egui::Pos2,
-        local_to_world_offset: egui::Vec2,
-    ) -> egui::Pos2 {
-        let scale = self.display_scale();
-        let offset = self.display_offset(local_to_world_offset);
-        egui::pos2(local.x * scale.x + offset.x, local.y * scale.y + offset.y)
-    }
-
-    fn world_to_local_point(
-        &self,
-        world: egui::Pos2,
-        local_to_world_offset: egui::Vec2,
-    ) -> egui::Pos2 {
-        let scale = self.display_scale();
-        let offset = self.display_offset(local_to_world_offset);
-        egui::pos2(
-            (world.x - offset.x) / scale.x,
-            (world.y - offset.y) / scale.y,
-        )
-    }
-
-    fn world_to_local_rect(
-        &self,
-        world: egui::Rect,
-        local_to_world_offset: egui::Vec2,
-    ) -> egui::Rect {
-        let min = self.world_to_local_point(world.min, local_to_world_offset);
-        let max = self.world_to_local_point(world.max, local_to_world_offset);
-        egui::Rect::from_min_max(
-            egui::pos2(min.x.min(max.x), min.y.min(max.y)),
-            egui::pos2(min.x.max(max.x), min.y.max(max.y)),
-        )
-    }
+    pub(super) const MAX_DIRECT_FILL_VERTICES: usize = 1_000_000;
 
     pub fn draw(
         &mut self,
@@ -221,198 +176,19 @@ impl ObjectsLayer {
                 ObjectColorMode::Continuous => None,
             };
 
-            if self.fill_cells
-                && self.fill_opacity > 0.0
-                && let Some(fill_mesh) = self.object_fill_mesh.as_ref()
-                && fill_mesh.bounds_local.intersects(visible_local)
-            {
-                let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-                if gpu_available {
-                    let mut items = Vec::new();
-                    if let Some(color_groups) = active_color_groups {
-                        items.reserve(color_groups.groups.len());
-                        for (group_idx, group) in color_groups.groups.iter().enumerate() {
-                            let Some(c) =
-                                self.effective_color_group_rgb(&color_groups.property_key, group)
-                            else {
-                                continue;
-                            };
-                            let fill_color =
-                                egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                            items.push(ObjectFillGlDrawItem {
-                                data: ObjectFillGlDrawData {
-                                    cache_id: object_property_render_cache_id(
-                                        0x4a20,
-                                        &color_groups.property_key,
-                                        group_idx,
-                                    ),
-                                    state_cache_id: object_property_render_cache_id(
-                                        0x4a21,
-                                        &color_groups.property_key,
-                                        group_idx,
-                                    ),
-                                    generation: self.generation,
-                                    vertices_local: Arc::clone(&fill_mesh.vertices_local),
-                                    object_count: fill_mesh.object_count,
-                                    selection_generation: group.fill_generation,
-                                    selection_state: Arc::clone(&group.fill_state),
-                                    color_cache_id: 0,
-                                    color_generation: 0,
-                                    object_colors_rgba: None,
-                                },
-                                params: ObjectFillGlDrawParams {
-                                    center_world: camera.center_world_lvl0,
-                                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                                    selected_color: fill_color,
-                                    primary_color: fill_color,
-                                    visible: self.visible,
-                                    local_to_world_offset: display_offset,
-                                    local_to_world_scale: display_scale,
-                                    object_color_opacity: 1.0,
-                                },
-                                visible_world: fill_mesh.bounds_local,
-                            });
-                        }
-                    } else {
-                        let fill_color =
-                            egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                        let mut visible_fill_state = vec![0u8; fill_mesh.object_count];
-                        for idx in 0..fill_mesh.object_count {
-                            if self.is_index_visible(idx)
-                                && let Some(slot) = visible_fill_state.get_mut(idx)
-                            {
-                                *slot = 255;
-                            }
-                        }
-                        items.push(ObjectFillGlDrawItem {
-                            data: ObjectFillGlDrawData {
-                                cache_id: object_render_cache_id(0x4a22, 0),
-                                state_cache_id: object_render_cache_id(0x4a23, 0),
-                                generation: self.generation,
-                                vertices_local: Arc::clone(&fill_mesh.vertices_local),
-                                object_count: fill_mesh.object_count,
-                                selection_generation: render_generation,
-                                selection_state: Arc::new(visible_fill_state),
-                                color_cache_id: object_render_cache_id(0x4a24, 0),
-                                color_generation: continuous_colors
-                                    .as_ref()
-                                    .map_or(0, |payload| payload.generation),
-                                object_colors_rgba: continuous_colors
-                                    .as_ref()
-                                    .map(|payload| Arc::clone(&payload.colors_rgba)),
-                            },
-                            params: ObjectFillGlDrawParams {
-                                center_world: camera.center_world_lvl0,
-                                zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                                selected_color: fill_color,
-                                primary_color: fill_color,
-                                visible: self.visible,
-                                local_to_world_offset: display_offset,
-                                local_to_world_scale: display_scale,
-                                object_color_opacity: self.fill_opacity,
-                            },
-                            visible_world: fill_mesh.bounds_local,
-                        });
-                    }
-                    let renderer = self.gl_object_fill.clone();
-                    let cb = egui_glow::CallbackFn::new(move |info, painter| {
-                        renderer.paint_many(info, painter, &items);
-                    });
-                    ui.painter().add(egui::PaintCallback {
-                        rect: viewport,
-                        callback: Arc::new(cb),
-                    });
-                } else if let Some(color_groups) = active_color_groups {
-                    let mut object_fill_colors =
-                        vec![egui::Color32::TRANSPARENT; fill_mesh.object_count];
-                    for group in &color_groups.groups {
-                        let Some(c) =
-                            self.effective_color_group_rgb(&color_groups.property_key, group)
-                        else {
-                            continue;
-                        };
-                        let fill_color =
-                            egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                        for (object_index, state) in group.fill_state.iter().copied().enumerate() {
-                            if state > 0 {
-                                object_fill_colors[object_index] = fill_color;
-                            }
-                        }
-                    }
-                    for tri in fill_mesh.vertices_local.chunks_exact(3) {
-                        let object_index = tri[0][2].round().max(0.0) as usize;
-                        let fill_color = object_fill_colors
-                            .get(object_index)
-                            .copied()
-                            .unwrap_or(egui::Color32::TRANSPARENT);
-                        if fill_color == egui::Color32::TRANSPARENT {
-                            continue;
-                        }
-                        let points = tri
-                            .iter()
-                            .map(|p| {
-                                camera.world_to_screen(
-                                    self.local_to_world_point(
-                                        egui::pos2(p[0], p[1]),
-                                        local_to_world_offset,
-                                    ),
-                                    viewport,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        ui.painter().add(egui::Shape::convex_polygon(
-                            points,
-                            fill_color,
-                            egui::Stroke::NONE,
-                        ));
-                    }
-                } else {
-                    let fill_color =
-                        egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], fill_alpha);
-                    let filtered_mask = self.filtered_mask.as_ref();
-                    for tri in fill_mesh.vertices_local.chunks_exact(3) {
-                        let object_index = tri[0][2].round().max(0.0) as usize;
-                        if filtered_mask
-                            .is_some_and(|mask| !mask.get(object_index).copied().unwrap_or(false))
-                        {
-                            continue;
-                        }
-                        let fill_color = continuous_colors
-                            .as_ref()
-                            .and_then(|payload| payload.colors_rgba.get(object_index))
-                            .map(|rgba| {
-                                egui::Color32::from_rgba_unmultiplied(
-                                    rgba[0],
-                                    rgba[1],
-                                    rgba[2],
-                                    ((rgba[3] as f32) * self.fill_opacity.clamp(0.0, 1.0)).round()
-                                        as u8,
-                                )
-                            })
-                            .unwrap_or(fill_color);
-                        if fill_color.a() == 0 {
-                            continue;
-                        }
-                        let points = tri
-                            .iter()
-                            .map(|p| {
-                                camera.world_to_screen(
-                                    self.local_to_world_point(
-                                        egui::pos2(p[0], p[1]),
-                                        local_to_world_offset,
-                                    ),
-                                    viewport,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        ui.painter().add(egui::Shape::convex_polygon(
-                            points,
-                            fill_color,
-                            egui::Stroke::NONE,
-                        ));
-                    }
-                }
-            }
+            self.draw_object_fills(
+                ui,
+                camera,
+                viewport,
+                visible_local,
+                local_to_world_offset,
+                display_offset,
+                display_scale,
+                gpu_available,
+                active_color_groups.copied(),
+                continuous_colors.as_ref(),
+                render_generation,
+            );
 
             if gpu_available {
                 let lod = &render_lods[lod_idx];
@@ -713,6 +489,7 @@ impl ObjectsLayer {
             && self.show_selection_overlay
             && self.selected_fill_opacity > 0.0
             && let Some(fill_mesh) = self.selected_fill_mesh.as_ref()
+            && fill_mesh.vertices_local.len() <= Self::MAX_DIRECT_FILL_VERTICES
             && fill_mesh.bounds_local.intersects(visible_local)
         {
             if gpu_available {
@@ -879,12 +656,12 @@ impl ObjectsLayer {
 
         let mut items = Vec::new();
         let state_cache_id = object_render_cache_id(0x4a31, 0);
-        if fill_mesh.object_count <= Self::SELECTED_RENDER_LOD_LIMIT {
+        if fill_mesh.vertices_local.len() < 500_000 {
             items.push(ObjectFillGlDrawItem {
                 data: ObjectFillGlDrawData {
                     cache_id: object_render_cache_id(0x4a32, 0),
                     state_cache_id,
-                    generation: self.generation,
+                    generation: self.geometry_generation,
                     vertices_local: Arc::clone(&fill_mesh.vertices_local),
                     object_count: fill_mesh.object_count,
                     selection_generation: self.selection_generation,
@@ -897,34 +674,33 @@ impl ObjectsLayer {
                 visible_world: fill_mesh.bounds_local,
             });
         } else {
-            let (bx0, by0, bx1, by1) = fill_mesh.bin_range_for_local_rect(visible_local);
-            for by in by0..=by1 {
-                for bx in bx0..=bx1 {
-                    let bin_index = by * fill_mesh.bins_w + bx;
-                    let Some(vertices) = fill_mesh.bin_vertices.get(bin_index) else {
-                        continue;
-                    };
-                    if vertices.is_empty() {
-                        continue;
-                    }
-                    items.push(ObjectFillGlDrawItem {
-                        data: ObjectFillGlDrawData {
-                            cache_id: object_render_cache_id_usize(0x4a80, bin_index),
-                            state_cache_id,
-                            generation: self.generation,
-                            vertices_local: Arc::clone(vertices),
-                            object_count: fill_mesh.object_count,
-                            selection_generation: self.selection_generation,
-                            selection_state: Arc::clone(&self.selection_fill_state),
-                            color_cache_id: 0,
-                            color_generation: 0,
-                            object_colors_rgba: None,
-                        },
-                        params: params.clone(),
-                        visible_world: visible_local,
-                    });
-                }
+            for slice in fill_mesh.spatial_slices_for_local_rect(visible_local) {
+                items.push(ObjectFillGlDrawItem {
+                    data: ObjectFillGlDrawData {
+                        cache_id: object_render_cache_id_usize(0x4a80, slice.bin_index),
+                        state_cache_id,
+                        generation: self.geometry_generation,
+                        vertices_local: slice.vertices_local,
+                        object_count: fill_mesh.object_count,
+                        selection_generation: self.selection_generation,
+                        selection_state: Arc::clone(&self.selection_fill_state),
+                        color_cache_id: 0,
+                        color_generation: 0,
+                        object_colors_rgba: None,
+                    },
+                    params: params.clone(),
+                    visible_world: slice.bounds_local,
+                });
             }
+        }
+
+        if items
+            .iter()
+            .map(|item| item.data.vertices_local.len())
+            .sum::<usize>()
+            > Self::MAX_DIRECT_FILL_VERTICES
+        {
+            return;
         }
 
         if items.is_empty() {

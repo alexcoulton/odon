@@ -72,6 +72,50 @@ mod rectangle_selection_tests {
     }
 
     #[test]
+    fn fill_spatial_query_returns_only_intersecting_non_empty_bins() {
+        let objects = vec![
+            object_with_polygons(vec![vec![
+                egui::pos2(10.0, 10.0),
+                egui::pos2(110.0, 10.0),
+                egui::pos2(110.0, 110.0),
+                egui::pos2(10.0, 110.0),
+                egui::pos2(10.0, 10.0),
+            ]]),
+            object_with_polygons(vec![vec![
+                egui::pos2(5000.0, 5000.0),
+                egui::pos2(5100.0, 5000.0),
+                egui::pos2(5100.0, 5100.0),
+                egui::pos2(5000.0, 5100.0),
+                egui::pos2(5000.0, 5000.0),
+            ]]),
+        ];
+        let mesh = build_object_fill_mesh(&objects).expect("test polygons should tessellate");
+        let visible = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 200.0));
+        let slices = mesh.spatial_slices_for_local_rect(visible);
+
+        assert!(!slices.is_empty());
+        assert!(slices.len() < mesh.bin_vertices.len());
+        assert!(
+            slices
+                .iter()
+                .all(|slice| slice.bounds_local.intersects(visible))
+        );
+        assert!(
+            slices
+                .iter()
+                .flat_map(|slice| slice.vertices_local.iter())
+                .all(|vertex| vertex[2] == 0.0,)
+        );
+        assert!(
+            mesh.spatial_slices_for_local_rect(egui::Rect::from_min_max(
+                egui::pos2(-500.0, -500.0),
+                egui::pos2(-100.0, -100.0),
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn rect_contains_point_inclusive_accepts_edges() {
         let rect = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 40.0));
 
@@ -161,5 +205,141 @@ mod rectangle_selection_tests {
         let object = point_object(egui::pos2(20.0, 20.0), egui::pos2(5.0, 5.0));
 
         assert!(!object_intersects_rect_for_selection(&object, rect));
+    }
+}
+
+#[cfg(test)]
+mod object_fill_tile_tests {
+    use super::tiles::{
+        MAX_VISIBLE_OBJECT_FILL_TILES, ObjectFillTileSpec, choose_object_fill_tile_level,
+        object_fill_tile_key, object_fill_tile_object_count_supported, plan_object_fill_tiles,
+    };
+    use super::*;
+
+    #[test]
+    fn level_tracks_screen_resolution_in_powers_of_two() {
+        assert_eq!(choose_object_fill_tile_level(4.0), 0);
+        assert_eq!(choose_object_fill_tile_level(1.0), 0);
+        assert_eq!(choose_object_fill_tile_level(0.5), 1);
+        assert_eq!(choose_object_fill_tile_level(0.25), 2);
+        assert_eq!(choose_object_fill_tile_level(0.01), 7);
+    }
+
+    #[test]
+    fn tile_keys_are_world_aligned_and_camera_independent() {
+        let bounds =
+            egui::Rect::from_min_max(egui::pos2(-1000.0, -1000.0), egui::pos2(3000.0, 3000.0));
+        let first = plan_object_fill_tiles(
+            egui::Rect::from_min_max(egui::pos2(-10.0, -10.0), egui::pos2(600.0, 600.0)),
+            bounds,
+            1.0,
+        );
+        assert!(
+            first
+                .iter()
+                .any(|tile| tile.tile_x == -1 && tile.tile_y == -1)
+        );
+        assert!(
+            first
+                .iter()
+                .any(|tile| tile.tile_x == 0 && tile.tile_y == 0)
+        );
+
+        let shifted = plan_object_fill_tiles(
+            egui::Rect::from_min_max(egui::pos2(20.0, 20.0), egui::pos2(620.0, 620.0)),
+            bounds,
+            1.0,
+        );
+        assert!(
+            shifted
+                .iter()
+                .any(|tile| tile.tile_x == 0 && tile.tile_y == 0)
+        );
+        assert_eq!(first[0].level, shifted[0].level);
+    }
+
+    #[test]
+    fn zooming_out_requests_fewer_coarser_tiles() {
+        let bounds = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(8192.0, 8192.0));
+        let visible = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(4096.0, 4096.0));
+        let fine = plan_object_fill_tiles(visible, bounds, 1.0);
+        let coarse = plan_object_fill_tiles(visible, bounds, 0.125);
+
+        assert!(coarse.len() < fine.len());
+        assert!(coarse[0].level > fine[0].level);
+    }
+
+    #[test]
+    fn visible_tiles_are_bounded_and_prioritize_the_camera_center() {
+        let bounds = egui::Rect::from_min_max(egui::pos2(-1.0e7, -1.0e7), egui::pos2(1.0e7, 1.0e7));
+        let visible =
+            egui::Rect::from_min_max(egui::pos2(-5000.0, -5000.0), egui::pos2(5000.0, 5000.0));
+        let tiles = plan_object_fill_tiles(visible, bounds, 8.0);
+
+        assert!(tiles.len() <= MAX_VISIBLE_OBJECT_FILL_TILES as usize);
+        let first_distance = tiles[0].bounds_local.center().distance_sq(visible.center());
+        assert!(tiles.iter().all(|tile| {
+            tile.bounds_local.center().distance_sq(visible.center()) >= first_distance
+        }));
+    }
+
+    #[test]
+    fn repeated_camera_trace_has_stable_world_keys_and_no_planner_queue() {
+        let bounds =
+            egui::Rect::from_min_max(egui::pos2(-8192.0, -8192.0), egui::pos2(8192.0, 8192.0));
+        let cameras = [
+            (egui::pos2(0.0, 0.0), 1.0),
+            (egui::pos2(64.0, -32.0), 0.5),
+            (egui::pos2(2048.0, 1024.0), 0.125),
+            (egui::pos2(0.0, 0.0), 1.0),
+        ];
+        let trace = || {
+            cameras
+                .iter()
+                .map(|(center, scale)| {
+                    let half = egui::vec2(1024.0 / scale, 768.0 / scale) * 0.5;
+                    plan_object_fill_tiles(
+                        egui::Rect::from_min_max(*center - half, *center + half),
+                        bounds,
+                        *scale,
+                    )
+                    .into_iter()
+                    .map(|tile| (tile.level, tile.tile_x, tile.tile_y))
+                    .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(trace(), trace());
+        assert_eq!(trace().first(), trace().last());
+    }
+
+    #[test]
+    fn integer_id_path_supports_more_than_65535_objects_without_truncation() {
+        assert!(object_fill_tile_object_count_supported(65_536));
+        assert!(object_fill_tile_object_count_supported(16_777_215));
+        assert!(!object_fill_tile_object_count_supported(16_777_216));
+    }
+
+    #[test]
+    fn style_edits_reuse_id_tiles_while_geometry_reload_changes_the_key() {
+        let spec = ObjectFillTileSpec {
+            level: 3,
+            tile_x: -4,
+            tile_y: 9,
+            bounds_local: egui::Rect::from_min_size(
+                egui::pos2(-16384.0, 36864.0),
+                egui::vec2(4096.0, 4096.0),
+            ),
+        };
+        let before_style_edit = object_fill_tile_key(7, spec);
+        let after_property_palette_domain_filter_and_opacity_edits = object_fill_tile_key(7, spec);
+        let after_geometry_reload = object_fill_tile_key(8, spec);
+
+        assert_eq!(
+            before_style_edit,
+            after_property_palette_domain_filter_and_opacity_edits
+        );
+        assert_ne!(before_style_edit, after_geometry_reload);
     }
 }

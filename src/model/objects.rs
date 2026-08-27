@@ -145,6 +145,12 @@ impl ControlObjectResource {
     pub fn renderer_payload<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.renderer_payload.as_ref()?.downcast_ref::<T>()
     }
+
+    pub fn renderer_payload_identity(&self) -> Option<usize> {
+        self.renderer_payload
+            .as_ref()
+            .map(|payload| Arc::as_ptr(payload) as *const () as usize)
+    }
 }
 
 pub trait ObjectResourceLoader: Send + Sync + 'static {
