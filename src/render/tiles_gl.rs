@@ -87,6 +87,7 @@ pub struct TileDraw {
     pub tile_y: u64,
     pub tile_x: u64,
     pub screen_rect: egui::Rect,
+    pub screen_quad: Option<[egui::Pos2; 4]>,
 }
 
 #[derive(Debug, Clone, Copy)]

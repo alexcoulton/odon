@@ -14,9 +14,66 @@ pub enum Ownership {
     User,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceLifetime {
+    Durable,
+    Session,
+}
+
+impl Default for SourceLifetime {
+    fn default() -> Self {
+        Self::Durable
+    }
+}
+
 impl Default for Ownership {
     fn default() -> Self {
         Self::Session
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AffineTransform {
+    pub input_axes: Vec<String>,
+    pub output_axes: Vec<String>,
+    pub matrix: Vec<Vec<f64>>,
+    pub direction: String,
+    pub pixel_center: String,
+}
+
+impl AffineTransform {
+    fn validate(&self) -> Result<(), ControlError> {
+        if self.input_axes != ["x", "y"] || self.output_axes != ["x", "y"] {
+            return Err(invalid("affine input_axes and output_axes must be [x, y]"));
+        }
+        if self.direction != "input_to_reference" || self.pixel_center != "center" {
+            return Err(invalid(
+                "affine direction must be input_to_reference with pixel_center=center",
+            ));
+        }
+        if self.matrix.len() != 3
+            || self.matrix.iter().any(|row| row.len() != 3)
+            || self.matrix.iter().flatten().any(|value| !value.is_finite())
+        {
+            return Err(invalid("affine matrix must be a finite 3x3 matrix"));
+        }
+        let tolerance = 1e-12;
+        if self.matrix[2][0].abs() > tolerance
+            || self.matrix[2][1].abs() > tolerance
+            || (self.matrix[2][2] - 1.0).abs() > tolerance
+        {
+            return Err(invalid(
+                "affine matrix must use homogeneous final row [0, 0, 1]",
+            ));
+        }
+        let determinant =
+            self.matrix[0][0] * self.matrix[1][1] - self.matrix[0][1] * self.matrix[1][0];
+        if determinant.abs() <= tolerance {
+            return Err(invalid("affine matrix must be invertible"));
+        }
+        Ok(())
     }
 }
 
@@ -32,6 +89,8 @@ pub struct CoordinateSpace {
     pub translation: Vec<f64>,
     #[serde(default)]
     pub reference_layer_id: Option<String>,
+    #[serde(default)]
+    pub affine: Option<AffineTransform>,
 }
 
 impl CoordinateSpace {
@@ -71,6 +130,16 @@ impl CoordinateSpace {
                 "coordinate-space scale must be positive and all transforms must be finite",
             ));
         }
+        if let Some(affine) = &self.affine {
+            if !self.axes.iter().any(|axis| axis == "x")
+                || !self.axes.iter().any(|axis| axis == "y")
+            {
+                return Err(invalid(
+                    "an affine coordinate space must include x and y axes",
+                ));
+            }
+            affine.validate()?;
+        }
         Ok(())
     }
 }
@@ -83,7 +152,11 @@ pub struct RegisterDataResource {
     pub uri: String,
     pub format: String,
     #[serde(default)]
+    pub group_path: Option<String>,
+    #[serde(default)]
     pub ownership: Ownership,
+    #[serde(default)]
+    pub source_lifetime: SourceLifetime,
     pub coordinate_space: CoordinateSpace,
     #[serde(default)]
     pub metadata: BTreeMap<String, Value>,
@@ -96,7 +169,10 @@ pub struct DataResourceSnapshot {
     pub resource_id: String,
     pub uri: String,
     pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_path: Option<String>,
     pub ownership: Ownership,
+    pub source_lifetime: SourceLifetime,
     pub owner_session_id: String,
     pub coordinate_space: CoordinateSpace,
     pub metadata: BTreeMap<String, Value>,
@@ -171,11 +247,25 @@ impl ResourceRegistry {
         if request.uri.trim().is_empty() {
             return Err(invalid("resource URI must not be empty"));
         }
+        if request.source_lifetime == SourceLifetime::Session
+            && request.ownership != Ownership::Session
+        {
+            return Err(ControlError::new(
+                ControlErrorKind::Conflict,
+                "a session-lifetime source cannot be project- or user-owned",
+            ));
+        }
         if !matches!(
             request.format.as_str(),
             "ome-zarr" | "zarr" | "arrow-ipc" | "parquet" | "geoparquet" | "geojson"
         ) {
             return Err(invalid("unsupported data resource format"));
+        }
+        let group_path = normalize_group_path(request.group_path.as_deref())?;
+        if group_path.is_some() && !matches!(request.format.as_str(), "ome-zarr" | "zarr") {
+            return Err(invalid(
+                "group_path is only supported for ome-zarr and zarr resources",
+            ));
         }
         let resource_id = allocate_id("resource", request.resource_id)?;
         let mut state = self.state.lock().expect("resource registry poisoned");
@@ -187,7 +277,9 @@ impl ResourceRegistry {
             resource_id: resource_id.clone(),
             uri: request.uri,
             format: request.format,
+            group_path,
             ownership: request.ownership,
+            source_lifetime: request.source_lifetime,
             owner_session_id: session_id.to_string(),
             coordinate_space: request.coordinate_space,
             metadata: request.metadata,
@@ -231,6 +323,16 @@ impl ResourceRegistry {
             .ok_or_else(|| not_found("data resource", id))
     }
 
+    pub fn get_resource_for_session(
+        &self,
+        id: &str,
+        session_id: &str,
+    ) -> Result<DataResourceSnapshot, ControlError> {
+        let resource = self.get_resource(id)?;
+        ensure_resource_reference(&resource, Ownership::Session, session_id)?;
+        Ok(resource)
+    }
+
     pub fn remove_resource(&self, id: &str, session_id: &str) -> Result<(), ControlError> {
         let mut state = self.state.lock().expect("resource registry poisoned");
         if state
@@ -268,55 +370,61 @@ impl ResourceRegistry {
         params: Value,
         session_id: &str,
     ) -> Result<LayerSnapshot, ControlError> {
-        let request: AddLayer = serde_json::from_value(params)
-            .map_err(|error| invalid(format!("invalid layer: {error}")))?;
-        if request.name.trim().is_empty() {
-            return Err(invalid("layer name must not be empty"));
+        self.add_layers_atomic(vec![params], session_id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid("layer batch unexpectedly produced no layer"))
+    }
+
+    pub fn validate_layers(&self, params: &[Value], session_id: &str) -> Result<(), ControlError> {
+        let requests = parse_add_layers(params.to_vec())?;
+        let state = self.state.lock().expect("resource registry poisoned");
+        validate_add_layers(&state, &requests, session_id)
+    }
+
+    pub fn add_layers_atomic(
+        &self,
+        params: Vec<Value>,
+        session_id: &str,
+    ) -> Result<Vec<LayerSnapshot>, ControlError> {
+        let requests = parse_add_layers(params)?;
+        if requests.is_empty() {
+            return Ok(Vec::new());
         }
-        if !matches!(
-            request.kind.as_str(),
-            "image" | "labels" | "objects" | "points" | "shapes" | "mask" | "annotations"
-        ) {
-            return Err(invalid("unsupported layer kind"));
-        }
-        if !request.opacity.is_finite() || !(0.0..=1.0).contains(&request.opacity) {
-            return Err(invalid("layer opacity must be between 0 and 1"));
-        }
-        let layer_id = allocate_id("layer", request.layer_id)?;
         let mut state = self.state.lock().expect("resource registry poisoned");
-        let resource = state
-            .resources
-            .get(&request.data_resource_id)
-            .ok_or_else(|| not_found("data resource", &request.data_resource_id))?;
-        ensure_resource_reference(resource, request.ownership, session_id)?;
-        if state.layers.iter().any(|layer| layer.layer_id == layer_id) {
-            return Err(conflict("layer_id", &layer_id));
-        }
+        validate_add_layers(&state, &requests, session_id)?;
         let revision = self.events.next_revision();
-        let snapshot = LayerSnapshot {
-            layer_id: layer_id.clone(),
-            name: request.name,
-            kind: request.kind,
-            data_resource_id: request.data_resource_id,
-            visible: request.visible,
-            opacity: request.opacity,
-            ownership: request.ownership,
-            owner_session_id: session_id.to_string(),
-            style: request.style,
-            provenance: request.provenance,
-            order: state.layers.len(),
-            revision,
-        };
-        state.layers.push(snapshot.clone());
+        let first_order = state.layers.len();
+        let snapshots = requests
+            .into_iter()
+            .enumerate()
+            .map(|(index, (layer_id, request))| LayerSnapshot {
+                layer_id,
+                name: request.name,
+                kind: request.kind,
+                data_resource_id: request.data_resource_id,
+                visible: request.visible,
+                opacity: request.opacity,
+                ownership: request.ownership,
+                owner_session_id: session_id.to_string(),
+                style: request.style,
+                provenance: request.provenance,
+                order: first_order + index,
+                revision,
+            })
+            .collect::<Vec<_>>();
+        state.layers.extend(snapshots.iter().cloned());
         drop(state);
-        self.publish(
-            "viewer.layers.added",
-            &layer_id,
-            revision,
-            &snapshot,
-            session_id,
-        );
-        Ok(snapshot)
+        for snapshot in &snapshots {
+            self.publish(
+                "viewer.layers.added",
+                &snapshot.layer_id,
+                revision,
+                snapshot,
+                session_id,
+            );
+        }
+        Ok(snapshots)
     }
 
     pub fn list_layers(&self) -> Vec<LayerSnapshot> {
@@ -642,6 +750,19 @@ impl ResourceRegistry {
         }
     }
 
+    pub fn session_layer_ids(&self, session_id: &str) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("resource registry poisoned")
+            .layers
+            .iter()
+            .filter(|layer| {
+                layer.ownership == Ownership::Session && layer.owner_session_id == session_id
+            })
+            .map(|layer| layer.layer_id.clone())
+            .collect()
+    }
+
     fn publish(
         &self,
         event: &str,
@@ -732,6 +853,75 @@ fn ensure_resource_reference(
         })));
     }
     Ok(())
+}
+
+fn parse_add_layers(params: Vec<Value>) -> Result<Vec<(String, AddLayer)>, ControlError> {
+    params
+        .into_iter()
+        .map(|params| {
+            let request: AddLayer = serde_json::from_value(params)
+                .map_err(|error| invalid(format!("invalid layer: {error}")))?;
+            if request.name.trim().is_empty() {
+                return Err(invalid("layer name must not be empty"));
+            }
+            if !matches!(
+                request.kind.as_str(),
+                "image" | "labels" | "objects" | "points" | "shapes" | "mask" | "annotations"
+            ) {
+                return Err(invalid("unsupported layer kind"));
+            }
+            if !request.opacity.is_finite() || !(0.0..=1.0).contains(&request.opacity) {
+                return Err(invalid("layer opacity must be between 0 and 1"));
+            }
+            let layer_id = allocate_id("layer", request.layer_id.clone())?;
+            Ok((layer_id, request))
+        })
+        .collect()
+}
+
+fn validate_add_layers(
+    state: &State,
+    requests: &[(String, AddLayer)],
+    session_id: &str,
+) -> Result<(), ControlError> {
+    let mut layer_ids = state
+        .layers
+        .iter()
+        .map(|layer| layer.layer_id.clone())
+        .collect::<HashSet<_>>();
+    for (layer_id, request) in requests {
+        let resource = state
+            .resources
+            .get(&request.data_resource_id)
+            .ok_or_else(|| not_found("data resource", &request.data_resource_id))?;
+        ensure_resource_reference(resource, request.ownership, session_id)?;
+        if !layer_ids.insert(layer_id.clone()) {
+            return Err(conflict("layer_id", layer_id));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_group_path(group_path: Option<&str>) -> Result<Option<String>, ControlError> {
+    let Some(group_path) = group_path else {
+        return Ok(None);
+    };
+    if group_path.is_empty() {
+        return Ok(None);
+    }
+    if group_path.trim() != group_path
+        || group_path.starts_with('/')
+        || group_path.ends_with('/')
+        || group_path.contains('\\')
+        || group_path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(invalid(
+            "group_path must be a normalized relative Zarr group path without traversal",
+        ));
+    }
+    Ok(Some(group_path.to_string()))
 }
 
 fn invalid(message: impl Into<String>) -> ControlError {
@@ -836,6 +1026,19 @@ mod tests {
     }
 
     #[test]
+    fn session_lifetime_sources_cannot_claim_durable_ownership() {
+        let registry = ResourceRegistry::shared(EventHub::shared());
+        let mut request = resource();
+        request["uri"] = json!("http://127.0.0.1:1234/secret/1");
+        request["source_lifetime"] = json!("session");
+        request["ownership"] = json!("project");
+        let error = registry
+            .register_resource(request, "one")
+            .expect_err("ephemeral project dependency is rejected");
+        assert_eq!(error.kind, ControlErrorKind::Conflict);
+    }
+
+    #[test]
     fn project_owned_resources_roundtrip_through_project_manifest() {
         let source = ResourceRegistry::shared(EventHub::shared());
         let mut project_resource = resource();
@@ -862,5 +1065,92 @@ mod tests {
             .expect("restore project manifest");
         assert_eq!(restored.list_resources().len(), 1);
         assert_eq!(restored.list_layers()[0].ownership, Ownership::Project);
+    }
+
+    #[test]
+    fn zarr_group_paths_are_normalized_and_persisted() {
+        let registry = ResourceRegistry::shared(EventHub::shared());
+        let mut request = resource();
+        request["group_path"] = json!("images/morphology");
+        request["ownership"] = json!("project");
+        let registered = registry
+            .register_resource(request, "one")
+            .expect("nested Zarr resource");
+        assert_eq!(registered.group_path.as_deref(), Some("images/morphology"));
+
+        let (resources, _) = registry.project_manifest();
+        assert_eq!(resources[0]["group_path"], json!("images/morphology"));
+    }
+
+    #[test]
+    fn affine_coordinate_contract_is_validated_and_persisted() {
+        let registry = ResourceRegistry::shared(EventHub::shared());
+        let mut request = resource();
+        request["ownership"] = json!("project");
+        request["coordinate_space"]["affine"] = json!({
+            "input_axes": ["x", "y"],
+            "output_axes": ["x", "y"],
+            "matrix": [[0.0, -1.0, 12.0], [1.0, 0.25, 4.0], [0.0, 0.0, 1.0]],
+            "direction": "input_to_reference",
+            "pixel_center": "center"
+        });
+        let registered = registry
+            .register_resource(request, "one")
+            .expect("invertible affine resource");
+        assert_eq!(
+            registered.coordinate_space.affine.unwrap().matrix[0][1],
+            -1.0
+        );
+        let (resources, _) = registry.project_manifest();
+        assert_eq!(
+            resources[0]["coordinate_space"]["affine"]["pixel_center"],
+            "center"
+        );
+
+        let mut invalid = resource();
+        invalid["coordinate_space"]["affine"] = json!({
+            "input_axes": ["x", "y"], "output_axes": ["x", "y"],
+            "matrix": [[1.0, 2.0, 0.0], [2.0, 4.0, 0.0], [0.0, 0.0, 1.0]],
+            "direction": "input_to_reference", "pixel_center": "center"
+        });
+        assert!(registry.register_resource(invalid, "one").is_err());
+    }
+
+    #[test]
+    fn invalid_or_non_zarr_group_paths_are_rejected() {
+        let registry = ResourceRegistry::shared(EventHub::shared());
+        for group_path in ["/images/a", "images//a", "images/../a", "images/a/"] {
+            let mut request = resource();
+            request["group_path"] = json!(group_path);
+            assert!(registry.register_resource(request, "one").is_err());
+        }
+
+        let mut request = resource();
+        request["format"] = json!("parquet");
+        request["group_path"] = json!("tables/counts");
+        assert!(registry.register_resource(request, "one").is_err());
+    }
+
+    #[test]
+    fn layer_batches_validate_before_committing_any_layer() {
+        let registry = ResourceRegistry::shared(EventHub::shared());
+        registry
+            .register_resource(resource(), "one")
+            .expect("resource");
+        let result = registry.add_layers_atomic(
+            vec![
+                json!({
+                    "layer_id": "layer:valid", "name": "Valid", "kind": "labels",
+                    "data_resource_id": "resource:labels"
+                }),
+                json!({
+                    "layer_id": "layer:invalid", "name": "Invalid", "kind": "labels",
+                    "data_resource_id": "resource:missing"
+                }),
+            ],
+            "one",
+        );
+        assert!(result.is_err());
+        assert!(registry.list_layers().is_empty());
     }
 }

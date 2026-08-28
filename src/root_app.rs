@@ -891,7 +891,14 @@ impl RootApp {
                 document.opened.descriptor.source.source_key()
             ));
         }
+        let (external_revision, external_layers, external_resources) =
+            self.control_runtime.external_layers();
         if let Mode::Single(app) = &mut self.mode {
+            // Registered GeoParquet layers must exist in the renderer before the actor-owned
+            // object projection is installed. Keeping this in the projection transaction also
+            // makes the numeric spatial_shape target stable for Python selection round-trips.
+            app.sync_control_external_layers(&external_layers, &external_resources);
+            self.control_external_revision = external_revision;
             app.project_space_mut()
                 .apply_control_actor_project_projection(&projection.project);
             app.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);

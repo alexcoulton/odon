@@ -8,6 +8,7 @@ use crate::data::zarr_attrs::read_node_attributes;
 pub struct SpatialDataTransform2 {
     pub scale: [f32; 2],
     pub translation: [f32; 2],
+    pub affine: Option<[[f32; 3]; 3]>,
 }
 
 impl Default for SpatialDataTransform2 {
@@ -15,12 +16,19 @@ impl Default for SpatialDataTransform2 {
         Self {
             scale: [1.0, 1.0],
             translation: [0.0, 0.0],
+            affine: None,
         }
     }
 }
 
 impl SpatialDataTransform2 {
     pub fn apply(&self, p: [f32; 2]) -> [f32; 2] {
+        if let Some(matrix) = self.affine {
+            return [
+                matrix[0][0] * p[0] + matrix[0][1] * p[1] + matrix[0][2],
+                matrix[1][0] * p[0] + matrix[1][1] * p[1] + matrix[1][2],
+            ];
+        }
         [
             p[0] * self.scale[0] + self.translation[0],
             p[1] * self.scale[1] + self.translation[1],
@@ -28,6 +36,16 @@ impl SpatialDataTransform2 {
     }
 
     pub fn relative_to(&self, reference: SpatialDataTransform2) -> Self {
+        if self.affine.is_some() || reference.affine.is_some() {
+            let matrix = self.matrix();
+            let reference = reference.matrix();
+            if let Some(inverse) = invert_affine(reference) {
+                return Self {
+                    affine: Some(multiply_affine(inverse, matrix)),
+                    ..Self::default()
+                };
+            }
+        }
         let ref_sx = reference.scale[0].max(1e-6);
         let ref_sy = reference.scale[1].max(1e-6);
         Self {
@@ -36,8 +54,49 @@ impl SpatialDataTransform2 {
                 (self.translation[0] - reference.translation[0]) / ref_sx,
                 (self.translation[1] - reference.translation[1]) / ref_sy,
             ],
+            affine: None,
         }
     }
+
+    pub fn matrix(&self) -> [[f32; 3]; 3] {
+        self.affine.unwrap_or([
+            [self.scale[0], 0.0, self.translation[0]],
+            [0.0, self.scale[1], self.translation[1]],
+            [0.0, 0.0, 1.0],
+        ])
+    }
+}
+
+fn invert_affine(matrix: [[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
+    let determinant = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    if determinant.abs() <= 1e-12 {
+        return None;
+    }
+    Some([
+        [
+            matrix[1][1] / determinant,
+            -matrix[0][1] / determinant,
+            (matrix[0][1] * matrix[1][2] - matrix[1][1] * matrix[0][2]) / determinant,
+        ],
+        [
+            -matrix[1][0] / determinant,
+            matrix[0][0] / determinant,
+            (matrix[1][0] * matrix[0][2] - matrix[0][0] * matrix[1][2]) / determinant,
+        ],
+        [0.0, 0.0, 1.0],
+    ])
+}
+
+fn multiply_affine(left: [[f32; 3]; 3], right: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut result = [[0.0; 3]; 3];
+    for (row, values) in result.iter_mut().enumerate() {
+        for (column, value) in values.iter_mut().enumerate() {
+            *value = (0..3)
+                .map(|index| left[row][index] * right[index][column])
+                .sum();
+        }
+    }
+    result
 }
 
 #[derive(Debug, Clone)]
@@ -319,6 +378,7 @@ fn discover_tables(root: &Path, out: &mut SpatialDataDiscovery) -> anyhow::Resul
             transform: SpatialDataTransform2 {
                 scale: [1.0, 1.0],
                 translation: [0.0, 0.0],
+                affine: None,
             },
             feature_key: None,
         });
@@ -331,6 +391,7 @@ fn parse_transform2(attrs: &serde_json::Map<String, serde_json::Value>) -> Spati
     let mut t = SpatialDataTransform2 {
         scale: [1.0, 1.0],
         translation: [0.0, 0.0],
+        affine: None,
     };
     let Some(cts) = coordinate_transformations(attrs) else {
         return t;

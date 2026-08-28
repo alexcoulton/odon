@@ -329,12 +329,14 @@ class ClientTests(unittest.TestCase):
             data = client.data.register(
                 "file:///tmp/labels.zarr",
                 format="ome-zarr",
+                group_path="labels/cells",
                 coordinate_space=odon.CoordinateSpace(
                     axes=("y", "x"), scale=(0.5, 0.5)
                 ),
             )
             layer = client.layers.add(data, name="Cellpose", kind="labels")
             self.assertEqual(layer.snapshot["data_resource_id"], data.resource_id)
+            self.assertEqual(data.snapshot["group_path"], "labels/cells")
 
             extension = client.ui.register_extension(
                 id="org.example.cellpose", name="Cellpose", version="0.1"
@@ -399,10 +401,26 @@ class CoordinateSpaceTests(unittest.TestCase):
         world = space.pixel_to_world((6.0, 3.0))
         self.assertEqual(world, (13.0, 2.0))
         self.assertEqual(space.world_to_pixel(world), (6.0, 3.0))
+        affine = odon.CoordinateSpace(
+            axes=("c", "y", "x"),
+            affine=odon.AffineTransform(
+                matrix=((0.0, -2.0, 10.0), (3.0, 0.5, -4.0), (0.0, 0.0, 1.0))
+            ),
+        )
+        affine_world = affine.pixel_to_world((2.0, 5.0, 7.0))
+        self.assertEqual(affine_world, (2.0, 19.5, 0.0))
+        self.assertEqual(affine.world_to_pixel(affine_world), (2.0, 5.0, 7.0))
         with self.assertRaises(ValueError):
             odon.CoordinateSpace(axes=("x", "x"))
         with self.assertRaises(ValueError):
             odon.CoordinateSpace(axes=("y", "x"), scale=(1.0,))
+        with self.assertRaises(ValueError):
+            odon.CoordinateSpace(
+                axes=("c", "y"),
+                affine=odon.AffineTransform(
+                    matrix=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+                ),
+            )
 
 
 class AsyncClientTests(unittest.IsolatedAsyncioTestCase):

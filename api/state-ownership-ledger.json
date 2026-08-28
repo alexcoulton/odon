@@ -596,10 +596,10 @@
         "fields": ["spatial_layers"],
         "current_class": "shared_resource",
         "disposition": "retain",
-        "canonical_writer": "ControlActor bounded alternate-document worker plus renderer presentation adapters",
-        "projection_source": "generation-tagged prepared shape, point, and object resources",
+        "canonical_writer": "ControlActor bounded alternate/generic object worker plus renderer presentation adapters",
+        "projection_source": "generation-tagged native or registered GeoParquet shape, point, property, and selection resources",
         "renderer_consumers": "shape/point GPU caches, spatial indexes, hit testing, tables, and paint UI",
-        "persistence_consumers": "none; actor project/document descriptors and native-layer presentation are authoritative",
+        "persistence_consumers": "project-owned GeoParquet descriptors; temporary adapter snapshots require explicit promotion",
         "native_commit_point": "typed dataset, object, selection, or native-layer command",
         "milestone": 5
       },

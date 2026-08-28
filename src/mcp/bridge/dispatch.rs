@@ -412,6 +412,38 @@ pub(super) fn call_actor_for_cleanup(
     })?
 }
 
+pub(super) fn call_actor_for_session_cleanup(
+    tx: &Sender<OdonControlRequest>,
+    identity: &ControlServerIdentity,
+    session_id: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, ControlError> {
+    let command = ControlCommand::decode(method, params)?;
+    let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+    tx.try_send(OdonControlRequest {
+        command,
+        reply: reply_tx,
+        session_id: session_id.to_string(),
+        request_id: None,
+        event_hub: Arc::clone(&identity.event_hub),
+        task_registry: Arc::clone(&identity.task_registry),
+        task_id: None,
+    })
+    .map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::NotReady,
+            "session resource disconnect cleanup could not reach the application actor",
+        )
+    })?;
+    reply_rx.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+        ControlError::new(
+            ControlErrorKind::Timeout,
+            "session resource disconnect cleanup timed out",
+        )
+    })?
+}
+
 fn call_actor_for_state_cleanup(
     tx: &Sender<OdonControlRequest>,
     state: &ConnectionState,

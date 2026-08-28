@@ -24,6 +24,8 @@ mode. Availability is still capability- and readiness-checked at runtime.
 | `odon.launch.launch(executable: 'str \| Path', args: 'Sequence[str]' = (), *, timeout: 'float' = 20.0, env: 'Mapping[str, str] \| None' = None, terminate_on_failure: 'bool' = True) -> 'Client'` | Launch an installed Odon executable and connect synchronously. |
 | `odon.launch.launch_async(executable: 'str \| Path', args: 'Sequence[str]' = (), *, timeout: 'float' = 20.0, env: 'Mapping[str, str] \| None' = None, terminate_on_failure: 'bool' = True) -> 'AsyncClient'` | Launch an installed Odon executable and connect asynchronously. |
 | `odon.extensions.run(factory: 'Callable[[Client], ExtensionT]', *, instance: 'Instance \| str \| None' = None, reconnect: 'bool' = False, reconnect_delay: 'float' = 1.0, stop_event: 'threading.Event \| None' = None) -> 'None'` | Run and optionally reconnect a packaged Python extension. |
+| `odon.integrations.spatialdata.display(app: 'Client', sdata: 'Any', *, image: 'str \| None' = None, labels: 'Iterable[str]' = (), shapes: 'Iterable[str]' = (), points: 'Iterable[str]' = (), tables: 'Iterable[str]' = (), table_columns: 'Mapping[str, Iterable[str]] \| None' = None, coordinate_system: 'str \| None' = None, transfer: 'str \| Mapping[str, str]' = 'auto', ownership: 'str' = 'session') -> 'SpatialDataDisplay'` | Adapt SpatialData elements independently by direct reference, session provider, or explicit vector snapshot. |
+| `odon.integrations.spatialdata.display_async(app: 'AsyncClient', sdata: 'Any', *, image: 'str \| None' = None, labels: 'Iterable[str]' = (), shapes: 'Iterable[str]' = (), points: 'Iterable[str]' = (), tables: 'Iterable[str]' = (), table_columns: 'Mapping[str, Iterable[str]] \| None' = None, coordinate_system: 'str \| None' = None, transfer: 'str \| Mapping[str, str]' = 'auto', ownership: 'str' = 'session') -> 'AsyncSpatialDataDisplay'` | Asynchronously compose independently adapted SpatialData elements into one Odon document. |
 | `odon.ui.emit(event: 'str', **data: 'Any') -> 'dict[str, Any]'` | Create an action that emits an extension event to Python. |
 | `odon.ui.command(method: 'str', params: 'Mapping[str, Any] \| None' = None) -> 'dict[str, Any]'` | Create an action that invokes a validated native command. |
 | `odon.ui.bind(target: 'str', **selector: 'Any') -> 'dict[str, Any]'` | Create a native state binding action. |
@@ -88,6 +90,7 @@ Access: `app.datasets`. Dataset inspection and opening.
 | --- | --- | --- | --- |
 | `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. (completion: immediate_semantic) |
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
+| `open_resource(resource: 'DataResource \| str', *, layers: 'Iterable[LayerSpec \| Mapping[str, Any]]' = (), if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_resource` | project, single, mosaic, transition | Open a registered OME-Zarr/Zarr resource as the primary document. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
 | `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
@@ -250,6 +253,7 @@ Access: `app.channels` or `app.viewer.channels`. Channel visibility, presentatio
 | `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. (completion: immediate_semantic) |
 | `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_contrast_many(channels: 'Iterable[str \| int]', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. (completion: immediate_semantic) |
@@ -569,7 +573,7 @@ Access: `app.mosaic`. Mosaic items, layout, selection, focus, object loading, an
 | `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
 | `get_object_property_cache() -> 'Any'` | `mosaic.objects.property_cache.get` | mosaic | Get the lazy mosaic object-property retention policy. (completion: immediate_semantic) |
 | `set_object_property_cache(*, policy: 'str' = 'lru', capacity: 'int \| None' = 2, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.property_cache.set` | mosaic | Bound lazily loaded mosaic properties without unloading object geometry. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
-| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Apply one continuous object-colour scale across the mosaic. |
+| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, domains_by_roi: 'Mapping[str, Sequence[float]] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Apply continuous object colours, optionally with one domain per ROI. |
 | `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. (completion: immediate_semantic) |
 | `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
 | `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
@@ -586,7 +590,7 @@ Access: `app.data`. Register and manage large external data by reference.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
+| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', group_path: 'str \| None' = None, resource_id: 'str \| None' = None, ownership: 'str' = 'session', source_lifetime: 'str' = 'durable', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
 | `register_numpy(array: 'Any', *, axes: 'Sequence[str]', units: 'Sequence[str]' = (), scale: 'Sequence[float]' = (), translation: 'Sequence[float]' = (), provenance: 'Mapping[str, Any] \| None' = None) -> 'DataResource'` | SDK-local/delegated | Inherited from delegated operation | Write an array to session-scoped Zarr and register it by reference. |
 | `get(resource_id: 'str') -> 'DataResource'` | `data.resources.get` | protocol | Get an external data descriptor. (completion: resource_ready) |
 | `list() -> 'list[DataResource]'` | `data.resources.list` | protocol | List registered external data. (completion: resource_ready) |
@@ -606,13 +610,42 @@ Access: returned by `app.data`. Mutable handle for one registered external data 
 
 Access: construct directly. Validated pixel/world coordinate metadata and conversion.
 
-Constructor: `CoordinateSpace(axes: 'tuple[str, ...]', units: 'tuple[str, ...]' = (), scale: 'tuple[float, ...]' = (), translation: 'tuple[float, ...]' = (), reference_layer_id: 'str \| None' = None) -> None`
+Constructor: `CoordinateSpace(axes: 'tuple[str, ...]', units: 'tuple[str, ...]' = (), scale: 'tuple[float, ...]' = (), translation: 'tuple[float, ...]' = (), reference_layer_id: 'str \| None' = None, affine: 'AffineTransform \| None' = None) -> None`
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
 | `pixel_to_world(coordinates: 'Sequence[float]') -> 'tuple[float, ...]'` | SDK-local/delegated | Inherited from delegated operation | Apply the level-zero affine transform to pixel-centre coordinates. |
 | `world_to_pixel(coordinates: 'Sequence[float]') -> 'tuple[float, ...]'` | SDK-local/delegated | Inherited from delegated operation | Invert the level-zero affine transform for world coordinates. |
+
+### Affine transform
+
+Access: construct directly. Validated 2D homogeneous input-to-reference affine transform.
+
+Constructor: `AffineTransform(matrix: 'tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]', input_axes: 'tuple[str, str]' = ('x', 'y'), output_axes: 'tuple[str, str]' = ('x', 'y'), direction: 'str' = 'input_to_reference', pixel_center: 'str' = 'center') -> None`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### Array provider
+
+Access: construct directly. Session-scoped read-only loopback OME-Zarr provider for NumPy, Xarray, and Dask arrays.
+
+Constructor: `ArrayProvider(array: 'Any', *, axes: 'Sequence[str]', chunks: 'Sequence[int] \| None' = None, max_concurrency: 'int' = 8, cache_chunks: 'int' = 128) -> 'None'`
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `uri (property)` | SDK-local/delegated | Inherited from delegated operation | Uri. |
+| `snapshot (property)` | SDK-local/delegated | Inherited from delegated operation | Snapshot. |
+| `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
+| `materialize(destination: 'str \| Path', *, overwrite: 'bool' = False, cancel: 'threading.Event \| None' = None) -> 'Path'` | SDK-local/delegated | Inherited from delegated operation | Explicitly write the complete provider generation as OME-Zarr. |
+
+### Provider snapshot
+
+Access: `provider.snapshot`. Immutable provider URI, generation, array, chunking, and lifetime metadata.
+
+This value type has no public methods beyond its fields.
 
 ### External layers
 
@@ -639,6 +672,61 @@ Access: returned by `app.layers`. Mutable handle for one external viewer layer.
 | `refresh() -> "'Layer'"` | SDK-local/delegated | Inherited from delegated operation | Refresh. |
 | `update(*, name: 'str \| None' = None, visible: 'bool \| None' = None, opacity: 'float \| None' = None, style: 'Mapping[str, Any] \| None' = None, if_revision: 'int \| None' = None) -> "'Layer'"` | SDK-local/delegated | Inherited from delegated operation | Update. |
 | `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
+
+### External layer specification
+
+Access: pass to `app.datasets.open_resource()`. Typed layer descriptor committed atomically with a primary resource.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `from_resource(data: 'DataResource \| str', *, name: 'str', kind: 'str', **options: 'Any') -> "'LayerSpec'"` | SDK-local/delegated | Inherited from delegated operation | From resource. |
+| `to_dict() -> 'dict[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | To dict. |
+
+### SpatialData element display
+
+Access: `SpatialDataDisplay.elements`. Chosen source, transfer, coordinate, ownership, resource, and layer identity for one element.
+
+This value type has no public methods beyond its fields.
+
+### SpatialData element selection
+
+Access: returned by `SpatialDataDisplay.selection()`. Bounded actor-owned object selection IDs mapped to one SpatialData element.
+
+This value type has no public methods beyond its fields.
+
+### SpatialData table projection
+
+Access: `SpatialDataDisplay.table_projections`. Selected AnnData columns projected onto a target vector resource.
+
+This value type has no public methods beyond its fields.
+
+### SpatialData display handle
+
+Access: returned by `display()`. Retained composite SpatialData resources with readiness, selection, refresh, persistence, and cleanup.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `wait_ready(timeout: 'float \| None' = None) -> 'Mapping[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | Wait ready. |
+| `readiness (property)` | SDK-local/delegated | Inherited from delegated operation | Readiness. |
+| `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
+| `selection(element: 'str', *, limit: 'int' = 200) -> 'ElementSelection'` | SDK-local/delegated | Inherited from delegated operation | Return selected object IDs for one displayed shapes or points element. |
+| `selected_ids(element: 'str', *, limit: 'int' = 200) -> 'tuple[str, ...]'` | SDK-local/delegated | Inherited from delegated operation | Convenience form of :meth:`selection` for caller-managed subsetting. |
+| `persist(destination: 'str \| Path', *, overwrite: 'bool' = False) -> "'SpatialDataDisplay'"` | SDK-local/delegated | Inherited from delegated operation | Create and open a project-owned generation with durable dependencies. |
+| `refresh(sdata: 'Any', *, element: 'str \| None' = None, transfer: 'str \| None' = None, timeout: 'float \| None' = None) -> "'SpatialDataDisplay'"` | SDK-local/delegated | Inherited from delegated operation | Open a fresh document generation, retaining the old one until ready. |
+
+### Async SpatialData display handle
+
+Access: returned by `display_async()`. Asynchronous composite SpatialData resources with readiness, selection, refresh, persistence, and cleanup.
+
+| Member | Control method | Modes | Contract |
+| --- | --- | --- | --- |
+| `wait_ready(timeout: 'float \| None' = None) -> 'Mapping[str, Any]'` | SDK-local/delegated | Inherited from delegated operation | Wait ready. |
+| `readiness (property)` | SDK-local/delegated | Inherited from delegated operation | Readiness. |
+| `close() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Close. |
+| `selection(element: 'str', *, limit: 'int' = 200) -> 'ElementSelection'` | SDK-local/delegated | Inherited from delegated operation | Return selected object IDs for one displayed shapes or points element. |
+| `selected_ids(element: 'str', *, limit: 'int' = 200) -> 'tuple[str, ...]'` | SDK-local/delegated | Inherited from delegated operation | Selected ids. |
+| `persist(destination: 'str \| Path', *, overwrite: 'bool' = False) -> "'AsyncSpatialDataDisplay'"` | SDK-local/delegated | Inherited from delegated operation | Persist. |
+| `refresh(sdata: 'Any', *, element: 'str \| None' = None, transfer: 'str \| None' = None, timeout: 'float \| None' = None) -> "'AsyncSpatialDataDisplay'"` | SDK-local/delegated | Inherited from delegated operation | Refresh. |
 
 ### Tasks
 
@@ -1375,6 +1463,7 @@ Access: `app.datasets`. Async dataset resource.
 | --- | --- | --- | --- |
 | `inspect(path: 'str \| Path') -> 'Any'` | `datasets.inspect` | project, single, mosaic, transition | Inspect a local dataset source and discover supported elements without opening it. (completion: immediate_semantic) |
 | `open_ome_zarr(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open ome zarr. |
+| `open_resource(resource: 'AsyncDataResource \| str', *, layers: 'Iterable[LayerSpec \| Mapping[str, Any]]' = (), if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_resource` | project, single, mosaic, transition | Open a registered OME-Zarr/Zarr resource as the primary document. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
 | `open_tiff(path: 'str \| Path', *, z: 'int' = 0, t: 'int' = 0, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | TIFF and OME-TIFF typed inspection and plane opening |
 | `open_mosaic_samplesheet(path: 'str \| Path', *, if_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Open mosaic samplesheet. |
 | `open_spatialdata(path: 'str \| Path', *, image: 'str', extra_images: 'Iterable[str]' = (), labels: 'str \| None' = None, shapes: 'Iterable[str]' = (), points: 'str \| None' = None, points_max: 'int' = 200000, if_revision: 'int \| None' = None) -> 'Any'` | `datasets.open_spatialdata` | project, single, mosaic, transition | Open a selected SpatialData image with typed image, label, shape, and point elements. (mutates; task; completion: retained_background; cancellation: cooperative; event: application.mode.changed) |
@@ -1537,6 +1626,7 @@ Access: `app.channels`. Async channel resource.
 | `set_visible(channels: 'Iterable[str \| int]', *, mode: 'str' = 'only', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_visible` | single, mosaic | Set channel visibility. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `get_contrast(channel: 'str \| int \| None' = None) -> 'Any'` | `viewer.channels.get_contrast` | single, mosaic | Get channel contrast. (completion: immediate_semantic) |
 | `set_contrast(channel: 'str \| int', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
+| `set_contrast_many(channels: 'Iterable[str \| int]', *, minimum: 'float', maximum: 'float', if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_contrast` | single, mosaic | Set channel contrast. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `set_color(channel: 'str \| int', color_rgb: 'Sequence[int]', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_color` | single, mosaic | Set a channel's additive-compositing colour. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `set_note(channel: 'str \| int', note: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.channels.set_note` | single, mosaic | Set a channel note. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `get_transform(channel: 'str \| int') -> 'Any'` | `viewer.channels.get_transform` | single | Get a channel's translation, scale, and rotation. (completion: immediate_semantic) |
@@ -1856,7 +1946,7 @@ Access: `app.mosaic`. Async mosaic resource.
 | `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
 | `get_object_property_cache() -> 'Any'` | `mosaic.objects.property_cache.get` | mosaic | Get the lazy mosaic object-property retention policy. (completion: immediate_semantic) |
 | `set_object_property_cache(*, policy: 'str' = 'lru', capacity: 'int \| None' = 2, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.property_cache.set` | mosaic | Bound lazily loaded mosaic properties without unloading object geometry. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
-| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Mosaic object loading and memory controls |
+| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, domains_by_roi: 'Mapping[str, Sequence[float]] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Mosaic object loading and memory controls |
 | `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. (completion: immediate_semantic) |
 | `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
 | `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
@@ -1873,7 +1963,7 @@ Access: `app.data`. Async external-data resource.
 
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
-| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', resource_id: 'str \| None' = None, ownership: 'str' = 'session', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncDataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
+| `register(uri: 'str \| Path', *, format: 'str', coordinate_space: 'CoordinateSpace', group_path: 'str \| None' = None, resource_id: 'str \| None' = None, ownership: 'str' = 'session', source_lifetime: 'str' = 'durable', metadata: 'Mapping[str, Any] \| None' = None, provenance: 'Mapping[str, Any] \| None' = None) -> 'AsyncDataResource'` | `data.resources.register` | protocol | Register referenced external data. (mutates; completion: resource_ready) |
 | `get(resource_id: 'str') -> 'AsyncDataResource'` | `data.resources.get` | protocol | Get an external data descriptor. (completion: resource_ready) |
 | `list() -> 'list[AsyncDataResource]'` | `data.resources.list` | protocol | List registered external data. (completion: resource_ready) |
 | `remove(resource_id: 'str') -> 'None'` | `data.resources.remove` | protocol | Remove an unreferenced data descriptor. (mutates; completion: resource_ready) |

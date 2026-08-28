@@ -516,6 +516,20 @@ fn request_schema(shape: RequestShape) -> Value {
             "required": ["path"],
             "additionalProperties": false,
         }),
+        RequestShape::DataResourceOpen => json!({
+            "type": "object",
+            "properties": {
+                "resource_id": {"type": "string", "minLength": 1},
+                "layers": {
+                    "type": "array",
+                    "maxItems": 1024,
+                    "items": {"type": "object"},
+                    "default": []
+                }
+            },
+            "required": ["resource_id"],
+            "additionalProperties": false,
+        }),
         RequestShape::ProjectMetadata => json!({
             "type": "object",
             "properties": {

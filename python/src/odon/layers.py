@@ -2,12 +2,56 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from .data import DataResource
 
 if TYPE_CHECKING:
     from .client import Client
+
+
+@dataclass(frozen=True)
+class LayerSpec:
+    """A layer descriptor committed atomically with a primary resource open."""
+
+    data_resource_id: str
+    name: str
+    kind: str
+    layer_id: str | None = None
+    visible: bool = True
+    opacity: float = 1.0
+    ownership: str = "session"
+    style: Mapping[str, Any] | None = None
+    provenance: Mapping[str, Any] | None = None
+
+    @classmethod
+    def from_resource(
+        cls, data: DataResource | str, *, name: str, kind: str, **options: Any
+    ) -> "LayerSpec":
+        return cls(
+            data_resource_id=(
+                data.resource_id if isinstance(data, DataResource) else data
+            ),
+            name=name,
+            kind=kind,
+            **options,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "data_resource_id": self.data_resource_id,
+            "name": self.name,
+            "kind": self.kind,
+            "visible": self.visible,
+            "opacity": self.opacity,
+            "ownership": self.ownership,
+            "style": dict(self.style or {}),
+            "provenance": dict(self.provenance or {}),
+        }
+        if self.layer_id is not None:
+            result["layer_id"] = self.layer_id
+        return result
 
 
 class Layer:

@@ -190,7 +190,7 @@ impl OmeZarrViewerApp {
                 .iter()
                 .find(|resource| resource.resource_id == layer.data_resource_id)
             else {
-                return (egui::Vec2::ONE, egui::Vec2::ZERO);
+                return (egui::Vec2::ONE, egui::Vec2::ZERO, None);
             };
             let coordinate = &resource.coordinate_space;
             let axis_value = |values: &[f64], axis: &str, default: f32| {
@@ -203,6 +203,11 @@ impl OmeZarrViewerApp {
                     .map(|value| value as f32)
                     .unwrap_or(default)
             };
+            let affine = coordinate.affine.as_ref().map(|affine| {
+                std::array::from_fn(|row| {
+                    std::array::from_fn(|column| affine.matrix[row][column] as f32)
+                })
+            });
             (
                 egui::vec2(
                     axis_value(&coordinate.scale, "x", 1.0),
@@ -212,6 +217,7 @@ impl OmeZarrViewerApp {
                     axis_value(&coordinate.translation, "x", 0.0),
                     axis_value(&coordinate.translation, "y", 0.0),
                 ),
+                affine,
             )
         };
         let apply_style = |loaded: &mut crate::spatialdata::SpatialImageLayer,
@@ -289,7 +295,11 @@ impl OmeZarrViewerApp {
                     existing.name = layer.name.clone();
                     existing.visible = layer.visible;
                     existing.opacity = layer.opacity as f32;
-                    (existing.scale_world, existing.offset_world) = transform_for(layer);
+                    (
+                        existing.scale_world,
+                        existing.offset_world,
+                        existing.affine_world,
+                    ) = transform_for(layer);
                     apply_style(existing, layer, resource);
                     continue;
                 }
@@ -298,17 +308,42 @@ impl OmeZarrViewerApp {
             let Ok(url) = url::Url::parse(&resource.uri) else {
                 continue;
             };
-            let Ok(path) = url.to_file_path() else {
+            let loaded = if let Ok(path) = url.to_file_path() {
+                let path = resource
+                    .group_path
+                    .as_deref()
+                    .map(|group_path| path.join(group_path))
+                    .unwrap_or(path);
+                self.spatial_image_layers.load_external_image(
+                    layer.layer_id.clone(),
+                    layer.data_resource_id.clone(),
+                    layer.name.clone(),
+                    path,
+                    self.tiles_gl.is_some(),
+                    self.smooth_pixels,
+                )
+            } else if matches!(url.scheme(), "http" | "https") {
+                let mut element_url = url;
+                if let Some(group_path) = resource.group_path.as_deref()
+                    && let Ok(mut segments) = element_url.path_segments_mut()
+                {
+                    segments.pop_if_empty();
+                    for component in group_path.split('/') {
+                        segments.push(component);
+                    }
+                }
+                self.spatial_image_layers.load_external_image_uri(
+                    layer.layer_id.clone(),
+                    layer.data_resource_id.clone(),
+                    layer.name.clone(),
+                    element_url.as_str().trim_end_matches('/'),
+                    self.tiles_gl.is_some(),
+                    self.smooth_pixels,
+                )
+            } else {
                 continue;
             };
-            match self.spatial_image_layers.load_external_image(
-                layer.layer_id.clone(),
-                layer.data_resource_id.clone(),
-                layer.name.clone(),
-                path,
-                self.tiles_gl.is_some(),
-                self.smooth_pixels,
-            ) {
+            match loaded {
                 Ok(id) => {
                     if let Some(loaded) = self
                         .spatial_image_layers
@@ -318,7 +353,8 @@ impl OmeZarrViewerApp {
                     {
                         loaded.visible = layer.visible;
                         loaded.opacity = layer.opacity as f32;
-                        (loaded.scale_world, loaded.offset_world) = transform_for(layer);
+                        (loaded.scale_world, loaded.offset_world, loaded.affine_world) =
+                            transform_for(layer);
                         apply_style(loaded, layer, resource);
                     }
                 }
@@ -353,6 +389,11 @@ impl OmeZarrViewerApp {
                     axis_value(&coordinate.translation, "x", 0.0),
                     axis_value(&coordinate.translation, "y", 0.0),
                 ],
+                affine: coordinate.affine.as_ref().map(|affine| {
+                    std::array::from_fn(|row| {
+                        std::array::from_fn(|column| affine.matrix[row][column] as f32)
+                    })
+                }),
             }
         };
         let apply_shape_style = |loaded: &mut crate::spatialdata::SpatialShapesLayer,

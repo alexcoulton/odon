@@ -6,6 +6,7 @@ use eframe::egui;
 
 use crate::camera::Camera;
 use crate::data::ome::{ChannelInfo, OmeZarrDataset};
+use crate::data::remote_store::{CoreRemoteDatasetBackend, RemoteDatasetBackend};
 use crate::imaging::tiling::{TileCoord, choose_level_auto, tiles_needed_lvl0_rect};
 use crate::imaging::view_plane::{ViewPlaneMode, ViewPlaneSelection};
 use crate::render::tiles::{RenderChannel, recommended_tile_loader_threads};
@@ -80,6 +81,32 @@ impl SpatialImageLayers {
         Ok(id)
     }
 
+    pub fn load_external_image_uri(
+        &mut self,
+        external_id: String,
+        external_resource_id: String,
+        name: String,
+        uri: &str,
+        gpu_available: bool,
+        smooth_pixels: bool,
+    ) -> anyhow::Result<u64> {
+        let opened = CoreRemoteDatasetBackend.open_http(uri)?;
+        let id = self.next_id.max(1);
+        self.next_id = id.wrapping_add(1).max(1);
+        let layer = SpatialImageLayer::open_prepared(
+            id,
+            Some(external_id),
+            Some(external_resource_id),
+            name,
+            opened.resource.dataset,
+            opened.resource.store,
+            gpu_available,
+            smooth_pixels,
+        )?;
+        self.images.push(layer);
+        Ok(id)
+    }
+
     pub fn tick(&mut self) {
         for layer in &mut self.images {
             layer.tick();
@@ -108,6 +135,7 @@ pub struct SpatialImageLayer {
     pub opacity: f32,
     pub offset_world: egui::Vec2,
     pub scale_world: egui::Vec2,
+    pub affine_world: Option<[[f32; 3]; 3]>,
     pub current_z_level0: u64,
 
     pub dataset: OmeZarrDataset,
@@ -182,6 +210,7 @@ impl SpatialImageLayer {
             opacity: 1.0,
             offset_world: egui::Vec2::ZERO,
             scale_world: egui::Vec2::ONE,
+            affine_world: None,
             current_z_level0: 0,
             channels: dataset.channels.clone(),
             dataset,
@@ -315,17 +344,20 @@ impl SpatialImageLayer {
             return HashSet::new();
         }
 
-        let inverse_point = |point: egui::Pos2| {
-            egui::pos2(
-                (point.x - self.offset_world.x) / self.scale_world.x.max(f32::EPSILON),
-                (point.y - self.offset_world.y) / self.scale_world.y.max(f32::EPSILON),
-            )
+        let affine = self.effective_affine();
+        let Some(inverse) = invert_affine(affine) else {
+            return HashSet::new();
         };
-        let visible_world = egui::Rect::from_min_max(
-            inverse_point(visible_world.min),
-            inverse_point(visible_world.max),
-        );
-        let effective_scale = self.scale_world.x.abs().max(self.scale_world.y.abs());
+        let visible_corners = [
+            visible_world.left_top(),
+            egui::pos2(visible_world.right(), visible_world.top()),
+            visible_world.right_bottom(),
+            egui::pos2(visible_world.left(), visible_world.bottom()),
+        ];
+        let local_corners = visible_corners.map(|point| apply_affine(inverse, point));
+        let visible_world = aabb(local_corners);
+        let effective_scale =
+            (affine[0][0].hypot(affine[1][0])).max(affine[0][1].hypot(affine[1][1]));
         let target_level = choose_level_auto(
             &self.dataset.levels,
             camera.zoom_screen_per_lvl0_px * effective_scale,
@@ -377,13 +409,18 @@ impl SpatialImageLayer {
         }
         let draws = needed
             .into_iter()
-            .map(|key| TileDraw {
-                view: key.view,
-                fallback_view: None,
-                level: key.level,
-                tile_y: key.tile_y,
-                tile_x: key.tile_x,
-                screen_rect: self.tile_screen_rect(camera, viewport, &level_info, &key),
+            .map(|key| {
+                let (screen_rect, screen_quad) =
+                    self.tile_screen_geometry(camera, viewport, &level_info, &key);
+                TileDraw {
+                    view: key.view,
+                    fallback_view: None,
+                    level: key.level,
+                    tile_y: key.tile_y,
+                    tile_x: key.tile_x,
+                    screen_rect,
+                    screen_quad: Some(screen_quad),
+                }
             })
             .filter(|draw| draw.screen_rect.intersects(viewport))
             .collect::<Vec<_>>();
@@ -432,13 +469,21 @@ impl SpatialImageLayer {
         out
     }
 
-    fn tile_screen_rect(
+    fn effective_affine(&self) -> [[f32; 3]; 3] {
+        self.affine_world.unwrap_or([
+            [self.scale_world.x, 0.0, self.offset_world.x],
+            [0.0, self.scale_world.y, self.offset_world.y],
+            [0.0, 0.0, 1.0],
+        ])
+    }
+
+    fn tile_screen_geometry(
         &self,
         camera: &Camera,
         viewport: egui::Rect,
         level_info: &crate::data::ome::LevelInfo,
         key: &RawTileKey,
-    ) -> egui::Rect {
+    ) -> (egui::Rect, [egui::Pos2; 4]) {
         let y_dim = self.dataset.dims.y;
         let x_dim = self.dataset.dims.x;
         let chunk_y = level_info.chunks[y_dim] as f32;
@@ -448,16 +493,65 @@ impl SpatialImageLayer {
         let y1 = (y0 + chunk_y).min(level_info.shape[y_dim] as f32);
         let x1 = (x0 + chunk_x).min(level_info.shape[x_dim] as f32);
         let downsample = level_info.downsample;
-        let world_min = egui::pos2(
-            x0 * downsample * self.scale_world.x,
-            y0 * downsample * self.scale_world.y,
-        ) + self.offset_world;
-        let world_max = egui::pos2(
-            x1 * downsample * self.scale_world.x,
-            y1 * downsample * self.scale_world.y,
-        ) + self.offset_world;
-        let screen_min = camera.world_to_screen(world_min, viewport);
-        let screen_max = camera.world_to_screen(world_max, viewport);
-        egui::Rect::from_min_max(screen_min, screen_max)
+        let affine = self.effective_affine();
+        let world_quad = [
+            apply_affine(affine, egui::pos2(x0 * downsample, y0 * downsample)),
+            apply_affine(affine, egui::pos2(x1 * downsample, y0 * downsample)),
+            apply_affine(affine, egui::pos2(x1 * downsample, y1 * downsample)),
+            apply_affine(affine, egui::pos2(x0 * downsample, y1 * downsample)),
+        ];
+        let screen_quad = world_quad.map(|point| camera.world_to_screen(point, viewport));
+        (aabb(screen_quad), screen_quad)
+    }
+}
+
+fn apply_affine(matrix: [[f32; 3]; 3], point: egui::Pos2) -> egui::Pos2 {
+    egui::pos2(
+        matrix[0][0] * point.x + matrix[0][1] * point.y + matrix[0][2],
+        matrix[1][0] * point.x + matrix[1][1] * point.y + matrix[1][2],
+    )
+}
+
+fn invert_affine(matrix: [[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
+    let determinant = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    if determinant.abs() <= f32::EPSILON {
+        return None;
+    }
+    Some([
+        [
+            matrix[1][1] / determinant,
+            -matrix[0][1] / determinant,
+            (matrix[0][1] * matrix[1][2] - matrix[1][1] * matrix[0][2]) / determinant,
+        ],
+        [
+            -matrix[1][0] / determinant,
+            matrix[0][0] / determinant,
+            (matrix[1][0] * matrix[0][2] - matrix[0][0] * matrix[1][2]) / determinant,
+        ],
+        [0.0, 0.0, 1.0],
+    ])
+}
+
+fn aabb(points: [egui::Pos2; 4]) -> egui::Rect {
+    points
+        .into_iter()
+        .fold(egui::Rect::NOTHING, |mut bounds, point| {
+            bounds.extend_with(point);
+            bounds
+        })
+}
+
+#[cfg(test)]
+mod affine_tests {
+    use super::*;
+
+    #[test]
+    fn affine_inverse_roundtrips_rotation_shear_and_translation() {
+        let matrix = [[0.0, -2.0, 10.0], [3.0, 0.5, -4.0], [0.0, 0.0, 1.0]];
+        let inverse = invert_affine(matrix).expect("invertible affine");
+        let point = egui::pos2(7.0, 11.0);
+        let roundtrip = apply_affine(inverse, apply_affine(matrix, point));
+        assert!((roundtrip.x - point.x).abs() < 1e-4);
+        assert!((roundtrip.y - point.y).abs() < 1e-4);
     }
 }

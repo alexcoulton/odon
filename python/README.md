@@ -61,6 +61,57 @@ labels = app.data.register(
 layer = app.layers.add(labels, name="Cellpose", kind="labels")
 ```
 
+One store can expose several registered Zarr groups without copying them, and
+the primary image plus related layers can be committed as one document:
+
+```python
+image = app.data.register(
+    "file:///data/sample.zarr",
+    format="ome-zarr",
+    group_path="images/morphology",
+    coordinate_space=space,
+)
+labels = app.data.register(
+    "file:///data/sample.zarr",
+    format="ome-zarr",
+    group_path="labels/nuclei",
+    coordinate_space=space,
+)
+task = app.datasets.open_resource(
+    image,
+    layers=[odon.LayerSpec.from_resource(labels, name="Nuclei", kind="labels")],
+)
+task.wait()
+```
+
+Install `odon-client[spatialdata]` on Python 3.11 or newer to adapt a backed
+official `SpatialData` object without duplicating its raster data:
+
+```python
+from odon.integrations.spatialdata import display
+
+shown = display(
+    app,
+    sdata,
+    image="morphology",
+    labels=["nuclei"],
+    shapes=["cells"],
+    tables=["table"],
+    table_columns={"table": ["cell_type", "score"]},
+)
+shown.wait_ready()
+```
+
+The adapter sends store/group descriptors and full 2D affine metadata for
+backed rasters; Rust reads the original OME-Zarr chunks. Unbacked NumPy,
+Xarray, or Dask rasters use a session-only loopback chunk provider. Compatible
+GeoParquet is referenced, while selected incompatible vectors and table
+columns are snapshotted independently. `shown.selection("cells")` returns
+actor-owned selected IDs, `shown.refresh(...)` replaces one complete document
+generation, and `shown.persist(...)` explicitly promotes ephemeral sources to
+durable project resources. The adapter never calls the native
+`datasets.open_spatialdata` compatibility method.
+
 Single-image mode also supports a linked two-viewport comparison without
 duplicating the open document or raw caches:
 

@@ -192,6 +192,7 @@ pub(super) fn begin_remote_http_open(
         generation,
         None,
         RemoteOpenSpec::Http { url },
+        None,
     );
 }
 
@@ -235,10 +236,11 @@ pub(super) fn begin_remote_s3_open(
             credentials,
             prefix,
         },
+        None,
     );
 }
 
-fn submit_remote_open(
+pub(super) fn submit_remote_open(
     model: &mut AppModel,
     request: OdonControlRequest,
     load_job_tx: &Sender<LoadJob>,
@@ -246,12 +248,14 @@ fn submit_remote_open(
     generation: u64,
     session_generation: Option<u64>,
     spec: RemoteOpenSpec,
+    registered: Option<RegisteredResourceOpenIdentity>,
 ) {
     match load_job_tx.try_send(LoadJob::RemoteOpen {
         generation,
         session_generation,
         request,
         spec,
+        registered,
     }) {
         Ok(()) => {
             diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);

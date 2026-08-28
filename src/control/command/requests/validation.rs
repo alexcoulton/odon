@@ -911,6 +911,23 @@ pub(in crate::control::command) fn validate_params(
                 ));
             }
         }
+        RequestShape::DataResourceOpen => {
+            let request: DataResourceOpenRequest =
+                serde_json::from_value(params.clone()).map_err(invalid)?;
+            if request.resource_id.trim().is_empty() {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "resource_id must not be empty",
+                ));
+            }
+            if request.layers.len() > 1024 || request.layers.iter().any(|layer| !layer.is_object())
+            {
+                return Err(ControlError::invalid_params(
+                    method,
+                    "layers must contain at most 1024 layer descriptor objects",
+                ));
+            }
+        }
         RequestShape::ProjectMetadata => {
             let request: ProjectMetadataRequest =
                 serde_json::from_value(params.clone()).map_err(invalid)?;

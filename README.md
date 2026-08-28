@@ -36,6 +36,32 @@ launch only the Odon desktop app; MCP clients launch `odon_mcp` automatically
 from the installed location. See
 [Odon MCP](docs/reference/codex-mcp-odon.md) for configuration paths.
 
+## Install the Python SDK
+
+The Python SDK lets a Python script control an Odon app that is already running.
+It does not install the Odon desktop app itself.
+
+You need Python 3.10 or newer. From the root of this repository, run:
+
+```bash
+python3 -m pip install ./python
+```
+
+Check that it installed correctly:
+
+```bash
+python3 -c "import odon; print('Odon Python SDK is installed')"
+```
+
+The package is named `odon-client`, but you use it in Python with `import odon`.
+For SDK development, install it in editable mode instead:
+
+```bash
+python3 -m pip install -e ./python
+```
+
+Then open Odon and follow the [Python API guide](docs/reference/python-api.md) to connect to it.
+
 ## What odon is for
 
 `odon` is intended for rapid visual exploration of spatial omics data, especially when you need to:
@@ -58,6 +84,9 @@ Primary workflows:
 
 - GPU-backed image compositing for high-plex channel panels
 - viewport-driven tile loading for local and remote datasets
+- Python-led SpatialData adaptation with zero-copy backed rasters, on-demand
+  in-memory chunk providers, affine-aligned vectors/tables, and explicit
+  durable promotion
 - interactive overlays for objects, masks, labels, and points
 - integrated thresholding and live cell-selection workflows
 - mosaic mode for simultaneous viewing of hundreds of ROIs

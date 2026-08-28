@@ -35,8 +35,9 @@ from .tasks import Task
 from .async_tasks import AsyncTask
 from .async_data import AsyncDataResource
 from .async_layers import AsyncLayer
-from .data import CoordinateSpace, DataResource
-from .layers import Layer
+from .data import AffineTransform, CoordinateSpace, DataResource
+from .layers import Layer, LayerSpec
+from .providers import ArrayProvider, ProviderSnapshot
 from .resources import Viewport, ViewportComparison, ViewportLinks, ViewportObjects, ViewportWorkspace, Viewports
 from .async_resources import (
     AsyncViewport,
@@ -84,6 +85,8 @@ __all__ = [
     "AsyncViewportObjects",
     "AsyncViewportWorkspace",
     "AsyncViewports",
+    "AffineTransform",
+    "ArrayProvider",
     "ActionCancelledError",
     "ActionExecutionError",
     "ActionQueueFullError",
@@ -112,9 +115,11 @@ __all__ = [
     "MarkerComparisonController",
     "MarkerComparisonState",
     "Layer",
+    "LayerSpec",
     "OdonError",
     "ProtocolError",
     "ProtocolVersionError",
+    "ProviderSnapshot",
     "PermissionDeniedError",
     "RemoteError",
     "ResourceNotFoundError",

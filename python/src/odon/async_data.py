@@ -41,8 +41,10 @@ class AsyncDataResources:
         *,
         format: str,
         coordinate_space: CoordinateSpace,
+        group_path: str | None = None,
         resource_id: str | None = None,
         ownership: str = "session",
+        source_lifetime: str = "durable",
         metadata: Mapping[str, Any] | None = None,
         provenance: Mapping[str, Any] | None = None,
     ) -> AsyncDataResource:
@@ -51,12 +53,15 @@ class AsyncDataResources:
             "uri": uri_value,
             "format": format,
             "ownership": ownership,
+            "source_lifetime": source_lifetime,
             "coordinate_space": coordinate_space.to_dict(),
             "metadata": dict(metadata or {}),
             "provenance": dict(provenance or {}),
         }
         if resource_id is not None:
             params["resource_id"] = resource_id
+        if group_path is not None:
+            params["group_path"] = group_path
         return AsyncDataResource(
             self, await self._client.call("data.resources.register", params)
         )

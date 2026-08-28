@@ -63,7 +63,7 @@ Priorities:
 | DATA-01 | OME-Zarr metadata and local reads | Core Viewer, Object And Overlay Data | Protected | V2/V3 attributes, CZYX axes, representative planes, histograms and tiles | P0 |
 | DATA-02 | TIFF and OME-TIFF opening | Object And Overlay Data, MCP And Automation | Protected | Generated grayscale/RGB/multichannel/multidimensional decode; true pyramids are extended | P0 |
 | DATA-03 | Remote HTTP and S3 stores | Core Viewer, Remote And Session State | Partial | URL/credential/prefix behavior protected; mock/real service IO remains extended | P1 |
-| DATA-04 | SpatialData discovery and elements | Object And Overlay Data | Protected | Deterministic image/point/shape/label/table discovery and transforms | P1 |
+| DATA-04 | SpatialData discovery and elements | Object And Overlay Data | Protected | Native compatibility plus Python-led real-library image/label/vector/table composites, zero-copy proof, per-element policy, provider chunks/cache/materialization, arbitrary affine, remote groups, actor-owned vector selection, refresh, and persistence; keyed property-only refresh and S3 secondary rasters remain extended | P1 |
 | DATA-05 | Xenium discovery, imagery, cells, transcripts | Object And Overlay Data | Partial | Required minimal fixture plus extended real-data suite | P1 |
 | DATA-06 | CSV points, GeoJSON, Parquet, and GeoParquet | Object And Overlay Data | Protected | CSV/GeoJSON/GeoParquet load, properties, geometry, export/reload and failures; vendor point Parquet is extended | P0 |
 | LABEL-01 | NGFF label discovery and rendering | Object And Overlay Data | None | Discovery/alignment tests and visual smoke | P1 |

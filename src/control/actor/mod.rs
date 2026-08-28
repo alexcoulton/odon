@@ -117,8 +117,8 @@ pub use channel_io::read_channel_intensity_stats;
 use channels::{begin_auto_contrast, begin_channel_intensity, enqueue_auto_contrast_on_open};
 use completion::{finish_load, reject_actor_request};
 use datasets::{
-    begin_dataset_inspection, begin_ome_zarr_load, begin_spatialdata_load, begin_tiff_load,
-    begin_xenium_load,
+    begin_data_resource_load, begin_dataset_inspection, begin_ome_zarr_load,
+    begin_spatialdata_load, begin_tiff_load, begin_xenium_load,
 };
 use deep_links::{
     apply_deep_link_on_worker, begin_deep_link_application, begin_deep_link_resolution,
@@ -130,8 +130,9 @@ use jobs::{
     AnalysisComputeKind, CompletionDomain, DeepLinkApplySpec, DeepLinkApplyWorkerResult,
     DeepLinkResolveWorkerResult, LoadCompletion, LoadJob, MaskAppendWorkerResult,
     MemoryPinWorkerOutcome, MemoryPinWorkerResult, MosaicMemoryPinWorkerOutcome,
-    MosaicMemoryPinWorkerResult, MosaicOpenWorkerResult, ProjectObjectPreloadWorkerResult,
-    ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult, ProjectViewApplyWorkerResult,
+    MosaicMemoryPinWorkerResult, MosaicOpenWorkerResult, OmeZarrOpenIdentity,
+    ProjectObjectPreloadWorkerResult, ProjectRoiOpenSpec, ProjectRoiOpenWorkerResult,
+    ProjectViewApplyWorkerResult, RegisteredObjectLayerSpec, RegisteredResourceOpenIdentity,
 };
 use mask_io::{append_mask_layers_geojson, export_mask_layers_geojson};
 use masks::{begin_mask_append, begin_mask_export, begin_mask_import};
@@ -164,7 +165,7 @@ use projects::{
 };
 use remote::{
     RemoteOpenIdentity, RemoteOpenSpec, RemoteSessionState, begin_remote_http_open,
-    begin_remote_list, begin_remote_s3_open,
+    begin_remote_list, begin_remote_s3_open, normalize_s3_prefix, submit_remote_open,
 };
 use request::{expand_path, finish_request, reject_worker_submission};
 use resources::{begin_label_load, begin_object_resource_load, begin_segmentation_geojson_load};

@@ -203,7 +203,7 @@ pub fn load_control_object_resource_with_options(
                 .unwrap_or("geometry")
             {
                 "geometry" => ObjectParquetSource::Geometry(ShapesLoadOptions {
-                    transform: SpatialDataTransform2::default(),
+                    transform: object_loader_transform(options)?,
                     geometry_column: required_loader_option(options, "geometry_column")?,
                     property_columns,
                 }),
@@ -235,6 +235,47 @@ pub fn load_control_object_resource_with_options(
         &cancel,
     )?;
     control_resource_from_preloaded(path, downsample_factor, PreloadedObjectLayer { result })
+}
+
+fn object_loader_transform(options: &serde_json::Value) -> anyhow::Result<SpatialDataTransform2> {
+    let Some(transform) = options.get("transform") else {
+        return Ok(SpatialDataTransform2::default());
+    };
+    if let Some(matrix) = transform
+        .get("matrix")
+        .and_then(serde_json::Value::as_array)
+    {
+        if matrix.len() != 3
+            || matrix
+                .iter()
+                .any(|row| row.as_array().is_none_or(|values| values.len() != 3))
+        {
+            anyhow::bail!("object loader transform matrix must be a 3x3 array");
+        }
+        let mut parsed = [[0.0_f32; 3]; 3];
+        for (row_index, row) in matrix.iter().enumerate() {
+            for (column_index, value) in row.as_array().unwrap().iter().enumerate() {
+                let value = value
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| anyhow!("object loader transform matrix must be finite"))?;
+                parsed[row_index][column_index] = value as f32;
+            }
+        }
+        let determinant = parsed[0][0] * parsed[1][1] - parsed[0][1] * parsed[1][0];
+        if determinant.abs() <= 1e-12
+            || parsed[2][0].abs() > 1e-6
+            || parsed[2][1].abs() > 1e-6
+            || (parsed[2][2] - 1.0).abs() > 1e-6
+        {
+            anyhow::bail!("object loader transform must be an invertible 2D affine matrix");
+        }
+        return Ok(SpatialDataTransform2 {
+            affine: Some(parsed),
+            ..SpatialDataTransform2::default()
+        });
+    }
+    Ok(SpatialDataTransform2::default())
 }
 
 /// Prepare a SpatialData shape as a canonical actor resource and renderer preload in one pass.

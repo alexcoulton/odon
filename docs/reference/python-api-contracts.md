@@ -15,7 +15,49 @@ renderer coverage can still change before a stable compatibility declaration.
 
 The package requires Python 3.10 or newer and has no mandatory third-party
 dependencies. The `arrays` extra adds NumPy and Zarr support for
-`register_numpy()`.
+`register_numpy()`. The `spatialdata` extra (Python 3.11+) supports
+`spatialdata>=0.6,<0.9` and remains lazy, so importing the base SDK does not
+import the scientific stack.
+
+## Group-addressed resources and composite opening
+
+For Zarr and OME-Zarr resources, `DataResources.register(...,
+group_path="images/morphology")` keeps the store URI and logical group path
+separate. Group paths must be normalized, relative, traversal-free paths and
+are rejected for non-Zarr formats.
+
+`Datasets.open_resource(primary, layers=[LayerSpec(...)])` is a retained task.
+Odon validates every layer descriptor and resource reference before loading,
+opens the primary group on its bounded Rust worker, then commits the document
+and complete layer batch atomically. Failure or cancellation does not install
+a partial layer batch.
+The task result reports the primary resource/store/group identities, committed
+layer snapshots, and separate model/resource/presentation readiness.
+
+`odon.integrations.spatialdata` builds this generic manifest from an official
+Python `SpatialData` object. Direct reference requires a backed,
+self-contained raster whose persisted group and normalized lazy read graph
+still match. The adapter reads metadata and graph identity only; it does not
+compute referenced pixels. `auto` may instead use a session-only
+`ArrayProvider` for an unbacked/computed raster or a selected GeoParquet
+snapshot for an incompatible vector. Tables require explicit `obs` columns
+and project them onto one selected shapes resource by `instance_id`.
+Unsupported sources, transforms, joins, or policies fail with
+`SpatialDataAdapterError.code` and structured details.
+
+`CoordinateSpace.affine` is an invertible 3×3 2D homogeneous transform with
+x/y input and output axes, `input_to_reference` direction, and pixel-centre
+convention. Rust renders rotation, shear, reflection, scale, and translation;
+Python has already resolved the SpatialData transformation graph relative to
+the primary image.
+
+Every resource declares `source_lifetime="durable" | "session"`. Session
+sources cannot claim project/user ownership. Provider and temporary-vector
+displays are cleaned by `close()`; `persist()` explicitly materializes/copies
+their dependencies and opens a project-owned durable generation. `refresh()`
+commits its replacement generation before releasing the old one. Selectable
+GeoParquet layers are actor-owned, and `selection()`/`selected_ids()` return a
+bounded generation-tagged ID snapshot to caller-managed Python data.
 
 ## Root resource tree
 
@@ -390,9 +432,12 @@ S3 credentials are session-only, redacted from responses, and removed from
 Odon memory by `clear_session()` or process exit. HTTP and S3 open methods are
 subject to the connected build's networking and format support.
 
-SpatialData opening requires a selected image and can additionally select
-extra images, one labels element, shape elements, and a bounded points element.
-Xenium opening makes imagery and cell/transcript loading choices explicit.
+Native `datasets.open_spatialdata` requires a selected image and can
+additionally select extra images, one labels element, shape elements, and a
+bounded points element. It is a standalone compatibility reader. The optional
+Python-led adapter uses only generic registered resources and composite open;
+its per-element transfer and lifetime rules are documented above. Xenium
+opening makes imagery and cell/transcript loading choices explicit.
 
 ### Projects, ROIs, samplesheets, and saved views
 

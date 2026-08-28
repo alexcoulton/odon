@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from odon.async_resources import AsyncApplication, AsyncDatasets, AsyncS3Datasets
+from odon.async_data import AsyncDataResource
+from odon.data import DataResource
+from odon.layers import LayerSpec
 from odon.resources import Application, Datasets, S3Datasets
 
 
@@ -108,6 +111,51 @@ class DatasetResourceTests(unittest.TestCase):
             ],
         )
 
+    def test_registered_resource_open_wrapper(self) -> None:
+        client = RecordingClient()
+        datasets = Datasets(client)  # type: ignore[arg-type]
+        resource = DataResource(None, {"resource_id": "resource:image"})  # type: ignore[arg-type]
+        datasets.open_resource(
+            resource,
+            layers=[
+                LayerSpec(
+                    data_resource_id="resource:labels",
+                    name="Nuclei",
+                    kind="labels",
+                )
+            ],
+            if_revision=9,
+        )
+        datasets.open_resource("resource:other")
+        self.assertEqual(
+            client.calls,
+            [
+                (
+                    "datasets.open_resource",
+                    {
+                        "resource_id": "resource:image",
+                        "layers": [
+                            {
+                                "data_resource_id": "resource:labels",
+                                "name": "Nuclei",
+                                "kind": "labels",
+                                "visible": True,
+                                "opacity": 1.0,
+                                "ownership": "session",
+                                "style": {},
+                                "provenance": {},
+                            }
+                        ],
+                        "if_revision": 9,
+                    },
+                ),
+                (
+                    "datasets.open_resource",
+                    {"resource_id": "resource:other", "layers": []},
+                ),
+            ],
+        )
+
     def test_remote_dataset_wrappers(self) -> None:
         client = RecordingClient()
         datasets = Datasets(client)  # type: ignore[arg-type]
@@ -145,6 +193,23 @@ class AsyncDatasetResourceTests(unittest.IsolatedAsyncioTestCase):
         await datasets.open_xenium("experiment", load_cells=False)
         self.assertEqual(client.calls[0][0], "datasets.open_spatialdata")
         self.assertEqual(client.calls[1][1]["load_cells"], False)
+
+    async def test_async_registered_resource_open_wrapper(self) -> None:
+        client = AsyncRecordingClient()
+        datasets = AsyncDatasets(client)  # type: ignore[arg-type]
+        resource = AsyncDataResource(  # type: ignore[arg-type]
+            None, {"resource_id": "resource:image"}
+        )
+        await datasets.open_resource(resource)
+        self.assertEqual(
+            client.calls,
+            [
+                (
+                    "datasets.open_resource",
+                    {"resource_id": "resource:image", "layers": []},
+                )
+            ],
+        )
 
     async def test_async_remote_dataset_wrappers(self) -> None:
         client = AsyncRecordingClient()

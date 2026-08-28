@@ -185,9 +185,26 @@ fn handle_control_client(
     for worker in workers {
         let _ = worker.join();
     }
-    identity
+    let session_id = state.hello_server.session_id.as_str();
+    for layer_id in identity
         .resource_registry
-        .cleanup_session(&state.hello_server.session_id);
+        .session_layer_ids(session_id)
+        .into_iter()
+        .filter(|layer_id| layer_id.starts_with("spatial_shape:"))
+    {
+        if super::dispatch::call_actor_for_session_cleanup(
+            &tx,
+            &identity,
+            session_id,
+            "viewer.layers.remove",
+            json!({"layer_id": layer_id}),
+        )
+        .is_err()
+        {
+            break;
+        }
+    }
+    identity.resource_registry.cleanup_session(session_id);
     let ui_cleanup = identity
         .ui_registry
         .cleanup_session(&state.hello_server.session_id);

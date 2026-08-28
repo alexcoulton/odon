@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import tempfile
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
@@ -14,12 +14,61 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class AffineTransform:
+    """A homogeneous affine mapping from element x/y into document x/y."""
+
+    matrix: tuple[
+        tuple[float, float, float],
+        tuple[float, float, float],
+        tuple[float, float, float],
+    ]
+    input_axes: tuple[str, str] = ("x", "y")
+    output_axes: tuple[str, str] = ("x", "y")
+    direction: str = "input_to_reference"
+    pixel_center: str = "center"
+
+    def __post_init__(self) -> None:
+        if len(self.matrix) != 3 or any(len(row) != 3 for row in self.matrix):
+            raise ValueError("affine matrix must be a 3x3 matrix")
+        values = [value for row in self.matrix for value in row]
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("affine matrix values must be finite")
+        if self.input_axes != ("x", "y") or self.output_axes != ("x", "y"):
+            raise ValueError("the current renderer affine contract requires x/y axes")
+        if self.direction != "input_to_reference" or self.pixel_center != "center":
+            raise ValueError("unsupported affine direction or pixel convention")
+        tolerance = 1e-12
+        if (
+            abs(self.matrix[2][0]) > tolerance
+            or abs(self.matrix[2][1]) > tolerance
+            or abs(self.matrix[2][2] - 1.0) > tolerance
+        ):
+            raise ValueError("affine matrix must have homogeneous final row [0, 0, 1]")
+        determinant = (
+            self.matrix[0][0] * self.matrix[1][1]
+            - self.matrix[0][1] * self.matrix[1][0]
+        )
+        if abs(determinant) <= tolerance:
+            raise ValueError("affine matrix must be invertible")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input_axes": list(self.input_axes),
+            "output_axes": list(self.output_axes),
+            "matrix": [list(row) for row in self.matrix],
+            "direction": self.direction,
+            "pixel_center": self.pixel_center,
+        }
+
+
+@dataclass(frozen=True)
 class CoordinateSpace:
     axes: tuple[str, ...]
     units: tuple[str, ...] = ()
     scale: tuple[float, ...] = ()
     translation: tuple[float, ...] = ()
     reference_layer_id: str | None = None
+    affine: AffineTransform | None = None
 
     def __post_init__(self) -> None:
         if not self.axes or any(not axis.strip() for axis in self.axes):
@@ -37,6 +86,8 @@ class CoordinateSpace:
             raise ValueError("scale values must be finite and positive")
         if any(not math.isfinite(value) for value in self.translation):
             raise ValueError("translation values must be finite")
+        if self.affine is not None and not {"x", "y"}.issubset(self.axes):
+            raise ValueError("an affine coordinate space requires x and y axes")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +100,7 @@ class CoordinateSpace:
                 if self.reference_layer_id is not None
                 else {}
             ),
+            **({"affine": self.affine.to_dict()} if self.affine is not None else {}),
         }
 
     def pixel_to_world(self, coordinates: Sequence[float]) -> tuple[float, ...]:
@@ -58,10 +110,18 @@ class CoordinateSpace:
             raise ValueError("coordinates must match the number of axes")
         scale = self.scale or (1.0,) * len(self.axes)
         translation = self.translation or (0.0,) * len(self.axes)
-        return tuple(
+        world = [
             float(coordinate) * scale[index] + translation[index]
             for index, coordinate in enumerate(coordinates)
-        )
+        ]
+        if self.affine is not None:
+            x_index, y_index = self._xy_indices()
+            x = float(coordinates[x_index])
+            y = float(coordinates[y_index])
+            matrix = self.affine.matrix
+            world[x_index] = matrix[0][0] * x + matrix[0][1] * y + matrix[0][2]
+            world[y_index] = matrix[1][0] * x + matrix[1][1] * y + matrix[1][2]
+        return tuple(world)
 
     def world_to_pixel(self, coordinates: Sequence[float]) -> tuple[float, ...]:
         """Invert the level-zero affine transform for world coordinates."""
@@ -70,10 +130,27 @@ class CoordinateSpace:
             raise ValueError("coordinates must match the number of axes")
         scale = self.scale or (1.0,) * len(self.axes)
         translation = self.translation or (0.0,) * len(self.axes)
-        return tuple(
+        pixels = [
             (float(coordinate) - translation[index]) / scale[index]
             for index, coordinate in enumerate(coordinates)
-        )
+        ]
+        if self.affine is not None:
+            x_index, y_index = self._xy_indices()
+            matrix = self.affine.matrix
+            a, b, tx = matrix[0]
+            c, d, ty = matrix[1]
+            determinant = a * d - b * c
+            x = float(coordinates[x_index]) - tx
+            y = float(coordinates[y_index]) - ty
+            pixels[x_index] = (d * x - b * y) / determinant
+            pixels[y_index] = (-c * x + a * y) / determinant
+        return tuple(pixels)
+
+    def _xy_indices(self) -> tuple[int, int]:
+        try:
+            return self.axes.index("x"), self.axes.index("y")
+        except ValueError as error:
+            raise ValueError("an affine coordinate space requires x and y axes") from error
 
 
 class DataResource:
@@ -104,8 +181,10 @@ class DataResources:
         *,
         format: str,
         coordinate_space: CoordinateSpace,
+        group_path: str | None = None,
         resource_id: str | None = None,
         ownership: str = "session",
+        source_lifetime: str = "durable",
         metadata: Mapping[str, Any] | None = None,
         provenance: Mapping[str, Any] | None = None,
     ) -> DataResource:
@@ -116,12 +195,15 @@ class DataResources:
             "uri": uri_value,
             "format": format,
             "ownership": ownership,
+            "source_lifetime": source_lifetime,
             "coordinate_space": coordinate_space.to_dict(),
             "metadata": dict(metadata or {}),
             "provenance": dict(provenance or {}),
         }
         if resource_id is not None:
             params["resource_id"] = resource_id
+        if group_path is not None:
+            params["group_path"] = group_path
         return DataResource(self, self._client.call("data.resources.register", params))
 
     def register_numpy(
@@ -230,7 +312,14 @@ def _write_numpy_zarr(
                     for index, name in enumerate(axes)
                 ],
                 "datasets": [
-                    {"path": "0", **({"coordinateTransformations": transforms} if transforms else {})}
+                    {
+                        "path": "0",
+                        **(
+                            {"coordinateTransformations": transforms}
+                            if transforms
+                            else {}
+                        ),
+                    }
                 ],
             }
         ]

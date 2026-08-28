@@ -126,6 +126,7 @@ pub enum RequestShape {
     ProjectViewRename,
     ProjectCreate,
     Path,
+    DataResourceOpen,
     ProjectMetadata,
     SamplesheetInspect,
     SamplesheetExport,

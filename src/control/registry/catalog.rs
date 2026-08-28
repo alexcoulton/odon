@@ -592,6 +592,16 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             Object
         ),
         method!(
+            "datasets.open_resource",
+            "Open a registered OME-Zarr or Zarr image resource as the primary document.",
+            "application.open",
+            true,
+            true,
+            Some("application.mode.changed"),
+            ALL_MODES,
+            DataResourceOpen
+        ),
+        method!(
             "datasets.inspect",
             "Inspect a local dataset source and discover supported elements without opening it.",
             "datasets.read",

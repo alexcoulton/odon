@@ -100,6 +100,46 @@ pub(super) struct MosaicOpenWorkerResult {
     pub(super) s3_session_generation: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct OmeZarrOpenIdentity {
+    pub(super) path: PathBuf,
+    pub(super) resource_id: Option<String>,
+    pub(super) source_uri: Option<String>,
+    pub(super) group_path: Option<String>,
+    pub(super) layers: Vec<Value>,
+    pub(super) object_layers: Vec<RegisteredObjectLayerSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RegisteredResourceOpenIdentity {
+    pub(super) resource_id: String,
+    pub(super) source_uri: String,
+    pub(super) group_path: Option<String>,
+    pub(super) layers: Vec<Value>,
+    pub(super) object_layers: Vec<RegisteredObjectLayerSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RegisteredObjectLayerSpec {
+    pub(super) layer_id: String,
+    pub(super) name: String,
+    pub(super) path: PathBuf,
+    pub(super) loader_options: Value,
+}
+
+impl OmeZarrOpenIdentity {
+    pub(super) fn local_path(path: PathBuf) -> Self {
+        Self {
+            path,
+            resource_id: None,
+            source_uri: None,
+            group_path: None,
+            layers: Vec::new(),
+            object_layers: Vec::new(),
+        }
+    }
+}
+
 pub(super) enum LoadCompletion {
     DatasetInspect {
         operation_generation: u64,
@@ -122,11 +162,12 @@ pub(super) enum LoadCompletion {
     OmeZarr {
         generation: u64,
         request: OdonControlRequest,
-        path: PathBuf,
+        identity: OmeZarrOpenIdentity,
         result: anyhow::Result<(
             OpenedDocument<OmeZarrDocumentResource>,
             Vec<String>,
             Option<ControlLabelResource>,
+            Vec<crate::data::document::DocumentObjectLayerResource>,
         )>,
     },
     Tiff {
@@ -171,10 +212,12 @@ pub(super) enum LoadCompletion {
         session_generation: Option<u64>,
         request: OdonControlRequest,
         identity: RemoteOpenIdentity,
+        registered: Option<RegisteredResourceOpenIdentity>,
         result: anyhow::Result<(
             OpenedDocument<OmeZarrDocumentResource>,
             Vec<String>,
             Option<ControlLabelResource>,
+            Vec<crate::data::document::DocumentObjectLayerResource>,
         )>,
     },
     ChannelIntensity {
@@ -500,7 +543,7 @@ pub(super) enum LoadJob {
     OmeZarr {
         generation: u64,
         request: OdonControlRequest,
-        path: PathBuf,
+        identity: OmeZarrOpenIdentity,
     },
     Tiff {
         generation: u64,
@@ -540,6 +583,7 @@ pub(super) enum LoadJob {
         session_generation: Option<u64>,
         request: OdonControlRequest,
         spec: RemoteOpenSpec,
+        registered: Option<RegisteredResourceOpenIdentity>,
     },
     ChannelIntensity {
         generation: u64,

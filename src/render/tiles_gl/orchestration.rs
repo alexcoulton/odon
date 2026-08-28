@@ -399,14 +399,25 @@ impl TilesGl {
                 set_channel_uniforms(gl_ref, &bindings, ch.window, ch.color_rgb, ch.alpha_scale);
 
                 for (td, texs) in &available_tiles {
-                    if !td.screen_rect.intersects(viewport) {
+                    let bounds = td
+                        .screen_quad
+                        .as_ref()
+                        .map(aabb_of_quad)
+                        .unwrap_or(td.screen_rect);
+                    if !bounds.intersects(viewport) {
                         continue;
                     }
                     let Some((_, tex)) = texs.iter().find(|(tile_ci, _)| *tile_ci == ci) else {
                         continue;
                     };
-                    let verts =
-                        tile_vertices_ndc(td.screen_rect, viewport, viewport_w, viewport_h, ppp);
+                    let verts = match td.screen_quad {
+                        Some(quad) => {
+                            tile_quad_vertices_ndc(quad, viewport, viewport_w, viewport_h, ppp)
+                        }
+                        None => {
+                            tile_vertices_ndc(td.screen_rect, viewport, viewport_w, viewport_h, ppp)
+                        }
+                    };
                     gl_ref.bind_buffer(glow::ARRAY_BUFFER, Some(bindings.vbo));
                     gl_ref.buffer_data_u8_slice(
                         glow::ARRAY_BUFFER,

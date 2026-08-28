@@ -174,12 +174,33 @@ every format.
 
 Current live external rendering is strongest for:
 
-- local OME-Zarr/Zarr images and labels; and
-- local Parquet/GeoParquet shapes, objects, and points.
+- local and HTTP OME-Zarr/Zarr images and labels;
+- authenticated S3 primary OME-Zarr resources;
+- session loopback OME-Zarr providers; and
+- local Parquet/GeoParquet shapes, objects, and points, including actor-owned
+  property queries and selection when the layer has a `spatial_shape` target.
 
 Arrow IPC and registered GeoJSON can be useful as descriptors even where no
 live renderer consumes them. Renderer support must be checked separately from
 successful registration.
+
+S3 credentials are actor-session state and are never copied into persistent
+descriptors or renderer-side external layers. Consequently, S3 currently
+supports a registered primary image but not credentialed secondary raster
+layers in the same composite. Python-led S3 references remain session-lifetime
+and cannot be saved as project dependencies. HTTP composites do not have this
+limitation.
+
+The Python array provider is intentionally session-only. Unexpected provider
+loss makes subsequent chunk reads fail; normal display cleanup removes its
+layers and descriptors. Projects refuse a provider or temporary vector as a
+durable dependency. Use the SpatialData display handle's explicit `persist()`
+operation before saving such a composite as a durable project.
+
+SpatialData table columns are currently joined into a selected vector
+GeoParquet snapshot. Property-only refresh, label-index joins, and expression
+matrix transfer require a future keyed-property resource; the adapter never
+copies an entire expression matrix implicitly.
 
 ## Labels and property-filled cells
 
@@ -248,6 +269,15 @@ Inline requests are bounded. Image arrays, tables, and large geometry are
 registered by URI. `register_numpy()` is a convenience that writes a temporary
 Zarr store before registration; it is not zero-copy shared memory. Very large
 analysis results should be written in a supported referenced format.
+
+The optional SpatialData adapter supports direct-reference and provider-backed
+rasters, selected vector snapshots or compatible GeoParquet references,
+selected table-column projection, and invertible 2D affine alignment. It fails
+closed when a source cannot be proven equivalent, a transform is non-affine,
+or the connected Odon build cannot read the resulting generic resource.
+`auto` never silently materializes a large raster. The native Rust
+`datasets.open_spatialdata` method remains a separate compatibility path and is
+never called by the Python adapter.
 
 ## Session lifetime and persistence
 

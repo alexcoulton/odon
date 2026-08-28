@@ -502,6 +502,7 @@ impl OmeZarrViewerApp {
                             tile_y: key.tile_y,
                             tile_x: key.tile_x,
                             screen_rect: tile_screen_rect,
+                            screen_quad: None,
                         });
                     }
                 }
@@ -519,6 +520,7 @@ impl OmeZarrViewerApp {
                             tile_y: key.tile_y,
                             tile_x: key.tile_x,
                             screen_rect: tile_screen_rect,
+                            screen_quad: None,
                         });
                     }
                 }

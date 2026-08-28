@@ -975,6 +975,32 @@ impl AppModel {
         Ok(())
     }
 
+    pub(crate) fn remove_document_object_layer(&mut self, layer_id: &str) -> bool {
+        let Some(id) = layer_id
+            .strip_prefix("spatial_shape:")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|id| *id > 0)
+        else {
+            return false;
+        };
+        let Some(dataset) = self.dataset.as_mut() else {
+            return false;
+        };
+        if dataset.secondary_object_layers.remove(&id).is_none() {
+            return false;
+        }
+        self.analyses.remove(&ObjectTarget::SpatialShape(id));
+        self.object_resource_generation = self.object_resource_generation.wrapping_add(1).max(1);
+        for viewport in dataset.workspace.viewports_mut() {
+            viewport.state.secondary_objects.remove(&id);
+            viewport
+                .state
+                .native_layers
+                .set_spatial_object_layer(layer_id, "", false);
+        }
+        true
+    }
+
     pub(super) fn install_label_resource_immediate(
         &mut self,
         resource: Arc<ControlLabelResource>,

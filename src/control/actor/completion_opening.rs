@@ -302,7 +302,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         LoadCompletion::OmeZarr {
             generation,
             request,
-            path,
+            identity,
             result,
         } => {
             let cancelled = request
@@ -319,9 +319,10 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 return;
             }
             match result {
-                Ok((opened, label_available, root_label_resource)) => {
+                Ok((opened, label_available, root_label_resource, object_layers)) => {
                     let root_label_resource = root_label_resource.map(Arc::new);
-                    if !model.install_document_for_generation(
+                    let mut candidate = model.clone();
+                    if !candidate.install_document_for_generation(
                         generation,
                         opened.descriptor.clone(),
                         label_available,
@@ -335,11 +336,45 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                             ControlErrorKind::Conflict,
                             "dataset open result was superseded by a newer request",
                         )
-                        .with_data(
-                            json!({"path": path.to_string_lossy(), "generation": generation}),
-                        )));
+                        .with_data(ome_zarr_identity_data(&identity, Some(generation)))));
                         return;
                     }
+                    if let Err(error) = candidate.install_document_object_layers(&object_layers) {
+                        model.fail_dataset_open_for_generation(
+                            generation,
+                            "failed to install registered object resources",
+                        );
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            error.with_data(json!({
+                                "resource_id": identity.resource_id,
+                                "phase": "install_object_layers",
+                            })),
+                        );
+                        return;
+                    }
+                    let attached_layers = match resource_registry
+                        .add_layers_atomic(identity.layers.clone(), &request.session_id)
+                    {
+                        Ok(layers) => layers,
+                        Err(error) => {
+                            model.fail_dataset_open_for_generation(
+                                generation,
+                                "failed to attach registered document layers",
+                            );
+                            reject_actor_request(
+                                request,
+                                diagnostics,
+                                error.with_data(json!({
+                                    "resource_id": identity.resource_id,
+                                    "phase": "attach_layers",
+                                })),
+                            );
+                            return;
+                        }
+                    };
+                    *model = candidate;
                     *render_document = Some(Arc::new(RenderDocument {
                         generation,
                         opened: opened.into_control(),
@@ -352,19 +387,28 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         wake_ui,
                         diagnostics,
                     );
-                    finish_request(
-                        request,
-                        json!({
-                            "opened": true,
-                            "mode": "single",
-                            "kind": "ome_zarr",
-                            "path": path.to_string_lossy(),
-                            "model_ready": true,
-                            "resources_ready": true,
-                            "presentation_ready": false,
-                        }),
-                        diagnostics,
-                    );
+                    let mut response = json!({
+                        "opened": true,
+                        "mode": "single",
+                        "kind": "ome_zarr",
+                        "path": identity.path.to_string_lossy(),
+                        "model_ready": true,
+                        "resources_ready": true,
+                        "presentation_ready": false,
+                        "layers": attached_layers,
+                    });
+                    if let Some(object) = response.as_object_mut() {
+                        if let Some(resource_id) = &identity.resource_id {
+                            object.insert("resource_id".into(), json!(resource_id));
+                        }
+                        if let Some(source_uri) = &identity.source_uri {
+                            object.insert("source_uri".into(), json!(source_uri));
+                        }
+                        if let Some(group_path) = &identity.group_path {
+                            object.insert("group_path".into(), json!(group_path));
+                        }
+                    }
+                    finish_request(request, response, diagnostics);
                 }
                 Err(error) => {
                     let message = format!("failed to open OME-Zarr dataset: {error}");
@@ -377,7 +421,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                             ControlErrorKind::Application,
                             message,
                         )
-                        .with_data(json!({"path": path.to_string_lossy()}))));
+                        .with_data(ome_zarr_identity_data(&identity, None))));
                     } else {
                         diagnostics
                             .stale_worker_completions
@@ -387,9 +431,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                             ControlErrorKind::Conflict,
                             "failed dataset open was superseded by a newer request",
                         )
-                        .with_data(
-                            json!({"path": path.to_string_lossy(), "generation": generation}),
-                        )));
+                        .with_data(ome_zarr_identity_data(&identity, Some(generation)))));
                     }
                 }
             }
@@ -807,6 +849,7 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             session_generation,
             request,
             identity,
+            registered,
             result,
         } => {
             if request_is_cancelled(&request) {
@@ -837,13 +880,14 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 return;
             }
             match result {
-                Ok((opened, label_available, root_label_resource)) => {
+                Ok((opened, label_available, root_label_resource, object_layers)) => {
                     let root_label_resource = root_label_resource.map(Arc::new);
-                    if !model.install_document_for_generation(
+                    let mut candidate = model.clone();
+                    if !candidate.install_document_for_generation(
                         generation,
                         opened.descriptor.clone(),
                         label_available,
-                        root_label_resource,
+                        root_label_resource.clone(),
                     ) {
                         remote_session.finish_s3_open(generation);
                         diagnostics
@@ -859,6 +903,49 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         );
                         return;
                     }
+                    if let Err(error) = candidate.install_document_object_layers(&object_layers) {
+                        model.fail_dataset_open_for_generation(
+                            generation,
+                            "failed to install registered object resources",
+                        );
+                        remote_session.finish_s3_open(generation);
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            error.with_data(json!({
+                                "resource_id": registered
+                                    .as_ref()
+                                    .map(|value| value.resource_id.as_str()),
+                                "phase": "install_object_layers",
+                            })),
+                        );
+                        return;
+                    }
+                    let attached_layers = match registered.as_ref() {
+                        Some(registered) => match resource_registry
+                            .add_layers_atomic(registered.layers.clone(), &request.session_id)
+                        {
+                            Ok(layers) => layers,
+                            Err(error) => {
+                                model.fail_dataset_open_for_generation(
+                                    generation,
+                                    "failed to attach registered document layers",
+                                );
+                                remote_session.finish_s3_open(generation);
+                                reject_actor_request(
+                                    request,
+                                    diagnostics,
+                                    error.with_data(json!({
+                                        "resource_id": registered.resource_id,
+                                        "phase": "attach_layers",
+                                    })),
+                                );
+                                return;
+                            }
+                        },
+                        None => Vec::new(),
+                    };
+                    *model = candidate;
                     *render_document = Some(Arc::new(RenderDocument {
                         generation,
                         opened: opened.into_control(),
@@ -879,7 +966,15 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                         ("model_ready".to_string(), Value::Bool(true)),
                         ("resources_ready".to_string(), Value::Bool(true)),
                         ("presentation_ready".to_string(), Value::Bool(false)),
+                        ("layers".to_string(), json!(attached_layers)),
                     ]);
+                    if let Some(registered) = &registered {
+                        response.as_object_mut().unwrap().extend([
+                            ("resource_id".to_string(), json!(registered.resource_id)),
+                            ("source_uri".to_string(), json!(registered.source_uri)),
+                            ("group_path".to_string(), json!(registered.group_path)),
+                        ]);
+                    }
                     finish_request(request, response, diagnostics);
                 }
                 Err(error) => {
@@ -1102,6 +1197,25 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         }
         _ => unreachable!("completion domain mismatch"),
     }
+}
+
+fn ome_zarr_identity_data(identity: &OmeZarrOpenIdentity, generation: Option<u64>) -> Value {
+    let mut data = json!({"path": identity.path.to_string_lossy()});
+    if let Some(object) = data.as_object_mut() {
+        if let Some(generation) = generation {
+            object.insert("generation".into(), json!(generation));
+        }
+        if let Some(resource_id) = &identity.resource_id {
+            object.insert("resource_id".into(), json!(resource_id));
+        }
+        if let Some(source_uri) = &identity.source_uri {
+            object.insert("source_uri".into(), json!(source_uri));
+        }
+        if let Some(group_path) = &identity.group_path {
+            object.insert("group_path".into(), json!(group_path));
+        }
+    }
+    data
 }
 
 #[allow(clippy::too_many_arguments)]

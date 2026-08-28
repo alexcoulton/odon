@@ -73,6 +73,107 @@ fn fixture_backend() -> Arc<dyn RemoteDatasetBackend> {
 }
 
 #[test]
+fn registered_http_group_uses_remote_reader_and_commits_layers() {
+    let channels = spawn_test_actor_with_remote(fixture_backend());
+    for (resource_id, group_path) in [
+        ("resource:remote-image", "images/morphology"),
+        ("resource:remote-labels", "labels/nuclei"),
+    ] {
+        let (register, register_rx) = request(
+            "data.resources.register",
+            json!({
+                "resource_id": resource_id,
+                "uri": "https://example.test/sample.zarr",
+                "format": "ome-zarr",
+                "group_path": group_path,
+                "coordinate_space": {"axes": ["c", "y", "x"]}
+            }),
+        );
+        channels.request_tx.send(register).unwrap();
+        register_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .expect("remote resource registration succeeds");
+    }
+
+    let (open, open_rx) = request(
+        "datasets.open_resource",
+        json!({
+            "resource_id": "resource:remote-image",
+            "layers": [{
+                "layer_id": "layer:remote-labels",
+                "data_resource_id": "resource:remote-labels",
+                "name": "Nuclei",
+                "kind": "labels"
+            }]
+        }),
+    );
+    channels.request_tx.send(open).unwrap();
+    let opened = open_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("registered HTTP resource opens");
+    assert_eq!(opened["resource_id"], "resource:remote-image");
+    assert_eq!(opened["source_uri"], "https://example.test/sample.zarr");
+    assert_eq!(opened["group_path"], "images/morphology");
+    assert_eq!(
+        opened["url"],
+        "https://example.test/sample.zarr/images/morphology"
+    );
+    assert_eq!(opened["layers"][0]["layer_id"], "layer:remote-labels");
+}
+
+#[test]
+fn registered_s3_group_reuses_session_credentials_without_persisting_them() {
+    let channels = spawn_test_actor_with_remote(fixture_backend());
+    let (configure, configure_rx) = request(
+        "datasets.s3.configure_session",
+        json!({
+            "endpoint":"objects.example.test",
+            "region":"auto",
+            "bucket":"images",
+            "access_key":"access-secret",
+            "secret_key":"secret-secret",
+        }),
+    );
+    channels.request_tx.send(configure).unwrap();
+    configure_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let (register, register_rx) = request(
+        "data.resources.register",
+        json!({
+            "resource_id": "resource:s3-image",
+            "uri": "s3://images/study/sample.zarr",
+            "format": "ome-zarr",
+            "group_path": "images/morphology",
+            "coordinate_space": {"axes": ["c", "y", "x"]}
+        }),
+    );
+    channels.request_tx.send(register).unwrap();
+    register_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    let (open, open_rx) = request(
+        "datasets.open_resource",
+        json!({"resource_id": "resource:s3-image"}),
+    );
+    channels.request_tx.send(open).unwrap();
+    let opened = open_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("registered S3 resource opens");
+    assert_eq!(opened["resource_id"], "resource:s3-image");
+    assert_eq!(opened["prefix"], "study/sample.zarr/images/morphology");
+    let text = opened.to_string();
+    assert!(!text.contains("access-secret"));
+    assert!(!text.contains("secret-secret"));
+}
+
+#[test]
 fn remote_sessions_listing_and_opens_complete_without_a_ui_frame() {
     let channels = spawn_test_actor_with_remote(fixture_backend());
     let access_key = "access-key-must-stay-secret";

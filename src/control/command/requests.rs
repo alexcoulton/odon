@@ -447,6 +447,14 @@ struct PathRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DataResourceOpenRequest {
+    resource_id: String,
+    #[serde(default)]
+    layers: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProjectMetadataRequest {
     default_dataset: Option<Value>,
     secondary_dataset: Option<Value>,

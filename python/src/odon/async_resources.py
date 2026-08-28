@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:
     from .async_client import AsyncClient
+    from .async_data import AsyncDataResource
+    from .layers import LayerSpec
 
 
 def _with_revision(params: Mapping[str, Any], if_revision: int | None) -> dict[str, Any]:
@@ -299,6 +301,30 @@ class AsyncDatasets:
     ) -> Any:
         return await self._client.application.open_ome_zarr(
             path, if_revision=if_revision
+        )
+
+    async def open_resource(
+        self,
+        resource: AsyncDataResource | str,
+        *,
+        layers: Iterable[LayerSpec | Mapping[str, Any]] = (),
+        if_revision: int | None = None,
+    ) -> Any:
+        """Open a registered OME-Zarr/Zarr resource as the primary document."""
+
+        resource_id = (
+            resource.resource_id if not isinstance(resource, str) else resource
+        )
+        layer_specs = [
+            layer.to_dict() if hasattr(layer, "to_dict") else dict(layer)
+            for layer in layers
+        ]
+        return await self._client.tasks.start(
+            "datasets.open_resource",
+            _with_revision(
+                {"resource_id": resource_id, "layers": layer_specs}, if_revision
+            ),
+            label=f"Open resource {resource_id}",
         )
 
     async def open_tiff(

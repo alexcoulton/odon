@@ -105,19 +105,24 @@ pub(super) fn spawn_resource_workers(
                         LoadJob::OmeZarr {
                             generation,
                             request,
-                            path,
+                            identity,
                         } => {
-                            let result = open_local_ome_zarr(&path).map(|opened| {
-                                complete_ome_zarr_resource(
+                            let result = open_local_ome_zarr(&identity.path).and_then(|opened| {
+                                let (opened, labels, root_label) = complete_ome_zarr_resource(
                                     opened,
-                                    discover_label_names_local(&path),
-                                )
+                                    discover_label_names_local(&identity.path),
+                                );
+                                let object_layers = load_registered_object_layers(
+                                    &identity.object_layers,
+                                    object_loader.as_deref(),
+                                )?;
+                                Ok((opened, labels, root_label, object_layers))
                             });
                             if completions
                                 .send(LoadCompletion::OmeZarr {
                                     generation,
                                     request,
-                                    path,
+                                    identity,
                                     result,
                                 })
                                 .is_err()
@@ -242,11 +247,21 @@ pub(super) fn spawn_resource_workers(
                             session_generation,
                             request,
                             spec,
+                            registered,
                         } => {
                             let (identity, result) = match spec {
                                 RemoteOpenSpec::Http { url } => {
-                                    let result = remote_backend.open_http(&url).map(|opened| {
-                                        complete_ome_zarr_resource(opened, Vec::new())
+                                    let result = remote_backend.open_http(&url).and_then(|opened| {
+                                        let (opened, labels, root_label) =
+                                            complete_ome_zarr_resource(opened, Vec::new());
+                                        let object_layers = load_registered_object_layers(
+                                            registered
+                                                .as_ref()
+                                                .map(|value| value.object_layers.as_slice())
+                                                .unwrap_or_default(),
+                                            object_loader.as_deref(),
+                                        )?;
+                                        Ok((opened, labels, root_label, object_layers))
                                     });
                                     (RemoteOpenIdentity::Http { url }, result)
                                 }
@@ -262,8 +277,17 @@ pub(super) fn spawn_resource_workers(
                                     };
                                     let result = remote_backend
                                         .open_s3(&credentials, &prefix)
-                                        .map(|opened| {
-                                            complete_ome_zarr_resource(opened, Vec::new())
+                                        .and_then(|opened| {
+                                            let (opened, labels, root_label) =
+                                                complete_ome_zarr_resource(opened, Vec::new());
+                                            let object_layers = load_registered_object_layers(
+                                                registered
+                                                    .as_ref()
+                                                    .map(|value| value.object_layers.as_slice())
+                                                    .unwrap_or_default(),
+                                                object_loader.as_deref(),
+                                            )?;
+                                            Ok((opened, labels, root_label, object_layers))
                                         })
                                         .map_err(|error| {
                                             anyhow::anyhow!(
@@ -279,6 +303,7 @@ pub(super) fn spawn_resource_workers(
                                     session_generation,
                                     request,
                                     identity,
+                                    registered,
                                     result,
                                 })
                                 .is_err()
@@ -1161,4 +1186,36 @@ pub(super) fn spawn_resource_workers(
     }
 
     Ok(())
+}
+
+fn load_registered_object_layers(
+    specs: &[RegisteredObjectLayerSpec],
+    object_loader: Option<&dyn ObjectResourceLoader>,
+) -> anyhow::Result<Vec<crate::data::document::DocumentObjectLayerResource>> {
+    if specs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let loader = object_loader
+        .ok_or_else(|| anyhow::anyhow!("selectable object resource loader is unavailable"))?;
+    specs
+        .iter()
+        .map(|spec| {
+            let resource = loader
+                .load_with_options(spec.path.clone(), 1.0, Some(spec.loader_options.clone()))
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to load registered object layer '{}' ({}): {error}",
+                        spec.name,
+                        spec.layer_id
+                    )
+                })?;
+            Ok(crate::data::document::DocumentObjectLayerResource {
+                layer_id: spec.layer_id.clone(),
+                name: spec.name.clone(),
+                kind: "spatial_shape".to_string(),
+                primary: false,
+                resource: Arc::new(resource),
+            })
+        })
+        .collect()
 }

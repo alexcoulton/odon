@@ -94,8 +94,12 @@ impl SpatialDataLayers {
         parquet_path: PathBuf,
         transform: SpatialDataTransform2,
     ) -> u64 {
-        let id = self.next_shape_layer_id.max(1);
-        self.next_shape_layer_id = id.wrapping_add(1).max(1);
+        let requested_id = external_id
+            .strip_prefix("spatial_shape:")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|id| *id > 0);
+        let id = requested_id.unwrap_or_else(|| self.next_shape_layer_id.max(1));
+        self.next_shape_layer_id = self.next_shape_layer_id.max(id.wrapping_add(1).max(1));
         let mut shape = SpatialShapesLayer::new(
             id,
             Some(external_id),

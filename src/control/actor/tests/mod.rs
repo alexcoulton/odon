@@ -212,6 +212,7 @@ mod analysis;
 mod annotations;
 mod backpressure;
 mod channels;
+mod data_resources;
 mod dataset_inspection;
 mod deep_link_apply;
 mod deep_link_resolution;

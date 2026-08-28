@@ -1220,6 +1220,7 @@ fn mosaic_transform(offset: egui::Vec2, scale: f32) -> SpatialDataTransform2 {
     SpatialDataTransform2 {
         scale: [scale, scale],
         translation: [offset.x, offset.y],
+        affine: None,
     }
 }
 

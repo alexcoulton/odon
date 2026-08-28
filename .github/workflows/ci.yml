@@ -94,3 +94,41 @@ jobs:
           name: odon-coverage-lcov
           path: lcov.info
           if-no-files-found: error
+
+  spatialdata-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: oldest-supported
+            requirement: "spatialdata>=0.6,<0.7"
+            python: "3.11"
+          - lane: newest-supported
+            requirement: "spatialdata>=0.8,<0.9"
+            python: "3.12"
+
+    name: SpatialData (${{ matrix.lane }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Python toolchain
+        uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python }}"
+
+      - name: Install SDK and SpatialData lane
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./python "${{ matrix.requirement }}"
+
+      - name: Run SpatialData adapter contract tests
+        env:
+          PYTHONPATH: python/src
+          PYTHONWARNINGS: ignore
+        run: >-
+          python -m unittest
+          python.tests.test_array_provider
+          python.tests.test_spatialdata_integration
+          -v

@@ -46,6 +46,7 @@ pub const ACTOR_CAPABLE_METHODS: &[&str] = &[
     "datasets.open_http",
     "datasets.open_mosaic_samplesheet",
     "datasets.open_ome_zarr",
+    "datasets.open_resource",
     "datasets.open_s3",
     "datasets.open_spatialdata",
     "datasets.open_tiff",

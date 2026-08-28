@@ -485,6 +485,18 @@ pub(super) fn dispatch_request(
         begin_ome_zarr_load(model, request, load_job_tx, diagnostics);
         return;
     }
+    if request.command.method() == "datasets.open_resource" {
+        diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
+        begin_data_resource_load(
+            model,
+            request,
+            resource_registry,
+            remote_session,
+            load_job_tx,
+            diagnostics,
+        );
+        return;
+    }
     if request.command.method() == "datasets.open_tiff" {
         diagnostics.actor_requests.fetch_add(1, Ordering::Relaxed);
         begin_tiff_load(model, request, load_job_tx, diagnostics);
@@ -997,6 +1009,7 @@ fn dispatch_resource_registry_request(
     let params = request.command.params();
     let session_id = request.session_id.as_str();
     let model_started = Instant::now();
+    let mut semantic_changed = false;
     let result = (|| -> Result<Value, ControlError> {
         match method {
             "data.resources.register" => {
@@ -1041,6 +1054,7 @@ fn dispatch_resource_registry_request(
             "viewer.layers.remove" => {
                 let id = required_registry_id(method, "layer_id", params)?;
                 registry.remove_layer(id, session_id)?;
+                semantic_changed |= model.remove_document_object_layer(id);
                 Ok(json!({"layer_id": id, "removed": true}))
             }
             "viewer.layers.reorder" => {
@@ -1070,7 +1084,7 @@ fn dispatch_resource_registry_request(
             if request.command.mutates() {
                 let (resources, layers) = registry.project_manifest();
                 let project_changed = model.update_project_manifest(resources, layers);
-                if project_changed {
+                if project_changed || semantic_changed {
                     publish_projection(
                         model,
                         render_document.clone(),

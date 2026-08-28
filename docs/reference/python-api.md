@@ -31,6 +31,12 @@ Install the optional array adapter with:
 python -m pip install -e './python[arrays]'
 ```
 
+Install the optional SpatialData adapter on Python 3.11 or newer with:
+
+```bash
+python -m pip install -e './python[spatialdata]'
+```
+
 Python 3.10 or newer is required.
 
 ## Connect, discover, or launch
@@ -79,6 +85,16 @@ and camera state, channels and contrast, objects, selection and filtering,
 mosaic layout, screenshots, external data, layers, tasks, events, and native UI
 extensions. `app.call(method, params)` remains available for introspection and
 experimental methods.
+
+SpatialData images, labels, shapes, points, and selected table properties can
+be composed through `odon.integrations.spatialdata.display()` or
+`display_async()`. Backed rasters stay in their original local/remote OME-Zarr
+store; unbacked arrays use a session chunk provider; and only selected vectors
+that need adaptation become GeoParquet snapshots. Full 2D affine alignment,
+selection-ID round trips, generation-safe refresh, and explicit durable
+promotion are exposed by the display handle. The adapter uses generic
+`data.resources.register` and `datasets.open_resource` contracts and never
+wraps the native `datasets.open_spatialdata` method.
 
 For a vim-slime/IPython tour made of independent `# %%` cells, open
 [`examples/interactive_python_api.py`](../../examples/interactive_python_api.py).
@@ -158,7 +174,7 @@ async names below have identical arguments and add `await` to network calls:
 | Resource | Representative operations |
 | --- | --- |
 | `application` | state/readiness, settings, recent projects, diagnostics, navigation, guarded close/quit |
-| `datasets` | inspect/open local OME-Zarr, TIFF, SpatialData, Xenium, HTTP and authenticated S3 sources |
+| `datasets` | inspect/open local OME-Zarr, registered group-addressed resources with atomic layers, TIFF, native SpatialData compatibility, Xenium, HTTP and authenticated S3 sources |
 | `projects` | create/open/save, metadata, samplesheets, discovery, ROI CRUD/selection/focus, saved views, object preload |
 | `viewer` | camera, panels, interpolation, renderer readiness, scale bar, active right tab, linked one/two-viewport workspaces |
 | `planes` | orientation/slice navigation and XY-only operation availability |
