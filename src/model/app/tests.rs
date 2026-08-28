@@ -1420,7 +1420,9 @@ fn viewport_filters_of_the_same_kind_have_independent_readiness() {
             downsample_factor: 1.0,
             features: Arc::new(Vec::new()),
             property_names: Arc::new(vec!["id".to_string()]),
+            property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
             numeric_summaries: Arc::new(Default::default()),
+            memory_diagnostics: Arc::new(Default::default()),
             renderer_payload: None,
         }),
     ));
@@ -1508,21 +1510,26 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
         downsample_factor: 1.0,
         features: Arc::new(vec![ControlObjectFeature {
             id: "shape-1".to_string(),
-            bbox_world: [1.0, 1.0, 9.0, 9.0],
-            centroid_world: [5.0, 5.0],
-            polygons_world: Arc::new(vec![vec![
-                [1.0, 1.0],
-                [9.0, 1.0],
-                [9.0, 9.0],
-                [1.0, 9.0],
-                [1.0, 1.0],
-            ]]),
+            bbox_world: eframe::egui::Rect::from_min_max(
+                eframe::egui::pos2(1.0, 1.0),
+                eframe::egui::pos2(9.0, 9.0),
+            ),
+            centroid_world: eframe::egui::pos2(5.0, 5.0),
+            polygons_world: vec![vec![
+                eframe::egui::pos2(1.0, 1.0),
+                eframe::egui::pos2(9.0, 1.0),
+                eframe::egui::pos2(9.0, 9.0),
+                eframe::egui::pos2(1.0, 9.0),
+                eframe::egui::pos2(1.0, 1.0),
+            ]],
             point_position_world: None,
             area_px: 64.0,
             perimeter_px: 32.0,
-            properties: serde_json::Map::from_iter([("score".to_string(), json!(2.5))]),
+            inline_properties: serde_json::Map::from_iter([("score".to_string(), json!(2.5))]),
+            source_row_index: None,
         }]),
         property_names: Arc::new(vec!["id".to_string(), "score".to_string()]),
+        property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
         numeric_summaries: Arc::new(BTreeMap::from([(
             "score".to_string(),
             crate::model::ControlObjectNumericSummary {
@@ -1534,6 +1541,7 @@ fn spatial_shape_resources_support_the_complete_object_compute_surface() {
                 missing_count: 0,
             },
         )])),
+        memory_diagnostics: Arc::new(Default::default()),
         renderer_payload: None,
     });
     model

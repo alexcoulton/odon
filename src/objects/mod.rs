@@ -12,6 +12,7 @@ use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use zarrs::storage::ReadableStorageTraits;
 
+use crate::compact_f32::NullableF32Column;
 use crate::data::ome::{ChannelInfo, OmeZarrDataset};
 use crate::features::points::FeaturePointLod;
 use crate::render::line_bins::{LineSegmentsBins, ObjectLineSegmentsBins};
@@ -30,9 +31,9 @@ use crate::render::polygon_fill_gl::{
 };
 use crate::spatialdata::{
     ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,
-    inspect_shapes_object_schema, load_shapes_centroid_point_objects, load_shapes_objects,
-    load_shapes_property_values_by_row, load_shapes_xy_point_features,
-    load_shapes_xy_point_objects,
+    inspect_shapes_object_schema, load_shapes_centroid_point_objects,
+    load_shapes_f32_property_column, load_shapes_objects, load_shapes_property_values_by_row,
+    load_shapes_xy_point_features, load_shapes_xy_point_objects,
 };
 use odon::model::{
     ContinuousDomain, ContinuousPalette, ContinuousScale, ControlObjectFilterResult,
@@ -46,6 +47,7 @@ mod defaults;
 mod filter_query;
 mod measurements;
 pub(crate) use measurements::MeasurementUiAction;
+mod memory;
 mod property_store;
 mod render;
 #[cfg(test)]
@@ -108,23 +110,8 @@ impl ObjectPreloadSettings {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ObjectFeature {
-    pub id: String,
-    pub polygons_world: Vec<Vec<egui::Pos2>>,
-    pub point_position_world: Option<egui::Pos2>,
-    pub bbox_world: egui::Rect,
-    pub area_px: f32,
-    pub perimeter_px: f32,
-    pub centroid_world: egui::Pos2,
-    /// Row-inline fallback properties.
-    ///
-    /// GeoJSON/CSV imports are naturally row-oriented and may keep their attributes here. For
-    /// GeoParquet-backed layers this should stay minimal; source and generated columns belong in
-    /// `ObjectPropertyStore` so ROI switching and preloading remain columnar.
-    pub inline_properties: serde_json::Map<String, serde_json::Value>,
-    pub source_row_index: Option<usize>,
-}
+/// The renderer and control actor retain the same immutable feature vector.
+pub type ObjectFeature = odon::model::ControlObjectFeature;
 
 #[derive(Debug, Clone)]
 pub struct SelectedObjectDetails {
@@ -552,6 +539,7 @@ struct LoadResult {
     property_store: ObjectPropertyStore,
     lazy_parquet_source: Option<LazyParquetSource>,
     bounds_local: egui::Rect,
+    memory_diagnostics: Arc<odon::model::ControlObjectMemoryDiagnostics>,
 }
 
 static NEXT_OBJECT_RENDER_RESOURCE_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -577,7 +565,13 @@ pub struct PreloadedObjectLayer {
 #[derive(Debug)]
 struct PropertyLoadResult {
     property_key: String,
-    values_by_row: HashMap<usize, serde_json::Value>,
+    values: LoadedPropertyValues,
+}
+
+#[derive(Debug)]
+enum LoadedPropertyValues {
+    F32(NullableF32Column),
+    ValuesByRow(HashMap<usize, serde_json::Value>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

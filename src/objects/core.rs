@@ -382,9 +382,9 @@ fn export_scalar_from_property_store(
         ObjectPropertyColumn::I64(values) => values
             .get(object_index)
             .and_then(|value| value.map(ExportScalar::Int64)),
-        ObjectPropertyColumn::F64(values) => values
+        ObjectPropertyColumn::F32(values) => values
             .get(object_index)
-            .and_then(|value| value.map(ExportScalar::Float64)),
+            .map(|value| ExportScalar::Float64(f64::from(value))),
         ObjectPropertyColumn::Dictionary { dictionary, values } => values
             .get(object_index)
             .and_then(|code| code.and_then(|code| dictionary.get(code as usize)))
@@ -410,11 +410,8 @@ fn numeric_property_value(
                     .and_then(|value| value.map(|value| value as f32))
                     .filter(|value| value.is_finite());
             }
-            ObjectPropertyColumn::F64(values) => {
-                return values
-                    .get(object_index)
-                    .and_then(|value| value.map(|value| value as f32))
-                    .filter(|value| value.is_finite());
+            ObjectPropertyColumn::F32(values) => {
+                return values.get(object_index).filter(|value| value.is_finite());
             }
             ObjectPropertyColumn::Json(values) => {
                 if let Some(value) = values

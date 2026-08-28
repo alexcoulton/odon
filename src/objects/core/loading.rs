@@ -277,55 +277,24 @@ pub(super) fn control_resource_from_preloaded(
         .cloned()
         .collect::<BTreeSet<_>>();
     property_names.insert("id".to_string());
-    let features = result
-        .objects
-        .iter()
-        .enumerate()
-        .map(|(index, object)| {
-            let mut properties = object.inline_properties.clone();
-            for property in &loaded_properties {
-                let value = result
-                    .property_store
-                    .loaded_columns
-                    .get(property)
-                    .map(|column| column.value_json_at(index))
-                    .unwrap_or(serde_json::Value::Null);
-                if !value.is_null() {
-                    properties.insert(property.clone(), value);
-                }
-            }
-            odon::model::ControlObjectFeature {
-                id: object.id.clone(),
-                bbox_world: [
-                    object.bbox_world.min.x,
-                    object.bbox_world.min.y,
-                    object.bbox_world.max.x,
-                    object.bbox_world.max.y,
-                ],
-                centroid_world: [object.centroid_world.x, object.centroid_world.y],
-                polygons_world: Arc::new(
-                    object
-                        .polygons_world
-                        .iter()
-                        .map(|polygon| polygon.iter().map(|point| [point.x, point.y]).collect())
-                        .collect(),
-                ),
-                point_position_world: object.point_position_world.map(|point| [point.x, point.y]),
-                area_px: object.area_px,
-                perimeter_px: object.perimeter_px,
-                properties,
-            }
-        })
-        .collect::<Vec<_>>();
+    let features = Arc::clone(&result.objects);
     let property_names = property_names.into_iter().collect::<Vec<_>>();
-    let numeric_summaries =
-        odon::model::ControlObjectResource::build_numeric_summaries(&features, &property_names);
+    let property_source: Arc<dyn odon::model::ControlObjectPropertySource> =
+        Arc::new(result.property_store.clone());
+    let numeric_summaries = odon::model::ControlObjectResource::build_numeric_summaries(
+        features.as_ref(),
+        &property_names,
+        property_source.as_ref(),
+    );
+    let memory_diagnostics = Arc::clone(&result.memory_diagnostics);
     Ok(odon::model::ControlObjectResource {
         source: path,
         downsample_factor,
-        features: Arc::new(features),
+        features,
         property_names: Arc::new(property_names),
+        property_source,
         numeric_summaries,
+        memory_diagnostics,
         renderer_payload: Some(Arc::new(preloaded)),
     })
 }
@@ -449,11 +418,37 @@ pub(super) fn load_result_from_objects(
     downsample_factor: f32,
     display_transform: SpatialDataTransform2,
     display_mode: ObjectDisplayMode,
-    objects: Vec<GeoJsonObjectFeature>,
+    mut objects: Vec<GeoJsonObjectFeature>,
     lazy_parquet_source: Option<LazyParquetSource>,
     cancel: &AtomicBool,
 ) -> anyhow::Result<LoadResult> {
     check_cancel(cancel)?;
+    let mut property_store = ObjectPropertyStore::from_available_columns(
+        lazy_parquet_source
+            .as_ref()
+            .map(|source| source.available_property_columns.clone())
+            .unwrap_or_default(),
+    );
+    if let Some(source) = lazy_parquet_source.as_ref() {
+        // GeoParquet geometry decoding never constructs row maps. Hydrate the small selected
+        // identity set directly into typed columns, indexed back through stable source rows. The
+        // canonical id already lives on the feature itself and is exposed synthetically.
+        for property in &source.loaded_property_columns {
+            if property == "id" {
+                continue;
+            }
+            check_cancel(cancel)?;
+            let values = load_parquet_property_values(&path, property, cancel)
+                .with_context(|| format!("failed to load identity column '{property}'"))?;
+            property_store.insert_column(
+                property.clone(),
+                object_property_column_from_loaded_values(&objects, &values),
+            );
+        }
+        for object in &mut objects {
+            object.inline_properties.clear();
+        }
+    }
     let bounds = objects.iter().map(|o| o.bbox_world).collect::<Vec<_>>();
     let bounds_local =
         union_rects(&bounds).ok_or_else(|| anyhow!("no valid object bounds after parsing"))?;
@@ -482,16 +477,24 @@ pub(super) fn load_result_from_objects(
     let (point_positions_world, point_values, point_lods) =
         build_object_point_payload(&objects, display_transform);
     check_cancel(cancel)?;
-    let object_property_keys = discover_property_keys(&objects);
-    let scalar_property_keys = discover_scalar_property_keys(&objects);
-    let color_property_keys = discover_categorical_color_keys(&objects);
-    let property_store = ObjectPropertyStore::from_available_columns(
-        lazy_parquet_source
-            .as_ref()
-            .map(|source| source.available_property_columns.clone())
-            .unwrap_or_default(),
+    let mut object_property_keys = discover_property_keys(&objects);
+    object_property_keys.extend(property_store.loaded_keys());
+    object_property_keys.sort();
+    object_property_keys.dedup();
+    let mut scalar_property_keys = discover_scalar_property_keys(&objects);
+    scalar_property_keys.extend(property_store.numeric_keys());
+    scalar_property_keys.sort();
+    scalar_property_keys.dedup();
+    let mut color_property_keys = discover_categorical_color_keys(&objects);
+    color_property_keys.extend(
+        property_store
+            .loaded_keys()
+            .into_iter()
+            .filter(|key| property_store.loaded_column_is_categorical(key, 24)),
     );
-    Ok(LoadResult {
+    color_property_keys.sort();
+    color_property_keys.dedup();
+    let mut result = LoadResult {
         request_id,
         render_resource_cache_id: next_object_render_resource_cache_id(),
         path,
@@ -512,7 +515,12 @@ pub(super) fn load_result_from_objects(
         property_store,
         lazy_parquet_source,
         bounds_local,
-    })
+        memory_diagnostics: Arc::new(Default::default()),
+    };
+    result.memory_diagnostics = Arc::new(crate::objects::memory::load_result_memory_diagnostics(
+        &result,
+    ));
+    Ok(result)
 }
 
 pub(super) fn load_all_parquet_property_columns_into_result(
@@ -530,10 +538,9 @@ pub(super) fn load_all_parquet_property_columns_into_result(
             source.loaded_property_columns.insert(property_key);
             continue;
         }
-        let values_by_row = load_shapes_property_values_by_row(path, &property_key, cancel)
+        let values = load_parquet_property_values(path, &property_key, cancel)
             .with_context(|| format!("failed to load property column '{property_key}'"))?;
-        let column =
-            ObjectPropertyColumn::from_values_by_row(result.objects.as_ref(), &values_by_row);
+        let column = object_property_column_from_loaded_values(result.objects.as_ref(), &values);
         let is_categorical = column.is_categorical(24);
         result
             .property_store
@@ -631,9 +638,39 @@ pub(super) fn parquet_loaded_property_columns(
 pub(super) fn load_parquet_property_values_for_loaded_objects(
     path: &Path,
     property_key: &str,
-) -> anyhow::Result<HashMap<usize, serde_json::Value>> {
+) -> anyhow::Result<LoadedPropertyValues> {
     let cancel = AtomicBool::new(false);
-    load_shapes_property_values_by_row(path, property_key, &cancel)
+    load_parquet_property_values(path, property_key, &cancel)
+}
+
+fn load_parquet_property_values(
+    path: &Path,
+    property_key: &str,
+    cancel: &AtomicBool,
+) -> anyhow::Result<LoadedPropertyValues> {
+    if let Some(values) = load_shapes_f32_property_column(path, property_key, cancel)? {
+        return Ok(LoadedPropertyValues::F32(values));
+    }
+    load_shapes_property_values_by_row(path, property_key, cancel)
+        .map(LoadedPropertyValues::ValuesByRow)
+}
+
+pub(super) fn object_property_column_from_loaded_values(
+    objects: &[GeoJsonObjectFeature],
+    values: &LoadedPropertyValues,
+) -> ObjectPropertyColumn {
+    match values {
+        LoadedPropertyValues::F32(values) => ObjectPropertyColumn::F32(Arc::new(
+            NullableF32Column::from_optional_values(objects.iter().map(|object| {
+                object
+                    .source_row_index
+                    .and_then(|row_index| values.get(row_index))
+            })),
+        )),
+        LoadedPropertyValues::ValuesByRow(values) => {
+            ObjectPropertyColumn::from_values_by_row(objects, values)
+        }
+    }
 }
 
 pub(super) fn parse_geojson_objects(

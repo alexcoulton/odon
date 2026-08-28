@@ -146,7 +146,9 @@ impl ObjectSelectionModel {
                 .features
                 .iter()
                 .enumerate()
-                .filter_map(|(index, feature)| feature_matches_id(feature, &id).then_some(index))
+                .filter_map(|(index, _feature)| {
+                    feature_matches_id(resource, index, &id).then_some(index)
+                })
                 .collect::<Vec<_>>();
             if matches.is_empty() {
                 missing.push(id);
@@ -202,7 +204,9 @@ impl ObjectSelectionModel {
                 .features
                 .iter()
                 .enumerate()
-                .filter_map(|(index, feature)| feature_matches_id(feature, id).then_some(index))
+                .filter_map(|(index, _feature)| {
+                    feature_matches_id(resource, index, id).then_some(index)
+                })
                 .collect::<Vec<_>>();
             match matches.as_slice() {
                 [index] => *index,
@@ -226,7 +230,7 @@ impl ObjectSelectionModel {
                 "selection_count":self.selected_indices.len(),
                 "generation":self.generation,
             }),
-            fit.then_some(resource.features[index].bbox_world),
+            fit.then_some(rect_array(resource.features[index].bbox_world)),
         ))
     }
 
@@ -297,7 +301,9 @@ impl ObjectSelectionModel {
         limit: usize,
     ) -> Value {
         let indices = candidate_indices(resource.features.len(), visible_indices)
-            .filter(|index| point_in_polygon(resource.features[*index].centroid_world, points))
+            .filter(|index| {
+                point_in_polygon(resource.features[*index].centroid_world.into(), points)
+            })
             .collect::<Vec<_>>();
         let matches = indices
             .iter()
@@ -321,7 +327,9 @@ impl ObjectSelectionModel {
         limit: usize,
     ) -> Result<Value, ControlError> {
         let indices = candidate_indices(resource.features.len(), visible_indices)
-            .filter(|index| point_in_polygon(resource.features[*index].centroid_world, points))
+            .filter(|index| {
+                point_in_polygon(resource.features[*index].centroid_world.into(), points)
+            })
             .collect::<Vec<_>>();
         let changed = self.apply_indices(&indices, selection_mode(params)?)?;
         Ok(json!({
@@ -419,35 +427,27 @@ fn object_entry(resource: &ControlObjectResource, index: usize) -> Option<Value>
     Some(json!({
         "index":index,
         "id":feature.id,
-        "centroid_world":feature.centroid_world,
-        "centroid_local":feature.centroid_world,
-        "bbox_world":feature.bbox_world,
-        "bbox_local":feature.bbox_world,
+        "centroid_world":[feature.centroid_world.x, feature.centroid_world.y],
+        "centroid_local":[feature.centroid_world.x, feature.centroid_world.y],
+        "bbox_world":rect_array(feature.bbox_world),
+        "bbox_local":rect_array(feature.bbox_world),
         "area_px":feature.area_px,
         "perimeter_px":feature.perimeter_px,
     }))
 }
 
-fn feature_matches_id(feature: &ControlObjectFeature, id: &str) -> bool {
+fn feature_matches_id(resource: &ControlObjectResource, feature_index: usize, id: &str) -> bool {
+    let Some(feature) = resource.features.get(feature_index) else {
+        return false;
+    };
     feature.id == id
         || ["cell_id", "id", "object_id", "label", "name"]
             .iter()
             .any(|key| {
-                feature
-                    .properties
-                    .get(*key)
-                    .and_then(value_label)
+                resource
+                    .property_label(feature_index, key)
                     .is_some_and(|value| value == id)
             })
-}
-
-fn value_label(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    }
 }
 
 fn candidate_indices<'a>(
@@ -468,7 +468,7 @@ fn candidate_indices<'a>(
 fn object_intersects_rect(feature: &ControlObjectFeature, rect: [f32; 4]) -> bool {
     let rect = normalize_rect(rect);
     if !feature.polygons_world.is_empty() {
-        if !rects_intersect(feature.bbox_world, rect) {
+        if !rects_intersect(rect_array(feature.bbox_world), rect) {
             return false;
         }
         let mut tested_polygon = false;
@@ -477,7 +477,7 @@ fn object_intersects_rect(feature: &ControlObjectFeature, rect: [f32; 4]) -> boo
                 continue;
             }
             tested_polygon = true;
-            if polygon_intersects_rect(polygon, rect) {
+            if polygon_intersects_rect_pos2(polygon, rect) {
                 return true;
             }
         }
@@ -488,13 +488,71 @@ fn object_intersects_rect(feature: &ControlObjectFeature, rect: [f32; 4]) -> boo
     point_in_rect(
         feature
             .point_position_world
-            .unwrap_or(feature.centroid_world),
+            .unwrap_or(feature.centroid_world)
+            .into(),
         rect,
     )
 }
 
 fn normalize_rect([x0, y0, x1, y1]: [f32; 4]) -> [f32; 4] {
     [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]
+}
+
+fn rect_array(rect: eframe::egui::Rect) -> [f32; 4] {
+    [rect.min.x, rect.min.y, rect.max.x, rect.max.y]
+}
+
+fn polygon_intersects_rect_pos2(polygon: &[eframe::egui::Pos2], rect: [f32; 4]) -> bool {
+    if polygon
+        .iter()
+        .any(|point| point_in_rect([point.x, point.y], rect))
+    {
+        return true;
+    }
+    let corners = rect_corners(rect);
+    if corners
+        .iter()
+        .copied()
+        .any(|point| point_in_pos2_polygon_or_on_edge(point, polygon))
+    {
+        return true;
+    }
+    let rect_edges = polygon_edges(&corners);
+    (0..polygon.len()).any(|index| {
+        let next = (index + 1) % polygon.len();
+        let a = [polygon[index].x, polygon[index].y];
+        let b = [polygon[next].x, polygon[next].y];
+        rect_edges
+            .iter()
+            .copied()
+            .any(|(c, d)| segments_intersect(a, b, c, d))
+    })
+}
+
+fn point_in_pos2_polygon_or_on_edge(point: [f32; 2], polygon: &[eframe::egui::Pos2]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut previous = polygon.len() - 1;
+    for current in 0..polygon.len() {
+        let a = polygon[current];
+        let b = polygon[previous];
+        let aa = [a.x, a.y];
+        let bb = [b.x, b.y];
+        if point_on_segment(point, aa, bb) {
+            return true;
+        }
+        let dy = b.y - a.y;
+        if ((a.y > point[1]) != (b.y > point[1]))
+            && dy.abs() > 1.0e-12
+            && point[0] < (b.x - a.x) * (point[1] - a.y) / dy + a.x
+        {
+            inside = !inside;
+        }
+        previous = current;
+    }
+    inside
 }
 
 fn point_in_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
@@ -516,31 +574,6 @@ fn point_in_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
         previous = current;
     }
     inside
-}
-
-fn polygon_intersects_rect(polygon: &[[f32; 2]], rect: [f32; 4]) -> bool {
-    if polygon
-        .iter()
-        .copied()
-        .any(|point| point_in_rect(point, rect))
-    {
-        return true;
-    }
-    let corners = rect_corners(rect);
-    if corners
-        .iter()
-        .copied()
-        .any(|point| point_in_polygon_or_on_edge(point, polygon))
-    {
-        return true;
-    }
-    let rect_edges = polygon_edges(&corners);
-    polygon_edges(polygon).into_iter().any(|(a, b)| {
-        rect_edges
-            .iter()
-            .copied()
-            .any(|(c, d)| segments_intersect(a, b, c, d))
-    })
 }
 
 fn polygon_edges(points: &[[f32; 2]]) -> Vec<([f32; 2], [f32; 2])> {
@@ -569,13 +602,6 @@ fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
 
 fn point_in_rect([x, y]: [f32; 2], [x0, y0, x1, y1]: [f32; 4]) -> bool {
     x >= x0 && x <= x1 && y >= y0 && y <= y1
-}
-
-fn point_in_polygon_or_on_edge(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
-    polygon_edges(polygon)
-        .iter()
-        .any(|(a, b)| point_on_segment(point, *a, *b))
-        || point_in_polygon(point, polygon)
 }
 
 fn segments_intersect(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> bool {
@@ -771,27 +797,41 @@ mod tests {
             features: Arc::new(vec![
                 ControlObjectFeature {
                     id: "a".to_string(),
-                    bbox_world: [0.0, 0.0, 10.0, 10.0],
-                    centroid_world: [5.0, 5.0],
-                    polygons_world: Arc::new(vec![vec![[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]]]),
+                    bbox_world: eframe::egui::Rect::from_min_max(
+                        eframe::egui::pos2(0.0, 0.0),
+                        eframe::egui::pos2(10.0, 10.0),
+                    ),
+                    centroid_world: eframe::egui::pos2(5.0, 5.0),
+                    polygons_world: vec![vec![
+                        eframe::egui::pos2(0.0, 0.0),
+                        eframe::egui::pos2(10.0, 0.0),
+                        eframe::egui::pos2(0.0, 10.0),
+                    ]],
                     point_position_world: None,
                     area_px: 50.0,
                     perimeter_px: 34.142,
-                    properties: json!({"label":"tumour"}).as_object().unwrap().clone(),
+                    inline_properties: json!({"label":"tumour"}).as_object().unwrap().clone(),
+                    source_row_index: None,
                 },
                 ControlObjectFeature {
                     id: "b".to_string(),
-                    bbox_world: [20.0, 20.0, 30.0, 30.0],
-                    centroid_world: [25.0, 25.0],
-                    polygons_world: Arc::new(Vec::new()),
-                    point_position_world: Some([25.0, 25.0]),
+                    bbox_world: eframe::egui::Rect::from_min_max(
+                        eframe::egui::pos2(20.0, 20.0),
+                        eframe::egui::pos2(30.0, 30.0),
+                    ),
+                    centroid_world: eframe::egui::pos2(25.0, 25.0),
+                    polygons_world: Vec::new(),
+                    point_position_world: Some(eframe::egui::pos2(25.0, 25.0)),
                     area_px: 0.0,
                     perimeter_px: 0.0,
-                    properties: json!({"label":"immune"}).as_object().unwrap().clone(),
+                    inline_properties: json!({"label":"immune"}).as_object().unwrap().clone(),
+                    source_row_index: None,
                 },
             ]),
             property_names: Arc::new(vec!["id".to_string(), "label".to_string()]),
+            property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
             numeric_summaries: Arc::new(Default::default()),
+            memory_diagnostics: Arc::new(Default::default()),
             renderer_payload: None,
         }
     }

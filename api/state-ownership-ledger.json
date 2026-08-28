@@ -1257,7 +1257,7 @@
       },
       {
         "id": "mosaic.segmentation",
-        "fields": ["seg_geojson", "object_property_cache_capacity"],
+        "fields": ["seg_geojson"],
         "current_class": "shared_resource",
         "disposition": "retain",
         "canonical_writer": "ControlActor mosaic object/resource presentation model",

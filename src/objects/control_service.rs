@@ -91,10 +91,12 @@ pub(super) fn evaluate_control_object_filter(
                 .features
                 .iter()
                 .enumerate()
-                .filter_map(|(index, feature)| {
+                .filter_map(|(index, _feature)| {
                     expression
                         .as_ref()
-                        .is_none_or(|expression| expression.matches_control_feature(feature))
+                        .is_none_or(|expression| {
+                            expression.matches_control_feature(resource, index)
+                        })
                         .then_some(index)
                 })
                 .collect::<Vec<_>>();
@@ -169,15 +171,15 @@ pub(super) fn evaluate_control_object_filter(
                             .as_str()
                             .unwrap_or_default()
                             .to_ascii_lowercase();
-                        let value = if property == "id" {
-                            feature.id.clone()
-                        } else {
-                            feature
-                                .properties
-                                .get(property)
-                                .map(column_value_to_display_text)
-                                .unwrap_or_default()
-                        };
+                        let value = resource
+                            .property_value(index, property)
+                            .as_ref()
+                            .map(column_value_to_display_text)
+                            .unwrap_or_else(|| {
+                                (property == "id")
+                                    .then(|| feature.id.clone())
+                                    .unwrap_or_default()
+                            });
                         value.to_ascii_lowercase().contains(&needle)
                     };
                     let visible = if active_clauses.is_empty() {

@@ -47,10 +47,7 @@ impl ObjectsLayer {
             loop {
                 match rx.try_recv() {
                     Ok(msg) => {
-                        self.apply_loaded_property_values(
-                            msg.property_key.as_str(),
-                            &msg.values_by_row,
-                        );
+                        self.apply_loaded_property_payload(msg.property_key.as_str(), &msg.values);
                         if self.property_load_key.as_deref() == Some(msg.property_key.as_str()) {
                             self.property_load_rx = None;
                             self.property_load_key = None;
@@ -496,9 +493,9 @@ impl ObjectsLayer {
         for (column_key, values) in &result.column_values {
             self.property_store.insert_column(
                 column_key.clone(),
-                ObjectPropertyColumn::F64(Arc::new(
-                    values.iter().map(|value| value.map(f64::from)).collect(),
-                )),
+                ObjectPropertyColumn::F32(Arc::new(NullableF32Column::from_optional_values(
+                    values.iter().copied(),
+                ))),
             );
         }
         self.extend_object_property_keys(

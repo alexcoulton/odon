@@ -61,41 +61,49 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                 features: Arc::new(vec![
                     crate::model::ControlObjectFeature {
                         id: "cell-a".to_string(),
-                        bbox_world: [0.0, 0.0, 10.0, 10.0],
-                        centroid_world: [5.0, 5.0],
-                        polygons_world: Arc::new(vec![vec![
-                            [0.0, 0.0],
-                            [10.0, 0.0],
-                            [10.0, 10.0],
-                            [0.0, 10.0],
-                            [0.0, 0.0],
-                        ]]),
-                        point_position_world: Some([5.0, 5.0]),
+                        bbox_world: eframe::egui::Rect::from_min_max(
+                            eframe::egui::pos2(0.0, 0.0),
+                            eframe::egui::pos2(10.0, 10.0),
+                        ),
+                        centroid_world: eframe::egui::pos2(5.0, 5.0),
+                        polygons_world: vec![vec![
+                            eframe::egui::pos2(0.0, 0.0),
+                            eframe::egui::pos2(10.0, 0.0),
+                            eframe::egui::pos2(10.0, 10.0),
+                            eframe::egui::pos2(0.0, 10.0),
+                            eframe::egui::pos2(0.0, 0.0),
+                        ]],
+                        point_position_world: Some(eframe::egui::pos2(5.0, 5.0)),
                         area_px: 100.0,
                         perimeter_px: 40.0,
-                        properties: json!({"phenotype":"tumour","score":0.9})
+                        inline_properties: json!({"phenotype":"tumour","score":0.9})
                             .as_object()
                             .unwrap()
                             .clone(),
+                        source_row_index: None,
                     },
                     crate::model::ControlObjectFeature {
                         id: "cell-b".to_string(),
-                        bbox_world: [20.0, 20.0, 30.0, 30.0],
-                        centroid_world: [25.0, 25.0],
-                        polygons_world: Arc::new(vec![vec![
-                            [20.0, 20.0],
-                            [30.0, 20.0],
-                            [30.0, 30.0],
-                            [20.0, 30.0],
-                            [20.0, 20.0],
-                        ]]),
-                        point_position_world: Some([25.0, 25.0]),
+                        bbox_world: eframe::egui::Rect::from_min_max(
+                            eframe::egui::pos2(20.0, 20.0),
+                            eframe::egui::pos2(30.0, 30.0),
+                        ),
+                        centroid_world: eframe::egui::pos2(25.0, 25.0),
+                        polygons_world: vec![vec![
+                            eframe::egui::pos2(20.0, 20.0),
+                            eframe::egui::pos2(30.0, 20.0),
+                            eframe::egui::pos2(30.0, 30.0),
+                            eframe::egui::pos2(20.0, 30.0),
+                            eframe::egui::pos2(20.0, 20.0),
+                        ]],
+                        point_position_world: Some(eframe::egui::pos2(25.0, 25.0)),
                         area_px: 100.0,
                         perimeter_px: 40.0,
-                        properties: json!({"phenotype":"immune","score":0.2})
+                        inline_properties: json!({"phenotype":"immune","score":0.2})
                             .as_object()
                             .unwrap()
                             .clone(),
+                        source_row_index: None,
                     },
                 ]),
                 property_names: Arc::new(vec![
@@ -103,7 +111,9 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                     "phenotype".to_string(),
                     "score".to_string(),
                 ]),
+                property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
                 numeric_summaries: Arc::new(Default::default()),
+                memory_diagnostics: Arc::new(Default::default()),
                 renderer_payload: None,
             })
         }
@@ -118,7 +128,10 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                 .as_ref()
                 .and_then(|value| value.get("project_preload"))
             {
-                assert_eq!(preload["mode"], "full_geometry");
+                assert!(matches!(
+                    preload["mode"].as_str(),
+                    Some("full_geometry" | "centroid_points")
+                ));
                 assert_eq!(preload["lazy_properties"], true);
             }
             self.load(path, downsample_factor)
@@ -137,13 +150,11 @@ fn spawn_test_actor_with_objects() -> ControlActorChannels {
                 .features
                 .iter()
                 .enumerate()
-                .filter_map(|(index, feature)| {
+                .filter_map(|(index, _feature)| {
                     (query.is_empty()
-                        || feature
-                            .properties
-                            .get("phenotype")
-                            .and_then(Value::as_str)
-                            .is_some_and(|value| query.contains(value)))
+                        || resource
+                            .property_label(index, "phenotype")
+                            .is_some_and(|value| query.contains(&value)))
                     .then_some(index)
                 })
                 .collect::<Vec<_>>();

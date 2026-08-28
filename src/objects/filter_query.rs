@@ -1,7 +1,9 @@
+#[cfg(test)]
+use super::NullableF32Column;
 use super::{
     GeoJsonObjectFeature, ObjectPropertyColumn, ObjectPropertyStore, column_value_to_display_text,
 };
-use odon::model::ControlObjectFeature;
+use odon::model::ControlObjectResource;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,16 +110,24 @@ impl ObjectFilterQueryExpr {
         }
     }
 
-    pub(super) fn matches_control_feature(&self, feature: &ControlObjectFeature) -> bool {
+    pub(super) fn matches_control_feature(
+        &self,
+        resource: &ControlObjectResource,
+        feature_index: usize,
+    ) -> bool {
         match self {
             Self::And(left, right) => {
-                left.matches_control_feature(feature) && right.matches_control_feature(feature)
+                left.matches_control_feature(resource, feature_index)
+                    && right.matches_control_feature(resource, feature_index)
             }
             Self::Or(left, right) => {
-                left.matches_control_feature(feature) || right.matches_control_feature(feature)
+                left.matches_control_feature(resource, feature_index)
+                    || right.matches_control_feature(resource, feature_index)
             }
-            Self::Not(inner) => !inner.matches_control_feature(feature),
-            Self::Predicate(predicate) => predicate.matches_control_feature(feature),
+            Self::Not(inner) => !inner.matches_control_feature(resource, feature_index),
+            Self::Predicate(predicate) => {
+                predicate.matches_control_feature(resource, feature_index)
+            }
         }
     }
 }
@@ -133,13 +143,20 @@ impl ObjectFilterPredicate {
         self.matches_actual(actual)
     }
 
-    fn matches_control_feature(&self, feature: &ControlObjectFeature) -> bool {
+    fn matches_control_feature(
+        &self,
+        resource: &ControlObjectResource,
+        feature_index: usize,
+    ) -> bool {
+        let Some(feature) = resource.features.get(feature_index) else {
+            return false;
+        };
         let actual = if self.property_key == "id" {
             ObjectFilterActualValue::String(feature.id.clone())
         } else {
-            feature
-                .properties
-                .get(&self.property_key)
+            resource
+                .property_value(feature_index, &self.property_key)
+                .as_ref()
                 .map(json_query_value)
                 .unwrap_or(ObjectFilterActualValue::Missing)
         };
@@ -320,10 +337,9 @@ fn column_query_value(
             .and_then(|value| *value)
             .map(|value| ObjectFilterActualValue::Number(value as f64))
             .unwrap_or(ObjectFilterActualValue::Null),
-        ObjectPropertyColumn::F64(values) => values
+        ObjectPropertyColumn::F32(values) => values
             .get(object_index)
-            .and_then(|value| *value)
-            .map(ObjectFilterActualValue::Number)
+            .map(|value| ObjectFilterActualValue::Number(f64::from(value)))
             .unwrap_or(ObjectFilterActualValue::Null),
         ObjectPropertyColumn::Dictionary { dictionary, values } => values
             .get(object_index)
@@ -965,7 +981,11 @@ mod tests {
         );
         store.insert_column(
             "median_intensity_cd3".to_string(),
-            ObjectPropertyColumn::F64(Arc::new(vec![Some(1500.0), Some(200.0), Some(50.0)])),
+            ObjectPropertyColumn::F32(Arc::new(NullableF32Column::from_optional_values([
+                Some(1500.0),
+                Some(200.0),
+                Some(50.0),
+            ]))),
         );
         store
     }

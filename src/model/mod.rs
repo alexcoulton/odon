@@ -60,8 +60,10 @@ pub(crate) use object_export::{
     object_export_columns, write_object_export,
 };
 pub use objects::{
-    ControlObjectFeature, ControlObjectFilterResult, ControlObjectNumericSummary,
-    ControlObjectResource, ObjectResourceLoader,
+    ControlObjectF32Column, ControlObjectFeature, ControlObjectFilterResult,
+    ControlObjectMemoryDiagnostics, ControlObjectNumericSummary, ControlObjectPropertyOverlay,
+    ControlObjectPropertySource, ControlObjectResource, EmptyControlObjectPropertySource,
+    ObjectResourceLoader, RetainedMemoryComponent,
 };
 pub use project::ProjectModelSnapshot;
 pub(crate) use project::normalized_loaded_project_snapshot;

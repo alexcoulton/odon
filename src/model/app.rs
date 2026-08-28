@@ -1510,20 +1510,26 @@ fn mosaic_memory_scope(spec: &super::MosaicMemoryPinSpec) -> String {
 
 fn numeric_object_properties(resource: &ControlObjectResource) -> Vec<String> {
     let mut properties = resource
-        .property_names
-        .iter()
-        .filter(|property| {
-            property.as_str() != "id"
-                && resource.features.iter().any(|feature| {
-                    feature
-                        .properties
-                        .get(property.as_str())
-                        .and_then(Value::as_f64)
-                        .is_some_and(f64::is_finite)
-                })
-        })
+        .numeric_summaries
+        .keys()
         .cloned()
         .collect::<Vec<_>>();
+    if properties.is_empty() {
+        properties.extend(
+            resource
+                .property_names
+                .iter()
+                .filter(|property| property.as_str() != "id")
+                .filter(|property| {
+                    (0..resource.features.len()).any(|index| {
+                        resource
+                            .property_f64(index, property)
+                            .is_some_and(f64::is_finite)
+                    })
+                })
+                .cloned(),
+        );
+    }
     properties.sort();
     properties.dedup();
     properties
@@ -2751,9 +2757,10 @@ fn apply_deep_link_object_legend(
     };
     let mut values = resource
         .into_iter()
-        .flat_map(|resource| resource.features.iter())
-        .filter_map(|feature| feature.properties.get(property))
-        .filter_map(object_value_label)
+        .flat_map(|resource| {
+            (0..resource.features.len())
+                .filter_map(|index| resource.property_label(index, property))
+        })
         .collect::<Vec<_>>();
     values.extend(request.visible_cell_types.iter().cloned());
     values.extend(request.hidden_cell_types.iter().cloned());
@@ -2807,15 +2814,6 @@ fn apply_deep_link_object_legend(
         if let Some(color) = colors.get(&normalized) {
             style.insert("color_rgb".to_string(), json!(color));
         }
-    }
-}
-
-fn object_value_label(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
     }
 }
 

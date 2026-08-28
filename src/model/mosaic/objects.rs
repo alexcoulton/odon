@@ -431,6 +431,10 @@ impl MosaicModel {
     }
 
     pub(super) fn object_state(&self) -> Value {
+        let mut cpu_geometry_memory = ControlObjectMemoryDiagnostics::default();
+        for resource in self.object_resources.values() {
+            cpu_geometry_memory.merge(&resource.memory_diagnostics);
+        }
         let items = self
             .items
             .iter()
@@ -447,6 +451,7 @@ impl MosaicModel {
                     "requested":self.object_pending_ids.contains(&item.id),
                     "loaded":resource.is_some(),
                     "object_count":resource.map_or(0, |resource| resource.features.len()),
+                    "cpu_geometry_memory":resource.map(|resource| resource.memory_diagnostics.snapshot()),
                     "error":self.object_failures.get(&item.id),
                 })
             })
@@ -459,6 +464,7 @@ impl MosaicModel {
             "requested_loading":self.object_pending_ids.len(),
             "settled":self.object_pending_ids.is_empty(),
             "loaded_count":self.object_resources.len(),
+            "cpu_geometry_memory":cpu_geometry_memory.snapshot(),
             "failed_count":self.object_failures.len(),
             "status":self.object_status,
             "items":items,

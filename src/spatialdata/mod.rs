@@ -14,6 +14,7 @@ pub(crate) use layers::{
     prepare_spatial_shape_data,
 };
 pub use parquet_points::{PointsLoadOptions, PointsMeta, PointsPayload, load_points_sample};
+pub(crate) use parquet_shapes::load_shapes_f32_property_column;
 pub use parquet_shapes::{
     ShapesLoadOptions, ShapesObjectSchema, ShapesRenderKind, detect_shapes_render_kind,
     inspect_shapes_object_schema, load_shapes_centroid_point_objects, load_shapes_circle_polylines,

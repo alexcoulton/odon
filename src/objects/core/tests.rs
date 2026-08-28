@@ -394,7 +394,11 @@ fn reinstalling_shared_property_resource_preserves_geometry_generation() {
     let mut property_update = shared_property_update;
     property_update.property_store.insert_column(
         "new_score".to_string(),
-        ObjectPropertyColumn::F64(Arc::new(vec![Some(1.0), Some(2.0), Some(3.0)])),
+        ObjectPropertyColumn::F32(Arc::new(NullableF32Column::from_optional_values([
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+        ]))),
     );
     property_update
         .scalar_property_keys
@@ -758,8 +762,46 @@ fn geojson_lifecycle_filter_selection_and_exports_round_trip() {
         parse_geoparquet_objects(&parquet_path, None, &cancel).expect("reload exported GeoParquet");
     assert_eq!(reloaded.len(), 3);
     assert_eq!(reloaded[0].id, "cell-a");
-    assert_eq!(reloaded[1].inline_properties["class"], "immune");
+    assert!(reloaded[1].inline_properties.is_empty());
     assert_eq!(reloaded[2].polygons_world.len(), 2);
+
+    let resource = load_control_object_resource_with_options(
+        parquet_path.clone(),
+        1.0,
+        Some(&serde_json::json!({
+            "format":"geoparquet",
+            "source":"geometry",
+            "geometry_column":"geometry",
+            "property_columns":["id", "class"],
+        })),
+    )
+    .expect("load shared GeoParquet resource");
+    assert!(
+        resource
+            .features
+            .iter()
+            .all(|feature| feature.inline_properties.is_empty()),
+        "GeoParquet rows must not retain JSON property maps"
+    );
+    assert_eq!(
+        resource.property_value(1, "class"),
+        Some(serde_json::json!("immune"))
+    );
+    let filtered = crate::objects::control_service::evaluate_control_object_filter(
+        &resource,
+        &serde_json::json!({"mode":"query", "query":"class == 'immune'"}),
+    )
+    .expect("filter shared GeoParquet columns");
+    assert_eq!(filtered.matching_indices.as_ref(), &[1]);
+    let renderer = resource
+        .renderer_payload::<PreloadedObjectLayer>()
+        .expect("renderer preload");
+    assert!(Arc::ptr_eq(&resource.features, &renderer.result.objects));
+    assert_eq!(
+        resource.memory_diagnostics.components["renderer.inline_property_maps"]
+            .opaque_allocation_count,
+        0
+    );
 
     layer.clear();
     assert_eq!(layer.object_count(), 0);

@@ -99,11 +99,29 @@ impl ObjectPropertyStore {
     }
 }
 
+impl odon::model::ControlObjectPropertySource for ObjectPropertyStore {
+    fn value_json_at(&self, object_index: usize, property: &str) -> Option<serde_json::Value> {
+        let value = self
+            .loaded_columns
+            .get(property)?
+            .value_json_at(object_index);
+        (!value.is_null()).then_some(value)
+    }
+
+    fn f64_at(&self, object_index: usize, property: &str) -> Option<f64> {
+        self.numeric_at(property, object_index)
+    }
+
+    fn label_at(&self, object_index: usize, property: &str) -> Option<String> {
+        self.label_at(property, object_index)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::objects) enum ObjectPropertyColumn {
     Bool(Arc<Vec<Option<bool>>>),
     I64(Arc<Vec<Option<i64>>>),
-    F64(Arc<Vec<Option<f64>>>),
+    F32(Arc<NullableF32Column>),
     Dictionary {
         dictionary: Arc<Vec<String>>,
         values: Arc<Vec<Option<u32>>>,
@@ -120,7 +138,7 @@ pub(in crate::objects) enum ObjectPropertyContainsMatcher {
     I64 {
         needle: String,
     },
-    F64 {
+    F32 {
         needle: String,
     },
     Dictionary {
@@ -136,7 +154,7 @@ impl ObjectPropertyColumn {
         match (self, other) {
             (Self::Bool(left), Self::Bool(right)) => Arc::ptr_eq(left, right),
             (Self::I64(left), Self::I64(right)) => Arc::ptr_eq(left, right),
-            (Self::F64(left), Self::F64(right)) => Arc::ptr_eq(left, right),
+            (Self::F32(left), Self::F32(right)) => Arc::ptr_eq(left, right),
             (
                 Self::Dictionary {
                     dictionary: left_dictionary,
@@ -167,9 +185,9 @@ impl ObjectPropertyColumn {
                 .and_then(|value| *value)
                 .map(serde_json::Value::from)
                 .unwrap_or(serde_json::Value::Null),
-            Self::F64(values) => values
+            Self::F32(values) => values
                 .get(object_index)
-                .and_then(|value| *value)
+                .map(f64::from)
                 .and_then(serde_json::Number::from_f64)
                 .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null),
@@ -237,12 +255,13 @@ impl ObjectPropertyColumn {
                         .collect(),
                 ));
             }
-            return Self::F64(Arc::new(
-                values
-                    .into_iter()
-                    .map(|value| value.and_then(|value| value.as_f64()))
-                    .collect(),
-            ));
+            return Self::F32(Arc::new(NullableF32Column::from_optional_values(
+                values.into_iter().map(|value| {
+                    value
+                        .and_then(|value| value.as_f64())
+                        .map(|value| value as f32)
+                }),
+            )));
         }
 
         if non_null
@@ -284,9 +303,7 @@ impl ObjectPropertyColumn {
             Self::I64(values) => values
                 .get(object_index)
                 .and_then(|value| value.map(|value| value.to_string())),
-            Self::F64(values) => values
-                .get(object_index)
-                .and_then(|value| value.map(|value| value.to_string())),
+            Self::F32(values) => values.get(object_index).map(|value| value.to_string()),
             Self::Dictionary { dictionary, values } => values
                 .get(object_index)
                 .and_then(|code| code.and_then(|code| dictionary.get(code as usize).cloned())),
@@ -321,7 +338,7 @@ impl ObjectPropertyColumn {
                 false_matches: "false".contains(&needle),
             },
             Self::I64(_) => ObjectPropertyContainsMatcher::I64 { needle },
-            Self::F64(_) => ObjectPropertyContainsMatcher::F64 { needle },
+            Self::F32(_) => ObjectPropertyContainsMatcher::F32 { needle },
             Self::Dictionary { dictionary, .. } => {
                 let matching_codes = dictionary
                     .iter()
@@ -353,9 +370,8 @@ impl ObjectPropertyColumn {
                 .get(object_index)
                 .and_then(|value| *value)
                 .is_some_and(|value| value.to_string().contains(needle)),
-            (Self::F64(values), ObjectPropertyContainsMatcher::F64 { needle }) => values
+            (Self::F32(values), ObjectPropertyContainsMatcher::F32 { needle }) => values
                 .get(object_index)
-                .and_then(|value| *value)
                 .is_some_and(|value| value.to_string().contains(needle)),
             (
                 Self::Dictionary { values, .. },
@@ -390,7 +406,7 @@ impl ObjectPropertyColumn {
                 values.sort_by_key(|value| value.to_ascii_lowercase());
                 Some(values)
             }
-            Self::I64(_) | Self::F64(_) | Self::Json(_) => None,
+            Self::I64(_) | Self::F32(_) | Self::Json(_) => None,
         }
     }
 
@@ -409,7 +425,7 @@ impl ObjectPropertyColumn {
     }
 
     pub(in crate::objects) fn is_numeric(&self) -> bool {
-        matches!(self, Self::I64(_) | Self::F64(_))
+        matches!(self, Self::I64(_) | Self::F32(_))
     }
 
     pub(in crate::objects) fn numeric_pairs(&self) -> Option<Vec<(usize, f32)>> {
@@ -422,11 +438,9 @@ impl ObjectPropertyColumn {
                     .filter(|(_, value)| value.is_finite())
                     .collect(),
             ),
-            Self::F64(values) => Some(
+            Self::F32(values) => Some(
                 values
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, value)| value.map(|value| (idx, value as f32)))
+                    .iter_present()
                     .filter(|(_, value)| value.is_finite())
                     .collect(),
             ),
@@ -439,7 +453,7 @@ impl ObjectPropertyColumn {
             Self::I64(values) => values
                 .get(object_index)
                 .and_then(|value| value.map(|value| value as f64)),
-            Self::F64(values) => values.get(object_index).and_then(|value| *value),
+            Self::F32(values) => values.get(object_index).map(f64::from),
             _ => None,
         }
         .filter(|value| value.is_finite())
@@ -449,7 +463,7 @@ impl ObjectPropertyColumn {
         match self {
             Self::Bool(values) => values.len(),
             Self::I64(values) => values.len(),
-            Self::F64(values) => values.len(),
+            Self::F32(values) => values.len(),
             Self::Dictionary { values, .. } => values.len(),
             Self::Json(values) => values.len(),
         }

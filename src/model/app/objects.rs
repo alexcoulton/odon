@@ -19,13 +19,8 @@ impl AppModel {
                 let values = resource
                     .features
                     .iter()
-                    .filter_map(|feature| {
-                        if name == "id" {
-                            Some(Value::String(feature.id.clone()))
-                        } else {
-                            feature.properties.get(name).cloned()
-                        }
-                    })
+                    .enumerate()
+                    .filter_map(|(index, _feature)| resource.property_value(index, name))
                     .filter(|value| !value.is_null())
                     .collect::<Vec<_>>();
                 let kind = object_property_type(&values);

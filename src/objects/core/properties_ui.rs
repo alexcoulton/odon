@@ -6,6 +6,7 @@ mod colors;
 mod continuous_ui;
 mod display_state;
 mod filters;
+mod lazy_cache;
 mod style;
 
 impl ObjectsLayer {

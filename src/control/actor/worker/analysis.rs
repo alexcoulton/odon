@@ -127,13 +127,7 @@ pub(in crate::control::actor) fn analysis_values<'a>(
         None => Box::new(0..spec.resource.features.len()),
     };
     indices.filter_map(move |index| {
-        let value = spec
-            .resource
-            .features
-            .get(index)?
-            .properties
-            .get(property)?
-            .as_f64()? as f32;
+        let value = spec.resource.property_f64(index, property)? as f32;
         let value = if transform == "arcsinh" {
             value.asinh()
         } else {

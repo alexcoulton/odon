@@ -4,6 +4,7 @@ mod annotations;
 mod app;
 mod app_support;
 mod camera;
+mod compact_f32;
 mod custom;
 mod debug_log;
 mod deep_link_ipc;

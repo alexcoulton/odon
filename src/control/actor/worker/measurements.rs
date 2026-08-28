@@ -1,6 +1,7 @@
 //! Object measurement computation and geometry helpers.
 
 use super::*;
+use crate::model::{ControlObjectF32Column, ControlObjectPropertyOverlay};
 
 pub(in crate::control::actor) fn measure_objects_on_worker(
     document: &RenderDocument,
@@ -22,8 +23,10 @@ pub(in crate::control::actor) fn measure_objects_on_worker(
         width > 0 && height > 0,
         "measurement level has invalid dimensions"
     );
-    let mut features = spec.resource.features.as_ref().clone();
+    let features = Arc::clone(&spec.resource.features);
     let mut property_names = spec.resource.property_names.as_ref().clone();
+    let mut property_overlay =
+        ControlObjectPropertyOverlay::new(Arc::clone(&spec.resource.property_source));
     let mut measured_objects = std::collections::HashSet::new();
     for channel in &dataset.channels {
         anyhow::ensure!(
@@ -58,20 +61,21 @@ pub(in crate::control::actor) fn measure_objects_on_worker(
         let key =
             measurement_property_key(&spec.prefix, &channel.name, channel.index, &property_names);
         property_names.push(key.clone());
+        let mut measured_values = vec![None; features.len()];
         for &index in spec.target_indices.iter() {
             anyhow::ensure!(
                 !worker_request_cancelled(request),
                 "measurement was cancelled"
             );
-            let Some(feature) = features.get_mut(index) else {
+            let Some(feature) = features.get(index) else {
                 continue;
             };
             let mut values = Vec::new();
             let downsample = level.downsample.max(1e-6);
-            let x0 = (feature.bbox_world[0] / downsample).floor().max(0.0) as usize;
-            let y0 = (feature.bbox_world[1] / downsample).floor().max(0.0) as usize;
-            let x1 = (feature.bbox_world[2] / downsample).ceil().max(0.0) as usize;
-            let y1 = (feature.bbox_world[3] / downsample).ceil().max(0.0) as usize;
+            let x0 = (feature.bbox_world.min.x / downsample).floor().max(0.0) as usize;
+            let y0 = (feature.bbox_world.min.y / downsample).floor().max(0.0) as usize;
+            let x1 = (feature.bbox_world.max.x / downsample).ceil().max(0.0) as usize;
+            let y1 = (feature.bbox_world.max.y / downsample).ceil().max(0.0) as usize;
             for y in y0.min(height)..y1.min(height) {
                 for x in x0.min(width)..x1.min(width) {
                     let world = [(x as f32 + 0.5) * downsample, (y as f32 + 0.5) * downsample];
@@ -94,23 +98,34 @@ pub(in crate::control::actor) fn measure_objects_on_worker(
                         quantile(&values, 0.5) as f64
                     }
                 };
-                feature.properties.insert(key.clone(), json!(value));
+                measured_values[index] = Some(value as f32);
                 measured_objects.insert(index);
             }
         }
+        property_overlay.insert_f32(
+            key,
+            ControlObjectF32Column::from_optional_values(measured_values),
+        );
     }
     property_names.sort();
     property_names.dedup();
-    let numeric_summaries =
-        ControlObjectResource::build_numeric_summaries(&features, &property_names);
+    let property_source: Arc<dyn crate::model::ControlObjectPropertySource> =
+        Arc::new(property_overlay);
+    let numeric_summaries = ControlObjectResource::build_numeric_summaries(
+        &features,
+        &property_names,
+        property_source.as_ref(),
+    );
     Ok((
         ControlObjectResource {
             source: spec.resource.source.clone(),
             downsample_factor: spec.resource.downsample_factor,
-            features: Arc::new(features),
+            features,
             property_names: Arc::new(property_names),
+            property_source,
             numeric_summaries,
-            renderer_payload: None,
+            memory_diagnostics: Arc::clone(&spec.resource.memory_diagnostics),
+            renderer_payload: spec.resource.renderer_payload.clone(),
         },
         measured_objects.len(),
     ))
@@ -142,7 +157,10 @@ pub(in crate::control::actor) fn measurement_property_key(
     }
 }
 
-pub(in crate::control::actor) fn point_in_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
+pub(in crate::control::actor) fn point_in_polygon(
+    point: [f32; 2],
+    polygon: &[eframe::egui::Pos2],
+) -> bool {
     if polygon.len() < 3 {
         return false;
     }
@@ -151,8 +169,8 @@ pub(in crate::control::actor) fn point_in_polygon(point: [f32; 2], polygon: &[[f
     for current in 0..polygon.len() {
         let a = polygon[current];
         let b = polygon[previous];
-        if ((a[1] > point[1]) != (b[1] > point[1]))
-            && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]
+        if ((a.y > point[1]) != (b.y > point[1]))
+            && point[0] < (b.x - a.x) * (point[1] - a.y) / (b.y - a.y) + a.x
         {
             inside = !inside;
         }

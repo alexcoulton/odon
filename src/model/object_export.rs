@@ -302,6 +302,7 @@ fn build_table(
                 &column.name,
                 index,
                 feature,
+                &spec.resource,
                 &spec.selected_indices,
                 &derived,
             ));
@@ -444,37 +445,38 @@ fn export_value(
     column: &str,
     index: usize,
     feature: &ControlObjectFeature,
+    resource: &ControlObjectResource,
     selected: &HashSet<usize>,
     derived: &std::collections::HashMap<String, DerivedColumn>,
 ) -> Option<ExportScalar> {
     if column == "id" {
         return Some(ExportScalar::String(feature.id.clone()));
     }
-    if let Some(value) = feature.properties.get(column) {
-        return Some(scalar_from_json(value));
+    if let Some(value) = resource.property_value(index, column) {
+        return Some(scalar_from_json(&value));
     }
     match derived.get(column)? {
         DerivedColumn::GeometryType => {
             Some(ExportScalar::String(geometry_type(feature).to_string()))
         }
-        DerivedColumn::CentroidX => Some(ExportScalar::Float64(feature.centroid_world[0] as f64)),
-        DerivedColumn::CentroidY => Some(ExportScalar::Float64(feature.centroid_world[1] as f64)),
+        DerivedColumn::CentroidX => Some(ExportScalar::Float64(feature.centroid_world.x as f64)),
+        DerivedColumn::CentroidY => Some(ExportScalar::Float64(feature.centroid_world.y as f64)),
         DerivedColumn::PointX => feature
             .point_position_world
-            .map(|point| ExportScalar::Float64(point[0] as f64)),
+            .map(|point| ExportScalar::Float64(point.x as f64)),
         DerivedColumn::PointY => feature
             .point_position_world
-            .map(|point| ExportScalar::Float64(point[1] as f64)),
+            .map(|point| ExportScalar::Float64(point.y as f64)),
         DerivedColumn::Area => Some(ExportScalar::Float64(feature.area_px as f64)),
         DerivedColumn::Perimeter => Some(ExportScalar::Float64(feature.perimeter_px as f64)),
         DerivedColumn::Selected => Some(ExportScalar::Bool(selected.contains(&index))),
-        DerivedColumn::Call(call) => Some(ExportScalar::Bool(passes_call(feature, call))),
+        DerivedColumn::Call(call) => Some(ExportScalar::Bool(passes_call(resource, index, call))),
         DerivedColumn::FailedCall => Some(ExportScalar::String("FAIL".to_string())),
         DerivedColumn::NamedSelection(ids) => Some(ExportScalar::Bool(ids.contains(&feature.id))),
     }
 }
 
-fn passes_call(feature: &ControlObjectFeature, call: &Value) -> bool {
+fn passes_call(resource: &ControlObjectResource, feature_index: usize, call: &Value) -> bool {
     let Some(rules) = call.get("rules").and_then(Value::as_array) else {
         return false;
     };
@@ -483,7 +485,7 @@ fn passes_call(feature: &ControlObjectFeature, call: &Value) -> bool {
             let Some(property) = rule.get("column_key").and_then(Value::as_str) else {
                 return false;
             };
-            let Some(value) = feature.properties.get(property).and_then(Value::as_f64) else {
+            let Some(value) = resource.property_f64(feature_index, property) else {
                 return false;
             };
             let threshold = rule
@@ -743,8 +745,8 @@ fn encode_wkb(feature: &ControlObjectFeature) -> Vec<u8> {
         let mut output = Vec::with_capacity(21);
         output.push(1);
         output.extend_from_slice(&1u32.to_le_bytes());
-        output.extend_from_slice(&(point[0] as f64).to_le_bytes());
-        output.extend_from_slice(&(point[1] as f64).to_le_bytes());
+        output.extend_from_slice(&(point.x as f64).to_le_bytes());
+        output.extend_from_slice(&(point.y as f64).to_le_bytes());
         return output;
     }
     if feature.polygons_world.len() == 1 {
@@ -760,7 +762,7 @@ fn encode_wkb(feature: &ControlObjectFeature) -> Vec<u8> {
     output
 }
 
-fn encode_polygon(rings: &[Vec<[f32; 2]>]) -> Vec<u8> {
+fn encode_polygon(rings: &[Vec<eframe::egui::Pos2>]) -> Vec<u8> {
     let mut output = Vec::new();
     output.push(1);
     output.extend_from_slice(&3u32.to_le_bytes());
@@ -769,8 +771,8 @@ fn encode_polygon(rings: &[Vec<[f32; 2]>]) -> Vec<u8> {
         let close = ring.first() != ring.last();
         output.extend_from_slice(&((ring.len() + usize::from(close)) as u32).to_le_bytes());
         for point in ring.iter().chain(close.then(|| ring.first()).flatten()) {
-            output.extend_from_slice(&(point[0] as f64).to_le_bytes());
-            output.extend_from_slice(&(point[1] as f64).to_le_bytes());
+            output.extend_from_slice(&(point.x as f64).to_le_bytes());
+            output.extend_from_slice(&(point.y as f64).to_le_bytes());
         }
     }
     output

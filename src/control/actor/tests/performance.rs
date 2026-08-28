@@ -51,24 +51,28 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
     let mut model = AppModel::project();
     model.install_dataset(&dataset);
 
-    let polygon = Arc::new(vec![vec![
-        [0.0, 0.0],
-        [10.0, 0.0],
-        [10.0, 10.0],
-        [0.0, 10.0],
-        [0.0, 0.0],
-    ]]);
+    let polygon = vec![vec![
+        eframe::egui::pos2(0.0, 0.0),
+        eframe::egui::pos2(10.0, 0.0),
+        eframe::egui::pos2(10.0, 10.0),
+        eframe::egui::pos2(0.0, 10.0),
+        eframe::egui::pos2(0.0, 0.0),
+    ]];
     let features = Arc::new(
         (0..45_000)
             .map(|index| ControlObjectFeature {
                 id: format!("feature-{index}"),
-                bbox_world: [0.0, 0.0, 10.0, 10.0],
-                centroid_world: [5.0, 5.0],
-                polygons_world: Arc::clone(&polygon),
+                bbox_world: eframe::egui::Rect::from_min_max(
+                    eframe::egui::pos2(0.0, 0.0),
+                    eframe::egui::pos2(10.0, 10.0),
+                ),
+                centroid_world: eframe::egui::pos2(5.0, 5.0),
+                polygons_world: polygon.clone(),
                 point_position_world: None,
                 area_px: 100.0,
                 perimeter_px: 40.0,
-                properties: serde_json::Map::new(),
+                inline_properties: serde_json::Map::new(),
+                source_row_index: None,
             })
             .collect::<Vec<_>>(),
     );
@@ -77,7 +81,9 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
         downsample_factor: 1.0,
         features: Arc::clone(&features),
         property_names: Arc::new(vec!["id".to_string()]),
+        property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
         numeric_summaries: Arc::new(Default::default()),
+        memory_diagnostics: Arc::new(Default::default()),
         renderer_payload: None,
     });
     let (document_generation, resource_generation) =

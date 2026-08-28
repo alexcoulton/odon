@@ -20,7 +20,13 @@ fn renderer_object_loader_exports_a_send_only_control_index() {
     let resource = crate::objects::load_control_object_resource(path.clone(), 1.0).unwrap();
     assert_eq!(resource.features.len(), 2);
     assert_eq!(resource.features[0].id, "cell-a");
-    assert_eq!(resource.features[0].bbox_world, [0.0, 0.0, 10.0, 10.0]);
+    assert_eq!(
+        resource.features[0].bbox_world,
+        eframe::egui::Rect::from_min_max(
+            eframe::egui::pos2(0.0, 0.0),
+            eframe::egui::pos2(10.0, 10.0),
+        )
+    );
     assert_eq!(resource.features[0].polygons_world.len(), 1);
     assert_eq!(resource.features[0].polygons_world[0].len(), 5);
     assert_eq!(

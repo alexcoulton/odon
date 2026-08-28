@@ -20,6 +20,7 @@ use geometry::{
     geometry_bytes_at, parse_wkb_object_polygons, render_kind_from_wkb,
 };
 
+use crate::compact_f32::NullableF32Column;
 use crate::spatialdata::SpatialDataTransform2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,20 +348,13 @@ pub fn load_shapes_objects(
                 continue;
             }
 
-            let mut properties = serde_json::Map::new();
-            for (name, col) in &property_columns {
-                if let Some(value) = array_value_to_json(*col, row) {
-                    properties.insert(name.clone(), value);
-                }
-            }
-            let id = object_id_from_properties(&properties)
+            let id = object_id_from_property_columns(&property_columns, row)
                 .unwrap_or_else(|| (fallback_index + 1).to_string());
-            properties.insert("id".to_string(), Value::String(id.clone()));
             out.push(LoadedShapeObject {
                 id,
                 polygons_world,
                 point_position_world: None,
-                properties,
+                properties: serde_json::Map::new(),
                 source_row_index: Some(fallback_index),
             });
             fallback_index += 1;
@@ -449,22 +443,13 @@ pub fn load_shapes_xy_point_objects(
             let center = eframe::egui::pos2(x, y);
             let polygons_world = vec![circle_polyline(center, 4.0, 8)];
 
-            let mut properties = serde_json::Map::new();
-            properties.insert(x_column.to_string(), Value::from(x));
-            properties.insert(y_column.to_string(), Value::from(y));
-            for (name, col) in &property_columns {
-                if let Some(value) = array_value_to_json(*col, row) {
-                    properties.insert(name.clone(), value);
-                }
-            }
-            let id = object_id_from_properties(&properties)
+            let id = object_id_from_property_columns(&property_columns, row)
                 .unwrap_or_else(|| (fallback_index + 1).to_string());
-            properties.insert("id".to_string(), Value::String(id.clone()));
             out.push(LoadedShapeObject {
                 id,
                 polygons_world,
                 point_position_world: Some(center),
-                properties,
+                properties: serde_json::Map::new(),
                 source_row_index: Some(fallback_index),
             });
             fallback_index += 1;
@@ -551,17 +536,10 @@ pub fn load_shapes_xy_point_features(
             }
 
             let center = eframe::egui::pos2(x, y);
-            let mut properties = serde_json::Map::new();
-            properties.insert(x_column.to_string(), Value::from(x));
-            properties.insert(y_column.to_string(), Value::from(y));
-            for (name, col) in &property_columns {
-                if let Some(value) = array_value_to_json(*col, row) {
-                    properties.insert(name.clone(), value);
-                }
-            }
-            let radius_world = properties
-                .get("radius")
-                .and_then(|value| value.as_f64())
+            let radius_world = property_columns
+                .iter()
+                .find_map(|(name, col)| (name == "radius").then(|| array_value_to_f64(*col, row)))
+                .flatten()
                 .map(|value| value as f32)
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .unwrap_or(1.0);
@@ -571,16 +549,15 @@ pub fn load_shapes_xy_point_features(
                 center,
                 eframe::egui::Vec2::splat(radius_world),
             );
-            let id = object_id_from_properties(&properties)
+            let id = object_id_from_property_columns(&property_columns, row)
                 .unwrap_or_else(|| (fallback_index + 1).to_string());
-            properties.insert("id".to_string(), Value::String(id.clone()));
             out.push(LoadedPointObject {
                 id,
                 point_world: center,
                 bbox_world,
                 area_px,
                 perimeter_px,
-                properties,
+                properties: serde_json::Map::new(),
                 source_row_index: Some(fallback_index),
             });
             fallback_index += 1;
@@ -666,22 +643,15 @@ pub fn load_shapes_centroid_point_objects(
                 continue;
             };
 
-            let mut properties = serde_json::Map::new();
-            for (name, col) in &property_columns {
-                if let Some(value) = array_value_to_json(*col, row) {
-                    properties.insert(name.clone(), value);
-                }
-            }
-            let id = object_id_from_properties(&properties)
+            let id = object_id_from_property_columns(&property_columns, row)
                 .unwrap_or_else(|| (fallback_index + 1).to_string());
-            properties.insert("id".to_string(), Value::String(id.clone()));
             out.push(LoadedPointObject {
                 id,
                 point_world: summary.centroid_world,
                 bbox_world: summary.bbox_world,
                 area_px: summary.area_px,
                 perimeter_px: summary.perimeter_px,
-                properties,
+                properties: serde_json::Map::new(),
                 source_row_index: Some(fallback_index),
             });
             fallback_index += 1;
@@ -741,6 +711,56 @@ pub fn load_shapes_property_values_by_row(
     Ok(out)
 }
 
+/// Stream a floating-point property without allocating a JSON value and hash
+/// table entry for every non-null row. Non-floating columns return `None` so
+/// callers can retain their exact integer, boolean, or categorical path.
+pub(crate) fn load_shapes_f32_property_column(
+    shapes_parquet_file: &Path,
+    property_key: &str,
+    cancel: &AtomicBool,
+) -> anyhow::Result<Option<NullableF32Column>> {
+    let file = std::fs::File::open(shapes_parquet_file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let schema = builder.schema();
+    let field = schema
+        .fields()
+        .iter()
+        .find(|field| field.name() == property_key)
+        .with_context(|| format!("missing property column '{property_key}'"))?;
+    if !matches!(field.data_type(), DataType::Float32 | DataType::Float64) {
+        return Ok(None);
+    }
+    let row_count = builder.metadata().file_metadata().num_rows().max(0) as usize;
+    let projection = ProjectionMask::columns(builder.parquet_schema(), [property_key]);
+    let mut reader = builder
+        .with_projection(projection)
+        .with_batch_size(16_384)
+        .build()?;
+    let mut out = NullableF32Column::with_capacity(row_count);
+
+    while let Some(batch) = reader.next() {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("property load cancelled");
+        }
+        let batch = batch?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let prop_i = batch
+            .schema()
+            .index_of(property_key)
+            .with_context(|| format!("missing property column '{property_key}'"))?;
+        let prop = batch.column(prop_i).as_ref();
+        for row in 0..batch.num_rows() {
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("property load cancelled");
+            }
+            out.push(array_value_to_f64(prop, row).map(|value| value as f32));
+        }
+    }
+    Ok(Some(out))
+}
+
 fn supports_object_property_type(dtype: &DataType) -> bool {
     matches!(
         dtype,
@@ -778,7 +798,10 @@ fn supports_numeric_property_type(dtype: &DataType) -> bool {
     )
 }
 
-fn object_id_from_properties(properties: &serde_json::Map<String, Value>) -> Option<String> {
+fn object_id_from_property_columns(
+    property_columns: &[(String, &dyn Array)],
+    row: usize,
+) -> Option<String> {
     for key in [
         "id",
         "instance_id",
@@ -788,11 +811,14 @@ fn object_id_from_properties(properties: &serde_json::Map<String, Value>) -> Opt
         "name",
         "polygon_name",
     ] {
-        if let Some(value) = properties.get(key) {
-            match value {
-                Value::String(v) => return Some(v.clone()),
-                other => return Some(other.to_string()),
-            }
+        let Some((_, column)) = property_columns.iter().find(|(name, _)| name == key) else {
+            continue;
+        };
+        if let Some(value) = array_value_to_json(*column, row) {
+            return Some(match value {
+                Value::String(value) => value,
+                other => other.to_string(),
+            });
         }
     }
     None

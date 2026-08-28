@@ -15,7 +15,10 @@ use crate::data::project_config::{
 };
 
 use super::layers::NativeLayersModel;
-use super::{ControlPinnedLevelResource, ObjectSelectionModel, SystemMemorySnapshot};
+use super::{
+    ControlObjectMemoryDiagnostics, ControlPinnedLevelResource, ObjectSelectionModel,
+    SystemMemorySnapshot,
+};
 
 mod layout;
 mod memory;
