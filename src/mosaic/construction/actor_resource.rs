@@ -85,7 +85,7 @@ impl MosaicViewerApp {
             if let Some(path) = item.segmentation_path.as_ref() {
                 metadata.insert("segpath".to_string(), path.to_string_lossy().into_owned());
             }
-            seg_geojson.discover_from_meta(item.id, &metadata);
+            seg_geojson.discover_from_meta(item.id, &item.roi_id, &metadata);
         }
 
         let abs_max = items

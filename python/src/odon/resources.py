@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
@@ -72,6 +73,25 @@ def _continuous_color_mapping(
         "out_of_range": out_of_range,
         "missing_color_rgb": missing,
     }
+
+
+def _continuous_domains_by_roi(
+    domains: Mapping[str, Sequence[float]] | None,
+) -> dict[str, list[float]]:
+    normalized: dict[str, list[float]] = {}
+    for roi_id, domain in (domains or {}).items():
+        values = [float(value) for value in domain]
+        if (
+            not str(roi_id).strip()
+            or len(values) != 2
+            or not all(math.isfinite(value) for value in values)
+            or values[0] >= values[1]
+        ):
+            raise ValueError(
+                "continuous ROI domains require a non-empty ROI id and finite [min, max]"
+            )
+        normalized[str(roi_id)] = values
+    return normalized
 
 
 def _with_viewport_revision(
@@ -3477,10 +3497,11 @@ class Mosaic:
         reverse: bool = False,
         out_of_range: str = "clamp",
         missing_color_rgb: Sequence[int] | None = None,
+        domains_by_roi: Mapping[str, Sequence[float]] | None = None,
         fill_cells: bool | None = None,
         fill_opacity: float | None = None,
     ) -> Any:
-        """Apply one continuous object-colour scale across the mosaic."""
+        """Apply continuous object colours, optionally with one domain per ROI."""
         return self.set_object_style(
             color_mapping=_continuous_color_mapping(
                 property,
@@ -3491,6 +3512,7 @@ class Mosaic:
                 out_of_range=out_of_range,
                 missing_color_rgb=missing_color_rgb,
             ),
+            continuous_domains_by_roi=_continuous_domains_by_roi(domains_by_roi),
             **_compact({"fill_cells": fill_cells, "fill_opacity": fill_opacity}),
         )
 

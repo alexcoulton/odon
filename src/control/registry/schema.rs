@@ -877,6 +877,15 @@ pub(super) fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
         let style_properties = json!({
             "color_mapping": object_color_mapping_schema(),
             "color_property": {"type":["string","null"]},
+            "continuous_domains_by_roi": {
+                "type":"object",
+                "additionalProperties": {
+                    "type":"array",
+                    "prefixItems":[{"type":"number"},{"type":"number"}],
+                    "minItems":2,
+                    "maxItems":2
+                }
+            },
             "fill_cells": {"type":"boolean"},
             "fill_opacity": {"type":"number","minimum":0.0,"maximum":1.0}
         });

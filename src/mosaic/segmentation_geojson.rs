@@ -15,6 +15,7 @@ use odon::model::{
 
 #[derive(Debug, Default)]
 struct ItemState {
+    roi_id: String,
     seg_path: Option<PathBuf>,
     layer: Option<ObjectsLayer>,
     status: String,
@@ -49,6 +50,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     items: HashMap<usize, ItemState>,
     color_property_key: String,
     color_mapping: ObjectColorMapping,
+    continuous_domains_by_roi: HashMap<String, [f64; 2]>,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
     property_cache_capacity: Option<usize>,
     actor_load_requested: BTreeSet<usize>,
@@ -73,6 +75,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             items: HashMap::new(),
             color_property_key: String::new(),
             color_mapping: ObjectColorMapping::Single,
+            continuous_domains_by_roi: HashMap::new(),
             color_level_overrides: HashMap::new(),
             property_cache_capacity: None,
             actor_load_requested: BTreeSet::new(),
@@ -116,6 +119,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             "selected_fill_opacity":self.selected_fill_opacity,
             "color_property_key":self.color_property_key,
             "color_mapping":self.color_mapping,
+            "continuous_domains_by_roi":self.continuous_domains_by_roi,
             "color_level_overrides":self.color_level_overrides,
             "downsample_factor":self.downsample_factor,
         })
@@ -174,6 +178,10 @@ impl MosaicGeoJsonSegmentationOverlay {
             mapping.validate()?;
             self.color_property_key = mapping.property().unwrap_or_default().to_string();
             self.color_mapping = mapping;
+        }
+        if let Some(value) = style.get("continuous_domains_by_roi") {
+            self.continuous_domains_by_roi = serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid per-ROI continuous domains: {error}"))?;
         }
         if let Some(value) = style.get("color_level_overrides") {
             self.color_level_overrides = serde_json::from_value(value.clone())
@@ -256,7 +264,13 @@ impl MosaicGeoJsonSegmentationOverlay {
             .and_then(|state| state.seg_path.clone())
     }
 
-    pub fn discover_from_meta(&mut self, item_id: usize, meta: &HashMap<String, String>) {
+    pub fn discover_from_meta(
+        &mut self,
+        item_id: usize,
+        roi_id: &str,
+        meta: &HashMap<String, String>,
+    ) {
+        self.items.entry(item_id).or_default().roi_id = roi_id.to_string();
         let Some(raw) = meta.get("segpath") else {
             return;
         };
@@ -284,6 +298,7 @@ impl MosaicGeoJsonSegmentationOverlay {
     ) -> usize {
         let style = self.shared_style();
         let color_mapping = self.render_color_mapping();
+        let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let mut installed = 0usize;
         for st in self.items.values_mut() {
@@ -296,7 +311,16 @@ impl MosaicGeoJsonSegmentationOverlay {
             let mut layer = ObjectsLayer::default();
             layer.set_object_fill_renderer(self.object_fill_renderer.clone());
             layer.set_lazy_property_cache_capacity(self.property_cache_capacity);
-            apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
+            let item_color_mapping = color_mapping_with_domain(
+                &color_mapping,
+                domains_by_roi.get(st.roi_id.as_str()).copied(),
+            );
+            apply_style(
+                &mut layer,
+                style,
+                &item_color_mapping,
+                &color_level_overrides,
+            );
             layer.install_preloaded(preloaded);
             st.status = format!("Using cached objects: {}", path.to_string_lossy());
             st.layer = Some(layer);
@@ -318,6 +342,7 @@ impl MosaicGeoJsonSegmentationOverlay {
         };
         let style = self.shared_style();
         let color_mapping = self.render_color_mapping();
+        let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let Some(state) = self.items.get_mut(&item_id) else {
             return false;
@@ -325,7 +350,16 @@ impl MosaicGeoJsonSegmentationOverlay {
         let mut layer = ObjectsLayer::default();
         layer.set_object_fill_renderer(self.object_fill_renderer.clone());
         layer.set_lazy_property_cache_capacity(self.property_cache_capacity);
-        apply_style(&mut layer, style, &color_mapping, &color_level_overrides);
+        let item_color_mapping = color_mapping_with_domain(
+            &color_mapping,
+            domains_by_roi.get(state.roi_id.as_str()).copied(),
+        );
+        apply_style(
+            &mut layer,
+            style,
+            &item_color_mapping,
+            &color_level_overrides,
+        );
         layer.install_preloaded(preloaded);
         state.status = format!("Using actor-loaded objects: {}", resource.source.display());
         state.layer = Some(layer);
@@ -767,6 +801,7 @@ impl MosaicGeoJsonSegmentationOverlay {
         let mut pending_any = false;
         let style = self.shared_style();
         let color_mapping = self.render_color_mapping();
+        let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
         for (item_id, world_rect, offset, scale) in visible_items {
             if !world_rect.intersects(visible_world) {
@@ -779,7 +814,11 @@ impl MosaicGeoJsonSegmentationOverlay {
                 continue;
             };
             layer.set_display_transform(mosaic_transform(*offset, *scale));
-            apply_style(layer, style, &color_mapping, &color_level_overrides);
+            let item_color_mapping = color_mapping_with_domain(
+                &color_mapping,
+                domains_by_roi.get(st.roi_id.as_str()).copied(),
+            );
+            apply_style(layer, style, &item_color_mapping, &color_level_overrides);
             layer.draw(ui, camera, viewport, visible_world, egui::Vec2::ZERO, true);
             pending_any |= layer.is_loading();
         }
@@ -799,10 +838,15 @@ impl MosaicGeoJsonSegmentationOverlay {
     ) -> Option<Vec<String>> {
         let style = self.shared_style();
         let color_mapping = self.render_color_mapping();
+        let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let st = self.items.get_mut(&item_id)?;
         let layer = st.layer.as_mut()?;
-        apply_style(layer, style, &color_mapping, &color_level_overrides);
+        let item_color_mapping = color_mapping_with_domain(
+            &color_mapping,
+            domains_by_roi.get(st.roi_id.as_str()).copied(),
+        );
+        apply_style(layer, style, &item_color_mapping, &color_level_overrides);
         layer.hover_tooltip(pointer_world, egui::Vec2::ZERO, camera)
     }
 
@@ -1179,6 +1223,36 @@ fn mosaic_transform(offset: egui::Vec2, scale: f32) -> SpatialDataTransform2 {
     }
 }
 
+fn color_mapping_with_domain(
+    mapping: &ObjectColorMapping,
+    domain: Option<[f64; 2]>,
+) -> ObjectColorMapping {
+    let Some(domain) = domain else {
+        return mapping.clone();
+    };
+    let ObjectColorMapping::Continuous {
+        property,
+        palette,
+        scale,
+        reverse,
+        out_of_range,
+        missing_color_rgb,
+        ..
+    } = mapping
+    else {
+        return mapping.clone();
+    };
+    ObjectColorMapping::Continuous {
+        property: property.clone(),
+        palette: palette.clone(),
+        domain: ContinuousDomain::Fixed(domain),
+        scale: *scale,
+        reverse: *reverse,
+        out_of_range: *out_of_range,
+        missing_color_rgb: *missing_color_rgb,
+    }
+}
+
 fn apply_style(
     layer: &mut ObjectsLayer,
     style: SharedStyle,
@@ -1196,4 +1270,40 @@ fn apply_style(
     layer.downsample_factor = style.downsample_factor;
     let _ = layer.set_color_mapping(color_mapping.clone());
     layer.set_color_level_overrides(color_mapping.property(), color_level_overrides);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_roi_domain_replaces_only_the_continuous_domain() {
+        let mapping = ObjectColorMapping::Continuous {
+            property: "median_raw__cd3".to_string(),
+            palette: ContinuousPalette::Named("viridis".to_string()),
+            domain: ContinuousDomain::Fixed([0.0, 1_000.0]),
+            scale: ContinuousScale::Linear,
+            reverse: true,
+            out_of_range: OutOfRangeMode::Clamp,
+            missing_color_rgb: Some([40, 40, 40]),
+        };
+
+        let overridden = color_mapping_with_domain(&mapping, Some([10.0, 20.0]));
+
+        let ObjectColorMapping::Continuous {
+            property,
+            domain,
+            reverse,
+            missing_color_rgb,
+            ..
+        } = overridden
+        else {
+            panic!("continuous mapping should remain continuous");
+        };
+        assert_eq!(property, "median_raw__cd3");
+        assert_eq!(domain, ContinuousDomain::Fixed([10.0, 20.0]));
+        assert!(reverse);
+        assert_eq!(missing_color_rgb, Some([40, 40, 40]));
+        assert_eq!(color_mapping_with_domain(&mapping, None), mapping);
+    }
 }

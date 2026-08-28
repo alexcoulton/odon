@@ -188,7 +188,10 @@ class MosaicResourceTests(unittest.TestCase):
         mosaic = Mosaic(client)  # type: ignore[arg-type]
 
         mosaic.color_objects_by_continuous(
-            "mean_channel_1", domain=(2000, 42000), fill_cells=True
+            "mean_channel_1",
+            domain=(2000, 42000),
+            domains_by_roi={"ROI-A": (100, 400), "ROI-B": (800, 1200)},
+            fill_cells=True,
         )
 
         method, params = client.calls[0]
@@ -196,6 +199,14 @@ class MosaicResourceTests(unittest.TestCase):
         self.assertEqual(
             params["style"]["color_mapping"]["domain"], [2000.0, 42000.0]
         )
+        self.assertEqual(
+            params["style"]["continuous_domains_by_roi"],
+            {"ROI-A": [100.0, 400.0], "ROI-B": [800.0, 1200.0]},
+        )
+        with self.assertRaises(ValueError):
+            mosaic.color_objects_by_continuous(
+                "mean_channel_1", domains_by_roi={"ROI-A": (2, 1)}
+            )
 
     def test_mosaic_object_property_cache_wrappers(self) -> None:
         client = RecordingClient()
@@ -271,7 +282,14 @@ class AsyncMosaicResourceTests(unittest.IsolatedAsyncioTestCase):
         mosaic = AsyncMosaic(client)  # type: ignore[arg-type]
 
         await mosaic.color_objects_by_continuous(
-            "mean_channel_1", palette="cividis", domain="auto"
+            "mean_channel_1",
+            palette="cividis",
+            domain="auto",
+            domains_by_roi={"ROI-A": (1, 9)},
+        )
+        self.assertEqual(
+            client.calls[0][1]["style"]["continuous_domains_by_roi"],
+            {"ROI-A": [1.0, 9.0]},
         )
 
         mapping = client.calls[0][1]["style"]["color_mapping"]

@@ -151,6 +151,50 @@ impl MosaicModel {
                         })?,
                     );
                 }
+                "continuous_domains_by_roi" => {
+                    let domains = value
+                        .as_object()
+                        .ok_or_else(|| invalid("continuous_domains_by_roi must be an object"))?;
+                    let mut normalized = serde_json::Map::new();
+                    for (roi_id, domain) in domains {
+                        if !self.items.iter().any(|item| item.roi_id == *roi_id) {
+                            return Err(invalid(format!(
+                                "continuous domain ROI '{roi_id}' was not found"
+                            )));
+                        }
+                        let values = domain
+                            .as_array()
+                            .filter(|values| values.len() == 2)
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "continuous domain for ROI '{roi_id}' must be [min, max]"
+                                ))
+                            })?;
+                        let minimum = values[0]
+                            .as_f64()
+                            .filter(|value| value.is_finite())
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "continuous domain minimum for ROI '{roi_id}' must be finite"
+                                ))
+                            })?;
+                        let maximum = values[1]
+                            .as_f64()
+                            .filter(|value| value.is_finite())
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "continuous domain maximum for ROI '{roi_id}' must be finite"
+                                ))
+                            })?;
+                        if maximum <= minimum {
+                            return Err(invalid(format!(
+                                "continuous domain maximum for ROI '{roi_id}' must exceed its minimum"
+                            )));
+                        }
+                        normalized.insert(roi_id.clone(), json!([minimum, maximum]));
+                    }
+                    next_object.insert(key.clone(), Value::Object(normalized));
+                }
                 "color_level_overrides" => {
                     value
                         .as_object()

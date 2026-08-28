@@ -113,7 +113,7 @@ impl MosaicViewerApp {
         let mut seg_geojson = MosaicGeoJsonSegmentationOverlay::default();
         seg_geojson.set_samplesheet_dir(project_dir);
         for it in &items {
-            seg_geojson.discover_from_meta(it.id, &it.meta);
+            seg_geojson.discover_from_meta(it.id, &it.sample_id, &it.meta);
         }
 
         let abs_max = items

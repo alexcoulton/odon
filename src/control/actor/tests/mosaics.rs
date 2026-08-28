@@ -412,9 +412,30 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
     let style = call(
         &channels,
         "mosaic.objects.style.set",
-        json!({"style":{"fill_cells":true,"opacity":0.42}}),
+        json!({"style":{
+            "fill_cells":true,
+            "opacity":0.42,
+            "continuous_domains_by_roi":{
+                "ROI-A":[1.0,10.0],
+                "ROI-B":[100.0,1000.0],
+            },
+        }}),
     );
     assert_eq!(style["result"]["style"]["fill_cells"], true);
+    assert_eq!(
+        style["result"]["style"]["continuous_domains_by_roi"]["ROI-A"],
+        json!([1.0, 10.0])
+    );
+    let (invalid_style, invalid_style_reply) = request(
+        "mosaic.objects.style.set",
+        json!({"style":{"continuous_domains_by_roi":{"missing-roi":[0.0,1.0]}}}),
+    );
+    channels.request_tx.send(invalid_style).unwrap();
+    let invalid_style_error = invalid_style_reply
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert!(invalid_style_error.message.contains("was not found"));
     assert_eq!(
         call(&channels, "mosaic.objects.style.get", json!({}))["objects"]["style"]["opacity"],
         0.42
