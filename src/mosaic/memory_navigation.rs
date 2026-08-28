@@ -170,20 +170,27 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn drain_raw_tiles(&mut self) {
-        while let Ok(msg) = self.loader.rx.try_recv() {
+        const MAX_RESPONSES_PER_FRAME: usize = 128;
+        for _ in 0..MAX_RESPONSES_PER_FRAME {
+            let Ok(msg) = self.loader.try_recv() else {
+                break;
+            };
             match msg {
                 MosaicRawTileWorkerResponse::Tile(msg) => {
                     if msg.generation == self.tile_request_generation {
                         self.tiles_gl.insert_pending(msg);
                     } else {
                         self.tiles_gl.cancel_in_flight(&msg.key);
+                        self.tiles_gl.record_stale_drop_before_install();
                     }
                 }
                 MosaicRawTileWorkerResponse::Dropped { key, .. } => {
                     self.tiles_gl.cancel_in_flight(&key);
+                    self.tiles_gl.record_worker_drop();
                 }
                 MosaicRawTileWorkerResponse::Failed { key, error } => {
                     self.tiles_gl.cancel_in_flight(&key);
+                    self.tiles_gl.record_failed_load();
                     crate::log_warn!("mosaic raw tile load failed for {:?}: {}", key, error);
                 }
             }

@@ -6,6 +6,7 @@ impl AppModel {
     pub fn settings_snapshot(&self) -> Value {
         json!({
             "auto_contrast":self.settings.auto_contrast,
+            "image_tile_cache":self.settings.image_tile_cache,
             "fast_object_rendering":self.settings.fast_object_rendering,
             "show_extension_manager":self.settings.show_extension_manager,
             "shell_layout_startup_profiles":self.settings.shell_layout_startup_profiles,
@@ -444,10 +445,15 @@ impl AppModel {
         }
         let fast_object_rendering_changed =
             self.settings.fast_object_rendering != settings.fast_object_rendering;
+        let image_tile_cache_changed = self.settings.image_tile_cache != settings.image_tile_cache;
         self.settings = settings;
         if fast_object_rendering_changed {
             let enabled = self.settings.fast_object_rendering;
             self.apply_fast_object_rendering_setting(enabled);
+        }
+        if image_tile_cache_changed {
+            self.tile_loading
+                .apply_image_tile_cache_settings(self.settings.image_tile_cache);
         }
         self.recent_project_exists.retain(|path, _| {
             self.settings

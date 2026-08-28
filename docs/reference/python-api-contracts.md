@@ -350,6 +350,8 @@ the native domain supports them:
 | Memory mosaic scope | `focused`, `item`, `all`; `item=` identifies the ROI for item scope. |
 | Tile prefetch mode | `off`, `target_halo`, `target_and_finer_halo`. |
 | Prefetch aggressiveness | `conservative`, `balanced`, `aggressive`. |
+| Mosaic image-tile cache mode | `automatic`, `conservative`, `balanced`, `performance`, `custom`; custom budgets accept 128 MiB–4 GiB in bytes. |
+| Mosaic image-channel history | `automatic`, `current_only`, `current_and_previous`; a unified marker's ROI-local aliases are retained as one group. |
 | Object preload mode | `full_geometry`, `centroid_points`. |
 | Mosaic layout | `fit_cells`, `native_pixels`. |
 | Xenium imagery | `auto`, `ome_zarr`, `tiff`. |

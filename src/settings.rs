@@ -7,6 +7,139 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MAX_RECENT_PROJECTS: usize = 20;
+pub const MIN_CUSTOM_IMAGE_TILE_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_CUSTOM_IMAGE_TILE_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageTileCacheMode {
+    #[default]
+    Automatic,
+    Conservative,
+    Balanced,
+    Performance,
+    Custom,
+}
+
+impl ImageTileCacheMode {
+    pub const ALL: [Self; 5] = [
+        Self::Automatic,
+        Self::Conservative,
+        Self::Balanced,
+        Self::Performance,
+        Self::Custom,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Conservative => "conservative",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::Conservative => "Conservative (256 MiB)",
+            Self::Balanced => "Balanced (512 MiB)",
+            Self::Performance => "Performance (1 GiB)",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageTileChannelHistory {
+    #[default]
+    Automatic,
+    CurrentOnly,
+    CurrentAndPrevious,
+}
+
+impl ImageTileChannelHistory {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::CurrentOnly, Self::CurrentAndPrevious];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::CurrentOnly => "current_only",
+            Self::CurrentAndPrevious => "current_and_previous",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::CurrentOnly => "Current only",
+            Self::CurrentAndPrevious => "Current + previous",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|history| history.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImageTileCacheSettings {
+    pub mode: ImageTileCacheMode,
+    pub custom_budget_bytes: u64,
+    pub channel_history: ImageTileChannelHistory,
+}
+
+impl Default for ImageTileCacheSettings {
+    fn default() -> Self {
+        Self {
+            mode: ImageTileCacheMode::Automatic,
+            custom_budget_bytes: 512 * 1024 * 1024,
+            channel_history: ImageTileChannelHistory::Automatic,
+        }
+    }
+}
+
+impl ImageTileCacheSettings {
+    pub fn normalized(mut self) -> Self {
+        self.custom_budget_bytes = self.custom_budget_bytes.clamp(
+            MIN_CUSTOM_IMAGE_TILE_CACHE_BYTES,
+            MAX_CUSTOM_IMAGE_TILE_CACHE_BYTES,
+        );
+        self
+    }
+
+    pub fn resolved_budget_bytes(self, total_memory_bytes: Option<u64>) -> (u64, &'static str) {
+        const MIB: u64 = 1024 * 1024;
+        const GIB: u64 = 1024 * MIB;
+        match self.mode {
+            ImageTileCacheMode::Automatic => {
+                let total = total_memory_bytes.unwrap_or(16 * GIB);
+                if total <= 16 * GIB {
+                    (384 * MIB, "automatic_total_ram_up_to_16_gib")
+                } else if total <= 32 * GIB {
+                    (768 * MIB, "automatic_total_ram_16_to_32_gib")
+                } else {
+                    (GIB, "automatic_total_ram_above_32_gib")
+                }
+            }
+            ImageTileCacheMode::Conservative => (256 * MIB, "conservative_preset"),
+            ImageTileCacheMode::Balanced => (512 * MIB, "balanced_preset"),
+            ImageTileCacheMode::Performance => (GIB, "performance_preset"),
+            ImageTileCacheMode::Custom => {
+                (self.normalized().custom_budget_bytes, "custom_byte_budget")
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +246,7 @@ fn percentile_from_histogram(histogram: &[u64], sample_count: u64, percentile: u
 #[serde(default)]
 pub struct AppSettings {
     pub auto_contrast: AutoContrastSettings,
+    pub image_tile_cache: ImageTileCacheSettings,
     #[serde(default = "default_true")]
     pub fast_object_rendering: bool,
     pub show_extension_manager: bool,
@@ -125,6 +259,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             auto_contrast: AutoContrastSettings::default(),
+            image_tile_cache: ImageTileCacheSettings::default(),
             fast_object_rendering: true,
             show_extension_manager: false,
             recent_projects: Vec::new(),
@@ -168,6 +303,7 @@ impl RecentProject {
 impl AppSettings {
     pub fn normalized(mut self) -> Self {
         self.auto_contrast = self.auto_contrast.normalized();
+        self.image_tile_cache = self.image_tile_cache.normalized();
         self.recent_projects
             .retain(|project| !project.path.as_os_str().is_empty());
         self.recent_projects
@@ -304,6 +440,46 @@ impl AppSettings {
                 );
             }
         }
+        if let Some(value) = params.get("image_tile_cache") {
+            let settings = value
+                .as_object()
+                .ok_or_else(|| "image_tile_cache must be an object".to_string())?;
+            if let Some(value) = settings.get("mode") {
+                candidate.image_tile_cache.mode = ImageTileCacheMode::parse(
+                    value
+                        .as_str()
+                        .ok_or_else(|| "image_tile_cache.mode must be a string".to_string())?,
+                )
+                .ok_or_else(|| {
+                    "image_tile_cache.mode must be automatic, conservative, balanced, performance, or custom"
+                        .to_string()
+                })?;
+            }
+            if let Some(value) = settings.get("custom_budget_bytes") {
+                candidate.image_tile_cache.custom_budget_bytes = value
+                    .as_u64()
+                    .filter(|value| {
+                        (MIN_CUSTOM_IMAGE_TILE_CACHE_BYTES..=MAX_CUSTOM_IMAGE_TILE_CACHE_BYTES)
+                            .contains(value)
+                    })
+                    .ok_or_else(|| {
+                        "image_tile_cache.custom_budget_bytes must be between 128 MiB and 4 GiB"
+                            .to_string()
+                    })?;
+            }
+            if let Some(value) = settings.get("channel_history") {
+                candidate.image_tile_cache.channel_history = ImageTileChannelHistory::parse(
+                    value.as_str().ok_or_else(|| {
+                        "image_tile_cache.channel_history must be a string".to_string()
+                    })?,
+                )
+                .ok_or_else(|| {
+                    "image_tile_cache.channel_history must be automatic, current_only, or current_and_previous"
+                        .to_string()
+                })?;
+            }
+            candidate.image_tile_cache = candidate.image_tile_cache.normalized();
+        }
         if let Some(value) = params.get("shell_layout_startup_profiles") {
             let profiles = value
                 .as_object()
@@ -434,6 +610,7 @@ mod tests {
         assert!(AppSettings::default().fast_object_rendering);
         assert!(!settings.show_extension_manager);
         assert!(!AppSettings::default().show_extension_manager);
+        assert_eq!(settings.image_tile_cache, ImageTileCacheSettings::default());
     }
 
     #[test]
@@ -442,11 +619,22 @@ mod tests {
             .patched(&serde_json::json!({
                 "fast_object_rendering":false,
                 "show_extension_manager":true,
+                "image_tile_cache":{
+                    "mode":"custom",
+                    "custom_budget_bytes":268435456,
+                    "channel_history":"current_only"
+                },
                 "auto_contrast":{"method":"p1_to_p99","lower_percentile":2,"upper_percentile":98}
             }))
             .unwrap();
         assert!(!settings.fast_object_rendering);
         assert!(settings.show_extension_manager);
+        assert_eq!(settings.image_tile_cache.mode, ImageTileCacheMode::Custom);
+        assert_eq!(settings.image_tile_cache.custom_budget_bytes, 268435456);
+        assert_eq!(
+            settings.image_tile_cache.channel_history,
+            ImageTileChannelHistory::CurrentOnly
+        );
         assert_eq!(settings.auto_contrast.method, AutoContrastMethod::P1ToP99);
         assert!(
             AppSettings::default()

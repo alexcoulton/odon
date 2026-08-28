@@ -1673,22 +1673,22 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
         ),
         method!(
             "memory.tiles.get",
-            "Inspect tile workers, cache occupancy, target level, and prefetch policy.",
+            "Inspect tile workers, byte-accounted image cache occupancy, target level, and prefetch policy.",
             "memory.read",
             false,
             false,
             None,
-            SINGLE_MODE,
+            VIEWER_MODES,
             Empty
         ),
         method!(
             "memory.tiles.set",
-            "Set tile worker count, prefetch policy, and pinned-level fallback.",
+            "Set tile workers, prefetch, image cache byte budget, channel history, and pinned-level fallback.",
             "memory.write",
             true,
             false,
             Some("memory.tiles.changed"),
-            SINGLE_MODE,
+            VIEWER_MODES,
             TileLoading
         ),
         method!(

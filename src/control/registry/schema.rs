@@ -245,6 +245,15 @@ fn request_schema(shape: RequestShape) -> Value {
             "properties": {
                 "fast_object_rendering": {"type": "boolean"},
                 "show_extension_manager": {"type": "boolean", "default": false},
+                "image_tile_cache": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["automatic", "conservative", "balanced", "performance", "custom"]},
+                        "custom_budget_bytes": {"type": "integer", "minimum": 134217728_u64, "maximum": 4294967296_u64},
+                        "channel_history": {"type": "string", "enum": ["automatic", "current_only", "current_and_previous"]}
+                    },
+                    "additionalProperties": false
+                },
                 "shell_layout_startup_profiles": {
                     "type":"object",
                     "properties":{
@@ -296,6 +305,9 @@ fn request_schema(shape: RequestShape) -> Value {
                 "prefetch_mode": {"type": "string", "enum": ["off", "target_halo", "target_and_finer_halo"]},
                 "prefetch_aggressiveness": {"type": "string", "enum": ["conservative", "balanced", "aggressive"]},
                 "prefer_pinned_finer_levels": {"type": "boolean"}
+                ,"cache_mode": {"type": "string", "enum": ["automatic", "conservative", "balanced", "performance", "custom"]}
+                ,"cache_budget_bytes": {"type": "integer", "minimum": 134217728_u64, "maximum": 4294967296_u64}
+                ,"channel_history": {"type": "string", "enum": ["automatic", "current_only", "current_and_previous"]}
             },
             "additionalProperties": false,
         }),

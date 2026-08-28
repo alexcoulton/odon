@@ -73,17 +73,50 @@ pub enum MosaicRawTileWorkerResponse {
     },
 }
 
+impl MosaicRawTileWorkerResponse {
+    fn retained_payload_bytes(&self) -> u64 {
+        match self {
+            Self::Tile(response) => (response.data_u16.len() as u64).saturating_mul(2),
+            Self::Dropped { .. } | Self::Failed { .. } => 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MosaicRawTileLoaderHandle {
     pub tx: Sender<MosaicRawTileRequest>,
     pub rx: Receiver<MosaicRawTileWorkerResponse>,
     latest_generation: Arc<AtomicU64>,
+    response_bytes: Arc<AtomicU64>,
 }
 
 impl MosaicRawTileLoaderHandle {
     pub fn set_latest_generation(&self, generation: u64) {
         self.latest_generation
             .store(generation.max(1), Ordering::Relaxed);
+    }
+
+    pub fn response_queue_len(&self) -> usize {
+        self.rx.len()
+    }
+
+    pub fn request_queue_len(&self) -> usize {
+        self.tx.len()
+    }
+
+    pub fn request_queue_bytes(&self) -> u64 {
+        (self.tx.len() as u64).saturating_mul(std::mem::size_of::<MosaicRawTileRequest>() as u64)
+    }
+
+    pub fn response_queue_bytes(&self) -> u64 {
+        self.response_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn try_recv(&self) -> Result<MosaicRawTileWorkerResponse, crossbeam_channel::TryRecvError> {
+        let response = self.rx.try_recv()?;
+        self.response_bytes
+            .fetch_sub(response.retained_payload_bytes(), Ordering::Relaxed);
+        Ok(response)
     }
 }
 
@@ -284,8 +317,13 @@ pub fn spawn_mosaic_raw_tile_loader(
     let cap = queue_capacity.max(256);
 
     let (tx_req, rx_req) = crossbeam_channel::bounded::<MosaicRawTileRequest>(cap);
-    let (tx_rsp, rx_rsp) = crossbeam_channel::unbounded::<MosaicRawTileWorkerResponse>();
+    // Responses retain decoded u16 tile payloads. Bounding this queue prevents a busy loader from
+    // accumulating hundreds of MiB while the render thread is temporarily occupied.
+    let response_capacity = cap.clamp(64, 512);
+    let (tx_rsp, rx_rsp) =
+        crossbeam_channel::bounded::<MosaicRawTileWorkerResponse>(response_capacity);
     let latest_generation = Arc::new(AtomicU64::new(1));
+    let response_bytes = Arc::new(AtomicU64::new(0));
 
     for t in 0..threads {
         let rx_req = rx_req.clone();
@@ -293,6 +331,7 @@ pub fn spawn_mosaic_raw_tile_loader(
         let sources = Arc::clone(&sources);
         let pinned_levels = pinned_levels.clone();
         let latest_generation = Arc::clone(&latest_generation);
+        let response_bytes = Arc::clone(&response_bytes);
         std::thread::Builder::new()
             .name(format!("mosaic-raw-loader-{t}"))
             .spawn(move || {
@@ -302,6 +341,7 @@ pub fn spawn_mosaic_raw_tile_loader(
                     rx_req,
                     tx_rsp,
                     latest_generation,
+                    response_bytes,
                 ) {
                     eprintln!("mosaic raw tile worker exited: {err:?}");
                 }
@@ -313,11 +353,24 @@ pub fn spawn_mosaic_raw_tile_loader(
         tx: tx_req,
         rx: rx_rsp,
         latest_generation,
+        response_bytes,
     })
 }
 
 struct WorkerDataset {
     arrays: Vec<Array<dyn ReadableStorageTraits>>,
+}
+
+fn send_worker_response(
+    tx: &Sender<MosaicRawTileWorkerResponse>,
+    response_bytes: &AtomicU64,
+    response: MosaicRawTileWorkerResponse,
+) {
+    let bytes = response.retained_payload_bytes();
+    response_bytes.fetch_add(bytes, Ordering::Relaxed);
+    if tx.send(response).is_err() {
+        response_bytes.fetch_sub(bytes, Ordering::Relaxed);
+    }
 }
 
 fn mosaic_raw_tile_worker(
@@ -326,13 +379,18 @@ fn mosaic_raw_tile_worker(
     rx_req: Receiver<MosaicRawTileRequest>,
     tx_rsp: Sender<MosaicRawTileWorkerResponse>,
     latest_generation: Arc<AtomicU64>,
+    response_bytes: Arc<AtomicU64>,
 ) -> anyhow::Result<()> {
     let mut opened: HashMap<usize, WorkerDataset> = HashMap::new();
 
     for req in rx_req.iter() {
         let key = req.key;
         if req.generation != latest_generation.load(Ordering::Relaxed) {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped { key });
+            send_worker_response(
+                &tx_rsp,
+                &response_bytes,
+                MosaicRawTileWorkerResponse::Dropped { key },
+            );
             continue;
         }
         let Some(src) = sources.get(key.dataset_id) else {
@@ -342,7 +400,11 @@ fn mosaic_raw_tile_worker(
             continue;
         };
         if let Some(resp) = pinned_levels.try_get_tile(key, req.generation, src, level) {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Tile(resp));
+            send_worker_response(
+                &tx_rsp,
+                &response_bytes,
+                MosaicRawTileWorkerResponse::Tile(resp),
+            );
             continue;
         }
 
@@ -396,10 +458,14 @@ fn mosaic_raw_tile_worker(
             }
         }
         if ranges.is_empty() {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
-                key,
-                error: "requested channel is not present in this ROI".to_string(),
-            });
+            send_worker_response(
+                &tx_rsp,
+                &response_bytes,
+                MosaicRawTileWorkerResponse::Failed {
+                    key,
+                    error: "requested channel is not present in this ROI".to_string(),
+                },
+            );
             continue;
         }
 
@@ -407,10 +473,14 @@ fn mosaic_raw_tile_worker(
         let data = match retrieve_image_subset_u16(array, &subset, &level.dtype) {
             Ok(data) => data,
             Err(err) => {
-                let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
-                    key,
-                    error: err.to_string(),
-                });
+                send_worker_response(
+                    &tx_rsp,
+                    &response_bytes,
+                    MosaicRawTileWorkerResponse::Failed {
+                        key,
+                        error: err.to_string(),
+                    },
+                );
                 continue;
             }
         };
@@ -418,7 +488,7 @@ fn mosaic_raw_tile_worker(
         let data = match squeeze_to_2d(data, y_dim, x_dim) {
             Some(data) => data,
             None => {
-                let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
+                send_worker_response(&tx_rsp, &response_bytes, MosaicRawTileWorkerResponse::Failed {
                     key,
                     error: "unexpected array dimensionality for raw tile (expected displayed axes plus singleton dims)".to_string(),
                 });
@@ -428,29 +498,41 @@ fn mosaic_raw_tile_worker(
 
         let data_u16 = data.iter().copied().collect::<Vec<_>>();
         if data_u16.len() != width * height {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Failed {
-                key,
-                error: format!(
-                    "raw tile size mismatch: got {} samples for {}x{} tile",
-                    data_u16.len(),
-                    width,
-                    height
-                ),
-            });
+            send_worker_response(
+                &tx_rsp,
+                &response_bytes,
+                MosaicRawTileWorkerResponse::Failed {
+                    key,
+                    error: format!(
+                        "raw tile size mismatch: got {} samples for {}x{} tile",
+                        data_u16.len(),
+                        width,
+                        height
+                    ),
+                },
+            );
             continue;
         }
         if req.generation != latest_generation.load(Ordering::Relaxed) {
-            let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Dropped { key });
+            send_worker_response(
+                &tx_rsp,
+                &response_bytes,
+                MosaicRawTileWorkerResponse::Dropped { key },
+            );
             continue;
         }
 
-        let _ = tx_rsp.send(MosaicRawTileWorkerResponse::Tile(MosaicRawTileResponse {
-            key,
-            generation: req.generation,
-            width,
-            height,
-            data_u16,
-        }));
+        send_worker_response(
+            &tx_rsp,
+            &response_bytes,
+            MosaicRawTileWorkerResponse::Tile(MosaicRawTileResponse {
+                key,
+                generation: req.generation,
+                width,
+                height,
+                data_u16,
+            }),
+        );
     }
 
     Ok(())

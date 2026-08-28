@@ -15,6 +15,8 @@ impl AppModel {
         self.settings = settings.normalized();
         let fast_object_rendering = self.settings.fast_object_rendering;
         self.apply_fast_object_rendering_setting(fast_object_rendering);
+        self.tile_loading
+            .apply_image_tile_cache_settings(self.settings.image_tile_cache);
         self.recent_project_exists = recent_project_exists.into_iter().collect();
         self.settings_path = path;
         self.settings_status.clear();
@@ -35,8 +37,9 @@ impl AppModel {
     }
 
     pub fn tile_loading_snapshot(&self) -> Result<Value, ControlError> {
-        let supported =
-            self.dataset()?.descriptor.kind != crate::data::document::DocumentKind::Tiff;
+        let supported = self.dataset.as_ref().is_some_and(|dataset| {
+            dataset.descriptor.kind != crate::data::document::DocumentKind::Tiff
+        });
         Ok(self.tile_loading.snapshot(supported))
     }
 
@@ -44,9 +47,12 @@ impl AppModel {
         &mut self,
         params: &Value,
     ) -> Result<Value, ControlError> {
-        let supported =
-            self.dataset()?.descriptor.kind != crate::data::document::DocumentKind::Tiff;
-        self.tile_loading.set(params, supported)
+        let supported = self.dataset.as_ref().is_some_and(|dataset| {
+            dataset.descriptor.kind != crate::data::document::DocumentKind::Tiff
+        });
+        let snapshot = self.tile_loading.set(params, supported)?;
+        self.settings.image_tile_cache = self.tile_loading.policy().image_tile_cache();
+        Ok(snapshot)
     }
 
     pub(crate) fn prepare_memory_pin(

@@ -4,6 +4,10 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::control::ControlError;
+use crate::settings::{
+    ImageTileCacheMode, ImageTileCacheSettings, ImageTileChannelHistory,
+    MAX_CUSTOM_IMAGE_TILE_CACHE_BYTES, MIN_CUSTOM_IMAGE_TILE_CACHE_BYTES,
+};
 
 #[derive(Debug, Clone)]
 pub struct ControlPinnedLevelResource {
@@ -310,6 +314,7 @@ pub struct TileLoadingPolicy {
     prefetch_mode: TilePrefetchMode,
     prefetch_aggressiveness: TilePrefetchAggressiveness,
     prefer_pinned_finer_levels: bool,
+    image_tile_cache: ImageTileCacheSettings,
     generation: u64,
 }
 
@@ -323,6 +328,7 @@ impl Default for TileLoadingPolicy {
             prefetch_mode: TilePrefetchMode::TargetHalo,
             prefetch_aggressiveness: TilePrefetchAggressiveness::Balanced,
             prefer_pinned_finer_levels: false,
+            image_tile_cache: ImageTileCacheSettings::default(),
             generation: 1,
         }
     }
@@ -348,6 +354,10 @@ impl TileLoadingPolicy {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    pub fn image_tile_cache(&self) -> ImageTileCacheSettings {
+        self.image_tile_cache
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +369,7 @@ pub(crate) struct TileLoadingModel {
     cache_in_flight: usize,
     target_level: Option<usize>,
     realized_generation: u64,
+    cache_observation: Value,
 }
 
 impl Default for TileLoadingModel {
@@ -371,6 +382,7 @@ impl Default for TileLoadingModel {
             cache_in_flight: 0,
             target_level: None,
             realized_generation: 0,
+            cache_observation: json!({}),
         }
     }
 }
@@ -378,6 +390,17 @@ impl Default for TileLoadingModel {
 impl TileLoadingModel {
     pub(crate) fn policy(&self) -> &TileLoadingPolicy {
         &self.policy
+    }
+
+    pub(crate) fn apply_image_tile_cache_settings(&mut self, settings: ImageTileCacheSettings) {
+        let settings = settings.normalized();
+        if self.policy.image_tile_cache == settings {
+            return;
+        }
+        self.policy.image_tile_cache = settings;
+        self.policy.generation = self.policy.generation.wrapping_add(1).max(1);
+        self.status =
+            "Updated mosaic image tile cache policy; renderer realization pending.".to_string();
     }
 
     pub(crate) fn set(
@@ -431,6 +454,49 @@ impl TileLoadingModel {
                 )
             })?;
         }
+        if let Some(value) = params.get("cache_mode") {
+            candidate.image_tile_cache.mode = ImageTileCacheMode::parse(
+                value.as_str().ok_or_else(|| {
+                    ControlError::invalid_params("memory.tiles.set", "cache_mode must be a string")
+                })?,
+            )
+            .ok_or_else(|| {
+                ControlError::invalid_params(
+                    "memory.tiles.set",
+                    "cache_mode must be automatic, conservative, balanced, performance, or custom",
+                )
+            })?;
+        }
+        if let Some(value) = params.get("cache_budget_bytes") {
+            candidate.image_tile_cache.custom_budget_bytes = value
+                .as_u64()
+                .filter(|value| {
+                    (MIN_CUSTOM_IMAGE_TILE_CACHE_BYTES..=MAX_CUSTOM_IMAGE_TILE_CACHE_BYTES)
+                        .contains(value)
+                })
+                .ok_or_else(|| {
+                    ControlError::invalid_params(
+                        "memory.tiles.set",
+                        "cache_budget_bytes must be between 128 MiB and 4 GiB",
+                    )
+                })?;
+        }
+        if let Some(value) = params.get("channel_history") {
+            candidate.image_tile_cache.channel_history =
+                ImageTileChannelHistory::parse(value.as_str().ok_or_else(|| {
+                    ControlError::invalid_params(
+                        "memory.tiles.set",
+                        "channel_history must be a string",
+                    )
+                })?)
+                .ok_or_else(|| {
+                    ControlError::invalid_params(
+                        "memory.tiles.set",
+                        "channel_history must be automatic, current_only, or current_and_previous",
+                    )
+                })?;
+        }
+        candidate.image_tile_cache = candidate.image_tile_cache.normalized();
         if candidate != self.policy {
             candidate.generation = self.policy.generation.wrapping_add(1).max(1);
             self.status = if candidate.workers != old_workers {
@@ -447,6 +513,9 @@ impl TileLoadingModel {
     }
 
     pub(crate) fn observe(&mut self, value: &Value) {
+        if let Some(cache) = value.get("cache").filter(|cache| cache.is_object()) {
+            self.cache_observation = cache.clone();
+        }
         self.cache_loaded = value
             .get("cache")
             .and_then(|cache| cache.get("loaded"))
@@ -489,21 +558,39 @@ impl TileLoadingModel {
         self.cache_in_flight = 0;
         self.target_level = None;
         self.realized_generation = 0;
+        self.cache_observation = json!({});
     }
 
     pub(crate) fn snapshot(&self, runtime_tuning_supported: bool) -> Value {
+        let mut cache = self.cache_observation.clone();
+        if !cache.is_object() {
+            cache = json!({});
+        }
+        let cache_object = cache.as_object_mut().expect("cache observation object");
+        cache_object
+            .entry("loaded".to_string())
+            .or_insert(json!(self.cache_loaded));
+        cache_object
+            .entry("capacity".to_string())
+            .or_insert(json!(self.cache_capacity));
+        cache_object
+            .entry("in_flight".to_string())
+            .or_insert(json!(self.cache_in_flight));
         json!({
             "workers":self.policy.workers,
             "runtime_tuning_supported":runtime_tuning_supported,
             "prefetch_mode":self.policy.prefetch_mode.as_str(),
             "prefetch_aggressiveness":self.policy.prefetch_aggressiveness.as_str(),
             "prefer_pinned_finer_levels":self.policy.prefer_pinned_finer_levels,
-            "status":self.status,
-            "cache":{
-                "loaded":self.cache_loaded,
-                "capacity":self.cache_capacity,
-                "in_flight":self.cache_in_flight,
+            "cache_mode":self.policy.image_tile_cache.mode.as_str(),
+            "cache_budget_bytes":if self.policy.image_tile_cache.mode == ImageTileCacheMode::Custom {
+                Some(self.policy.image_tile_cache.custom_budget_bytes)
+            } else {
+                None
             },
+            "channel_history":self.policy.image_tile_cache.channel_history.as_str(),
+            "status":self.status,
+            "cache":cache,
             "target_level":self.target_level,
             "generation":self.policy.generation,
             "realized_generation":self.realized_generation,

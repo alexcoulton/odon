@@ -60,7 +60,7 @@ impl MosaicViewerApp {
             sources,
             pinned_levels,
             loader,
-            tiles_gl: MosaicTilesGl::new(12_000),
+            tiles_gl: MosaicTilesGl::new(odon::settings::ImageTileCacheSettings::default()),
             _remote_runtimes: remote_runtimes,
             camera,
             last_canvas_rect: None,

@@ -526,7 +526,7 @@
         "disposition": "retain",
         "canonical_writer": "ControlActor persisted tile policy",
         "projection_source": "tile-policy generation",
-        "renderer_consumers": "tile scheduler",
+        "renderer_consumers": "single-view tile scheduler and global mosaic image-tile cache",
         "persistence_consumers": "application settings",
         "native_commit_point": "typed tile-loading policy command",
         "milestone": 5

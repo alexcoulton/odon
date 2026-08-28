@@ -2231,6 +2231,9 @@ class Memory:
         prefetch_mode: str | None = None,
         prefetch_aggressiveness: str | None = None,
         prefer_pinned_finer_levels: bool | None = None,
+        cache_mode: str | None = None,
+        cache_budget_bytes: int | None = None,
+        channel_history: str | None = None,
         if_revision: int | None = None,
     ) -> Any:
         params: dict[str, Any] = {}
@@ -2239,6 +2242,9 @@ class Memory:
             ("prefetch_mode", prefetch_mode),
             ("prefetch_aggressiveness", prefetch_aggressiveness),
             ("prefer_pinned_finer_levels", prefer_pinned_finer_levels),
+            ("cache_mode", cache_mode),
+            ("cache_budget_bytes", cache_budget_bytes),
+            ("channel_history", channel_history),
         ):
             if value is not None:
                 params[key] = value

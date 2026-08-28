@@ -488,6 +488,47 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn ui_memory(&mut self, ui: &mut egui::Ui) {
+        let tile_cache = self.tiles_gl.stats();
+        ui.heading("Image tile cache");
+        ui.label(format!(
+            "{} tracked / {} budget ({} entries)",
+            format_bytes(tile_cache.total_tracked_bytes),
+            format_bytes(tile_cache.effective_budget_bytes),
+            tile_cache.entries,
+        ));
+        ui.label(format!(
+            "Pending CPU {} · uploaded texture {} · awaiting GL deletion {}",
+            format_bytes(tile_cache.pending_cpu_bytes),
+            format_bytes(tile_cache.uploaded_texture_bytes),
+            format_bytes(tile_cache.queued_deletion_bytes),
+        ));
+        ui.label(format!(
+            "Pressure: {} · policy: {} · previous channel group: {}",
+            tile_cache.pressure_state,
+            tile_cache.resolution_reason,
+            if tile_cache.previous_channel_group.is_empty() {
+                "not retained".to_string()
+            } else {
+                format!("{} channel(s)", tile_cache.previous_channel_group.len())
+            },
+        ));
+        if tile_cache.over_budget_bytes > 0 {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                format!(
+                    "Visible working set is {} over budget; visible tiles are protected.",
+                    format_bytes(tile_cache.over_budget_bytes)
+                ),
+            );
+        }
+        ui.label(format!(
+            "Evictions: {} budget · {} channel change · peak {}",
+            tile_cache.evictions_byte_budget,
+            tile_cache.evictions_channel_change,
+            format_bytes(tile_cache.peak_tracked_bytes),
+        ));
+        ui.separator();
+
         ui_memory_overview(
             ui,
             "Manually pin selected OME-Zarr channels and levels in CPU RAM.",

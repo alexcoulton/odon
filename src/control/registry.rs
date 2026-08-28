@@ -318,6 +318,8 @@ pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
             | "viewer.screenshot.settings.get"
             | "viewer.screenshot.settings.set"
             | "viewer.screenshot.capture"
+            | "memory.tiles.get"
+            | "memory.tiles.set"
             | "memory.get"
             | "memory.pin"
             | "memory.unpin"

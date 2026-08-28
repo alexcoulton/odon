@@ -21,6 +21,9 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
             "prefetch_mode":"off",
             "prefetch_aggressiveness":"aggressive",
             "prefer_pinned_finer_levels":false,
+            "cache_mode":"custom",
+            "cache_budget_bytes":268435456,
+            "channel_history":"current_only",
         }),
     );
     channels.request_tx.send(set).unwrap();
@@ -32,6 +35,9 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
     assert_eq!(policy["prefetch_mode"], "off");
     assert_eq!(policy["prefetch_aggressiveness"], "aggressive");
     assert_eq!(policy["prefer_pinned_finer_levels"], false);
+    assert_eq!(policy["cache_mode"], "custom");
+    assert_eq!(policy["cache_budget_bytes"], 268435456);
+    assert_eq!(policy["channel_history"], "current_only");
     assert_eq!(policy["presentation_pending"], true);
     let generation = policy["generation"].as_u64().unwrap();
 
@@ -44,7 +50,14 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
 
     let observed = json!({
         "tile_loading_observation": {
-            "cache":{"loaded":7,"capacity":256,"in_flight":2},
+            "cache":{
+                "loaded":7,
+                "capacity":32768,
+                "in_flight":2,
+                "pending_cpu_bytes":1048576,
+                "uploaded_texture_bytes":2097152,
+                "effective_budget_bytes":268435456
+            },
             "target_level":3,
             "realized_generation":generation,
             "status":"Tile loading policy realized by renderer.",
@@ -69,6 +82,9 @@ fn tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations
     assert_eq!(current["presentation_pending"], false);
     assert_eq!(current["cache"]["loaded"], 7);
     assert_eq!(current["cache"]["in_flight"], 2);
+    assert_eq!(current["cache"]["pending_cpu_bytes"], 1048576);
+    assert_eq!(current["cache"]["uploaded_texture_bytes"], 2097152);
+    assert_eq!(current["cache"]["effective_budget_bytes"], 268435456);
     assert_eq!(current["target_level"], 3);
 }
 

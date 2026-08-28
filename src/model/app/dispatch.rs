@@ -662,6 +662,17 @@ impl AppModel {
             return Some(result.map(|response| ModelDispatch { response, present }));
         }
         if self.mode == ModelMode::Mosaic {
+            if matches!(method, "memory.tiles.get" | "memory.tiles.set") {
+                let response = if method == "memory.tiles.get" {
+                    self.tile_loading_snapshot()
+                } else {
+                    self.set_tile_loading_policy(params)
+                };
+                return Some(response.map(|response| ModelDispatch {
+                    response,
+                    present: method == "memory.tiles.set",
+                }));
+            }
             if method == "viewer.native_layers.set_visibility"
                 && let Ok(layer_id) = Self::native_layer_id(params)
                 && let Some(id) = layer_id

@@ -173,7 +173,7 @@ async names below have identical arguments and add `await` to network calls:
 | `measurements` | configuration, background execution, cancellation and generated property discovery |
 | `object_exports` | enriched CSV/GeoParquet columns, scoped export and progress |
 | `mosaic` | items, selection/focus, layout, object loading and cancellation |
-| `memory` | single/mosaic RAM estimates and pin lifecycle; single-view tile worker/prefetch policy |
+| `memory` | single/mosaic RAM estimates and pin lifecycle; tile worker/prefetch controls; mosaic image-tile byte budgets, channel history, and diagnostics |
 | `screenshots` | explicit viewport/workspace/window/project capture, overlays, scaling, output folder and overwrite policy |
 | `data`, `layers`, `ui` | external resources, extension-owned layers and declarative native UI |
 

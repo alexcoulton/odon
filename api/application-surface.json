@@ -522,17 +522,17 @@
       "id": "PERF-01.target",
       "feature_id": "PERF-01",
       "domain": "memory.tiles",
-      "title": "Tile loading, replacement, and prefetch state",
+      "title": "Tile loading, byte budgeting, channel history, and prefetch state",
       "phase": "G",
       "status": "covered",
-      "native_entry_points": ["Performance settings", "tile loader status"],
+      "native_entry_points": ["Rendering > Image Tile Cache settings", "mosaic Memory diagnostics", "tile loader status"],
       "methods": ["memory.tiles.get", "memory.tiles.set"],
       "events": ["memory.tiles.changed"],
       "permissions": ["memory.read", "memory.write"],
       "python_sync": ["odon.resources:Memory.get_tile_loading", "odon.resources:Memory.set_tile_loading"],
       "python_async": ["odon.async_resources:AsyncMemory.get_tile_loading", "odon.async_resources:AsyncMemory.set_tile_loading"],
       "tests": ["rust:tile_loading_policy_commits_without_a_frame_and_accepts_renderer_observations", "python:test_memory_wrappers"],
-      "notes": "Single-view tile policy is actor-canonical and completes without a frame. Renderer cache occupancy and realization generation flow back as observation-only state, so an old frame cannot overwrite policy. Mosaic policy remains on the mosaic route until Wave 4."
+      "notes": "The actor-canonical policy includes an application-wide mosaic image-tile byte budget and unified-channel history. Mosaic cache byte counters and realization generation flow back as observation-only state, so an old frame cannot overwrite policy. Single-view worker and prefetch controls remain compatible."
     },
     {
       "id": "PERF-02.target",

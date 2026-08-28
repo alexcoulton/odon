@@ -71,6 +71,9 @@ class ResourceTests(unittest.TestCase):
             prefetch_mode="target_halo",
             prefetch_aggressiveness="aggressive",
             prefer_pinned_finer_levels=True,
+            cache_mode="custom",
+            cache_budget_bytes=268435456,
+            channel_history="current_only",
         )
         self.assertEqual(client.calls[1][0], "memory.pin")
         self.assertEqual(client.calls[1][1]["channels"], [0, "DAPI"])
@@ -79,6 +82,9 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(client.calls[1][1]["if_revision"], 4)
         self.assertEqual(client.calls[2][1]["item"], "ROI-1")
         self.assertEqual(client.calls[5][1]["workers"], 6)
+        self.assertEqual(client.calls[5][1]["cache_mode"], "custom")
+        self.assertEqual(client.calls[5][1]["cache_budget_bytes"], 268435456)
+        self.assertEqual(client.calls[5][1]["channel_history"], "current_only")
 
     def test_screenshot_settings_and_overwrite(self) -> None:
         client = Client()

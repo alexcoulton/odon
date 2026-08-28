@@ -91,6 +91,7 @@ impl MosaicViewerApp {
         let visible_world = visible_world_rect(&self.camera, rect);
         let prev_visible_world = self.last_visible_world.unwrap_or(visible_world);
         let channels_draw = self.visible_channel_draws();
+        self.tiles_gl.refresh_automatic_policy();
         self.sync_tile_request_generation(visible_world, rect, &channels_draw);
         self.drain_raw_tiles();
         let request_generation = self.tile_request_generation;
@@ -212,7 +213,18 @@ impl MosaicViewerApp {
                 });
             }
         }
+        self.tiles_gl.update_working_set(
+            keep.clone(),
+            channels_draw.iter().map(|channel| channel.index).collect(),
+        );
         self.tiles_gl.prune_in_flight(&keep);
+
+        if self.tiles_gl.has_queued_deletions()
+            || self.tiles_gl.stats().pending_cpu_bytes > 0
+            || self.loader.response_queue_len() > 0
+        {
+            ui.ctx().request_repaint();
+        }
 
         let tiles_gl = self.tiles_gl.clone();
         let sources = Arc::clone(&self.sources);

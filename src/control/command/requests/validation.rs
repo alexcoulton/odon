@@ -3,8 +3,10 @@
 use super::*;
 
 mod commands;
+mod memory;
 mod shell;
 
+use memory::{validate_image_tile_cache, validate_tile_loading};
 use shell::{
     validate_shell_id, validate_shell_mode, validate_shell_profile_name,
     validate_shell_profile_scope, validate_shell_transaction_id,
@@ -432,6 +434,9 @@ pub(in crate::control::command) fn validate_params(
             let _ = request.fast_object_rendering;
             let _ = request.show_extension_manager;
             let _ = request.shell_layout_startup_profiles;
+            if let Some(cache) = request.image_tile_cache {
+                validate_image_tile_cache(method, cache)?;
+            }
         }
         RequestShape::LifecycleRequest => {
             let request: LifecycleRequest =
@@ -482,34 +487,7 @@ pub(in crate::control::command) fn validate_params(
         RequestShape::TileLoading => {
             let request: TileLoadingRequest =
                 serde_json::from_value(params.clone()).map_err(invalid)?;
-            if request
-                .workers
-                .is_some_and(|value| !(1..=12).contains(&value))
-            {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "workers must be from 1 to 12",
-                ));
-            }
-            if request.prefetch_mode.as_deref().is_some_and(|value| {
-                !matches!(value, "off" | "target_halo" | "target_and_finer_halo")
-            }) {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "unknown prefetch_mode",
-                ));
-            }
-            if request
-                .prefetch_aggressiveness
-                .as_deref()
-                .is_some_and(|value| !matches!(value, "conservative" | "balanced" | "aggressive"))
-            {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "unknown prefetch_aggressiveness",
-                ));
-            }
-            let _ = request.prefer_pinned_finer_levels;
+            validate_tile_loading(method, request)?;
         }
         RequestShape::MemoryPin => {
             let request: MemoryPinRequest =

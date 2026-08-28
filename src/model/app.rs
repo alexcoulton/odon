@@ -3164,6 +3164,7 @@ fn settings_snapshot_for(
 ) -> Value {
     json!({
         "auto_contrast":settings.auto_contrast,
+        "image_tile_cache":settings.image_tile_cache,
         "fast_object_rendering":settings.fast_object_rendering,
         "show_extension_manager":settings.show_extension_manager,
         "shell_layout_startup_profiles":settings.shell_layout_startup_profiles,

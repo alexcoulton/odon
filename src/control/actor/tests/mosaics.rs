@@ -62,6 +62,22 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
         call(&channels, "app.get_state", json!({}))["mode"],
         "mosaic"
     );
+    let tile_policy = call(
+        &channels,
+        "memory.tiles.set",
+        json!({
+            "cache_mode":"custom",
+            "cache_budget_bytes":268435456,
+            "channel_history":"current_only",
+        }),
+    );
+    assert_eq!(tile_policy["cache_mode"], "custom");
+    assert_eq!(tile_policy["cache_budget_bytes"], 268435456);
+    assert_eq!(tile_policy["channel_history"], "current_only");
+    assert_eq!(
+        call(&channels, "memory.tiles.get", json!({}))["cache_mode"],
+        "custom"
+    );
     let channel_state = call(&channels, "viewer.channels.list", json!({}));
     assert_eq!(channel_state["mode"], "mosaic");
     assert_eq!(channel_state["channels"].as_array().unwrap().len(), 5);

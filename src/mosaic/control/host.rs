@@ -1,6 +1,14 @@
 use super::super::*;
 
 impl MosaicViewerApp {
+    pub fn apply_control_actor_tile_loading_policy(
+        &mut self,
+        policy: &odon::model::TileLoadingPolicy,
+    ) {
+        self.tiles_gl
+            .set_policy(policy.image_tile_cache(), policy.generation());
+    }
+
     pub(crate) fn set_object_fill_renderer(
         &mut self,
         renderer: crate::render::polygon_fill_gl::ObjectFillGlRenderer,

@@ -1,6 +1,27 @@
 use super::super::*;
 
 impl MosaicViewerApp {
+    pub fn control_renderer_observation_snapshot(&self) -> serde_json::Value {
+        let stats = self.tiles_gl.stats();
+        let mut cache = stats.to_json();
+        cache["response_queue_entries"] = serde_json::json!(self.loader.response_queue_len());
+        cache["response_queue_bytes"] = serde_json::json!(self.loader.response_queue_bytes());
+        cache["request_queue_entries"] = serde_json::json!(self.loader.request_queue_len());
+        cache["request_queue_bytes"] = serde_json::json!(self.loader.request_queue_bytes());
+        serde_json::json!({
+            "tile_loading_observation": {
+                "cache": cache,
+                "target_level": self.last_target_level_by_dataset_id.iter().flatten().min(),
+                "realized_generation": stats.realized_generation,
+                "status": if stats.over_budget_bytes > 0 {
+                    "Visible mosaic working set temporarily exceeds the image tile cache budget."
+                } else {
+                    "Mosaic image tile cache policy realized by renderer."
+                },
+            },
+        })
+    }
+
     pub fn control_channel_snapshot(&self) -> serde_json::Value {
         serde_json::Value::Array(
             self.channels
@@ -69,6 +90,11 @@ impl MosaicViewerApp {
                 "in_flight": self.tiles_gl.in_flight_len(),
                 "tile_debug_enabled": self.show_tile_debug,
                 "request_generation": self.tile_request_generation,
+                "cache": self.tiles_gl.stats().to_json(),
+                "response_queue_entries": self.loader.response_queue_len(),
+                "response_queue_bytes": self.loader.response_queue_bytes(),
+                "request_queue_entries": self.loader.request_queue_len(),
+                "request_queue_bytes": self.loader.request_queue_bytes(),
             },
             "segmentation": segmentation,
             "segmentation_pending_visible": self.seg_geojson_pending_visible,

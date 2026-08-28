@@ -11,7 +11,9 @@ use crate::app::{
     S3DatasetSelection, ViewerPlatformEffect,
 };
 use crate::app_support::menu::NativeMenu;
-use crate::app_support::settings::{AppSettings, settings_file_path};
+use crate::app_support::settings::{
+    AppSettings, ImageTileCacheMode, ImageTileChannelHistory, settings_file_path,
+};
 use crate::data::dataset_kind::{
     LocalDatasetKind, classify_local_dataset_path, normalize_local_dataset_path,
 };
@@ -630,6 +632,7 @@ impl RootApp {
         if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
             mosaic.apply_control_shell_projection(&projection.shell);
             mosaic.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
+            mosaic.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy);
         }
         self.apply_project_object_preload_projection(&projection.project_object_preload);
         if projection.mode == ModelMode::Project {
@@ -695,6 +698,7 @@ impl RootApp {
                     };
                 self.configure_mosaic_app(&mut mosaic);
                 mosaic.apply_control_shell_projection(&projection.shell);
+                mosaic.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy);
                 mosaic.set_return_dataset_root(ret.dataset_root.clone());
                 mosaic.set_project_space(project_space);
                 if let Err(error) = mosaic.apply_control_actor_state(
@@ -1078,13 +1082,14 @@ impl RootApp {
             return;
         }
         self.control_last_observed_at = Instant::now();
-        let Mode::Single(app) = &mut self.mode else {
-            return;
+        let observation = match &mut self.mode {
+            Mode::Single(app) => app.control_renderer_observation_snapshot(),
+            Mode::Mosaic { mosaic, .. } => mosaic.control_renderer_observation_snapshot(),
+            _ => return,
         };
-        let _ = self.control_runtime.report_renderer_observation(
-            app.control_renderer_observation_snapshot(),
-            self.control_projection_revision_applied,
-        );
+        let _ = self
+            .control_runtime
+            .report_renderer_observation(observation, self.control_projection_revision_applied);
     }
 
     fn current_project_space(&self) -> Option<&ProjectSpace> {
@@ -1375,6 +1380,81 @@ impl RootApp {
                         }
 
                         ui.separator();
+                        ui.heading("Image Tile Cache");
+                        ui.horizontal(|ui| {
+                            ui.label("Cache mode");
+                            settings_help_button(
+                                ui,
+                                "Sets one application-wide byte budget for mosaic image tiles. Automatic adapts the ceiling to physical memory and current memory pressure.",
+                            );
+                            egui::ComboBox::from_id_salt("image_tile_cache_mode")
+                                .selected_text(self.settings_draft.image_tile_cache.mode.label())
+                                .show_ui(ui, |ui| {
+                                    for mode in ImageTileCacheMode::ALL {
+                                        ui.selectable_value(
+                                            &mut self.settings_draft.image_tile_cache.mode,
+                                            mode,
+                                            mode.label(),
+                                        );
+                                    }
+                                });
+                        });
+                        if self.settings_draft.image_tile_cache.mode == ImageTileCacheMode::Custom {
+                            let mut custom_mib =
+                                self.settings_draft.image_tile_cache.custom_budget_bytes / (1024 * 1024);
+                            ui.horizontal(|ui| {
+                                ui.label("Custom limit");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut custom_mib)
+                                            .range(128..=4096)
+                                            .suffix(" MiB"),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings_draft.image_tile_cache.custom_budget_bytes =
+                                        custom_mib.saturating_mul(1024 * 1024);
+                                }
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Channel history");
+                            settings_help_button(
+                                ui,
+                                "Current only minimizes memory. Current + previous makes before/after switching faster. Automatic keeps the previous marker only while budget and pressure allow.",
+                            );
+                            egui::ComboBox::from_id_salt("image_tile_channel_history")
+                                .selected_text(
+                                    self.settings_draft.image_tile_cache.channel_history.label(),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for history in ImageTileChannelHistory::ALL {
+                                        ui.selectable_value(
+                                            &mut self.settings_draft.image_tile_cache.channel_history,
+                                            history,
+                                            history.label(),
+                                        );
+                                    }
+                                });
+                        });
+                        if self.settings_draft.image_tile_cache.mode
+                            == ImageTileCacheMode::Automatic
+                        {
+                            ui.label(
+                                "The renderer resolves the live ceiling from physical RAM and memory pressure. The Mosaic Memory tab shows the current value.",
+                            );
+                        } else {
+                            let (resolved_bytes, _) = self
+                                .settings_draft
+                                .image_tile_cache
+                                .resolved_budget_bytes(None);
+                            ui.label(format!(
+                                "Configured image-tile ceiling: {:.0} MiB. Small mosaics are unaffected until they reach it.",
+                                resolved_bytes as f64 / (1024.0 * 1024.0),
+                            ));
+                        }
+
+                        ui.separator();
                         ui.heading("Renderer");
                         ui.label(if self.gpu_available {
                             "GPU acceleration: active (OpenGL)"
@@ -1421,6 +1501,7 @@ impl RootApp {
                 "app.settings.set",
                 serde_json::json!({
                     "auto_contrast":self.settings_draft.auto_contrast,
+                    "image_tile_cache":self.settings_draft.image_tile_cache,
                     "fast_object_rendering":self.settings_draft.fast_object_rendering,
                     "show_extension_manager":self.settings_draft.show_extension_manager,
                 }),

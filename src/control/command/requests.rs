@@ -214,9 +214,18 @@ struct CaptureScreenshotRequest {
 #[serde(deny_unknown_fields)]
 struct AppSettingsRequest {
     auto_contrast: Option<AutoContrastRequest>,
+    image_tile_cache: Option<ImageTileCacheRequest>,
     fast_object_rendering: Option<bool>,
     show_extension_manager: Option<bool>,
     shell_layout_startup_profiles: Option<std::collections::BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageTileCacheRequest {
+    mode: Option<String>,
+    custom_budget_bytes: Option<u64>,
+    channel_history: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +266,9 @@ struct TileLoadingRequest {
     prefetch_mode: Option<String>,
     prefetch_aggressiveness: Option<String>,
     prefer_pinned_finer_levels: Option<bool>,
+    cache_mode: Option<String>,
+    cache_budget_bytes: Option<u64>,
+    channel_history: Option<String>,
 }
 
 #[derive(Deserialize)]
