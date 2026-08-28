@@ -14,7 +14,7 @@ Most users should download a precompiled binary from the GitHub releases page:
 
 - [Latest releases](https://github.com/alexcoulton/odon/releases)
 - [Full documentation](https://alexcoulton.github.io/odon/)
-- [Biorxiv preprint](https://www.biorxiv.org/content/10.64898/2026.03.30.715233v1) (please cite us if you benefit from Odon!)
+- [Bioinformatics paper](https://doi.org/10.1093/bioinformatics/btag514) (please cite us if you benefit from Odon!)
 
 Release builds are intended to be the main distribution path for:
 
