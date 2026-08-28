@@ -880,10 +880,21 @@ impl AppModel {
                 "viewer.viewports.layers.set_order" => self.set_native_layer_order(params)?,
                 "viewer.viewports.layers.set_active" => self.set_native_layer_active(params)?,
                 "viewer.viewports.layers.state.replace" => self.replace_native_layers(params)?,
-                "viewer.objects.get_state" => json!({
-                    "target": "segmentation_objects",
-                    "state": self.object_resource_state(),
-                }),
+                "viewer.objects.get_state" => {
+                    let mut state = self.object_resource_state();
+                    if let Some(object) = state.as_object_mut()
+                        && let Some(renderer) = self
+                            .dataset
+                            .as_ref()
+                            .and_then(|dataset| dataset.performance.get("object_fill"))
+                    {
+                        object.insert("renderer".to_string(), renderer.clone());
+                    }
+                    json!({
+                        "target": "segmentation_objects",
+                        "state": state,
+                    })
+                }
                 "viewer.objects.get_visibility" => self.object_overlay_visibility_global(params)?,
                 "viewer.objects.set_visibility" => {
                     self.set_object_overlay_visibility_global(params)?

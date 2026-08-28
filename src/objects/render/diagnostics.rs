@@ -11,6 +11,14 @@ impl ObjectsLayer {
         self.gl_object_selection.stats()
     }
 
+    pub(crate) fn outline_frame_stats(&self) -> ObjectOutlineFrameStats {
+        self.outline_frame_stats
+    }
+
+    pub(crate) fn object_presentation_state_stats(&self) -> ObjectPresentationStateStats {
+        self.presentation_state_stats()
+    }
+
     pub(crate) fn render_diagnostics_json(&self) -> serde_json::Value {
         let gpu = self.gl_object_fill.stats();
         let outline_gpu = self.outline_gpu_stats();
@@ -45,6 +53,8 @@ impl ObjectsLayer {
             },
             "gpu": gpu,
             "outline_gpu": outline_gpu,
+            "outline_frame": self.outline_frame_stats(),
+            "presentation_state": self.object_presentation_state_stats(),
         })
     }
 }

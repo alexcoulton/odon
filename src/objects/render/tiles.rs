@@ -6,6 +6,7 @@ pub(in crate::objects) const OBJECT_FILL_TILE_SIZE_PX: u32 = 512;
 const MAX_OBJECT_FILL_TILE_LEVEL: u8 = 24;
 pub(super) const MAX_VISIBLE_OBJECT_FILL_TILES: i64 = 256;
 const MAX_EXACT_FLOAT_OBJECT_INDEX: usize = 16_777_215;
+const TEXTURE_OUTLINE_TILE_SUPERSAMPLE: f32 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::objects) struct ObjectFillTileSpec {
@@ -39,26 +40,22 @@ impl ObjectsLayer {
         display_scale: egui::Vec2,
         active_color_groups: Option<&ObjectColorGroups>,
         continuous_colors: Option<&ObjectContinuousColorPayload>,
-        render_generation: u64,
+        texture_outline_requested: bool,
+        visibility_state: &ObjectRenderStatePayload,
         frame_generation: u64,
     ) -> Option<ObjectFillTileFrame> {
-        const MIN_TILE_VERTEX_COUNT: usize = 500_000;
-        const MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL: f32 = 2.0;
-        if fill_mesh.vertices_local.len() < MIN_TILE_VERTEX_COUNT
-            || !object_fill_tile_object_count_supported(fill_mesh.object_count)
-        {
-            return None;
-        }
         let local_screen_per_pixel = camera.zoom_screen_per_lvl0_px
             * display_scale.x.abs().max(display_scale.y.abs()).max(1.0e-9);
-        if local_screen_per_pixel > MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL {
+        if !object_fill_tile_path_eligible(fill_mesh, local_screen_per_pixel) {
             return None;
         }
 
+        let (target_screen_per_pixel, fallback_screen_per_pixel) =
+            object_fill_tile_planning_scales(local_screen_per_pixel, texture_outline_requested);
         let target_specs = plan_object_fill_tiles(
             visible_local,
             fill_mesh.bounds_local,
-            local_screen_per_pixel,
+            target_screen_per_pixel,
         );
         if target_specs.is_empty() {
             return None;
@@ -67,8 +64,9 @@ impl ObjectsLayer {
             specs
                 .into_iter()
                 .map(|spec| {
+                    let raster_bounds_local = object_fill_tile_raster_bounds(spec.bounds_local);
                     let geometry = fill_mesh
-                        .spatial_slices_for_local_rect(spec.bounds_local)
+                        .spatial_slices_for_local_rect(raster_bounds_local)
                         .into_iter()
                         .map(|slice| ObjectFillTileGeometry {
                             cache_id: object_render_cache_id_usize(0x4ab0, slice.bin_index),
@@ -84,6 +82,7 @@ impl ObjectsLayer {
                             spec,
                         ),
                         bounds_local: spec.bounds_local,
+                        raster_bounds_local,
                         geometry,
                     }
                 })
@@ -93,7 +92,7 @@ impl ObjectsLayer {
         let fallback_specs = plan_object_fill_tiles(
             visible_local,
             fill_mesh.bounds_local,
-            local_screen_per_pixel * 0.25,
+            fallback_screen_per_pixel,
         );
         let mut request_items = build_items(fallback_specs);
         let fallback_keys = request_items
@@ -108,7 +107,8 @@ impl ObjectsLayer {
         );
 
         let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let selection_overlay = self.object_fill_selection_tile_style(fill_mesh.object_count);
+        let selection_overlay = self
+            .object_fill_selection_tile_style(fill_mesh.object_count, texture_outline_requested);
         let mut styles = Vec::new();
         if let Some(color_groups) = active_color_groups {
             styles.reserve(color_groups.groups.len());
@@ -119,6 +119,12 @@ impl ObjectsLayer {
                 };
                 let color =
                     egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
+                let border_color = egui::Color32::from_rgba_unmultiplied(
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+                );
                 styles.push(ObjectFillTileStyle {
                     style_cache_id: self.render_style_cache_id,
                     state_cache_id: object_property_render_cache_id(
@@ -136,23 +142,22 @@ impl ObjectsLayer {
                     primary_color: color,
                     object_color_opacity: 1.0,
                     selection_overlay: selection_overlay.clone(),
+                    border: self.object_fill_tile_border_style(
+                        texture_outline_requested,
+                        border_color,
+                        false,
+                    ),
                 });
             }
         } else {
-            let mut visible_state = vec![0u8; fill_mesh.object_count];
-            for (index, state) in visible_state.iter_mut().enumerate() {
-                if self.is_index_visible(index) {
-                    *state = 255;
-                }
-            }
             let rgb = self.color_rgb;
             let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
             styles.push(ObjectFillTileStyle {
                 style_cache_id: self.render_style_cache_id,
                 state_cache_id: object_render_cache_id(0x4a23, 0),
                 object_count: fill_mesh.object_count,
-                state_generation: render_generation,
-                object_state: Arc::new(visible_state),
+                state_generation: visibility_state.generation,
+                object_state: Arc::clone(&visibility_state.values),
                 color_cache_id: object_render_cache_id(0x4a24, 0),
                 color_generation: continuous_colors.map_or(0, |payload| payload.generation),
                 object_colors_rgba: continuous_colors
@@ -161,6 +166,16 @@ impl ObjectsLayer {
                 primary_color: color,
                 object_color_opacity: self.fill_opacity,
                 selection_overlay: selection_overlay.clone(),
+                border: self.object_fill_tile_border_style(
+                    texture_outline_requested,
+                    egui::Color32::from_rgba_unmultiplied(
+                        rgb[0],
+                        rgb[1],
+                        rgb[2],
+                        (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    ),
+                    continuous_colors.is_some(),
+                ),
             });
         }
 
@@ -183,9 +198,10 @@ impl ObjectsLayer {
     pub(in crate::objects) fn object_fill_selection_tile_style(
         &self,
         object_count: usize,
+        include_outline: bool,
     ) -> Option<ObjectFillTileSelectionStyle> {
         if !self.show_selection_overlay
-            || self.selected_fill_opacity <= 0.0
+            || (self.selected_fill_opacity <= 0.0 && !include_outline)
             || self.selected_object_indices.is_empty()
             || self.selection_fill_state.len() != object_count
         {
@@ -205,6 +221,31 @@ impl ObjectsLayer {
             primary_color: color,
         })
     }
+
+    fn object_fill_tile_border_style(
+        &self,
+        enabled: bool,
+        base_color: egui::Color32,
+        use_object_colors: bool,
+    ) -> ObjectFillTileBorderStyle {
+        ObjectFillTileBorderStyle {
+            enabled,
+            width_points: self.width_screen_px.max(0.0),
+            base_color,
+            use_object_colors,
+            object_color_opacity: self.opacity.clamp(0.0, 1.0),
+            selected_color: egui::Color32::from_rgba_unmultiplied(255, 245, 140, 210),
+            primary_color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+        }
+    }
+}
+
+pub(in crate::objects) fn object_fill_tile_raster_bounds(bounds: egui::Rect) -> egui::Rect {
+    let gutter_scale = 2.0 / OBJECT_FILL_TILE_SIZE_PX as f32;
+    bounds.expand2(egui::vec2(
+        bounds.width() * gutter_scale,
+        bounds.height() * gutter_scale,
+    ))
 }
 
 pub(in crate::objects) fn object_fill_tile_key(
@@ -223,6 +264,31 @@ pub(in crate::objects) fn object_fill_tile_key(
 
 pub(in crate::objects) fn object_fill_tile_object_count_supported(object_count: usize) -> bool {
     object_count <= MAX_EXACT_FLOAT_OBJECT_INDEX
+}
+
+pub(in crate::objects) fn object_fill_tile_path_eligible(
+    fill_mesh: &ObjectFillMesh,
+    local_screen_per_pixel: f32,
+) -> bool {
+    const MIN_TILE_VERTEX_COUNT: usize = 500_000;
+    const MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL: f32 = 2.0;
+    fill_mesh.vertices_local.len() >= MIN_TILE_VERTEX_COUNT
+        && object_fill_tile_object_count_supported(fill_mesh.object_count)
+        && local_screen_per_pixel <= MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL
+}
+
+pub(in crate::objects) fn object_fill_tile_planning_scales(
+    local_screen_per_pixel: f32,
+    texture_outline_requested: bool,
+) -> (f32, f32) {
+    if texture_outline_requested {
+        (
+            local_screen_per_pixel * TEXTURE_OUTLINE_TILE_SUPERSAMPLE,
+            local_screen_per_pixel * (TEXTURE_OUTLINE_TILE_SUPERSAMPLE * 0.5),
+        )
+    } else {
+        (local_screen_per_pixel, local_screen_per_pixel * 0.25)
+    }
 }
 
 pub(in crate::objects) fn choose_object_fill_tile_level(local_screen_per_pixel: f32) -> u8 {

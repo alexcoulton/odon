@@ -2,10 +2,17 @@
 
 use super::*;
 
-const OBJECT_FILL_ID_TILE_SIZE_PX: i32 = 512;
+mod shaders;
+use shaders::*;
+
+const OBJECT_FILL_ID_TILE_LOGICAL_SIZE_PX: i32 = 512;
+const OBJECT_FILL_ID_TILE_GUTTER_PX: i32 = 2;
+const OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX: i32 =
+    OBJECT_FILL_ID_TILE_LOGICAL_SIZE_PX + OBJECT_FILL_ID_TILE_GUTTER_PX * 2;
 const MAX_ID_TILES_COMPLETED_PER_FRAME: usize = 2;
 const MAX_ID_TILE_VERTICES_PER_FRAME: usize = 300_000;
 pub(super) const MAX_PENDING_ID_TILES: usize = 16;
+const MULTISAMPLE_MIN_TEXELS_PER_FRAGMENT: f32 = 0.75;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjectFillTileKey {
@@ -28,7 +35,19 @@ pub struct ObjectFillTileGeometry {
 pub struct ObjectFillTileDrawItem {
     pub key: ObjectFillTileKey,
     pub bounds_local: egui::Rect,
+    pub raster_bounds_local: egui::Rect,
     pub geometry: Vec<ObjectFillTileGeometry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectFillTileBorderStyle {
+    pub enabled: bool,
+    pub width_points: f32,
+    pub base_color: egui::Color32,
+    pub use_object_colors: bool,
+    pub object_color_opacity: f32,
+    pub selected_color: egui::Color32,
+    pub primary_color: egui::Color32,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +64,7 @@ pub struct ObjectFillTileStyle {
     pub primary_color: egui::Color32,
     pub object_color_opacity: f32,
     pub selection_overlay: Option<ObjectFillTileSelectionStyle>,
+    pub border: ObjectFillTileBorderStyle,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +132,15 @@ pub(super) struct ObjectFillTileGlObjects {
     compose_u_use_selection_overlay: Option<glow::UniformLocation>,
     compose_u_selection_selected_color: Option<glow::UniformLocation>,
     compose_u_selection_primary_color: Option<glow::UniformLocation>,
+    compose_u_border_enabled: Option<glow::UniformLocation>,
+    compose_u_border_radius_texels: Option<glow::UniformLocation>,
+    compose_u_border_color: Option<glow::UniformLocation>,
+    compose_u_border_use_object_colors: Option<glow::UniformLocation>,
+    compose_u_border_object_color_opacity: Option<glow::UniformLocation>,
+    compose_u_border_selected_color: Option<glow::UniformLocation>,
+    compose_u_border_primary_color: Option<glow::UniformLocation>,
+    compose_u_texels_per_fragment: Option<glow::UniformLocation>,
+    compose_u_multisample_resolve: Option<glow::UniformLocation>,
 }
 
 impl ObjectFillTileGlObjects {
@@ -185,11 +214,45 @@ impl ObjectFillTileGlObjects {
             compose_u_selection_primary_color: unsafe {
                 gl.get_uniform_location(compose_program, "u_selection_primary_color")
             },
+            compose_u_border_enabled: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_enabled")
+            },
+            compose_u_border_radius_texels: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_radius_texels")
+            },
+            compose_u_border_color: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_color")
+            },
+            compose_u_border_use_object_colors: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_use_object_colors")
+            },
+            compose_u_border_object_color_opacity: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_object_color_opacity")
+            },
+            compose_u_border_selected_color: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_selected_color")
+            },
+            compose_u_border_primary_color: unsafe {
+                gl.get_uniform_location(compose_program, "u_border_primary_color")
+            },
+            compose_u_texels_per_fragment: unsafe {
+                gl.get_uniform_location(compose_program, "u_texels_per_fragment")
+            },
+            compose_u_multisample_resolve: unsafe {
+                gl.get_uniform_location(compose_program, "u_multisample_resolve")
+            },
         })
     }
 }
 
 impl ObjectFillGlRenderer {
+    pub fn id_tiles_have_exact_coverage(&self, keys: &[ObjectFillTileKey]) -> bool {
+        let inner = self.inner.lock();
+        inner.tile_gl_objects.is_some()
+            && !keys.is_empty()
+            && keys.iter().all(|key| inner.id_tiles.contains(key))
+    }
+
     pub fn id_tiles_have_coverage(&self, keys: &[ObjectFillTileKey]) -> bool {
         let inner = self.inner.lock();
         inner.tile_gl_objects.is_some()
@@ -348,6 +411,8 @@ impl ObjectFillInner {
         self.last_tile_raster_vertices = 0;
         self.last_tile_raster_draw_calls = 0;
         self.last_tile_compose_draw_calls = 0;
+        self.last_tile_multisample_compose_draw_calls = 0;
+        self.last_tile_border_compose_draw_calls = 0;
         self.last_tile_selection_compose_draw_calls = 0;
         self.last_tile_raster_ms = 0.0;
         self.last_tile_compose_ms = 0.0;
@@ -365,7 +430,7 @@ impl ObjectFillInner {
 
     fn id_tile_for_draw(&mut self, key: ObjectFillTileKey) -> Option<(glow::Texture, [f32; 4])> {
         if let Some(texture) = self.id_tiles.get(&key).map(|tile| tile.texture) {
-            return Some((texture, [0.0, 1.0, 1.0, 0.0]));
+            return Some((texture, object_fill_tile_interior_uv(0, 0, 1)));
         }
         for level_delta in 1..=8 {
             let Some(ancestor) = object_fill_tile_ancestor_key(key, level_delta) else {
@@ -377,12 +442,10 @@ impl ObjectFillInner {
             let factor = 1i32.checked_shl(level_delta.into()).unwrap_or(i32::MAX);
             let relative_x = key.tile_x.rem_euclid(factor) as f32;
             let relative_y = key.tile_y.rem_euclid(factor) as f32;
-            let factor = factor as f32;
-            let u_min = relative_x / factor;
-            let u_max = (relative_x + 1.0) / factor;
-            let v_top = 1.0 - relative_y / factor;
-            let v_bottom = 1.0 - (relative_y + 1.0) / factor;
-            return Some((texture, [u_min, u_max, v_top, v_bottom]));
+            return Some((
+                texture,
+                object_fill_tile_interior_uv(relative_x as i32, relative_y as i32, factor),
+            ));
         }
         None
     }
@@ -423,8 +486,8 @@ impl ObjectFillInner {
             gl_ref.viewport(
                 0,
                 0,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
             );
             gl_ref.disable(glow::SCISSOR_TEST);
             gl_ref.disable(glow::BLEND);
@@ -434,13 +497,13 @@ impl ObjectFillInner {
             gl_ref.bind_vertex_array(Some(tile_gl.vao));
             gl_ref.uniform_2_f32(
                 tile_gl.id_u_tile_min.as_ref(),
-                item.bounds_local.min.x,
-                item.bounds_local.min.y,
+                item.raster_bounds_local.min.x,
+                item.raster_bounds_local.min.y,
             );
             gl_ref.uniform_2_f32(
                 tile_gl.id_u_tile_size.as_ref(),
-                item.bounds_local.width().max(1.0e-6),
-                item.bounds_local.height().max(1.0e-6),
+                item.raster_bounds_local.width().max(1.0e-6),
+                item.raster_bounds_local.height().max(1.0e-6),
             );
         }
 
@@ -471,7 +534,7 @@ impl ObjectFillInner {
             if draw_count == 0 {
                 break;
             }
-            let scissor = id_tile_scissor_box(geometry.bounds_local, item.bounds_local);
+            let scissor = id_tile_scissor_box(geometry.bounds_local, item.raster_bounds_local);
             if scissor[2] <= 0 || scissor[3] <= 0 {
                 pending.next_geometry += 1;
                 pending.next_vertex = 0;
@@ -540,8 +603,8 @@ impl ObjectFillInner {
         gl: &Arc<glow::Context>,
         tile_gl: &ObjectFillTileGlObjects,
     ) -> Option<ObjectFillPendingIdTileGpu> {
-        let bytes = (OBJECT_FILL_ID_TILE_SIZE_PX as usize)
-            .saturating_mul(OBJECT_FILL_ID_TILE_SIZE_PX as usize)
+        let bytes = (OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
+            .saturating_mul(OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
             .saturating_mul(std::mem::size_of::<u32>());
         if bytes > self.tile_budget_bytes {
             return None;
@@ -593,8 +656,8 @@ impl ObjectFillInner {
                 glow::TEXTURE_2D,
                 0,
                 glow::R32UI as i32,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
                 0,
                 glow::RED_INTEGER,
                 glow::UNSIGNED_INT,
@@ -616,8 +679,8 @@ impl ObjectFillInner {
             gl_ref.viewport(
                 0,
                 0,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
-                OBJECT_FILL_ID_TILE_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
+                OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX,
             );
             gl_ref.disable(glow::SCISSOR_TEST);
             gl_ref.disable(glow::BLEND);
@@ -729,6 +792,9 @@ impl ObjectFillInner {
                 .selection_overlay
                 .as_ref()
                 .map_or([0.0; 4], |selection| color_f32(selection.primary_color));
+            let border_color = color_f32(style.border.base_color);
+            let border_selected = color_f32(style.border.selected_color);
+            let border_primary = color_f32(style.border.primary_color);
             unsafe {
                 let gl_ref = gl.as_ref();
                 gl_ref.use_program(Some(tile_gl.compose_program));
@@ -758,6 +824,27 @@ impl ObjectFillInner {
                 gl_ref.uniform_4_f32_slice(
                     tile_gl.compose_u_selection_primary_color.as_ref(),
                     &selection_primary,
+                );
+                gl_ref.uniform_1_i32(
+                    tile_gl.compose_u_border_enabled.as_ref(),
+                    i32::from(style.border.enabled && style.border.width_points > 0.0),
+                );
+                gl_ref.uniform_4_f32_slice(tile_gl.compose_u_border_color.as_ref(), &border_color);
+                gl_ref.uniform_1_i32(
+                    tile_gl.compose_u_border_use_object_colors.as_ref(),
+                    i32::from(style.border.use_object_colors),
+                );
+                gl_ref.uniform_1_f32(
+                    tile_gl.compose_u_border_object_color_opacity.as_ref(),
+                    style.border.object_color_opacity.clamp(0.0, 1.0),
+                );
+                gl_ref.uniform_4_f32_slice(
+                    tile_gl.compose_u_border_selected_color.as_ref(),
+                    &border_selected,
+                );
+                gl_ref.uniform_4_f32_slice(
+                    tile_gl.compose_u_border_primary_color.as_ref(),
+                    &border_primary,
                 );
                 gl_ref.active_texture(glow::TEXTURE1);
                 gl_ref.bind_texture(glow::TEXTURE_2D, Some(state_texture));
@@ -795,11 +882,28 @@ impl ObjectFillInner {
                     continue;
                 }
                 let vertices = tile_quad_vertices(screen_rect, viewport, ppp, uv);
+                let texels_per_fragment = object_fill_texels_per_fragment(screen_rect, ppp, uv);
+                let multisample_resolve = object_fill_uses_multisample_resolve(texels_per_fragment);
+                let border_radius_texels =
+                    object_fill_border_radius_texels(style.border.width_points, screen_rect);
                 unsafe {
                     let gl_ref = gl.as_ref();
                     gl_ref.enable(glow::SCISSOR_TEST);
                     gl_ref.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
                     gl_ref.bind_buffer(glow::ARRAY_BUFFER, Some(tile_gl.quad_vbo));
+                    gl_ref.uniform_1_i32(
+                        tile_gl.compose_u_border_radius_texels.as_ref(),
+                        border_radius_texels,
+                    );
+                    gl_ref.uniform_2_f32(
+                        tile_gl.compose_u_texels_per_fragment.as_ref(),
+                        texels_per_fragment[0],
+                        texels_per_fragment[1],
+                    );
+                    gl_ref.uniform_1_i32(
+                        tile_gl.compose_u_multisample_resolve.as_ref(),
+                        i32::from(multisample_resolve),
+                    );
                     gl_ref.buffer_data_u8_slice(
                         glow::ARRAY_BUFFER,
                         bytemuck::cast_slice(&vertices),
@@ -815,6 +919,15 @@ impl ObjectFillInner {
                 }
                 self.last_tile_compose_draw_calls =
                     self.last_tile_compose_draw_calls.saturating_add(1);
+                if multisample_resolve {
+                    self.last_tile_multisample_compose_draw_calls = self
+                        .last_tile_multisample_compose_draw_calls
+                        .saturating_add(1);
+                }
+                if style.border.enabled && style.border.width_points > 0.0 {
+                    self.last_tile_border_compose_draw_calls =
+                        self.last_tile_border_compose_draw_calls.saturating_add(1);
+                }
                 if style.selection_overlay.is_some() {
                     self.last_tile_selection_compose_draw_calls = self
                         .last_tile_selection_compose_draw_calls
@@ -866,8 +979,40 @@ fn tile_screen_rect(
     egui::Rect::from_two_pos(to_screen(local_rect.min), to_screen(local_rect.max))
 }
 
+fn object_fill_border_radius_texels(width_points: f32, screen_rect: egui::Rect) -> i32 {
+    if width_points <= 0.0 {
+        return 0;
+    }
+    let screen_span = screen_rect
+        .width()
+        .abs()
+        .max(screen_rect.height().abs())
+        .max(1.0e-6);
+    (width_points * OBJECT_FILL_ID_TILE_LOGICAL_SIZE_PX as f32 / screen_span)
+        .ceil()
+        .clamp(1.0, OBJECT_FILL_ID_TILE_GUTTER_PX as f32) as i32
+}
+
+fn object_fill_texels_per_fragment(
+    screen_rect: egui::Rect,
+    pixels_per_point: f32,
+    uv: [f32; 4],
+) -> [f32; 2] {
+    let physical_width = (screen_rect.width().abs() * pixels_per_point.max(1.0e-6)).max(1.0e-6);
+    let physical_height = (screen_rect.height().abs() * pixels_per_point.max(1.0e-6)).max(1.0e-6);
+    let texture_size = OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as f32;
+    [
+        (uv[1] - uv[0]).abs() * texture_size / physical_width,
+        (uv[2] - uv[3]).abs() * texture_size / physical_height,
+    ]
+}
+
+fn object_fill_uses_multisample_resolve(texels_per_fragment: [f32; 2]) -> bool {
+    texels_per_fragment[0].max(texels_per_fragment[1]) >= MULTISAMPLE_MIN_TEXELS_PER_FRAGMENT
+}
+
 fn id_tile_scissor_box(geometry: egui::Rect, tile: egui::Rect) -> [i32; 4] {
-    let size = OBJECT_FILL_ID_TILE_SIZE_PX;
+    let size = OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX;
     let width = tile.width().max(1.0e-6);
     let height = tile.height().max(1.0e-6);
     let to_x = |x: f32| (((x - tile.min.x) / width) * size as f32).round() as i32;
@@ -911,112 +1056,19 @@ fn object_fill_tile_ancestor_key(
     })
 }
 
-const ID_TILE_VERT_330: &str = r#"#version 330 core
-layout(location = 0) in vec2 a_pos;
-layout(location = 1) in float a_object_id;
-
-uniform vec2 u_tile_min;
-uniform vec2 u_tile_size;
-
-flat out uint v_object_id;
-
-void main() {
-    vec2 rel = (a_pos - u_tile_min) / max(u_tile_size, vec2(1e-6));
-    gl_Position = vec4(rel.x * 2.0 - 1.0, 1.0 - rel.y * 2.0, 0.0, 1.0);
-    v_object_id = uint(a_object_id + 0.5) + 1u;
-}"#;
-
-const ID_TILE_FRAG_330: &str = r#"#version 330 core
-flat in uint v_object_id;
-layout(location = 0) out uint out_object_id;
-void main() {
-    out_object_id = v_object_id;
-}"#;
-
-const ID_TILE_COMPOSE_VERT_330: &str = r#"#version 330 core
-layout(location = 0) in vec2 a_pos_ndc;
-layout(location = 1) in vec2 a_uv;
-out vec2 v_uv;
-void main() {
-    gl_Position = vec4(a_pos_ndc, 0.0, 1.0);
-    v_uv = a_uv;
-}"#;
-
-const ID_TILE_COMPOSE_FRAG_330: &str = r#"#version 330 core
-in vec2 v_uv;
-
-uniform usampler2D u_id_tex;
-uniform sampler2D u_state_tex;
-uniform ivec2 u_state_tex_size;
-uniform sampler2D u_color_tex;
-uniform ivec2 u_color_tex_size;
-uniform int u_use_object_colors;
-uniform float u_object_color_opacity;
-uniform vec4 u_selected_color;
-uniform vec4 u_primary_color;
-uniform sampler2D u_selection_tex;
-uniform ivec2 u_selection_tex_size;
-uniform int u_use_selection_overlay;
-uniform vec4 u_selection_selected_color;
-uniform vec4 u_selection_primary_color;
-
-out vec4 out_color;
-
-void main() {
-    uint stored_id = texture(u_id_tex, v_uv).r;
-    if (stored_id == 0u || u_state_tex_size.x <= 0 || u_state_tex_size.y <= 0) {
-        discard;
-    }
-    int object_id = int(stored_id - 1u);
-    int state_x = object_id % u_state_tex_size.x;
-    int state_y = object_id / u_state_tex_size.x;
-    if (state_y < 0 || state_y >= u_state_tex_size.y) {
-        discard;
-    }
-    float state = texelFetch(u_state_tex, ivec2(state_x, state_y), 0).r;
-    if (state < 0.001) {
-        discard;
-    }
-    if (u_use_selection_overlay != 0) {
-        if (u_selection_tex_size.x <= 0 || u_selection_tex_size.y <= 0) {
-            discard;
-        }
-        int selection_x = object_id % u_selection_tex_size.x;
-        int selection_y = object_id / u_selection_tex_size.x;
-        if (selection_y < 0 || selection_y >= u_selection_tex_size.y) {
-            discard;
-        }
-        float selection_state = texelFetch(
-            u_selection_tex,
-            ivec2(selection_x, selection_y),
-            0
-        ).r;
-        if (selection_state >= 0.001) {
-            out_color = selection_state > 0.75
-                ? u_selection_primary_color
-                : u_selection_selected_color;
-            return;
-        }
-    }
-    if (u_use_object_colors != 0) {
-        if (u_color_tex_size.x <= 0 || u_color_tex_size.y <= 0) {
-            discard;
-        }
-        int color_x = object_id % u_color_tex_size.x;
-        int color_y = object_id / u_color_tex_size.x;
-        if (color_y < 0 || color_y >= u_color_tex_size.y) {
-            discard;
-        }
-        vec4 object_color = texelFetch(u_color_tex, ivec2(color_x, color_y), 0);
-        object_color.a *= u_object_color_opacity;
-        if (object_color.a <= 0.0) {
-            discard;
-        }
-        out_color = object_color;
-        return;
-    }
-    out_color = state > 0.75 ? u_primary_color : u_selected_color;
-}"#;
+fn object_fill_tile_interior_uv(relative_x: i32, relative_y: i32, factor: i32) -> [f32; 4] {
+    let physical = OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as f32;
+    let inset = OBJECT_FILL_ID_TILE_GUTTER_PX as f32 / physical;
+    let interior = OBJECT_FILL_ID_TILE_LOGICAL_SIZE_PX as f32 / physical;
+    let factor = factor.max(1) as f32;
+    let x = relative_x as f32;
+    let y = relative_y as f32;
+    let u_min = inset + interior * x / factor;
+    let u_max = inset + interior * (x + 1.0) / factor;
+    let v_top = 1.0 - inset - interior * y / factor;
+    let v_bottom = 1.0 - inset - interior * (y + 1.0) / factor;
+    [u_min, u_max, v_top, v_bottom]
+}
 
 #[cfg(test)]
 mod tests {
@@ -1059,9 +1111,66 @@ mod tests {
     #[test]
     fn quad_maps_local_top_to_texture_top() {
         let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
-        let vertices = tile_quad_vertices(viewport, viewport, 1.0, [0.0, 1.0, 1.0, 0.0]);
-        assert_eq!(&vertices[0..4], &[-1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(&vertices[8..12], &[1.0, -1.0, 1.0, 0.0]);
+        let uv = object_fill_tile_interior_uv(0, 0, 1);
+        let vertices = tile_quad_vertices(viewport, viewport, 1.0, uv);
+        assert_eq!(&vertices[0..2], &[-1.0, 1.0]);
+        assert_eq!(&vertices[2..4], &[uv[0], uv[2]]);
+        assert_eq!(&vertices[8..10], &[1.0, -1.0]);
+        assert_eq!(&vertices[10..12], &[uv[1], uv[3]]);
+    }
+
+    #[test]
+    fn logical_interior_uv_excludes_the_physical_gutter() {
+        let close = |left: f32, right: f32| assert!((left - right).abs() < 1.0e-6);
+        let uv = object_fill_tile_interior_uv(0, 0, 1);
+        let inset =
+            OBJECT_FILL_ID_TILE_GUTTER_PX as f32 / OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as f32;
+        for (actual, expected) in uv.into_iter().zip([inset, 1.0 - inset, 1.0 - inset, inset]) {
+            close(actual, expected);
+        }
+
+        let child = object_fill_tile_interior_uv(1, 2, 4);
+        let interior = OBJECT_FILL_ID_TILE_LOGICAL_SIZE_PX as f32
+            / OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as f32;
+        close(child[0], inset + interior * 0.25);
+        close(child[1], inset + interior * 0.5);
+        close(child[2], 1.0 - inset - interior * 0.5);
+        close(child[3], 1.0 - inset - interior * 0.75);
+    }
+
+    #[test]
+    fn overview_compose_uses_multisampling_for_one_or_more_texels_per_fragment() {
+        let uv = object_fill_tile_interior_uv(0, 0, 1);
+        let one_texel_per_fragment = object_fill_texels_per_fragment(
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(512.0, 512.0)),
+            1.0,
+            uv,
+        );
+        assert_eq!(one_texel_per_fragment, [1.0, 1.0]);
+        assert!(object_fill_uses_multisample_resolve(one_texel_per_fragment));
+
+        let half_texel_per_fragment = object_fill_texels_per_fragment(
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1024.0, 1024.0)),
+            1.0,
+            uv,
+        );
+        assert_eq!(half_texel_per_fragment, [0.5, 0.5]);
+        assert!(!object_fill_uses_multisample_resolve(
+            half_texel_per_fragment
+        ));
+    }
+
+    #[test]
+    fn ancestor_uv_uses_only_its_visible_texture_footprint() {
+        let child_uv = object_fill_tile_interior_uv(1, 0, 2);
+        let footprint = object_fill_texels_per_fragment(
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(128.0, 128.0)),
+            1.0,
+            child_uv,
+        );
+
+        assert_eq!(footprint, [2.0, 2.0]);
+        assert!(object_fill_uses_multisample_resolve(footprint));
     }
 
     #[test]
@@ -1091,7 +1200,35 @@ mod tests {
             tile,
         );
 
-        assert_eq!(top, [0, 256, 512, 256]);
-        assert_eq!(bottom, [0, 0, 512, 256]);
+        assert_eq!(top, [0, 258, 516, 258]);
+        assert_eq!(bottom, [0, 0, 516, 258]);
+    }
+
+    #[test]
+    fn edge_classifier_detects_ids_and_background_without_a_tile_grid() {
+        fn boundary(ids: &[u32], width: usize, x: usize, y: usize) -> bool {
+            let height = ids.len() / width;
+            let current = ids[y * width + x];
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let nx = (x as isize + dx).clamp(0, width as isize - 1) as usize;
+                    let ny = (y as isize + dy).clamp(0, height as isize - 1) as usize;
+                    if ids[ny * width + nx] != current {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        let same_id = [7, 7, 7, 7, 7, 7, 7, 7, 7];
+        assert!(!boundary(&same_id, 3, 1, 1));
+        let adjacent_ids = [7, 7, 8, 7, 7, 8, 7, 7, 8];
+        assert!(boundary(&adjacent_ids, 3, 1, 1));
+        let background = [7, 7, 0, 7, 7, 0, 7, 7, 0];
+        assert!(boundary(&background, 3, 1, 1));
     }
 }

@@ -296,6 +296,9 @@ impl ObjectsLayer {
             _ => true,
         };
         self.control_renderer_payload_identity = None;
+        self.presentation_state_cache = ObjectPresentationStateCache::default();
+        self.outline_mode_runtime = ObjectOutlineModeRuntime::default();
+        self.outline_frame_stats = ObjectOutlineFrameStats::default();
         self.render_resource_cache_id = msg.render_resource_cache_id;
         self.cancel_property_load();
         self.display_transform = msg.display_transform;
@@ -426,6 +429,9 @@ impl ObjectsLayer {
 
     pub fn clear(&mut self) {
         self.control_renderer_payload_identity = None;
+        self.presentation_state_cache = ObjectPresentationStateCache::default();
+        self.outline_mode_runtime = ObjectOutlineModeRuntime::default();
+        self.outline_frame_stats = ObjectOutlineFrameStats::default();
         self.objects = None;
         self.bins = None;
         self.render_lods = None;

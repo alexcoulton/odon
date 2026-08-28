@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 use eframe::egui;
 use glow::HasContext;
@@ -100,6 +101,10 @@ impl ObjectLineBinsGlRenderer {
         }
 
         let mut inner = self.inner.lock();
+        inner.last_draw_calls = 0;
+        inner.last_records = 0;
+        inner.last_paint_ms = 0.0;
+        let paint_started = Instant::now();
         if inner.gl_objects.is_none() {
             inner.gl_objects = ObjectLineGlObjects::new(gl).ok();
         }
@@ -306,6 +311,8 @@ impl ObjectLineBinsGlRenderer {
                         gl.vertex_attrib_divisor(1, 1);
                         gl.draw_arrays_instanced(glow::TRIANGLES, 0, 6, bin_count as i32);
                     }
+                    inner.last_draw_calls = inner.last_draw_calls.saturating_add(1);
+                    inner.last_records = inner.last_records.saturating_add(bin_count as u64);
                 }
             }
         }
@@ -322,6 +329,7 @@ impl ObjectLineBinsGlRenderer {
             gl.bind_vertex_array(None);
             gl.use_program(None);
         }
+        inner.last_paint_ms = paint_started.elapsed().as_secs_f64() * 1_000.0;
     }
 }
 
@@ -370,6 +378,9 @@ struct ObjectLineInner {
     texture_evictions: u64,
     buffer_deletions: u64,
     texture_deletions: u64,
+    last_draw_calls: u64,
+    last_records: u64,
+    last_paint_ms: f64,
 }
 
 impl ObjectLineInner {
@@ -389,6 +400,9 @@ impl ObjectLineInner {
             texture_evictions: 0,
             buffer_deletions: 0,
             texture_deletions: 0,
+            last_draw_calls: 0,
+            last_records: 0,
+            last_paint_ms: 0.0,
         }
     }
 

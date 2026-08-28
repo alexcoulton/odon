@@ -25,9 +25,9 @@ use crate::render::points::PointsStyle;
 use crate::render::points_gl::PointsGlRenderer;
 use crate::render::polygon_fill_gl::{
     ObjectFillGlDrawData, ObjectFillGlDrawItem, ObjectFillGlDrawParams, ObjectFillGlRenderer,
-    ObjectFillTileDrawItem, ObjectFillTileGeometry, ObjectFillTileGlParams, ObjectFillTileKey,
-    ObjectFillTileSelectionStyle, ObjectFillTileStyle, PolygonFillGlDrawData,
-    PolygonFillGlDrawItem, PolygonFillGlDrawParams, PolygonFillGlRenderer,
+    ObjectFillTileBorderStyle, ObjectFillTileDrawItem, ObjectFillTileGeometry,
+    ObjectFillTileGlParams, ObjectFillTileKey, ObjectFillTileSelectionStyle, ObjectFillTileStyle,
+    PolygonFillGlDrawData, PolygonFillGlDrawItem, PolygonFillGlDrawParams, PolygonFillGlRenderer,
 };
 use crate::spatialdata::{
     ShapesLoadOptions, ShapesObjectSchema, SpatialDataElement, SpatialDataTransform2,
@@ -62,7 +62,8 @@ pub use self::core::{
 use self::filter_query::ObjectFilterQueryExpr;
 pub(crate) use self::geojson::{GeoJsonSegmentationLayer, GeoJsonSourceAction};
 use self::property_store::*;
-use self::render::property_scalar_value;
+pub(crate) use self::render::{ObjectOutlineFrameStats, ObjectPresentationStateStats};
+use self::render::{ObjectOutlineModeRuntime, ObjectPresentationStateCache, property_scalar_value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectPreloadMode {
@@ -494,6 +495,9 @@ pub struct ObjectsLayer {
     bounds_local: Option<egui::Rect>,
     generation: u64,
     geometry_generation: u64,
+    presentation_state_cache: ObjectPresentationStateCache,
+    outline_mode_runtime: ObjectOutlineModeRuntime,
+    outline_frame_stats: ObjectOutlineFrameStats,
     gl: LineBinsGlRenderer,
     gl_object_selection: ObjectLineBinsGlRenderer,
     gl_fill: PolygonFillGlRenderer,

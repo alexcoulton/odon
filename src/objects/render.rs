@@ -11,6 +11,8 @@ mod diagnostics;
 mod fills;
 mod lods;
 mod mesh;
+mod outline_mode;
+mod presentation_state;
 mod selection;
 mod selection_geometry;
 #[cfg(test)]
@@ -20,6 +22,15 @@ mod transforms;
 
 pub(in crate::objects) use lods::*;
 pub(in crate::objects) use mesh::*;
+pub(crate) use outline_mode::ObjectOutlineFrameStats;
+use outline_mode::visible_line_outline_work;
+pub(in crate::objects) use outline_mode::{
+    ObjectOutlineMode, ObjectOutlineModeReason, ObjectOutlineModeRuntime,
+};
+pub(crate) use presentation_state::ObjectPresentationStateStats;
+pub(in crate::objects) use presentation_state::{
+    ObjectPresentationStateCache, ObjectRenderStatePayload,
+};
 pub(in crate::objects) use selection_geometry::*;
 
 impl ObjectsLayer {
@@ -35,6 +46,7 @@ impl ObjectsLayer {
         local_to_world_offset: egui::Vec2,
         gpu_available: bool,
     ) {
+        self.outline_frame_stats = ObjectOutlineFrameStats::default();
         let Some(_) = self.objects.as_ref() else {
             return;
         };
@@ -47,6 +59,13 @@ impl ObjectsLayer {
         if self.color_mode == ObjectColorMode::Continuous && continuous_colors.is_none() {
             return;
         }
+        let visibility_state_plan_started = std::time::Instant::now();
+        let visibility_state = self.cached_visibility_state();
+        let continuous_outline_state = continuous_colors
+            .as_ref()
+            .map(|_| self.cached_continuous_outline_state());
+        let visibility_state_plan_ms =
+            visibility_state_plan_started.elapsed().as_secs_f64() * 1_000.0;
 
         let visible_local = self.world_to_local_rect(visible_world, local_to_world_offset);
         let display_scale = self.display_scale();
@@ -105,6 +124,19 @@ impl ObjectsLayer {
             return;
         }
         let render_generation = self.render_cache_generation();
+        let local_screen_per_pixel = camera.zoom_screen_per_lvl0_px
+            * display_scale.x.abs().max(display_scale.y.abs()).max(1.0e-9);
+        let (visible_outline_bins, visible_outline_records) = if (continuous_colors.is_some()
+            || (self.show_selection_overlay && !self.selected_object_indices.is_empty()))
+            && let Some(selection_lods) = self.object_selection_lods.as_ref()
+            && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
+                selection_lods,
+                dataset_long_side_screen_px,
+            )) {
+            outline_mode::visible_object_outline_work(&selection_lod.bins, visible_local)
+        } else {
+            visible_line_outline_work(&render_lods[lod_idx].bins, visible_local)
+        };
 
         let a = (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let c = self.color_rgb;
@@ -118,6 +150,23 @@ impl ObjectsLayer {
 
         let mut selection_fill_composited_by_tiles = false;
         if use_fast_proxy_points || use_fill_proxy_points {
+            let _ = self.outline_mode_runtime.resolve_preference(
+                local_screen_per_pixel,
+                visible_outline_records,
+                false,
+            );
+            let mut outline_frame_stats = ObjectOutlineFrameStats::for_layer(
+                local_screen_per_pixel,
+                visible_outline_bins,
+                visible_outline_records,
+                self.outline_mode_runtime.transitions(),
+            );
+            outline_frame_stats.set_mode(
+                ObjectOutlineMode::Proxy,
+                ObjectOutlineModeReason::ProxyPolicy,
+            );
+            outline_frame_stats.visibility_state_plan_ms = visibility_state_plan_ms;
+            self.outline_frame_stats = outline_frame_stats;
             let proxy_alpha = if use_fill_proxy_points {
                 self.fill_opacity
             } else {
@@ -163,6 +212,19 @@ impl ObjectsLayer {
                 gpu_available,
             );
         } else {
+            let texture_eligible = gpu_available
+                && self.fill_cells
+                && self.fill_opacity > 0.0
+                && self.gl_object_fill.stats().tile_supported != Some(false)
+                && self.object_fill_mesh.as_ref().is_some_and(|mesh| {
+                    tiles::object_fill_tile_path_eligible(mesh, local_screen_per_pixel)
+                });
+            let (texture_outline_requested, texture_reason) =
+                self.outline_mode_runtime.resolve_preference(
+                    local_screen_per_pixel,
+                    visible_outline_records,
+                    texture_eligible,
+                );
             let color_groups_binding = self.active_color_groups();
             let active_color_groups = match self.color_mode {
                 ObjectColorMode::Single => None,
@@ -172,7 +234,8 @@ impl ObjectsLayer {
                 ObjectColorMode::Continuous => None,
             };
 
-            selection_fill_composited_by_tiles = self.draw_object_fills(
+            let fill_plan_started = std::time::Instant::now();
+            let fill_outcome = self.draw_object_fills(
                 ui,
                 camera,
                 viewport,
@@ -183,10 +246,39 @@ impl ObjectsLayer {
                 gpu_available,
                 active_color_groups.copied(),
                 continuous_colors.as_ref(),
-                render_generation,
+                texture_outline_requested,
+                &visibility_state,
             );
-
-            if gpu_available {
+            let fill_plan_ms = fill_plan_started.elapsed().as_secs_f64() * 1_000.0;
+            selection_fill_composited_by_tiles = fill_outcome.selection_overlay_composited;
+            let vector_outlines_required = !fill_outcome.texture_outline_active;
+            let mut outline_frame_stats = ObjectOutlineFrameStats::for_layer(
+                local_screen_per_pixel,
+                visible_outline_bins,
+                visible_outline_records,
+                self.outline_mode_runtime.transitions(),
+            );
+            outline_frame_stats.tile_frame_planned = fill_outcome.tile_frame_planned;
+            outline_frame_stats.texture_coverage = fill_outcome.texture_coverage;
+            outline_frame_stats.texture_border_draw_calls = fill_outcome.texture_border_draw_calls;
+            outline_frame_stats.visibility_state_plan_ms = visibility_state_plan_ms;
+            outline_frame_stats.fill_plan_ms = fill_plan_ms;
+            if fill_outcome.texture_outline_active {
+                outline_frame_stats.set_mode(ObjectOutlineMode::Texture, texture_reason);
+            } else {
+                outline_frame_stats.set_mode(
+                    ObjectOutlineMode::Vector,
+                    if texture_outline_requested && fill_outcome.tile_frame_planned {
+                        ObjectOutlineModeReason::VectorTilesPending
+                    } else if texture_outline_requested {
+                        ObjectOutlineModeReason::VectorTextureUnavailable
+                    } else {
+                        texture_reason
+                    },
+                );
+            }
+            let outline_plan_started = std::time::Instant::now();
+            if gpu_available && vector_outlines_required {
                 let lod = &render_lods[lod_idx];
                 if active_color_groups.is_none()
                     && (continuous_colors.is_some()
@@ -200,29 +292,8 @@ impl ObjectsLayer {
                         ))
                     && let Some(object_count) = self.objects.as_ref().map(|objects| objects.len())
                 {
-                    let selection_state = if continuous_colors.is_some() {
-                        let mut state = vec![0u8; object_count];
-                        for (index, slot) in state.iter_mut().enumerate() {
-                            if self.is_index_visible(index) {
-                                *slot = 64;
-                            }
-                        }
-                        if self.show_selection_overlay {
-                            for index in &self.selected_object_indices {
-                                if self.is_index_visible(*index)
-                                    && let Some(slot) = state.get_mut(*index)
-                                {
-                                    *slot = 128;
-                                }
-                            }
-                            if let Some(index) = self.selected_object_index
-                                && self.is_index_visible(index)
-                                && let Some(slot) = state.get_mut(index)
-                            {
-                                *slot = 255;
-                            }
-                        }
-                        Arc::new(state)
+                    let selection_state = if let Some(state) = continuous_outline_state.as_ref() {
+                        Arc::clone(&state.values)
                     } else {
                         Arc::clone(&self.selection_fill_state)
                     };
@@ -232,11 +303,10 @@ impl ObjectsLayer {
                             state_cache_id: object_render_cache_id(0x4a91, 0),
                             geometry_generation: self.outline_geometry_cache_generation(),
                             bins: Arc::clone(&selection_lod.bins),
-                            selection_generation: if continuous_colors.is_some() {
-                                render_generation
-                                    ^ continuous_colors
-                                        .as_ref()
-                                        .map_or(0, |payload| payload.generation)
+                            selection_generation: if let Some(state) =
+                                continuous_outline_state.as_ref()
+                            {
+                                state.generation
                             } else {
                                 self.selection_generation
                             },
@@ -366,7 +436,7 @@ impl ObjectsLayer {
                         );
                     }
                 }
-            } else if let Some(color_groups) = active_color_groups {
+            } else if !gpu_available && let Some(color_groups) = active_color_groups {
                 for group in &color_groups.groups {
                     let Some(c) = self.effective_color_group_rgb(&color_groups.property_key, group)
                     else {
@@ -403,7 +473,8 @@ impl ObjectsLayer {
                         }
                     }
                 }
-            } else if let Some(payload) = continuous_colors.as_ref()
+            } else if !gpu_available
+                && let Some(payload) = continuous_colors.as_ref()
                 && let Some(selection_lods) = self.object_selection_lods.as_ref()
                 && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
                     selection_lods,
@@ -452,7 +523,7 @@ impl ObjectsLayer {
                         }
                     }
                 }
-            } else {
+            } else if !gpu_available {
                 let lod = &render_lods[lod_idx];
                 let stroke = egui::Stroke::new(self.width_screen_px.max(0.0), color);
                 let (bx0, by0, bx1, by1) = lod.bins.bin_range_for_world_rect(visible_local);
@@ -479,6 +550,9 @@ impl ObjectsLayer {
                     }
                 }
             }
+            outline_frame_stats.outline_plan_ms =
+                outline_plan_started.elapsed().as_secs_f64() * 1_000.0;
+            self.outline_frame_stats = outline_frame_stats;
         }
 
         if use_selected_only_fill_mesh && !selection_fill_composited_by_tiles {

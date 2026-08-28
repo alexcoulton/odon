@@ -10,8 +10,8 @@ use parking_lot::Mutex;
 
 mod tiles;
 pub use tiles::{
-    ObjectFillTileDrawItem, ObjectFillTileGeometry, ObjectFillTileGlParams, ObjectFillTileKey,
-    ObjectFillTileSelectionStyle, ObjectFillTileStyle,
+    ObjectFillTileBorderStyle, ObjectFillTileDrawItem, ObjectFillTileGeometry,
+    ObjectFillTileGlParams, ObjectFillTileKey, ObjectFillTileSelectionStyle, ObjectFillTileStyle,
 };
 
 #[derive(Debug, Clone)]
@@ -363,6 +363,8 @@ pub struct ObjectFillGlStats {
     pub last_tile_raster_vertices: u64,
     pub last_tile_raster_draw_calls: u64,
     pub last_tile_compose_draw_calls: u64,
+    pub last_tile_multisample_compose_draw_calls: u64,
+    pub last_tile_border_compose_draw_calls: u64,
     pub last_tile_selection_compose_draw_calls: u64,
     pub total_tile_raster_vertices: u64,
     pub last_tile_raster_ms: f64,
@@ -778,6 +780,8 @@ struct ObjectFillInner {
     last_tile_raster_vertices: u64,
     last_tile_raster_draw_calls: u64,
     last_tile_compose_draw_calls: u64,
+    last_tile_multisample_compose_draw_calls: u64,
+    last_tile_border_compose_draw_calls: u64,
     last_tile_selection_compose_draw_calls: u64,
     total_tile_raster_vertices: u64,
     last_tile_raster_ms: f64,
@@ -838,6 +842,8 @@ impl ObjectFillInner {
             last_tile_raster_vertices: 0,
             last_tile_raster_draw_calls: 0,
             last_tile_compose_draw_calls: 0,
+            last_tile_multisample_compose_draw_calls: 0,
+            last_tile_border_compose_draw_calls: 0,
             last_tile_selection_compose_draw_calls: 0,
             total_tile_raster_vertices: 0,
             last_tile_raster_ms: 0.0,
@@ -884,6 +890,8 @@ impl ObjectFillInner {
             last_tile_raster_vertices: self.last_tile_raster_vertices,
             last_tile_raster_draw_calls: self.last_tile_raster_draw_calls,
             last_tile_compose_draw_calls: self.last_tile_compose_draw_calls,
+            last_tile_multisample_compose_draw_calls: self.last_tile_multisample_compose_draw_calls,
+            last_tile_border_compose_draw_calls: self.last_tile_border_compose_draw_calls,
             last_tile_selection_compose_draw_calls: self.last_tile_selection_compose_draw_calls,
             total_tile_raster_vertices: self.total_tile_raster_vertices,
             last_tile_raster_ms: self.last_tile_raster_ms,

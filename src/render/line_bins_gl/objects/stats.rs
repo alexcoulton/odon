@@ -21,6 +21,9 @@ pub struct ObjectLineBinsGlStats {
     pub buffer_deletions: u64,
     pub texture_deletions: u64,
     pub last_frame_missing_bins: usize,
+    pub last_draw_calls: u64,
+    pub last_records: u64,
+    pub last_paint_ms: f64,
 }
 
 impl ObjectLineBinsGlStats {
@@ -50,7 +53,10 @@ impl ObjectLineBinsGlStats {
             buffer_deletions,
             texture_deletions,
             last_frame_missing_bins,
+            last_draw_calls,
+            last_records,
         );
+        self.last_paint_ms += other.last_paint_ms;
     }
 }
 
@@ -105,6 +111,9 @@ impl ObjectLineInner {
             buffer_deletions: self.buffer_deletions,
             texture_deletions: self.texture_deletions,
             last_frame_missing_bins: self.last_frame_missing_bins,
+            last_draw_calls: self.last_draw_calls,
+            last_records: self.last_records,
+            last_paint_ms: self.last_paint_ms,
         }
     }
 }

@@ -869,6 +869,8 @@ impl MosaicGeoJsonSegmentationOverlay {
         let mut property_stale_results_dropped = 0u64;
         let mut property_cache_items = Vec::new();
         let mut outline_gpu = crate::render::line_bins_gl::ObjectLineBinsGlStats::default();
+        let mut outline_frame = crate::objects::ObjectOutlineFrameStats::default();
+        let mut presentation_state = crate::objects::ObjectPresentationStateStats::default();
         for (item_id, st) in &self.items {
             if st.seg_path.is_none() {
                 continue;
@@ -924,6 +926,8 @@ impl MosaicGeoJsonSegmentationOverlay {
                 "cache": property_cache,
             }));
             outline_gpu.merge(layer.outline_gpu_stats());
+            outline_frame.merge(layer.outline_frame_stats());
+            presentation_state.merge(layer.object_presentation_state_stats());
             loaded += usize::from(layer.has_data());
             loading_data += usize::from(layer.is_loading());
             loading_properties += usize::from(layer.is_property_loading());
@@ -987,13 +991,23 @@ impl MosaicGeoJsonSegmentationOverlay {
                 "tile_frame_generation": gpu.tile_frame_generation,
                 "tile_frame_generated": gpu.tile_frame_generated,
                 "tile_frame_raster_vertices": gpu.tile_frame_raster_vertices,
+                "tile_requests": gpu.tile_requests,
+                "tile_generations": gpu.tile_generations,
                 "tile_evictions": gpu.tile_evictions,
+                "last_tile_raster_draw_calls": gpu.last_tile_raster_draw_calls,
+                "last_tile_compose_draw_calls": gpu.last_tile_compose_draw_calls,
+                "last_tile_multisample_compose_draw_calls": gpu.last_tile_multisample_compose_draw_calls,
+                "last_tile_border_compose_draw_calls": gpu.last_tile_border_compose_draw_calls,
+                "last_tile_raster_ms": gpu.last_tile_raster_ms,
+                "last_tile_compose_ms": gpu.last_tile_compose_ms,
             },
             "gpu_object_outline_cache": {
                 "shared": false,
                 "layer_count": layer_allocated,
                 "stats": outline_gpu,
             },
+            "object_outline_frame": outline_frame,
+            "object_presentation_state": presentation_state,
         })
     }
 

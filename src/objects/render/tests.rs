@@ -2,6 +2,137 @@
 
 use super::*;
 
+fn presentation_test_object(id: &str, x: f32) -> ObjectFeature {
+    ObjectFeature {
+        id: id.to_string(),
+        polygons_world: Vec::new(),
+        point_position_world: Some(egui::pos2(x, 0.0)),
+        bbox_world: egui::Rect::from_min_max(egui::pos2(x, 0.0), egui::pos2(x, 0.0)),
+        area_px: 0.0,
+        perimeter_px: 0.0,
+        centroid_world: egui::pos2(x, 0.0),
+        inline_properties: serde_json::Map::new(),
+        source_row_index: None,
+    }
+}
+
+#[test]
+fn outline_mode_resolver_uses_hysteresis_around_texture_threshold() {
+    let mut resolver = ObjectOutlineModeRuntime::default();
+    assert!(resolver.resolve_preference(0.30, 200_000, true).0);
+    assert!(resolver.resolve_preference(0.50, 200_000, true).0);
+    assert!(!resolver.resolve_preference(0.60, 200_000, true).0);
+    assert!(!resolver.resolve_preference(0.50, 200_000, true).0);
+    assert!(resolver.resolve_preference(0.30, 200_000, true).0);
+    assert_eq!(resolver.transitions(), 3);
+}
+
+#[test]
+fn outline_mode_resolver_resets_when_texture_path_is_unavailable() {
+    let mut resolver = ObjectOutlineModeRuntime::default();
+    assert!(resolver.resolve_preference(0.10, 200_000, true).0);
+    assert!(!resolver.resolve_preference(0.10, 200_000, false).0);
+    assert_eq!(resolver.transitions(), 2);
+}
+
+#[test]
+fn outline_frame_aggregation_ignores_layers_without_a_presented_frame() {
+    let mut aggregate = ObjectOutlineFrameStats::default();
+    let mut texture = ObjectOutlineFrameStats::for_layer(0.1, 4, 400_000, 1);
+    texture.set_mode(
+        ObjectOutlineMode::Texture,
+        ObjectOutlineModeReason::TextureWorkload,
+    );
+    aggregate.merge(texture);
+    aggregate.merge(ObjectOutlineFrameStats::default());
+
+    assert_eq!(aggregate.layer_count, 1);
+    assert_eq!(aggregate.mode, ObjectOutlineMode::Texture);
+    assert_eq!(aggregate.visible_records, 400_000);
+}
+
+#[test]
+fn outline_frame_aggregation_keeps_a_shared_mode_when_only_reasons_differ() {
+    let mut aggregate = ObjectOutlineFrameStats::default();
+    let mut workload = ObjectOutlineFrameStats::for_layer(0.1, 4, 400_000, 1);
+    workload.set_mode(
+        ObjectOutlineMode::Texture,
+        ObjectOutlineModeReason::TextureWorkload,
+    );
+    let mut hysteresis = ObjectOutlineFrameStats::for_layer(0.2, 3, 200_000, 1);
+    hysteresis.set_mode(
+        ObjectOutlineMode::Texture,
+        ObjectOutlineModeReason::TextureHysteresis,
+    );
+
+    aggregate.merge(workload);
+    aggregate.merge(hysteresis);
+
+    assert_eq!(aggregate.mode, ObjectOutlineMode::Texture);
+    assert_eq!(aggregate.reason, ObjectOutlineModeReason::Mixed);
+    assert_eq!(aggregate.texture_layers, 2);
+}
+
+#[test]
+fn camera_only_frames_reuse_visibility_presentation_state() {
+    let mut layer = ObjectsLayer::default();
+    layer.objects = Some(Arc::new(vec![
+        presentation_test_object("a", 0.0),
+        presentation_test_object("b", 1.0),
+    ]));
+
+    let first = layer.cached_visibility_state();
+    let first_stats = layer.presentation_state_stats();
+    let second = layer.cached_visibility_state();
+    let second_stats = layer.presentation_state_stats();
+
+    assert!(Arc::ptr_eq(&first.values, &second.values));
+    assert_eq!(first.generation, second.generation);
+    assert_eq!(first_stats.visibility_rebuilds, 1);
+    assert_eq!(second_stats.visibility_rebuilds, 1);
+
+    layer.filter_generation = layer.filter_generation.wrapping_add(1).max(1);
+    let filtered = layer.cached_visibility_state();
+    assert!(!Arc::ptr_eq(&first.values, &filtered.values));
+    assert_ne!(first.generation, filtered.generation);
+    assert_eq!(layer.presentation_state_stats().visibility_rebuilds, 2);
+}
+
+#[test]
+fn selection_only_invalidates_continuous_outline_presentation_state() {
+    let mut layer = ObjectsLayer::default();
+    layer.objects = Some(Arc::new(vec![
+        presentation_test_object("a", 0.0),
+        presentation_test_object("b", 1.0),
+    ]));
+    layer.show_selection_overlay = true;
+
+    let visibility = layer.cached_visibility_state();
+    let first = layer.cached_continuous_outline_state();
+    let first_stats = layer.presentation_state_stats();
+    let again = layer.cached_continuous_outline_state();
+    assert!(Arc::ptr_eq(&first.values, &again.values));
+    assert_eq!(first_stats.continuous_outline_rebuilds, 1);
+
+    layer.selected_object_indices.insert(1);
+    layer.selected_object_index = Some(1);
+    layer.selection_generation = layer.selection_generation.wrapping_add(1).max(1);
+    let selected = layer.cached_continuous_outline_state();
+    let visibility_after_selection = layer.cached_visibility_state();
+
+    assert!(Arc::ptr_eq(
+        &visibility.values,
+        &visibility_after_selection.values
+    ));
+    assert!(!Arc::ptr_eq(&first.values, &selected.values));
+    assert_eq!(selected.values.as_slice(), &[64, 255]);
+    assert_eq!(layer.presentation_state_stats().visibility_rebuilds, 1);
+    assert_eq!(
+        layer.presentation_state_stats().continuous_outline_rebuilds,
+        2
+    );
+}
+
 #[test]
 fn fill_proxy_points_follow_the_low_zoom_geometry_preference() {
     let lods = build_render_lods_from_polylines(&[vec![
@@ -250,7 +381,8 @@ mod rectangle_selection_tests {
 mod object_fill_tile_tests {
     use super::tiles::{
         MAX_VISIBLE_OBJECT_FILL_TILES, ObjectFillTileSpec, choose_object_fill_tile_level,
-        object_fill_tile_key, object_fill_tile_object_count_supported, plan_object_fill_tiles,
+        object_fill_tile_key, object_fill_tile_object_count_supported,
+        object_fill_tile_planning_scales, object_fill_tile_raster_bounds, plan_object_fill_tiles,
     };
     use super::*;
 
@@ -261,6 +393,24 @@ mod object_fill_tile_tests {
         assert_eq!(choose_object_fill_tile_level(0.5), 1);
         assert_eq!(choose_object_fill_tile_level(0.25), 2);
         assert_eq!(choose_object_fill_tile_level(0.01), 7);
+    }
+
+    #[test]
+    fn texture_outlines_provide_two_levels_for_coverage_resolving() {
+        let local_screen_per_pixel = 0.25;
+        let (target, fallback) = object_fill_tile_planning_scales(local_screen_per_pixel, true);
+
+        assert_eq!(choose_object_fill_tile_level(target), 0);
+        assert_eq!(choose_object_fill_tile_level(fallback), 1);
+    }
+
+    #[test]
+    fn fill_only_frames_keep_the_existing_coarse_fallback() {
+        let local_screen_per_pixel = 0.25;
+        let (target, fallback) = object_fill_tile_planning_scales(local_screen_per_pixel, false);
+
+        assert_eq!(choose_object_fill_tile_level(target), 2);
+        assert_eq!(choose_object_fill_tile_level(fallback), 4);
     }
 
     #[test]
@@ -385,6 +535,15 @@ mod object_fill_tile_tests {
     }
 
     #[test]
+    fn raster_bounds_add_two_logical_texels_on_every_side() {
+        let logical =
+            egui::Rect::from_min_size(egui::pos2(-4096.0, 8192.0), egui::vec2(4096.0, 4096.0));
+        let raster = object_fill_tile_raster_bounds(logical);
+        assert_eq!(raster.min, logical.min - egui::vec2(16.0, 16.0));
+        assert_eq!(raster.max, logical.max + egui::vec2(16.0, 16.0));
+    }
+
+    #[test]
     fn selection_fill_is_a_state_lookup_attached_to_existing_id_tiles() {
         let mut layer = ObjectsLayer {
             show_selection_overlay: true,
@@ -396,7 +555,7 @@ mod object_fill_tile_tests {
         layer.rebuild_selection_fill_state(3);
 
         let style = layer
-            .object_fill_selection_tile_style(3)
+            .object_fill_selection_tile_style(3, false)
             .expect("visible non-empty selection should provide a tile state lookup");
 
         assert_eq!(style.state_generation, layer.selection_generation);
@@ -417,14 +576,15 @@ mod object_fill_tile_tests {
         layer.rebuild_selection_fill_state(1);
 
         layer.show_selection_overlay = false;
-        assert!(layer.object_fill_selection_tile_style(1).is_none());
+        assert!(layer.object_fill_selection_tile_style(1, false).is_none());
 
         layer.show_selection_overlay = true;
         layer.selected_fill_opacity = 0.0;
-        assert!(layer.object_fill_selection_tile_style(1).is_none());
+        assert!(layer.object_fill_selection_tile_style(1, false).is_none());
+        assert!(layer.object_fill_selection_tile_style(1, true).is_some());
 
         layer.selected_fill_opacity = 0.5;
-        assert!(layer.object_fill_selection_tile_style(2).is_none());
+        assert!(layer.object_fill_selection_tile_style(2, false).is_none());
     }
 
     #[test]

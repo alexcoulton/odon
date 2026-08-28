@@ -2,6 +2,15 @@
 
 use super::*;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(in crate::objects) struct ObjectFillDrawOutcome {
+    pub selection_overlay_composited: bool,
+    pub tile_frame_planned: bool,
+    pub texture_coverage: bool,
+    pub texture_outline_active: bool,
+    pub texture_border_draw_calls: usize,
+}
+
 impl ObjectsLayer {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::objects) fn draw_object_fills(
@@ -16,19 +25,20 @@ impl ObjectsLayer {
         gpu_available: bool,
         active_color_groups: Option<&ObjectColorGroups>,
         continuous_colors: Option<&ObjectContinuousColorPayload>,
-        render_generation: u64,
-    ) -> bool {
+        texture_outline_requested: bool,
+        visibility_state: &ObjectRenderStatePayload,
+    ) -> ObjectFillDrawOutcome {
         if !self.fill_cells || self.fill_opacity <= 0.0 {
-            return false;
+            return ObjectFillDrawOutcome::default();
         }
         let Some(fill_mesh) = self.object_fill_mesh.as_ref() else {
-            return false;
+            return ObjectFillDrawOutcome::default();
         };
         if !fill_mesh.bounds_local.intersects(visible_local) {
-            return false;
+            return ObjectFillDrawOutcome::default();
         }
 
-        let tile_frame = gpu_available
+        let mut tile_frame = gpu_available
             .then(|| {
                 self.plan_object_fill_tile_frame(
                     fill_mesh,
@@ -38,7 +48,8 @@ impl ObjectsLayer {
                     display_scale,
                     active_color_groups,
                     continuous_colors,
-                    render_generation,
+                    texture_outline_requested,
+                    visibility_state,
                     ui.ctx().cumulative_frame_nr(),
                 )
             })
@@ -46,6 +57,10 @@ impl ObjectsLayer {
         let tile_coverage = tile_frame
             .as_ref()
             .is_some_and(|frame| self.gl_object_fill.id_tiles_have_coverage(&frame.keys()));
+        let exact_tile_coverage = tile_frame.as_ref().is_some_and(|frame| {
+            self.gl_object_fill
+                .id_tiles_have_exact_coverage(&frame.keys())
+        });
         let any_tile_coverage = tile_frame.as_ref().is_some_and(|frame| {
             self.gl_object_fill
                 .id_tiles_have_any_coverage(&frame.keys())
@@ -60,6 +75,18 @@ impl ObjectsLayer {
                 <= Self::MAX_DIRECT_FILL_VERTICES
         });
         let tile_compose = tile_coverage || (!direct_fallback_is_bounded && any_tile_coverage);
+        let texture_outline_active = texture_outline_requested && exact_tile_coverage;
+        if !texture_outline_active && let Some(frame) = tile_frame.as_mut() {
+            for style in &mut frame.styles {
+                style.border.enabled = false;
+            }
+        }
+        let tile_frame_planned = tile_frame.is_some();
+        let texture_border_draw_calls = tile_frame.as_ref().map_or(0, |frame| {
+            usize::from(texture_outline_active)
+                .saturating_mul(frame.draw_items.len())
+                .saturating_mul(frame.styles.len())
+        });
         let selection_overlay_composited = tile_compose
             && tile_frame
                 .as_ref()
@@ -77,7 +104,7 @@ impl ObjectsLayer {
                     fill_mesh,
                     active_color_groups,
                     continuous_colors,
-                    render_generation,
+                    visibility_state,
                 );
             }
         } else {
@@ -115,7 +142,13 @@ impl ObjectsLayer {
                 callback: Arc::new(cb),
             });
         }
-        selection_overlay_composited
+        ObjectFillDrawOutcome {
+            selection_overlay_composited,
+            tile_frame_planned,
+            texture_coverage: exact_tile_coverage,
+            texture_outline_active,
+            texture_border_draw_calls,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -130,7 +163,7 @@ impl ObjectsLayer {
         fill_mesh: &ObjectFillMesh,
         active_color_groups: Option<&ObjectColorGroups>,
         continuous_colors: Option<&ObjectContinuousColorPayload>,
-        render_generation: u64,
+        visibility_state: &ObjectRenderStatePayload,
     ) {
         const SPATIAL_FILL_VERTEX_THRESHOLD: usize = 500_000;
         let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -210,13 +243,6 @@ impl ObjectsLayer {
         } else {
             let rgb = self.color_rgb;
             let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-            let mut visible_state = vec![0u8; fill_mesh.object_count];
-            for (index, state) in visible_state.iter_mut().enumerate() {
-                if self.is_index_visible(index) {
-                    *state = 255;
-                }
-            }
-            let visible_state = Arc::new(visible_state);
             for (cache_id, vertices_local, bounds_local) in &fill_geometry {
                 items.push(ObjectFillGlDrawItem {
                     data: ObjectFillGlDrawData {
@@ -227,8 +253,8 @@ impl ObjectsLayer {
                         generation: self.geometry_generation,
                         vertices_local: Arc::clone(vertices_local),
                         object_count: fill_mesh.object_count,
-                        selection_generation: render_generation,
-                        selection_state: Arc::clone(&visible_state),
+                        selection_generation: visibility_state.generation,
+                        selection_state: Arc::clone(&visibility_state.values),
                         color_cache_id: object_render_cache_id(0x4a24, 0),
                         color_generation: continuous_colors.map_or(0, |payload| payload.generation),
                         object_colors_rgba: continuous_colors

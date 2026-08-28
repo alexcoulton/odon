@@ -2134,6 +2134,38 @@ fn dataset_bootstrap_restores_actor_project_workspace_and_supersedes_workers() {
 }
 
 #[test]
+fn object_state_exposes_the_latest_renderer_observation() {
+    let (dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    model
+        .dataset
+        .as_mut()
+        .expect("installed dataset")
+        .performance = json!({
+        "object_fill": {
+            "outline_frame": {"mode":"texture","visible_records":24000000},
+            "presentation_state": {"visibility_rebuilds":1},
+        }
+    });
+
+    let response = model
+        .dispatch("viewer.objects.get_state", &json!({}))
+        .expect("known command")
+        .expect("valid state request")
+        .response;
+
+    assert_eq!(
+        response["state"]["renderer"]["outline_frame"]["mode"],
+        "texture"
+    );
+    assert_eq!(
+        response["state"]["renderer"]["presentation_state"]["visibility_rebuilds"],
+        1
+    );
+}
+
+#[test]
 fn plane_commands_retain_per_axis_slices_and_clamp_to_dataset_extents() {
     let (mut dataset, _) = OmeZarrDataset::open_local(&fixture()).expect("fixture");
     dataset.dims.z = Some(1);
