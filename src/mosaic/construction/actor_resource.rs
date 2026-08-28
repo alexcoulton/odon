@@ -420,6 +420,7 @@ impl MosaicViewerApp {
                     self.selected_channel = index;
                 }
             }
+            self.reconcile_channel_contrast_projection();
         }
         if let Some(order) = state
             .get("channel_order")

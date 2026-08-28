@@ -9,6 +9,7 @@ impl eframe::App for MosaicViewerApp {
         // viewport while progressively refining visible ROIs.
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
+        self.flush_pending_channel_contrast();
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close

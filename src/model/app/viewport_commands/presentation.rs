@@ -140,7 +140,20 @@ impl AppModel {
         params: &Value,
     ) -> Result<Value, ControlError> {
         let id = Self::viewport_id(params)?;
-        let selector = channel_selector_from_params(params)?.clone();
+        let selectors = params
+            .get("channels")
+            .map(|value| {
+                value
+                    .as_array()
+                    .filter(|values| !values.is_empty())
+                    .cloned()
+                    .ok_or_else(|| invalid("channels must be a non-empty array"))
+            })
+            .transpose()?;
+        let selector = selectors
+            .is_none()
+            .then(|| channel_selector_from_params(params).cloned())
+            .transpose()?;
         let min = params
             .get("min")
             .or_else(|| params.get("lo"))
@@ -159,17 +172,43 @@ impl AppModel {
         let workspace = &mut dataset.workspace;
         let active_before = workspace.active().state.clone();
         let target = workspace.get_mut(&id).ok_or_else(|| not_found(&id))?;
-        let index = resolve_channel(&target.state.channels, &selector)?;
-        target.state.channels[index].window = Some((min, max));
-        target.state.channels[index].contrast_manual = true;
-        let channel = &target.state.channels[index];
-        let result = json!({
-            "index": index,
-            "name": channel.name,
+        let mut indices = if let Some(selectors) = selectors {
+            selectors
+                .iter()
+                .map(|selector| resolve_channel(&target.state.channels, selector))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            vec![resolve_channel(
+                &target.state.channels,
+                selector.as_ref().expect("single selector was validated"),
+            )?]
+        };
+        indices.sort_unstable();
+        indices.dedup();
+        let mut changed = false;
+        for &index in &indices {
+            let channel = &mut target.state.channels[index];
+            changed |= channel.window != Some((min, max));
+            channel.window = Some((min, max));
+            channel.contrast_manual = true;
+        }
+        let channels = indices
+            .iter()
+            .map(|&index| json!({"index":index,"name":target.state.channels[index].name}))
+            .collect::<Vec<_>>();
+        let mut result = json!({
+            "changed": changed,
+            "channels": channels,
+            "count": indices.len(),
             "min": min,
             "max": max,
             "abs_max": abs_max,
         });
+        if indices.len() == 1 {
+            let index = indices[0];
+            result["index"] = json!(index);
+            result["name"] = json!(target.state.channels[index].name);
+        }
         let _ = workspace.bump_presentation_revision(&id);
         let active_changed = presentation_changed(&active_before, &workspace.active().state);
         Ok(viewport_response(

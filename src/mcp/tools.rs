@@ -600,7 +600,7 @@ fn open_roi_tool_schema() -> Value {
 fn set_channel_contrast_tool_schema() -> Value {
     json!({
         "name": "set_channel_contrast",
-        "description": "Set contrast limits for a channel by index, name, channel, or marker.",
+        "description": "Set contrast limits atomically for one channel, or for several channels using channels.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -608,6 +608,11 @@ fn set_channel_contrast_tool_schema() -> Value {
                 "name": {"type": "string"},
                 "channel": {"type": "string"},
                 "marker": {"type": "string"},
+                "channels": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "string"}]}
+                },
                 "min": {"type": "number"},
                 "max": {"type": "number"}
             },

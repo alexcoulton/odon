@@ -16,8 +16,7 @@ impl MosaicViewerApp {
         params: serde_json::Value,
     ) -> bool {
         self.native_command_ingress
-            .push(NativeControlIntent { method, params });
-        true
+            .push(NativeControlIntent { method, params })
     }
 
     pub(in crate::mosaic) fn layout_command_params(&self) -> serde_json::Value {

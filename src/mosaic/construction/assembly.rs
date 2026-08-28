@@ -77,6 +77,8 @@ impl MosaicViewerApp {
             channel_select_anchor_idx: None,
             selected_channel_group_id: None,
             quick_contrast_target: top_bar::QuickContrastTarget::Visible,
+            desired_channel_contrast: None,
+            submitted_channel_contrast: None,
             selected_overlay_layers: HashSet::new(),
             overlay_select_anchor_pos: None,
             overlay_layer_order: vec![

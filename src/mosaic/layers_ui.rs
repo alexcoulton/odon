@@ -55,7 +55,10 @@ impl MosaicViewerApp {
             let Some(ch) = self.channels.get(idx) else {
                 continue;
             };
-            let window = ch.window.unwrap_or((0.0, abs_max));
+            let window = self
+                .preview_channel_window(idx)
+                .or(ch.window)
+                .unwrap_or((0.0, abs_max));
             if let Some(prev) = first_window {
                 if (prev.0 - window.0).abs() > 1e-6 || (prev.1 - window.1).abs() > 1e-6 {
                     mixed = true;
@@ -142,19 +145,104 @@ impl MosaicViewerApp {
     }
 
     pub(super) fn apply_channel_window_to_indices(&mut self, indices: &[usize], lo: f32, hi: f32) {
+        let windows = indices
+            .iter()
+            .copied()
+            .map(|index| (index, lo, hi))
+            .collect::<Vec<_>>();
+        self.apply_channel_windows(&windows);
+    }
+
+    pub(super) fn apply_channel_windows(&mut self, windows: &[(usize, f32, f32)]) {
         let abs_max = self.abs_max.max(1.0);
-        let lo = lo.clamp(0.0, abs_max);
-        let hi = hi.clamp(0.0, abs_max);
-        let (lo, hi) = if hi <= lo {
-            ((hi - 1.0).clamp(0.0, abs_max), hi)
-        } else {
-            (lo, hi)
+        let mut windows = windows
+            .iter()
+            .copied()
+            .filter(|(index, _, _)| *index < self.channels.len())
+            .map(|(index, lo, hi)| {
+                let hi = hi.clamp(1.0, abs_max);
+                let lo = lo.clamp(0.0, hi - 1.0);
+                (index, lo, hi)
+            })
+            .collect::<Vec<_>>();
+        windows.sort_unstable_by_key(|(index, _, _)| *index);
+        windows.dedup_by_key(|(index, _, _)| *index);
+        if windows.is_empty() {
+            return;
+        }
+        self.desired_channel_contrast = Some(PendingChannelContrast { windows });
+        self.flush_pending_channel_contrast();
+    }
+
+    pub(super) fn preview_channel_window(&self, index: usize) -> Option<(f32, f32)> {
+        self.desired_channel_contrast
+            .as_ref()?
+            .windows
+            .iter()
+            .find_map(|&(candidate, minimum, maximum)| {
+                (candidate == index).then_some((minimum, maximum))
+            })
+    }
+
+    pub(super) fn flush_pending_channel_contrast(&mut self) {
+        if self
+            .native_command_ingress
+            .contains_pending("viewer.channels.set_contrast")
+        {
+            return;
+        }
+        let Some(desired) = self.desired_channel_contrast.clone() else {
+            self.submitted_channel_contrast = None;
+            return;
         };
-        for &index in indices {
-            self.submit_native_control_intent(
-                "viewer.channels.set_contrast",
-                serde_json::json!({"index":index,"min":lo,"max":hi}),
-            );
+        if self.submitted_channel_contrast.as_ref() == Some(&desired) {
+            return;
+        }
+        let first_window = desired.windows.first().copied();
+        let common_window = first_window.is_some_and(|(_, minimum, maximum)| {
+            desired
+                .windows
+                .iter()
+                .all(|(_, other_minimum, other_maximum)| {
+                    *other_minimum == minimum && *other_maximum == maximum
+                })
+        });
+        let params = if common_window {
+            let (_, minimum, maximum) = first_window.expect("pending contrast is non-empty");
+            serde_json::json!({
+                "channels":desired.windows.iter().map(|(index, _, _)| *index).collect::<Vec<_>>(),
+                "min":minimum,
+                "max":maximum,
+            })
+        } else {
+            serde_json::json!({
+                "windows":desired.windows.iter().map(|(index, minimum, maximum)| {
+                    serde_json::json!({"index":index,"min":minimum,"max":maximum})
+                }).collect::<Vec<_>>(),
+            })
+        };
+        if self.submit_native_control_intent("viewer.channels.set_contrast", params) {
+            self.submitted_channel_contrast = Some(desired);
+        }
+    }
+
+    pub(super) fn reconcile_channel_contrast_projection(&mut self) {
+        let Some(desired) = self.desired_channel_contrast.clone() else {
+            self.submitted_channel_contrast = None;
+            return;
+        };
+        let projection_matches = desired.windows.iter().all(|&(index, minimum, maximum)| {
+            self.channels
+                .get(index)
+                .and_then(|channel| channel.window)
+                .is_some_and(|window| {
+                    (window.0 - minimum).abs() <= f32::EPSILON
+                        && (window.1 - maximum).abs() <= f32::EPSILON
+                })
+        });
+        if projection_matches && self.submitted_channel_contrast.as_ref() == Some(&desired) {
+            self.desired_channel_contrast = None;
+            self.submitted_channel_contrast = None;
         }
     }
 
@@ -283,8 +371,11 @@ impl MosaicViewerApp {
             let windows = members
                 .iter()
                 .filter_map(|&index| {
-                    let (mut minimum, _) =
-                        self.channels.get(index)?.window.unwrap_or((0.0, abs_max));
+                    let channel = self.channels.get(index)?;
+                    let (mut minimum, _) = self
+                        .preview_channel_window(index)
+                        .or(channel.window)
+                        .unwrap_or((0.0, abs_max));
                     minimum = minimum.clamp(0.0, abs_max);
                     let maximum = hi.clamp(0.0, abs_max);
                     let minimum = if maximum <= minimum {
@@ -295,9 +386,7 @@ impl MosaicViewerApp {
                     Some((index, minimum, maximum))
                 })
                 .collect::<Vec<_>>();
-            for (index, minimum, maximum) in windows {
-                self.apply_channel_window_to_indices(&[index], minimum, maximum);
-            }
+            self.apply_channel_windows(&windows);
             ui.ctx().request_repaint();
             return;
         }

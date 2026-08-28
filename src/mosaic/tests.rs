@@ -218,7 +218,7 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     ChannelListHost::set_layer_groups(&mut mosaic, groups);
     mosaic.set_active_layer(MosaicLayerId::TextLabels);
     mosaic.set_layer_visible(MosaicLayerId::SegmentationGeoJson, true);
-    mosaic.apply_channel_window_to_indices(&[1], 5.0, 100.0);
+    mosaic.apply_channel_window_to_indices(&[1, 2], 5.0, 100.0);
     mosaic.commit_channel_color(1, [1, 2, 3]);
     mosaic.commit_channel_note(1, "review".to_string());
     mosaic.fit_mosaic();
@@ -255,6 +255,13 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
             )
         });
     }
+    let contrast = intents
+        .iter()
+        .find(|intent| intent.method == "viewer.channels.set_contrast")
+        .expect("contrast intent");
+    assert_eq!(contrast.params["channels"], serde_json::json!([1, 2]));
+    assert_eq!(contrast.params["min"], 5.0);
+    assert_eq!(contrast.params["max"], 100.0);
     assert_eq!(semantic_snapshot(&mosaic), before);
 
     let projection = serde_json::json!({
@@ -274,5 +281,56 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     assert!(
         mosaic.take_native_control_intents().is_empty(),
         "applying an actor projection must not feed commands back to the actor"
+    );
+}
+
+#[test]
+fn mosaic_contrast_coalesces_drag_updates_and_batches_distinct_windows() {
+    let dir = TestMosaicDir::new();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let sheet = dir.0.join("contrast-mosaic.csv");
+    fs::write(
+        &sheet,
+        format!("id,path,cohort\nROI-A,{},A\n", fixture.display()),
+    )
+    .expect("write contrast mosaic samplesheet");
+    let ctx = egui::Context::default();
+    let mut mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(1))
+        .expect("construct contrast mosaic");
+    let channels_before = mosaic.control_channel_snapshot();
+
+    mosaic.apply_channel_window_to_indices(&[0, 1], 5.0, 100.0);
+    mosaic.apply_channel_window_to_indices(&[0, 1], 15.0, 120.0);
+    assert_eq!(mosaic.preview_channel_window(0), Some((15.0, 120.0)));
+    let first = mosaic.take_native_control_intents();
+    assert_eq!(first.len(), 1, "one actor command may be in flight");
+    assert_eq!(first[0].params["channels"], serde_json::json!([0, 1]));
+    assert_eq!(first[0].params["min"], 5.0);
+
+    mosaic.flush_pending_channel_contrast();
+    let latest = mosaic.take_native_control_intents();
+    assert_eq!(
+        latest.len(),
+        1,
+        "only the newest drag position is queued next"
+    );
+    assert_eq!(latest[0].params["channels"], serde_json::json!([0, 1]));
+    assert_eq!(latest[0].params["min"], 15.0);
+    assert_eq!(latest[0].params["max"], 120.0);
+
+    mosaic.apply_channel_windows(&[(0, 8.0, 140.0), (1, 12.0, 140.0)]);
+    let batch = mosaic.take_native_control_intents();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(
+        batch[0].params["windows"],
+        serde_json::json!([
+            {"index":0,"min":8.0,"max":140.0},
+            {"index":1,"min":12.0,"max":140.0},
+        ])
+    );
+    assert_eq!(
+        mosaic.control_channel_snapshot(),
+        channels_before,
+        "optimistic contrast is render-only until projected by the actor"
     );
 }

@@ -1474,6 +1474,29 @@ class AsyncChannels:
             "viewer.channels.set_contrast", _with_revision(params, if_revision)
         )
 
+    async def set_contrast_many(
+        self,
+        channels: Iterable[str | int],
+        *,
+        minimum: float,
+        maximum: float,
+        if_revision: int | None = None,
+    ) -> Any:
+        channel_list = list(channels)
+        if not channel_list:
+            raise ValueError("channels must not be empty")
+        return await self._client.call(
+            "viewer.channels.set_contrast",
+            _with_revision(
+                {
+                    "channels": channel_list,
+                    "min": float(minimum),
+                    "max": float(maximum),
+                },
+                if_revision,
+            ),
+        )
+
     async def set_color(
         self,
         channel: str | int,

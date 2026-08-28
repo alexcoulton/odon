@@ -53,6 +53,9 @@ class ChannelResourceTests(unittest.TestCase):
         channels.reset_transform(1)
         channels.get_presentation()
         channels.set_presentation(search="nuclear", sort="visible_first")
+        channels.set_contrast_many(
+            ["DAPI", 2], minimum=10, maximum=200, if_revision=7
+        )
 
         self.assertEqual(
             client.calls[0],
@@ -76,9 +79,23 @@ class ChannelResourceTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             channels.set_transform("DAPI")
-        self.assertEqual(client.calls[-1][1], {"search": "nuclear", "sort": "visible_first"})
+        self.assertEqual(client.calls[-2][1], {"search": "nuclear", "sort": "visible_first"})
+        self.assertEqual(
+            client.calls[-1],
+            (
+                "viewer.channels.set_contrast",
+                {
+                    "channels": ["DAPI", 2],
+                    "min": 10.0,
+                    "max": 200.0,
+                    "if_revision": 7,
+                },
+            ),
+        )
         with self.assertRaises(ValueError):
             channels.set_presentation()
+        with self.assertRaises(ValueError):
+            channels.set_contrast_many([], minimum=0, maximum=1)
 
         channels.auto_contrast(channels=["DAPI", 2], viewport_id="right")
         self.assertEqual(
@@ -104,6 +121,7 @@ class AsyncChannelResourceTests(unittest.IsolatedAsyncioTestCase):
         await channels.set_transform("DAPI", scale=[2, 2])
         await channels.set_presentation(sort="name_asc")
         await channels.auto_contrast(channels=[0], overwrite_manual=False)
+        await channels.set_contrast_many([0, "CD3"], minimum=5, maximum=150)
 
         self.assertEqual(
             client.calls[0],
@@ -117,6 +135,13 @@ class AsyncChannelResourceTests(unittest.IsolatedAsyncioTestCase):
             (
                 "viewer.channels.auto_contrast",
                 {"overwrite_manual": False, "channels": [0]},
+            ),
+        )
+        self.assertEqual(
+            client.calls[5],
+            (
+                "viewer.channels.set_contrast",
+                {"channels": [0, "CD3"], "min": 5.0, "max": 150.0},
             ),
         )
 

@@ -69,11 +69,13 @@ pub fn ui_contrast_window(
         });
     }
 
+    let maximum_minimum = (hi - 1.0).clamp(0.0, abs_max);
     limits_touched |= ui
-        .add(egui::Slider::new(&mut lo, 0.0..=abs_max).text("Min"))
+        .add(egui::Slider::new(&mut lo, 0.0..=maximum_minimum).text("Min"))
         .changed();
+    let minimum_maximum = (lo + 1.0).clamp(0.0, abs_max);
     limits_touched |= ui
-        .add(egui::Slider::new(&mut hi, 0.0..=abs_max).text("Max"))
+        .add(egui::Slider::new(&mut hi, minimum_maximum..=abs_max).text("Max"))
         .changed();
 
     lo = lo.clamp(0.0, abs_max);

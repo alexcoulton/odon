@@ -1008,7 +1008,10 @@ impl MosaicViewerApp {
             ui.ctx().request_repaint();
         }
 
-        let window = sel.window.unwrap_or((0.0, abs_max));
+        let window = self
+            .preview_channel_window(selected_channel)
+            .or(sel.window)
+            .unwrap_or((0.0, abs_max));
         let out = contrast::ui_contrast_window(
             ui,
             abs_max,
@@ -1023,7 +1026,10 @@ impl MosaicViewerApp {
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    let (mut minimum, _) = channel.window.unwrap_or((0.0, abs_max));
+                    let (mut minimum, _) = self
+                        .preview_channel_window(index)
+                        .or(channel.window)
+                        .unwrap_or((0.0, abs_max));
                     minimum = minimum.clamp(0.0, abs_max);
                     let maximum = hi.clamp(0.0, abs_max);
                     let minimum = if maximum <= minimum {
@@ -1034,9 +1040,7 @@ impl MosaicViewerApp {
                     (index, minimum, maximum)
                 })
                 .collect::<Vec<_>>();
-            for (index, minimum, maximum) in windows {
-                self.apply_channel_window_to_indices(&[index], minimum, maximum);
-            }
+            self.apply_channel_windows(&windows);
             self.commit_layer_groups_preview(groups_before);
             return;
         }

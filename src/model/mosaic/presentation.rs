@@ -384,26 +384,104 @@ impl MosaicModel {
 
     pub(super) fn set_channel_contrast(&mut self, params: &Value) -> Result<Value, ControlError> {
         self.require_resource()?;
-        let index = self.channel_index_from_params(params)?;
-        let minimum = params
-            .get("min")
-            .or_else(|| params.get("lo"))
-            .and_then(Value::as_f64)
-            .ok_or_else(|| invalid("min is required"))? as f32;
-        let maximum = params
-            .get("max")
-            .or_else(|| params.get("hi"))
-            .and_then(Value::as_f64)
-            .ok_or_else(|| invalid("max is required"))? as f32;
-        if !minimum.is_finite() || !maximum.is_finite() || maximum <= minimum {
-            return Err(invalid("contrast max must be greater than min"));
+        let mut windows = if let Some(values) = params.get("windows") {
+            values
+                .as_array()
+                .filter(|values| !values.is_empty())
+                .ok_or_else(|| invalid("windows must be a non-empty array"))?
+                .iter()
+                .map(|value| {
+                    let index = self.channel_index_from_params(value)?;
+                    let minimum = value
+                        .get("min")
+                        .or_else(|| value.get("lo"))
+                        .and_then(Value::as_f64)
+                        .ok_or_else(|| invalid("each contrast window requires min"))?
+                        as f32;
+                    let maximum = value
+                        .get("max")
+                        .or_else(|| value.get("hi"))
+                        .and_then(Value::as_f64)
+                        .ok_or_else(|| invalid("each contrast window requires max"))?
+                        as f32;
+                    if !minimum.is_finite() || !maximum.is_finite() || maximum <= minimum {
+                        return Err(invalid("contrast max must be greater than min"));
+                    }
+                    Ok((index, minimum, maximum))
+                })
+                .collect::<Result<Vec<_>, ControlError>>()?
+        } else {
+            let minimum = params
+                .get("min")
+                .or_else(|| params.get("lo"))
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("min is required"))? as f32;
+            let maximum = params
+                .get("max")
+                .or_else(|| params.get("hi"))
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("max is required"))? as f32;
+            if !minimum.is_finite() || !maximum.is_finite() || maximum <= minimum {
+                return Err(invalid("contrast max must be greater than min"));
+            }
+            let indices = if let Some(selectors) = params.get("channels") {
+                selectors
+                    .as_array()
+                    .filter(|selectors| !selectors.is_empty())
+                    .ok_or_else(|| invalid("channels must be a non-empty array"))?
+                    .iter()
+                    .map(|selector| self.channel_index(selector))
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                vec![self.channel_index_from_params(params)?]
+            };
+            indices
+                .into_iter()
+                .map(|index| (index, minimum, maximum))
+                .collect()
+        };
+        windows.sort_unstable_by_key(|(index, _, _)| *index);
+        if windows.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(invalid("contrast channels must not contain duplicates"));
         }
-        let changed = self.channels[index].window != Some((minimum, maximum));
-        self.channels[index].window = Some((minimum, maximum));
-        Ok(json!({
-            "mode":"mosaic",
-            "contrast":{"changed":changed,"index":index,"name":self.channels[index].name,"min":minimum,"max":maximum,"abs_max":self.abs_max()},
-        }))
+        let mut changed = false;
+        for &(index, minimum, maximum) in &windows {
+            changed |= self.channels[index].window != Some((minimum, maximum));
+            self.channels[index].window = Some((minimum, maximum));
+        }
+        let window_results = windows
+            .iter()
+            .map(|&(index, minimum, maximum)| {
+                json!({"index":index,"name":self.channels[index].name,"min":minimum,"max":maximum})
+            })
+            .collect::<Vec<_>>();
+        let mut contrast = json!({
+            "changed":changed,
+            "channels":window_results,
+            "windows":window_results,
+            "count":windows.len(),
+            "abs_max":self.abs_max(),
+        });
+        let common_window = windows
+            .first()
+            .map(|(_, minimum, maximum)| (*minimum, *maximum));
+        if common_window.is_some_and(|(minimum, maximum)| {
+            windows.iter().all(|(_, other_minimum, other_maximum)| {
+                *other_minimum == minimum && *other_maximum == maximum
+            })
+        }) {
+            let (minimum, maximum) = common_window.expect("contrast windows are non-empty");
+            contrast["min"] = json!(minimum);
+            contrast["max"] = json!(maximum);
+        }
+        if windows.len() == 1 {
+            let (index, minimum, maximum) = windows[0];
+            contrast["index"] = json!(index);
+            contrast["name"] = json!(self.channels[index].name);
+            contrast["min"] = json!(minimum);
+            contrast["max"] = json!(maximum);
+        }
+        Ok(json!({"mode":"mosaic","contrast":contrast}))
     }
 
     pub(super) fn set_channel_color(&mut self, params: &Value) -> Result<Value, ControlError> {

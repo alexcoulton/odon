@@ -493,7 +493,10 @@ impl MosaicViewerApp {
                     rgb[1] as f32 / 255.0,
                     rgb[2] as f32 / 255.0,
                 ],
-                window: gch.window.unwrap_or((0.0, self.abs_max)),
+                window: self
+                    .preview_channel_window(gid)
+                    .or(gch.window)
+                    .unwrap_or((0.0, self.abs_max)),
             });
         }
         out

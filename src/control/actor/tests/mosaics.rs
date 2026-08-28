@@ -111,6 +111,33 @@ fn complete_mosaic_surface_executes_without_a_render_frame() {
         )["contrast"]["max"],
         200.0
     );
+    let batch_contrast = call(
+        &channels,
+        "viewer.channels.set_contrast",
+        json!({"channels":[0,2,4],"min":20.0,"max":300.0}),
+    );
+    assert_eq!(batch_contrast["contrast"]["count"], 3);
+    for index in [0, 2, 4] {
+        assert_eq!(
+            call(
+                &channels,
+                "viewer.channels.get_contrast",
+                json!({"index":index})
+            )["contrast"]["max"],
+            300.0
+        );
+    }
+    let distinct_contrast = call(
+        &channels,
+        "viewer.channels.set_contrast",
+        json!({"windows":[
+            {"index":0,"min":5.0,"max":250.0},
+            {"index":2,"min":15.0,"max":250.0},
+        ]}),
+    );
+    assert_eq!(distinct_contrast["contrast"]["count"], 2);
+    assert_eq!(distinct_contrast["contrast"]["windows"][0]["min"], 5.0);
+    assert_eq!(distinct_contrast["contrast"]["windows"][1]["min"], 15.0);
     call(
         &channels,
         "viewer.channels.set_color",

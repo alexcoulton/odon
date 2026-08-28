@@ -88,6 +88,11 @@ struct GlobalChannel {
     note: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PendingChannelContrast {
+    windows: Vec<(usize, f32, f32)>,
+}
+
 #[derive(Debug, Clone)]
 struct MosaicItem {
     id: usize,
@@ -214,6 +219,8 @@ pub struct MosaicViewerApp {
     channel_select_anchor_idx: Option<usize>,
     selected_channel_group_id: Option<u64>,
     quick_contrast_target: top_bar::QuickContrastTarget,
+    desired_channel_contrast: Option<PendingChannelContrast>,
+    submitted_channel_contrast: Option<PendingChannelContrast>,
     selected_overlay_layers: HashSet<MosaicLayerId>,
     overlay_select_anchor_pos: Option<usize>,
     overlay_layer_order: Vec<MosaicLayerId>,
