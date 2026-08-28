@@ -59,7 +59,6 @@ impl NullableF32Column {
         self.validity.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn heap_bytes(&self) -> usize {
         self.values.capacity() * std::mem::size_of::<f32>()
             + self.validity.capacity() * std::mem::size_of::<u64>()

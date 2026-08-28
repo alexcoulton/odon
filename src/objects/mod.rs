@@ -512,6 +512,14 @@ pub struct ObjectsLayer {
     load_rx: Option<Receiver<Result<LoadResult, String>>>,
     property_load_rx: Option<Receiver<PropertyLoadResult>>,
     property_load_key: Option<String>,
+    property_load_cancel: Option<Arc<AtomicBool>>,
+    property_load_generation: u64,
+    property_load_started: u64,
+    property_load_cancelled: u64,
+    property_load_completed: u64,
+    property_load_stale_results: u64,
+    property_load_estimated_bytes: u64,
+    property_load_peak_estimated_bytes: u64,
     status: String,
 }
 
@@ -565,6 +573,7 @@ pub struct PreloadedObjectLayer {
 #[derive(Debug)]
 struct PropertyLoadResult {
     property_key: String,
+    generation: u64,
     values: LoadedPropertyValues,
 }
 

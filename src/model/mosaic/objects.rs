@@ -4,6 +4,10 @@ use super::*;
 use crate::model::ObjectColorMapping;
 
 impl MosaicModel {
+    pub(crate) fn observe_renderer_object_state(&mut self, observation: &Value) {
+        self.renderer_object_observation = observation.clone();
+    }
+
     pub(super) fn object_property_cache_snapshot(&self) -> Value {
         json!({
             "policy": if self.object_property_cache_capacity.is_some() { "lru" } else { "unbounded" },
@@ -467,6 +471,7 @@ impl MosaicModel {
             "cpu_geometry_memory":cpu_geometry_memory.snapshot(),
             "failed_count":self.object_failures.len(),
             "status":self.object_status,
+            "renderer":self.renderer_object_observation,
             "items":items,
         })
     }

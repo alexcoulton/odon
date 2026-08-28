@@ -9,11 +9,36 @@ impl ObjectsLayer {
     }
 
     pub(crate) fn lazy_property_cache_snapshot(&self) -> serde_json::Value {
+        let resident_columns = self
+            .lazy_property_lru
+            .iter()
+            .map(|key| {
+                serde_json::json!({
+                    "property": key,
+                    "bytes": self.property_store.loaded_column_bytes(key),
+                })
+            })
+            .collect::<Vec<_>>();
         serde_json::json!({
             "policy": if self.lazy_property_cache_capacity.is_some() { "lru" } else { "unbounded" },
             "capacity": self.lazy_property_cache_capacity,
             "resident_lazy_columns": self.lazy_property_lru.len(),
+            "resident_lazy_column_bytes": resident_columns
+                .iter()
+                .filter_map(|value| value["bytes"].as_u64())
+                .sum::<u64>(),
+            "total_loaded_column_bytes": self.property_store.loaded_bytes(),
+            "resident_columns": resident_columns,
             "evictions": self.lazy_property_cache_evictions,
+            "loading": self.property_load_rx.is_some(),
+            "loading_property": self.property_load_key.as_deref(),
+            "loading_generation": self.property_load_generation,
+            "loading_estimated_bytes": self.property_load_estimated_bytes,
+            "peak_loading_estimated_bytes": self.property_load_peak_estimated_bytes,
+            "loads_started": self.property_load_started,
+            "loads_completed": self.property_load_completed,
+            "loads_cancelled": self.property_load_cancelled,
+            "stale_results_dropped": self.property_load_stale_results,
         })
     }
 
@@ -60,10 +85,21 @@ impl ObjectsLayer {
         pinned
     }
 
+    pub(in crate::objects::core) fn prepare_lazy_property_cache_for_load(&mut self) {
+        let Some(capacity) = self.lazy_property_cache_capacity else {
+            return;
+        };
+        self.evict_lazy_property_columns_to_target(capacity.saturating_sub(1));
+    }
+
     pub(super) fn enforce_lazy_property_cache_capacity(&mut self) {
         let Some(capacity) = self.lazy_property_cache_capacity else {
             return;
         };
+        self.evict_lazy_property_columns_to_target(capacity);
+    }
+
+    fn evict_lazy_property_columns_to_target(&mut self, requested_target: usize) {
         self.lazy_property_lru
             .retain(|key| self.property_store.has_loaded(key));
         let pinned = self.pinned_lazy_property_keys();
@@ -72,7 +108,7 @@ impl ObjectsLayer {
             .iter()
             .filter(|key| pinned.contains(key.as_str()))
             .count();
-        let target = capacity.max(pinned_resident);
+        let target = requested_target.max(pinned_resident);
         let mut evicted = Vec::new();
         while self.lazy_property_lru.len() > target {
             let Some(index) = self

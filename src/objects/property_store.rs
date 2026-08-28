@@ -67,6 +67,19 @@ impl ObjectPropertyStore {
         self.loaded_columns.remove(key).is_some()
     }
 
+    pub(in crate::objects) fn loaded_column_bytes(&self, key: &str) -> u64 {
+        self.loaded_columns
+            .get(key)
+            .map_or(0, ObjectPropertyColumn::retained_bytes)
+    }
+
+    pub(in crate::objects) fn loaded_bytes(&self) -> u64 {
+        self.loaded_columns
+            .values()
+            .map(ObjectPropertyColumn::retained_bytes)
+            .sum()
+    }
+
     pub(in crate::objects) fn shares_storage_with(&self, other: &Self) -> bool {
         self.available_columns == other.available_columns
             && self.loaded_columns.len() == other.loaded_columns.len()
@@ -127,6 +140,42 @@ pub(in crate::objects) enum ObjectPropertyColumn {
         values: Arc<Vec<Option<u32>>>,
     },
     Json(Arc<Vec<Option<serde_json::Value>>>),
+}
+
+impl ObjectPropertyColumn {
+    fn retained_bytes(&self) -> u64 {
+        match self {
+            Self::Bool(values) => values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<bool>>())
+                as u64,
+            Self::I64(values) => values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<i64>>())
+                as u64,
+            Self::F32(values) => values.heap_bytes() as u64,
+            Self::Dictionary { dictionary, values } => {
+                let dictionary_bytes = dictionary
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<String>())
+                    .saturating_add(
+                        dictionary
+                            .iter()
+                            .map(|value| value.capacity())
+                            .sum::<usize>(),
+                    );
+                dictionary_bytes.saturating_add(
+                    values
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<Option<u32>>()),
+                ) as u64
+            }
+            Self::Json(values) => values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<serde_json::Value>>())
+                as u64,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

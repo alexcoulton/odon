@@ -638,9 +638,9 @@ pub(super) fn parquet_loaded_property_columns(
 pub(super) fn load_parquet_property_values_for_loaded_objects(
     path: &Path,
     property_key: &str,
+    cancel: &AtomicBool,
 ) -> anyhow::Result<LoadedPropertyValues> {
-    let cancel = AtomicBool::new(false);
-    load_parquet_property_values(path, property_key, &cancel)
+    load_parquet_property_values(path, property_key, cancel)
 }
 
 fn load_parquet_property_values(

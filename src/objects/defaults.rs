@@ -169,6 +169,14 @@ impl Default for ObjectsLayer {
             load_rx: None,
             property_load_rx: None,
             property_load_key: None,
+            property_load_cancel: None,
+            property_load_generation: 0,
+            property_load_started: 0,
+            property_load_cancelled: 0,
+            property_load_completed: 0,
+            property_load_stale_results: 0,
+            property_load_estimated_bytes: 0,
+            property_load_peak_estimated_bytes: 0,
             status: String::new(),
         }
     }

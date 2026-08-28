@@ -7,6 +7,7 @@ mod continuous_ui;
 mod display_state;
 mod filters;
 mod lazy_cache;
+mod property_loading;
 mod style;
 
 impl ObjectsLayer {

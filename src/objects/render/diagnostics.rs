@@ -3,8 +3,17 @@
 use super::*;
 
 impl ObjectsLayer {
+    pub(in crate::objects) fn outline_geometry_cache_generation(&self) -> u64 {
+        self.geometry_generation
+    }
+
+    pub(crate) fn outline_gpu_stats(&self) -> crate::render::line_bins_gl::ObjectLineBinsGlStats {
+        self.gl_object_selection.stats()
+    }
+
     pub(crate) fn render_diagnostics_json(&self) -> serde_json::Value {
         let gpu = self.gl_object_fill.stats();
+        let outline_gpu = self.outline_gpu_stats();
         let (full_mesh_bytes, binned_mesh_bytes, spatial_bin_count) = self
             .object_fill_mesh
             .as_ref()
@@ -35,6 +44,7 @@ impl ObjectsLayer {
                 "continuous_color_bytes": continuous_color_bytes,
             },
             "gpu": gpu,
+            "outline_gpu": outline_gpu,
         })
     }
 }

@@ -251,6 +251,7 @@ pub(crate) struct MosaicModel {
     object_failures: BTreeMap<usize, String>,
     object_cancel: Option<Arc<AtomicBool>>,
     object_status: String,
+    renderer_object_observation: Value,
     pinned_levels: BTreeMap<(usize, usize), MosaicPinnedLevelState>,
     memory_selected_channels: Vec<usize>,
     memory_operation_generation: u64,
@@ -307,6 +308,7 @@ impl Default for MosaicModel {
             object_failures: BTreeMap::new(),
             object_cancel: None,
             object_status: String::new(),
+            renderer_object_observation: json!({}),
             pinned_levels: BTreeMap::new(),
             memory_selected_channels: Vec::new(),
             memory_operation_generation: 0,
@@ -483,6 +485,7 @@ impl MosaicModel {
         self.object_failures.clear();
         self.object_pending_ids.clear();
         self.object_status.clear();
+        self.renderer_object_observation = json!({});
         self.pinned_levels.clear();
         self.memory_selected_channels = (0..self.channels.len()).collect();
         self.memory_operation_generation = 0;

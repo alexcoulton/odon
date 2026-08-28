@@ -303,8 +303,7 @@ impl ObjectsLayer {
         let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
         self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
-        self.property_load_rx = None;
-        self.property_load_key = None;
+        self.cancel_property_load();
         self.status = format!("Loading objects: {}", path.to_string_lossy());
 
         std::thread::Builder::new()

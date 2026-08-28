@@ -29,6 +29,44 @@ fn fill_proxy_points_follow_the_low_zoom_geometry_preference() {
     assert!(!layer.should_use_fill_proxy_points(coarse));
 }
 
+#[test]
+fn outline_geometry_cache_generation_ignores_presentation_changes() {
+    let mut layer = ObjectsLayer::default();
+    layer.geometry_generation = 41;
+    layer.generation = 41;
+    let geometry_cache_generation = layer.outline_geometry_cache_generation();
+
+    // Marker, palette, filter, and other presentation changes advance this general generation.
+    layer.generation = layer.generation.wrapping_add(1);
+
+    assert_eq!(
+        layer.outline_geometry_cache_generation(),
+        geometry_cache_generation,
+        "presentation changes must reuse uploaded outline geometry"
+    );
+    layer.geometry_generation = layer.geometry_generation.wrapping_add(1);
+    assert_ne!(
+        layer.outline_geometry_cache_generation(),
+        geometry_cache_generation,
+        "actual geometry changes must invalidate uploaded outline geometry"
+    );
+}
+
+#[test]
+fn outline_gpu_stats_expose_empty_cache_capacities() {
+    let renderer = ObjectLineBinsGlRenderer::new(32, 3);
+
+    let stats = renderer.stats();
+
+    assert_eq!(stats.bin_entries, 0);
+    assert_eq!(stats.bin_capacity_entries, 32);
+    assert_eq!(stats.bin_bytes, 0);
+    assert_eq!(stats.state_entries, 0);
+    assert_eq!(stats.state_capacity_entries, 3);
+    assert_eq!(stats.color_entries, 0);
+    assert_eq!(stats.color_capacity_entries, 3);
+}
+
 #[cfg(test)]
 mod rectangle_selection_tests {
     use super::*;

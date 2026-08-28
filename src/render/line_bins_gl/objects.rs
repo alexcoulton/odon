@@ -12,8 +12,10 @@ use super::program::compile_program_with_attributes;
 
 mod color_texture;
 mod shaders;
+mod stats;
 use color_texture::ObjectColorGpu;
 use shaders::OBJECT_LINE_FRAG_330;
+pub use stats::ObjectLineBinsGlStats;
 
 const OBJECT_LINE_VERT_330: &str = shaders::OBJECT_LINE_VERT_330;
 
@@ -38,7 +40,9 @@ pub struct ObjectLineBinsGlDrawParams {
 pub struct ObjectLineBinsGlDrawData {
     pub cache_id: u64,
     pub state_cache_id: u64,
-    pub generation: u64,
+    /// Changes only when the uploaded outline geometry changes. Presentation/style generations
+    /// must not participate in the geometry-buffer cache key.
+    pub geometry_generation: u64,
     pub bins: Arc<ObjectLineSegmentsBins>,
     pub selection_generation: u64,
     pub selection_state: Arc<Vec<u8>>,
@@ -74,6 +78,10 @@ impl ObjectLineBinsGlRenderer {
         Self {
             inner: Arc::new(Mutex::new(ObjectLineInner::new(bin_cap, state_cap))),
         }
+    }
+
+    pub fn stats(&self) -> ObjectLineBinsGlStats {
+        self.inner.lock().stats()
     }
 
     pub fn paint_many(
@@ -273,7 +281,7 @@ impl ObjectLineBinsGlRenderer {
                         .ensure_bin_uploaded(
                             gl,
                             it.data.cache_id,
-                            it.data.generation,
+                            it.data.geometry_generation,
                             bin_index,
                             slice,
                             allow_upload,
@@ -332,6 +340,7 @@ struct ObjectBinUpload {
 struct ObjectBinGpu {
     vbo: glow::Buffer,
     count: usize,
+    bytes: usize,
 }
 
 struct ObjectStateGpu {
@@ -341,14 +350,26 @@ struct ObjectStateGpu {
     generation: u64,
 }
 
+struct ObjectTextureDelete {
+    texture: glow::Texture,
+    bytes: usize,
+}
+
 struct ObjectLineInner {
     gl_objects: Option<ObjectLineGlObjects>,
     bins: LruCache<(u64, u64, usize), ObjectBinGpu>,
     states: LruCache<u64, ObjectStateGpu>,
     colors: LruCache<u64, ObjectColorGpu>,
-    buffers_to_delete: Vec<glow::Buffer>,
-    textures_to_delete: Vec<glow::Texture>,
+    buffers_to_delete: Vec<ObjectBinGpu>,
+    textures_to_delete: Vec<ObjectTextureDelete>,
     last_frame_missing_bins: usize,
+    bin_uploads: u64,
+    state_uploads: u64,
+    color_uploads: u64,
+    bin_evictions: u64,
+    texture_evictions: u64,
+    buffer_deletions: u64,
+    texture_deletions: u64,
 }
 
 impl ObjectLineInner {
@@ -361,17 +382,26 @@ impl ObjectLineInner {
             buffers_to_delete: Vec::new(),
             textures_to_delete: Vec::new(),
             last_frame_missing_bins: 0,
+            bin_uploads: 0,
+            state_uploads: 0,
+            color_uploads: 0,
+            bin_evictions: 0,
+            texture_evictions: 0,
+            buffer_deletions: 0,
+            texture_deletions: 0,
         }
     }
 
     fn delete_queued(&mut self, gl: &Arc<glow::Context>) {
         unsafe {
             let gl = gl.as_ref();
-            for b in self.buffers_to_delete.drain(..) {
-                gl.delete_buffer(b);
+            for buffer in self.buffers_to_delete.drain(..) {
+                gl.delete_buffer(buffer.vbo);
+                self.buffer_deletions = self.buffer_deletions.saturating_add(1);
             }
-            for t in self.textures_to_delete.drain(..) {
-                gl.delete_texture(t);
+            for texture in self.textures_to_delete.drain(..) {
+                gl.delete_texture(texture.texture);
+                self.texture_deletions = self.texture_deletions.saturating_add(1);
             }
         }
     }
@@ -400,6 +430,9 @@ impl ObjectLineInner {
         }
 
         let vbo = unsafe { gl.as_ref().create_buffer().map_err(|_| ()).ok()? };
+        let bytes = segments
+            .len()
+            .saturating_mul(std::mem::size_of::<[f32; 5]>());
         unsafe {
             let gl = gl.as_ref();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
@@ -416,10 +449,13 @@ impl ObjectLineInner {
             ObjectBinGpu {
                 vbo,
                 count: segments.len(),
+                bytes,
             },
         ) {
-            self.buffers_to_delete.push(ev.vbo);
+            self.buffers_to_delete.push(ev);
+            self.bin_evictions = self.bin_evictions.saturating_add(1);
         }
+        self.bin_uploads = self.bin_uploads.saturating_add(1);
         self.delete_queued(gl);
 
         let v = self.bins.get(&key)?;
@@ -508,8 +544,13 @@ impl ObjectLineInner {
             },
         ) && ev.texture != texture
         {
-            self.textures_to_delete.push(ev.texture);
+            self.textures_to_delete.push(ObjectTextureDelete {
+                texture: ev.texture,
+                bytes: (ev.width.max(0) as usize).saturating_mul(ev.height.max(0) as usize),
+            });
+            self.texture_evictions = self.texture_evictions.saturating_add(1);
         }
+        self.state_uploads = self.state_uploads.saturating_add(1);
         self.delete_queued(gl);
         self.states.get(&cache_id)
     }

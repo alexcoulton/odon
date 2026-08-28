@@ -857,7 +857,18 @@ impl MosaicGeoJsonSegmentationOverlay {
         let mut bulk_measuring = 0usize;
         let mut busy_statuses = Vec::new();
         let mut resident_lazy_columns = 0usize;
+        let mut resident_lazy_column_bytes = 0u64;
+        let mut total_loaded_column_bytes = 0u64;
         let mut property_cache_evictions = 0u64;
+        let mut property_loads_in_flight = 0usize;
+        let mut property_loading_estimated_bytes = 0u64;
+        let mut property_peak_loading_estimated_bytes = 0u64;
+        let mut property_loads_started = 0u64;
+        let mut property_loads_completed = 0u64;
+        let mut property_loads_cancelled = 0u64;
+        let mut property_stale_results_dropped = 0u64;
+        let mut property_cache_items = Vec::new();
+        let mut outline_gpu = crate::render::line_bins_gl::ObjectLineBinsGlStats::default();
         for (item_id, st) in &self.items {
             if st.seg_path.is_none() {
                 continue;
@@ -872,8 +883,47 @@ impl MosaicGeoJsonSegmentationOverlay {
             resident_lazy_columns += property_cache["resident_lazy_columns"]
                 .as_u64()
                 .unwrap_or(0) as usize;
+            resident_lazy_column_bytes = resident_lazy_column_bytes.saturating_add(
+                property_cache["resident_lazy_column_bytes"]
+                    .as_u64()
+                    .unwrap_or(0),
+            );
+            total_loaded_column_bytes = total_loaded_column_bytes.saturating_add(
+                property_cache["total_loaded_column_bytes"]
+                    .as_u64()
+                    .unwrap_or(0),
+            );
             property_cache_evictions = property_cache_evictions
                 .saturating_add(property_cache["evictions"].as_u64().unwrap_or(0));
+            property_loads_in_flight +=
+                usize::from(property_cache["loading"].as_bool().unwrap_or(false));
+            property_loading_estimated_bytes = property_loading_estimated_bytes.saturating_add(
+                property_cache["loading_estimated_bytes"]
+                    .as_u64()
+                    .unwrap_or(0),
+            );
+            property_peak_loading_estimated_bytes = property_peak_loading_estimated_bytes
+                .saturating_add(
+                    property_cache["peak_loading_estimated_bytes"]
+                        .as_u64()
+                        .unwrap_or(0),
+                );
+            property_loads_started = property_loads_started
+                .saturating_add(property_cache["loads_started"].as_u64().unwrap_or(0));
+            property_loads_completed = property_loads_completed
+                .saturating_add(property_cache["loads_completed"].as_u64().unwrap_or(0));
+            property_loads_cancelled = property_loads_cancelled
+                .saturating_add(property_cache["loads_cancelled"].as_u64().unwrap_or(0));
+            property_stale_results_dropped = property_stale_results_dropped.saturating_add(
+                property_cache["stale_results_dropped"]
+                    .as_u64()
+                    .unwrap_or(0),
+            );
+            property_cache_items.push(serde_json::json!({
+                "item_id": item_id,
+                "cache": property_cache,
+            }));
+            outline_gpu.merge(layer.outline_gpu_stats());
             loaded += usize::from(layer.has_data());
             loading_data += usize::from(layer.is_loading());
             loading_properties += usize::from(layer.is_property_loading());
@@ -907,7 +957,18 @@ impl MosaicGeoJsonSegmentationOverlay {
                 "policy": if self.property_cache_capacity.is_some() { "lru" } else { "unbounded" },
                 "capacity_per_roi": self.property_cache_capacity,
                 "resident_lazy_columns": resident_lazy_columns,
+                "resident_lazy_column_bytes": resident_lazy_column_bytes,
+                "total_loaded_column_bytes": total_loaded_column_bytes,
                 "evictions": property_cache_evictions,
+                "loads_in_flight": property_loads_in_flight,
+                "loading_estimated_bytes": property_loading_estimated_bytes,
+                "peak_loading_estimated_bytes": property_peak_loading_estimated_bytes,
+                "loads_started": property_loads_started,
+                "loads_completed": property_loads_completed,
+                "loads_cancelled": property_loads_cancelled,
+                "stale_results_dropped": property_stale_results_dropped,
+                "max_concurrent_decodes": 4,
+                "items": property_cache_items,
             },
             "gpu_object_fill_pool": {
                 "shared": true,
@@ -927,6 +988,11 @@ impl MosaicGeoJsonSegmentationOverlay {
                 "tile_frame_generated": gpu.tile_frame_generated,
                 "tile_frame_raster_vertices": gpu.tile_frame_raster_vertices,
                 "tile_evictions": gpu.tile_evictions,
+            },
+            "gpu_object_outline_cache": {
+                "shared": false,
+                "layer_count": layer_allocated,
+                "stats": outline_gpu,
             },
         })
     }

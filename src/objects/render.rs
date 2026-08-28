@@ -230,7 +230,7 @@ impl ObjectsLayer {
                         data: ObjectLineBinsGlDrawData {
                             cache_id: object_render_cache_id(0x4a90, selection_lod.lod as u64),
                             state_cache_id: object_render_cache_id(0x4a91, 0),
-                            generation: self.generation,
+                            geometry_generation: self.outline_geometry_cache_generation(),
                             bins: Arc::clone(&selection_lod.bins),
                             selection_generation: if continuous_colors.is_some() {
                                 render_generation
@@ -805,7 +805,7 @@ impl ObjectsLayer {
                 data: ObjectLineBinsGlDrawData {
                     cache_id: object_render_cache_id(0x4a40, selection_lod.lod as u64),
                     state_cache_id: object_render_cache_id(0x4a41, 0),
-                    generation: self.generation,
+                    geometry_generation: self.outline_geometry_cache_generation(),
                     bins: Arc::clone(&selection_lod.bins),
                     selection_generation: self.selection_generation,
                     selection_state: Arc::clone(&self.selection_fill_state),

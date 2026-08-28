@@ -14,6 +14,17 @@ impl ObjectsLayer {
         self.load_rx = None;
     }
 
+    pub(super) fn cancel_property_load(&mut self) {
+        if let Some(cancel) = self.property_load_cancel.take()
+            && !cancel.swap(true, Ordering::Relaxed)
+        {
+            self.property_load_cancelled = self.property_load_cancelled.saturating_add(1);
+        }
+        self.property_load_rx = None;
+        self.property_load_key = None;
+        self.property_load_estimated_bytes = 0;
+    }
+
     pub fn tick(&mut self) {
         use crossbeam_channel::TryRecvError;
 
@@ -47,16 +58,34 @@ impl ObjectsLayer {
             loop {
                 match rx.try_recv() {
                     Ok(msg) => {
-                        self.apply_loaded_property_payload(msg.property_key.as_str(), &msg.values);
-                        if self.property_load_key.as_deref() == Some(msg.property_key.as_str()) {
+                        let current = msg.generation == self.property_load_generation
+                            && self.property_load_key.as_deref() == Some(msg.property_key.as_str())
+                            && self
+                                .property_load_cancel
+                                .as_ref()
+                                .is_none_or(|cancel| !cancel.load(Ordering::Relaxed));
+                        if current {
+                            self.apply_loaded_property_payload(
+                                msg.property_key.as_str(),
+                                &msg.values,
+                            );
+                            self.property_load_completed =
+                                self.property_load_completed.saturating_add(1);
                             self.property_load_rx = None;
                             self.property_load_key = None;
+                            self.property_load_cancel = None;
+                            self.property_load_estimated_bytes = 0;
+                        } else {
+                            self.property_load_stale_results =
+                                self.property_load_stale_results.saturating_add(1);
                         }
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         self.property_load_rx = None;
                         self.property_load_key = None;
+                        self.property_load_cancel = None;
+                        self.property_load_estimated_bytes = 0;
                         break;
                     }
                 }
@@ -268,8 +297,7 @@ impl ObjectsLayer {
         };
         self.control_renderer_payload_identity = None;
         self.render_resource_cache_id = msg.render_resource_cache_id;
-        self.property_load_rx = None;
-        self.property_load_key = None;
+        self.cancel_property_load();
         self.display_transform = msg.display_transform;
         self.display_mode = msg.display_mode;
         self.objects = Some(msg.objects);
@@ -460,8 +488,7 @@ impl ObjectsLayer {
         self.object_export_dialog = None;
         self.object_export_rx = None;
         self.cancel_current_load();
-        self.property_load_rx = None;
-        self.property_load_key = None;
+        self.cancel_property_load();
         self.analysis_warm_rx = None;
         self.analysis_warm_started = false;
         self.analysis_selection_rx = None;
@@ -1184,8 +1211,7 @@ impl ObjectsLayer {
         let (tx, rx) = crossbeam_channel::bounded::<Result<LoadResult, String>>(1);
         self.object_load_cancel = Some(cancel);
         self.load_rx = Some(rx);
-        self.property_load_rx = None;
-        self.property_load_key = None;
+        self.cancel_property_load();
         self.status = format!("Loading SpatialData objects: {element_name}");
 
         std::thread::Builder::new()

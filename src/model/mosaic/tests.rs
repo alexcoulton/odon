@@ -33,4 +33,18 @@ mod tests {
         assert!(size[0] >= 220.0);
         assert!(size[1] >= 115.0);
     }
+
+    #[test]
+    fn renderer_object_observation_is_exposed_in_mosaic_object_state() {
+        let mut mosaic = MosaicModel::default();
+        let observation = json!({
+            "resident_property_bytes": 1234,
+            "in_flight_property_loads": 2,
+            "loads_cancelled": 7,
+        });
+
+        mosaic.observe_renderer_object_state(&observation);
+
+        assert_eq!(mosaic.object_state()["renderer"], observation);
+    }
 }

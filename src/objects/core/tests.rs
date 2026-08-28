@@ -498,6 +498,13 @@ fn lazy_property_lru_evicts_old_columns_but_pins_active_references() {
     activate(&mut layer, "b");
     layer.apply_loaded_property_values("b", &values);
     activate(&mut layer, "c");
+    layer.prepare_lazy_property_cache_for_load();
+
+    assert!(!layer.property_store.has_loaded("a"));
+    assert!(layer.property_store.has_loaded("b"));
+    assert_eq!(layer.lazy_property_lru, VecDeque::from(["b".into()]));
+    assert_eq!(layer.lazy_property_cache_evictions, 1);
+
     layer.apply_loaded_property_values("c", &values);
 
     assert!(!layer.property_store.has_loaded("a"));
@@ -522,6 +529,91 @@ fn lazy_property_lru_evicts_old_columns_but_pins_active_references() {
     assert!(!layer.property_store.has_loaded("c"));
     assert!(layer.property_store.has_loaded("d"));
     assert_eq!(layer.lazy_property_cache_evictions, 2);
+}
+
+#[test]
+fn cancelling_a_property_load_invalidates_its_worker_and_is_idempotent() {
+    let mut layer = ObjectsLayer::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (_tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
+    layer.property_load_rx = Some(rx);
+    layer.property_load_key = Some("old".to_string());
+    layer.property_load_cancel = Some(Arc::clone(&cancel));
+    layer.property_load_estimated_bytes = 4096;
+
+    layer.cancel_property_load();
+
+    assert!(cancel.load(Ordering::Relaxed));
+    assert!(layer.property_load_rx.is_none());
+    assert!(layer.property_load_key.is_none());
+    assert!(layer.property_load_cancel.is_none());
+    assert_eq!(layer.property_load_estimated_bytes, 0);
+    assert_eq!(layer.property_load_cancelled, 1);
+
+    layer.cancel_property_load();
+    assert_eq!(layer.property_load_cancelled, 1);
+}
+
+#[test]
+fn selecting_a_resident_property_cancels_an_obsolete_decode() {
+    let mut layer = ObjectsLayer::default();
+    layer.property_store.insert_column(
+        "resident".to_string(),
+        ObjectPropertyColumn::F32(Arc::new(NullableF32Column::from_optional_values([Some(
+            1.0,
+        )]))),
+    );
+    let obsolete = Arc::new(AtomicBool::new(false));
+    let (_tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
+    layer.property_load_rx = Some(rx);
+    layer.property_load_key = Some("obsolete".to_string());
+    layer.property_load_cancel = Some(Arc::clone(&obsolete));
+
+    layer.ensure_property_loaded("resident");
+
+    assert!(obsolete.load(Ordering::Relaxed));
+    assert!(layer.property_load_rx.is_none());
+    assert!(layer.property_load_key.is_none());
+    assert_eq!(layer.property_load_cancelled, 1);
+}
+
+#[test]
+fn switching_to_single_color_cancels_an_obsolete_decode() {
+    let mut layer = ObjectsLayer::default();
+    layer.color_mode = ObjectColorMode::Continuous;
+    layer.color_property_key = "loading".to_string();
+    let obsolete = Arc::new(AtomicBool::new(false));
+    let (_tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
+    layer.property_load_rx = Some(rx);
+    layer.property_load_key = Some("loading".to_string());
+    layer.property_load_cancel = Some(Arc::clone(&obsolete));
+
+    layer.set_color_by_property(None);
+
+    assert!(obsolete.load(Ordering::Relaxed));
+    assert!(layer.property_load_rx.is_none());
+    assert_eq!(layer.property_load_cancelled, 1);
+}
+
+#[test]
+fn stale_property_result_cannot_install_after_a_newer_generation() {
+    let mut layer = ObjectsLayer::default();
+    let (tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
+    tx.send(PropertyLoadResult {
+        property_key: "old".to_string(),
+        generation: 4,
+        values: LoadedPropertyValues::ValuesByRow(HashMap::from([(0, serde_json::json!(42.0))])),
+    })
+    .expect("queue stale property result");
+    layer.property_load_rx = Some(rx);
+    layer.property_load_key = Some("new".to_string());
+    layer.property_load_generation = 5;
+    layer.property_load_cancel = Some(Arc::new(AtomicBool::new(false)));
+
+    layer.tick();
+
+    assert!(!layer.property_store.has_loaded("old"));
+    assert_eq!(layer.property_load_stale_results, 1);
 }
 
 #[test]

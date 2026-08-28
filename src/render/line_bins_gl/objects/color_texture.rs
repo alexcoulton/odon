@@ -83,8 +83,15 @@ impl ObjectLineInner {
             },
         ) && evicted.texture != texture
         {
-            self.textures_to_delete.push(evicted.texture);
+            self.textures_to_delete.push(ObjectTextureDelete {
+                texture: evicted.texture,
+                bytes: (evicted.width.max(0) as usize)
+                    .saturating_mul(evicted.height.max(0) as usize)
+                    .saturating_mul(4),
+            });
+            self.texture_evictions = self.texture_evictions.saturating_add(1);
         }
+        self.color_uploads = self.color_uploads.saturating_add(1);
         self.delete_queued(gl);
         self.colors.get(&cache_id)
     }

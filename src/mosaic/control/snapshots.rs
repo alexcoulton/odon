@@ -19,6 +19,7 @@ impl MosaicViewerApp {
                     "Mosaic image tile cache policy realized by renderer."
                 },
             },
+            "mosaic_object_observation": self.seg_geojson.control_loading_snapshot(),
         })
     }
 

@@ -585,6 +585,15 @@ impl AppModel {
         if based_on_projection_revision > self.projection_revision {
             return false;
         }
+        if self.mode == ModelMode::Mosaic {
+            if let Some(tile_loading) = observation.get("tile_loading_observation") {
+                self.tile_loading.observe(tile_loading);
+            }
+            if let Some(objects) = observation.get("mosaic_object_observation") {
+                self.mosaic.observe_renderer_object_state(objects);
+            }
+            return true;
+        }
         let Some(dataset) = self.dataset.as_mut() else {
             return false;
         };

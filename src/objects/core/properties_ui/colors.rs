@@ -1,3 +1,4 @@
+use super::property_loading::acquire_lazy_property_load;
 use super::*;
 
 impl ObjectsLayer {
@@ -119,6 +120,9 @@ impl ObjectsLayer {
         self.color_mapping = next_mapping;
         self.resolved_continuous_domain = None;
         self.continuous_color_payload = None;
+        if self.color_mode == ObjectColorMode::Single {
+            self.cancel_property_load();
+        }
         if self.color_mode == ObjectColorMode::ByProperty {
             let key = self.color_property_key.clone();
             self.ensure_property_loaded(key.as_str());
@@ -511,6 +515,13 @@ impl ObjectsLayer {
     }
 
     pub(in crate::objects) fn ensure_property_loaded(&mut self, property_key: &str) {
+        if self
+            .property_load_key
+            .as_deref()
+            .is_some_and(|loading| loading != property_key)
+        {
+            self.cancel_property_load();
+        }
         if self.property_store.has_loaded(property_key) {
             self.touch_lazy_property_cache_key(property_key);
             self.enforce_lazy_property_cache_capacity();
@@ -529,7 +540,7 @@ impl ObjectsLayer {
         {
             return;
         }
-        let Some(path) = self.loaded_geojson.as_ref() else {
+        let Some(path) = self.loaded_geojson.clone() else {
             return;
         };
         if self.property_load_key.as_deref() == Some(property_key)
@@ -538,22 +549,45 @@ impl ObjectsLayer {
             return;
         };
 
+        self.cancel_property_load();
+        self.prepare_lazy_property_cache_for_load();
+
         let property_key_owned = property_key.to_string();
-        let path = path.clone();
         let (tx, rx) = crossbeam_channel::bounded::<PropertyLoadResult>(1);
+        self.property_load_generation = self.property_load_generation.wrapping_add(1).max(1);
+        let generation = self.property_load_generation;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_worker = Arc::clone(&cancel);
         self.property_load_rx = Some(rx);
         self.property_load_key = Some(property_key_owned.clone());
+        self.property_load_cancel = Some(cancel);
+        self.property_load_started = self.property_load_started.saturating_add(1);
+        let row_count = self.objects.as_ref().map_or(0, |objects| objects.len()) as u64;
+        // The decoder temporarily owns a source-row column before the final object-order compact
+        // column is installed. Account both f32 payloads plus their validity bitmaps.
+        self.property_load_estimated_bytes = row_count.saturating_mul(66).div_ceil(8);
+        self.property_load_peak_estimated_bytes = self
+            .property_load_peak_estimated_bytes
+            .max(self.property_load_estimated_bytes);
         self.status = format!("Loading property '{property_key}'...");
 
         std::thread::Builder::new()
-            .name(format!("seg-objects-property-loader-{property_key}"))
+            .name(format!("seg-objects-property-loader-{generation}"))
             .spawn(move || {
+                let Some(_permit) = acquire_lazy_property_load(&cancel_worker) else {
+                    return;
+                };
                 if let Ok(values) = load_parquet_property_values_for_loaded_objects(
                     &path,
                     property_key_owned.as_str(),
+                    &cancel_worker,
                 ) {
+                    if cancel_worker.load(Ordering::Relaxed) {
+                        return;
+                    }
                     let _ = tx.send(PropertyLoadResult {
                         property_key: property_key_owned,
+                        generation,
                         values,
                     });
                 }

@@ -2401,6 +2401,23 @@ fn stale_renderer_observation_cannot_revert_actor_owned_state() {
 }
 
 #[test]
+fn mosaic_renderer_observations_are_accepted_without_a_single_dataset() {
+    let mut model = AppModel::project();
+    model.mode = ModelMode::Mosaic;
+    let observation = json!({
+        "mosaic_object_observation": {
+            "resident_property_bytes": 8192,
+            "loads_cancelled": 3,
+        },
+        "tile_loading_observation": {
+            "cache": {"loaded": 5},
+        },
+    });
+
+    assert!(model.observe_renderer_state(&observation, model.projection_revision));
+}
+
+#[test]
 fn project_metadata_and_roi_transactions_execute_without_a_renderer() {
     let mut model = AppModel::project();
     let created = model
