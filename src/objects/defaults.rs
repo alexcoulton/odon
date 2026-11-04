@@ -17,6 +17,7 @@ impl Default for ObjectsLayer {
             loaded_geojson: None,
             downsample_factor: 1.0,
             control_renderer_payload_identity: None,
+            installed_preload: std::sync::Weak::new(),
             render_resource_cache_id: next_object_render_resource_cache_id(),
             render_style_cache_id: next_object_render_style_cache_id(),
             display_transform: SpatialDataTransform2::default(),

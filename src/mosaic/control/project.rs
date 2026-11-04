@@ -137,7 +137,7 @@ impl MosaicViewerApp {
     ) -> usize {
         let mut installed = 0usize;
         for (path, layer) in preloaded {
-            installed += self.seg_geojson.install_preloaded(path, layer.as_ref());
+            installed += self.seg_geojson.install_preloaded(path, layer);
         }
         if installed > 0 {
             self.renderer_status =

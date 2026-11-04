@@ -360,6 +360,8 @@ pub struct ObjectsLayer {
     pub loaded_geojson: Option<PathBuf>,
     pub downsample_factor: f32,
     control_renderer_payload_identity: Option<usize>,
+    /// The shared preload this layer currently shows, so repeated projections can skip reinstalling.
+    installed_preload: std::sync::Weak<PreloadedObjectLayer>,
     render_resource_cache_id: u64,
     render_style_cache_id: u64,
     display_transform: SpatialDataTransform2,

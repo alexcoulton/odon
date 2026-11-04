@@ -296,6 +296,7 @@ impl ObjectsLayer {
             _ => true,
         };
         self.control_renderer_payload_identity = None;
+        self.installed_preload = std::sync::Weak::new();
         self.presentation_state_cache = ObjectPresentationStateCache::default();
         self.outline_mode_runtime = ObjectOutlineModeRuntime::default();
         self.outline_frame_stats = ObjectOutlineFrameStats::default();
@@ -430,6 +431,7 @@ impl ObjectsLayer {
 
     pub fn clear(&mut self) {
         self.control_renderer_payload_identity = None;
+        self.installed_preload = std::sync::Weak::new();
         self.presentation_state_cache = ObjectPresentationStateCache::default();
         self.outline_mode_runtime = ObjectOutlineModeRuntime::default();
         self.outline_frame_stats = ObjectOutlineFrameStats::default();
@@ -1186,6 +1188,22 @@ impl ObjectsLayer {
         self.load_rx = None;
         self.object_load_cancel = None;
         self.install_load_result(preloaded.result.clone());
+    }
+
+    /// Installs a shared preload unless this layer already shows it. Replacing a layer discards
+    /// its colour groups, presentation state, and renderers, so this must stay cheap to repeat.
+    /// Returns whether anything was installed.
+    pub fn install_shared_preload(&mut self, preloaded: &Arc<PreloadedObjectLayer>) -> bool {
+        if self.has_shared_preload(preloaded) {
+            return false;
+        }
+        self.install_preloaded(preloaded);
+        self.installed_preload = Arc::downgrade(preloaded);
+        true
+    }
+
+    pub fn has_shared_preload(&self, preloaded: &Arc<PreloadedObjectLayer>) -> bool {
+        std::ptr::eq(self.installed_preload.as_ptr(), Arc::as_ptr(preloaded))
     }
 
     pub fn install_control_resource(

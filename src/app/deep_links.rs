@@ -321,8 +321,13 @@ impl OmeZarrViewerApp {
         }
     }
 
-    pub fn install_preloaded_project_segmentation(&mut self, preloaded: &PreloadedObjectLayer) {
-        self.seg_objects.install_preloaded(preloaded);
+    pub fn install_preloaded_project_segmentation(
+        &mut self,
+        preloaded: &Arc<PreloadedObjectLayer>,
+    ) {
+        if !self.seg_objects.install_shared_preload(preloaded) {
+            return;
+        }
         self.restore_project_object_state_after_segmentation_load();
         self.set_active_layer(LayerId::SegmentationObjects);
         self.roi_selector_ui

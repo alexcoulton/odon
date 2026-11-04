@@ -214,7 +214,23 @@ fn project_roi_segmentation_path(
 #[derive(Default)]
 struct ProjectObjectPreloadRenderProjection {
     resources: HashMap<(PathBuf, ObjectPreloadSettings), Arc<PreloadedObjectLayer>>,
+    applied: Option<AppliedProjectObjectPreloads>,
     ui: ProjectObjectCacheUiState,
+}
+
+/// What `resources` was built from. Keeping it unchanged keeps each preload's `Arc` identity, which
+/// is how layers recognise that they already show it.
+struct AppliedProjectObjectPreloads {
+    settings: ObjectPreloadSettings,
+    resources: Arc<Vec<(PathBuf, Arc<odon::model::ControlObjectResource>)>>,
+}
+
+fn same_shared_entries<T>(left: &[(PathBuf, Arc<T>)], right: &[(PathBuf, Arc<T>)]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.0 == right.0 && Arc::ptr_eq(&left.1, &right.1))
 }
 
 pub struct RootApp {
@@ -982,14 +998,24 @@ impl RootApp {
             loading: projection.state["loading"].as_bool().unwrap_or(false),
             cached_settings: settings,
         };
-        self.object_preload.resources.clear();
-        for (path, resource) in projection.resources.iter() {
-            let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
-                continue;
-            };
-            self.object_preload
-                .resources
-                .insert((path.clone(), settings), Arc::new(preloaded.clone()));
+        let unchanged = self.object_preload.applied.as_ref().is_some_and(|applied| {
+            applied.settings == settings
+                && same_shared_entries(&applied.resources, &projection.resources)
+        });
+        if !unchanged {
+            self.object_preload.resources.clear();
+            for (path, resource) in projection.resources.iter() {
+                let Some(preloaded) = resource.renderer_payload::<PreloadedObjectLayer>() else {
+                    continue;
+                };
+                self.object_preload
+                    .resources
+                    .insert((path.clone(), settings), Arc::new(preloaded.clone()));
+            }
+            self.object_preload.applied = Some(AppliedProjectObjectPreloads {
+                settings,
+                resources: Arc::clone(&projection.resources),
+            });
         }
         self.object_preload.ui.cached = self.object_preload.resources.len();
 

@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use eframe::egui;
 
@@ -58,6 +59,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     category_colors: CategoryColors,
     legend_ui: LegendUiState,
     property_cache_capacity: Option<usize>,
+    canonical_paths: HashMap<PathBuf, PathBuf>,
     actor_load_requested: BTreeSet<usize>,
     force_repaint_frames: u32,
     primary_selected_item_id: Option<usize>,
@@ -85,6 +87,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             category_colors: CategoryColors::default(),
             legend_ui: LegendUiState::default(),
             property_cache_capacity: None,
+            canonical_paths: HashMap::new(),
             actor_load_requested: BTreeSet::new(),
             force_repaint_frames: 0,
             primary_selected_item_id: None,
@@ -298,23 +301,42 @@ impl MosaicGeoJsonSegmentationOverlay {
         st.seg_path = Some(resolved);
     }
 
+    /// Called for every projection, so an unchanged preload must return before doing any work.
     pub fn install_preloaded(
         &mut self,
         seg_path: &std::path::Path,
-        preloaded: &PreloadedObjectLayer,
+        preloaded: &Arc<PreloadedObjectLayer>,
     ) -> usize {
+        let targets = self
+            .items
+            .iter()
+            .filter(|(_, st)| {
+                st.seg_path.as_ref().is_some_and(|path| {
+                    paths_match(path, seg_path, &mut self.canonical_paths)
+                        && st
+                            .layer
+                            .as_ref()
+                            .is_none_or(|layer| !layer.has_shared_preload(preloaded))
+                })
+            })
+            .map(|(item_id, _)| *item_id)
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return 0;
+        }
+
         let style = self.shared_style();
         let color_mapping = self.render_color_mapping();
         let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
         let mut installed = 0usize;
-        for st in self.items.values_mut() {
+        for item_id in targets {
+            let Some(st) = self.items.get_mut(&item_id) else {
+                continue;
+            };
             let Some(path) = st.seg_path.as_ref() else {
                 continue;
             };
-            if !paths_match(path, seg_path) {
-                continue;
-            }
             let mut layer = ObjectsLayer::default();
             layer.set_object_fill_renderer(self.object_fill_renderer.clone());
             layer.set_lazy_property_cache_capacity(self.property_cache_capacity);
@@ -328,7 +350,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                 &item_color_mapping,
                 &color_level_overrides,
             );
-            layer.install_preloaded(preloaded);
+            layer.install_shared_preload(preloaded);
             st.status = format!("Using cached objects: {}", path.to_string_lossy());
             st.layer = Some(layer);
             installed += 1;
@@ -1236,14 +1258,35 @@ impl MosaicGeoJsonSegmentationOverlay {
     }
 }
 
-fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
+/// Compares paths by what they resolve to. Resolving touches the filesystem, which may be a slow
+/// external or network drive on the UI thread, so each successful result is remembered.
+fn paths_match(
+    a: &std::path::Path,
+    b: &std::path::Path,
+    canonical_paths: &mut HashMap<PathBuf, PathBuf>,
+) -> bool {
     if a == b {
         return true;
     }
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a.to_string_lossy() == b.to_string_lossy(),
+    match (
+        canonical_path(a, canonical_paths),
+        canonical_path(b, canonical_paths),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
     }
+}
+
+fn canonical_path(
+    path: &std::path::Path,
+    canonical_paths: &mut HashMap<PathBuf, PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(canonical) = canonical_paths.get(path) {
+        return Some(canonical.clone());
+    }
+    let canonical = path.canonicalize().ok()?;
+    canonical_paths.insert(path.to_path_buf(), canonical.clone());
+    Some(canonical)
 }
 
 static EMPTY_COLOR_LEVEL_OVERRIDES: std::sync::LazyLock<HashMap<String, ObjectColorLevelOverride>> =
@@ -1309,6 +1352,185 @@ fn apply_style(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("odon-seg-overlay-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn preload(&self, file: &str) -> (PathBuf, Arc<PreloadedObjectLayer>) {
+            let path = self.0.join(file);
+            let fixture = serde_json::json!({
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "id": "cell",
+                    "properties": {"class": "tumour"},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]
+                    }
+                }]
+            });
+            std::fs::write(&path, fixture.to_string()).expect("write object fixture");
+            let resource = crate::objects::load_control_object_resource(path.clone(), 1.0)
+                .expect("load object fixture");
+            let preloaded = resource
+                .renderer_payload::<PreloadedObjectLayer>()
+                .expect("object resource carries a renderer payload")
+                .clone();
+            (path, Arc::new(preloaded))
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn overlay_with_items(paths: &[&PathBuf]) -> MosaicGeoJsonSegmentationOverlay {
+        let mut overlay = MosaicGeoJsonSegmentationOverlay::default();
+        for (item_id, path) in paths.iter().enumerate() {
+            overlay.items.insert(
+                item_id,
+                ItemState {
+                    roi_id: format!("ROI{item_id}"),
+                    seg_path: Some((*path).clone()),
+                    ..ItemState::default()
+                },
+            );
+        }
+        overlay
+    }
+
+    /// A value `install_preloaded` resets, so surviving proves the layer was not replaced.
+    const UNTOUCHED_MARKER: f32 = 0.123;
+
+    fn mark_layer(overlay: &mut MosaicGeoJsonSegmentationOverlay, item_id: usize) {
+        overlay
+            .items
+            .get_mut(&item_id)
+            .unwrap()
+            .layer
+            .as_mut()
+            .unwrap()
+            .opacity = UNTOUCHED_MARKER;
+    }
+
+    fn layer_is_marked(overlay: &MosaicGeoJsonSegmentationOverlay, item_id: usize) -> bool {
+        overlay.items[&item_id].layer.as_ref().unwrap().opacity == UNTOUCHED_MARKER
+    }
+
+    #[test]
+    fn repeated_projections_keep_the_installed_layer() {
+        let dir = TestDir::new("repeat");
+        let (path, preloaded) = dir.preload("a.geojson");
+        let mut overlay = overlay_with_items(&[&path]);
+
+        assert_eq!(overlay.install_preloaded(&path, &preloaded), 1);
+        mark_layer(&mut overlay, 0);
+
+        assert_eq!(overlay.install_preloaded(&path, &preloaded), 0);
+        assert!(layer_is_marked(&overlay, 0));
+    }
+
+    #[test]
+    fn a_changed_preload_replaces_only_the_matching_layer() {
+        let dir = TestDir::new("changed");
+        let (path_a, preloaded_a) = dir.preload("a.geojson");
+        let (path_b, preloaded_b) = dir.preload("b.geojson");
+        let mut overlay = overlay_with_items(&[&path_a, &path_b]);
+        overlay.install_preloaded(&path_a, &preloaded_a);
+        overlay.install_preloaded(&path_b, &preloaded_b);
+        mark_layer(&mut overlay, 0);
+        mark_layer(&mut overlay, 1);
+
+        let (_, reloaded_a) = dir.preload("a.geojson");
+
+        assert_eq!(overlay.install_preloaded(&path_a, &reloaded_a), 1);
+        assert!(!layer_is_marked(&overlay, 0));
+        assert!(layer_is_marked(&overlay, 1));
+    }
+
+    #[test]
+    fn items_without_a_layer_still_receive_an_already_seen_preload() {
+        let dir = TestDir::new("late-item");
+        let (path, preloaded) = dir.preload("a.geojson");
+        let mut overlay = overlay_with_items(&[&path]);
+        overlay.install_preloaded(&path, &preloaded);
+        overlay.items.insert(
+            1,
+            ItemState {
+                roi_id: "ROI1".to_string(),
+                seg_path: Some(path.clone()),
+                ..ItemState::default()
+            },
+        );
+
+        assert_eq!(overlay.install_preloaded(&path, &preloaded), 1);
+        assert!(overlay.items[&1].layer.is_some());
+    }
+
+    #[test]
+    fn loading_other_data_forgets_the_installed_preload() {
+        let dir = TestDir::new("forget");
+        let (_, preloaded) = dir.preload("a.geojson");
+        let (_, other) = dir.preload("b.geojson");
+        let mut layer = ObjectsLayer::default();
+
+        assert!(layer.install_shared_preload(&preloaded));
+        assert!(layer.has_shared_preload(&preloaded));
+        assert!(!layer.has_shared_preload(&other));
+
+        layer.install_preloaded(other.as_ref());
+        assert!(!layer.has_shared_preload(&preloaded));
+        assert!(layer.install_shared_preload(&preloaded));
+    }
+
+    #[test]
+    fn differently_spelled_paths_match_and_resolved_paths_are_remembered() {
+        let dir = TestDir::new("paths");
+        let (path, _) = dir.preload("a.geojson");
+        std::fs::create_dir_all(dir.0.join("sub")).expect("create subdirectory");
+        let spelled_differently = dir.0.join("sub").join("..").join("a.geojson");
+        let (other, _) = dir.preload("b.geojson");
+        let mut canonical_paths = HashMap::new();
+
+        assert!(paths_match(&path, &path, &mut canonical_paths));
+        assert!(
+            canonical_paths.is_empty(),
+            "identical paths need no filesystem access"
+        );
+        assert!(paths_match(
+            &spelled_differently,
+            &path,
+            &mut canonical_paths
+        ));
+        assert!(!paths_match(&other, &path, &mut canonical_paths));
+        assert_eq!(canonical_paths.len(), 3);
+
+        std::fs::remove_file(&path).expect("remove fixture");
+        assert!(
+            paths_match(&spelled_differently, &path, &mut canonical_paths),
+            "a remembered result must not touch the filesystem again"
+        );
+    }
+
+    #[test]
+    fn missing_files_do_not_match_a_different_path() {
+        let mut canonical_paths = HashMap::new();
+        assert!(!paths_match(
+            std::path::Path::new("/odon-test-missing/a"),
+            std::path::Path::new("/odon-test-missing/b"),
+            &mut canonical_paths,
+        ));
+    }
 
     #[test]
     fn per_roi_domain_replaces_only_the_continuous_domain() {

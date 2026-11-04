@@ -85,3 +85,33 @@ mod native_control_cutover_tests {
         );
     }
 }
+
+mod project_object_preload_tests {
+    use super::super::*;
+
+    #[test]
+    fn preload_entries_match_only_on_the_same_shared_resources_in_order() {
+        let (a, b) = (Arc::new(1), Arc::new(2));
+        let entries = |pairs: &[(&str, &Arc<i32>)]| {
+            pairs
+                .iter()
+                .map(|(path, value)| (PathBuf::from(path), Arc::clone(value)))
+                .collect::<Vec<_>>()
+        };
+        let original = entries(&[("a", &a), ("b", &b)]);
+
+        assert!(same_shared_entries(
+            &original,
+            &entries(&[("a", &a), ("b", &b)])
+        ));
+        assert!(!same_shared_entries(&original, &entries(&[("a", &a)])));
+        assert!(
+            !same_shared_entries(&original, &entries(&[("a", &a), ("b", &Arc::new(2))])),
+            "an equal value from a new load is still a new resource"
+        );
+        assert!(!same_shared_entries(
+            &original,
+            &entries(&[("a", &a), ("c", &b)])
+        ));
+    }
+}
