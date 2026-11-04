@@ -69,6 +69,49 @@ fn bootstrap_project(channels: &ControlActorChannels, snapshot: ProjectModelSnap
 }
 
 #[test]
+fn duplicate_roi_ids_open_and_apply_deep_links_to_the_resolved_source() {
+    let dataset_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    for method in ["project.rois.open", "deep_links.apply"] {
+        let channels = spawn_test_actor();
+        let mut snapshot = project_roi_snapshot(dataset_path.clone(), None);
+        let mut other = snapshot.rois[0].clone();
+        other.set_dataset_source(DatasetSource::Local(PathBuf::from(
+            "/tmp/another-sample/synthetic_5ch.ome.zarr",
+        )));
+        snapshot.rois.insert(0, other);
+        snapshot.config.rois.clone_from(&snapshot.rois);
+        let source_key = snapshot.rois[1].source_key().unwrap();
+        bootstrap_project(&channels, snapshot);
+
+        let params = if method == "deep_links.apply" {
+            json!({"request":{"roi":source_key,"channel":"CD3"}})
+        } else {
+            json!({"roi":source_key})
+        };
+        let (open, open_rx) = request(method, params);
+        channels.request_tx.send(open).unwrap();
+        let result = open_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["resources_ready"], true, "{method}: {result}");
+
+        let projection = channels.presentation_rx.try_recv().unwrap();
+        assert_eq!(projection.mode, ModelMode::Single);
+        assert_eq!(
+            projection.document.unwrap().path(),
+            Some(dataset_path.as_path())
+        );
+        assert_eq!(
+            projection.project.focused_source_key,
+            Some(source_key.clone())
+        );
+        assert_eq!(projection.project.selected_source_keys, vec![source_key]);
+    }
+}
+
+#[test]
 fn project_roi_open_commits_document_resources_and_saved_view_without_a_frame() {
     let channels = spawn_test_actor_with_objects();
     let dataset_path =

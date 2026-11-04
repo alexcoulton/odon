@@ -56,6 +56,30 @@ pub fn spawn_listener() -> Option<Receiver<DeepLinkRequest>> {
     Some(rx)
 }
 
+/// Relays messages to a new receiver, calling `wake` after each one so the consumer can sleep
+/// until there is work instead of polling. Anything queued before this is called is relayed too.
+pub fn forward_with_wake<T, F>(rx: Receiver<T>, wake: F) -> Receiver<T>
+where
+    T: Send + 'static,
+    F: Fn() + Send + 'static,
+{
+    let (tx, forwarded) = mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("odon-deep-link-wake".to_string())
+        .spawn(move || {
+            while let Ok(message) = rx.recv() {
+                if tx.send(message).is_err() {
+                    break;
+                }
+                wake();
+            }
+        });
+    if let Err(error) = spawned {
+        crate::log_warn!("deep_link: could not start the wake thread: {error}");
+    }
+    forwarded
+}
+
 fn handle_client(mut stream: TcpStream, tx: &Sender<DeepLinkRequest>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut raw = String::new();
@@ -82,4 +106,34 @@ fn handle_client(mut stream: TcpStream, tx: &Sender<DeepLinkRequest>) {
 
     let _ = stream.write_all(ACK.as_bytes());
     let _ = stream.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn forwarding_relays_queued_and_later_messages_and_wakes_for_each() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(1).expect("queue before forwarding starts");
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&wakes);
+
+        let forwarded = forward_with_wake(rx, move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        tx.send(2).expect("send after forwarding starts");
+
+        let timeout = Duration::from_secs(5);
+        assert_eq!(forwarded.recv_timeout(timeout), Ok(1));
+        assert_eq!(forwarded.recv_timeout(timeout), Ok(2));
+        drop(tx);
+        assert!(
+            forwarded.recv_timeout(timeout).is_err(),
+            "closing the source ends the relay"
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    }
 }

@@ -455,15 +455,6 @@ struct DataResourceOpenRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProjectMetadataRequest {
-    default_dataset: Option<Value>,
-    secondary_dataset: Option<Value>,
-    default_threshold_marker: Option<Value>,
-    mosaic_segmentation_search_roots: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SamplesheetInspectRequest {
     path: String,
     #[serde(default)]
@@ -603,7 +594,8 @@ struct ProjectRoiOrderRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRoiSelectRequest {
-    ids: Vec<String>,
+    ids: Option<Vec<String>>,
+    source_keys: Option<Vec<String>>,
     #[serde(default = "default_roi_selection_mode")]
     mode: String,
 }

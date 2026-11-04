@@ -744,7 +744,26 @@ impl OmeZarrViewerApp {
             return Err("actor projection has an invalid viewport count".to_string());
         }
 
+        // The workspace is out of `self` while it is rebuilt. Put it back on failure, otherwise
+        // one rejected projection leaves the canvas without a workspace until restart.
         let mut current = self.viewport_workspace.take();
+        let result = self.apply_control_actor_viewports_projection(
+            projection,
+            projected_viewports,
+            &mut current,
+        );
+        if result.is_err() {
+            self.viewport_workspace = current;
+        }
+        result
+    }
+
+    fn apply_control_actor_viewports_projection(
+        &mut self,
+        projection: &serde_json::Value,
+        projected_viewports: &[serde_json::Value],
+        current: &mut Option<ViewportWorkspace<ViewerViewportState>>,
+    ) -> Result<(), String> {
         let current_active = current
             .as_ref()
             .map(|workspace| workspace.active_id().clone());

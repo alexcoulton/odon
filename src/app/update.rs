@@ -44,6 +44,29 @@ impl eframe::App for OmeZarrViewerApp {
             self.legacy_cell_threshold_points.set_project_config(cfg);
         }
 
+        let category_colors = &self.project_space.config().category_colors;
+        self.seg_objects.sync_category_colors(category_colors);
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut() {
+                objects.sync_category_colors(category_colors);
+            }
+        }
+        let pointer_down = ctx.input(|input| input.pointer.any_down());
+        let mut category_color_commit = self.seg_objects.take_category_color_commit(pointer_down);
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut()
+                && let Some(params) = objects.take_category_color_commit(pointer_down)
+            {
+                category_color_commit = Some(params);
+            }
+        }
+        if let Some(params) = category_color_commit {
+            self.native_command_ingress.push(NativeControlIntent {
+                method: "project.update_metadata",
+                params,
+            });
+        }
+
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close

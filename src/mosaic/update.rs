@@ -9,6 +9,12 @@ impl eframe::App for MosaicViewerApp {
         // viewport while progressively refining visible ROIs.
         self.refresh_system_memory_if_needed();
         self.seg_geojson.tick();
+        self.seg_geojson
+            .sync_category_colors(&self.project_space.config().category_colors);
+        let pointer_down = ctx.input(|input| input.pointer.any_down());
+        if let Some(params) = self.seg_geojson.take_category_color_commit(pointer_down) {
+            self.submit_native_control_intent("project.update_metadata", params);
+        }
         self.flush_pending_channel_contrast();
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation

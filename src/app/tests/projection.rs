@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn category_colors_update_through_the_project_command_and_survive_the_project_file() {
+    let params = serde_json::json!({"category_colors":{"Tumour":[230,57,70]}});
+    odon::control::ControlCommand::decode("project.update_metadata", params.clone())
+        .expect("legend commit is a typed actor command");
+    odon::control::ControlCommand::decode(
+        "project.update_metadata",
+        serde_json::json!({"category_colors":{"Tumour":[999,0,0]}}),
+    )
+    .expect_err("out-of-range colours are rejected");
+
+    let mut model = AppModel::project();
+    model
+        .dispatch("project.update_metadata", &params)
+        .unwrap()
+        .unwrap();
+    let project = model
+        .dispatch("project.get", &serde_json::json!({}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        project.response["metadata"]["category_colors"]["Tumour"],
+        serde_json::json!([230, 57, 70])
+    );
+
+    let config = odon::data::project_config::ProjectConfig {
+        category_colors: std::collections::BTreeMap::from([("Tumour".to_string(), [230, 57, 70])]),
+        ..Default::default()
+    };
+    let text = serde_json::to_string(&config).unwrap();
+    let restored: odon::data::project_config::ProjectConfig = serde_json::from_str(&text).unwrap();
+    assert_eq!(restored.category_colors, config.category_colors);
+    let older: odon::data::project_config::ProjectConfig = serde_json::from_str("{}").unwrap();
+    assert!(older.category_colors.is_empty(), "older projects still load");
+}
+
+#[test]
+fn rejected_actor_projection_keeps_the_viewer_workspace() {
+    let mut app = fixture_app();
+    let mut model = AppModel::project();
+    model
+        .bootstrap_dataset(&app.dataset)
+        .expect("actor fixture installs the dataset");
+    let mut projection = model.render_workspace_snapshot().unwrap();
+    app.apply_control_actor_workspace_projection(&projection)
+        .expect("canonical projection applies");
+
+    projection["layout"] = serde_json::json!("not-a-layout");
+    app.apply_control_actor_workspace_projection(&projection)
+        .expect_err("invalid layout is rejected");
+
+    assert!(
+        app.viewport_workspace.is_some(),
+        "a rejected projection must not leave the canvas without a workspace"
+    );
+}
+
+#[test]
 fn renderer_observation_excludes_actor_owned_workspace_semantics() {
     let mut app = fixture_app();
     let observation = app.control_renderer_observation_snapshot();

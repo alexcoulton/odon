@@ -364,6 +364,21 @@ fn project_roi_mosaic_and_deep_link_commands_are_typed() {
         .is_err()
     );
     assert!(
+        ControlCommand::decode(
+            "project.rois.select",
+            json!({"source_keys":["local:/tmp/sample/ROI1.ome.zarr"]})
+        )
+        .is_ok()
+    );
+    for params in [
+        json!({}),
+        json!({"ids":[],"source_keys":[]}),
+        json!({"source_keys":["local:/tmp/a", "local:/tmp/a"]}),
+        json!({"source_keys":[""]}),
+    ] {
+        assert!(ControlCommand::decode("project.rois.select", params).is_err());
+    }
+    assert!(
         ControlCommand::decode("mosaic.focus.set", json!({"index": 0, "roi_id": "ROI-1"})).is_err()
     );
     assert!(

@@ -304,11 +304,6 @@ mod rectangle_selection_tests {
         let new_bin_98 = object_render_cache_id(0x4a80, 98);
         let new_bin_226 = object_render_cache_id(0x4a80, 226);
         assert_ne!(new_bin_98, new_bin_226);
-        assert_ne!(
-            object_property_render_cache_id(0x4a20, "marker_a", 0),
-            object_property_render_cache_id(0x4a20, "marker_b", 0),
-            "simultaneous viewport styles need distinct GPU state caches"
-        );
     }
 
     #[test]
@@ -624,5 +619,268 @@ mod object_fill_tile_tests {
         assert!(layer.selection_cpu_overlay_dirty);
         assert_eq!(layer.selection_fill_state.as_slice(), &[255]);
         assert!(layer.selection_generation > before_generation);
+    }
+}
+
+#[test]
+fn scene_workload_enables_texture_outlines_for_small_mosaic_layers() {
+    let scale = 0.012;
+    let (layer_records, scene_records) = (20_000usize, 234_633usize);
+
+    let mut alone = ObjectOutlineModeRuntime::default();
+    let (texture, reason) = alone.resolve_preference(scale, layer_records, true);
+    assert!(!texture, "one small layer stays on exact vector outlines");
+    assert_eq!(reason, ObjectOutlineModeReason::VectorDetail);
+
+    let mut in_mosaic = ObjectOutlineModeRuntime::default();
+    let (texture, _) = in_mosaic.resolve_preference(scale, layer_records.max(scene_records), true);
+    assert!(texture, "the combined scene crosses the workload threshold");
+
+    let (texture, reason) =
+        in_mosaic.resolve_preference(1.0, layer_records.max(scene_records), true);
+    assert!(!texture, "zooming in returns to exact vector outlines");
+    assert_eq!(reason, ObjectOutlineModeReason::VectorDetail);
+}
+
+mod categorical_rendering_tests {
+    use super::*;
+
+    const MIXED_LABELS: [Option<&str>; 4] = [Some("tumour"), Some("immune"), None, Some("tumour")];
+
+    fn categorical_object(index: usize, label: Option<&str>) -> ObjectFeature {
+        let (x, y) = (index as f32 * 4_096.0, 0.0);
+        let mut inline_properties = serde_json::Map::new();
+        if let Some(label) = label {
+            inline_properties.insert("class".to_string(), serde_json::json!(label));
+        }
+        ObjectFeature {
+            id: format!("cell-{index}"),
+            polygons_world: vec![vec![
+                egui::pos2(x, y),
+                egui::pos2(x + 100.0, y),
+                egui::pos2(x + 100.0, y + 100.0),
+                egui::pos2(x, y + 100.0),
+                egui::pos2(x, y),
+            ]],
+            point_position_world: None,
+            bbox_world: egui::Rect::from_min_max(
+                egui::pos2(x, y),
+                egui::pos2(x + 100.0, y + 100.0),
+            ),
+            area_px: 10_000.0,
+            perimeter_px: 400.0,
+            centroid_world: egui::pos2(x + 50.0, y + 50.0),
+            inline_properties,
+            source_row_index: Some(index),
+        }
+    }
+
+    fn categorical_layer(labels: &[Option<&str>]) -> ObjectsLayer {
+        let objects = labels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| categorical_object(index, *label))
+            .collect::<Vec<_>>();
+        let mut layer = ObjectsLayer::default();
+        layer.object_fill_mesh = build_object_fill_mesh(&objects).ok();
+        layer.objects = Some(Arc::new(objects));
+        layer.color_mode = ObjectColorMode::ByProperty;
+        layer.color_property_key = "class".to_string();
+        layer.color_mapping = ObjectColorMapping::categorical("class");
+        layer.ensure_color_groups();
+        layer
+    }
+
+    fn override_for(layer: &mut ObjectsLayer, label: &str, style: ObjectColorLevelOverride) {
+        layer.color_level_overrides_property_key = "class".to_string();
+        layer.color_level_overrides.insert(label.to_string(), style);
+    }
+
+    fn plan_low_zoom_frame(
+        layer: &mut ObjectsLayer,
+        requested: bool,
+    ) -> tiles::ObjectFillTileFrame {
+        let colors = layer.cached_categorical_colors();
+        let visibility = layer.cached_visibility_state();
+        let mesh = layer.object_fill_mesh.clone().expect("fill mesh");
+        layer
+            .plan_object_fill_tile_frame(
+                &mesh,
+                mesh.bounds_local,
+                &crate::camera::Camera {
+                    center_world_lvl0: egui::pos2(0.0, 0.0),
+                    zoom_screen_per_lvl0_px: 0.01,
+                },
+                egui::Vec2::ZERO,
+                egui::vec2(1.0, 1.0),
+                colors.as_ref(),
+                requested,
+                &visibility,
+                1,
+            )
+            .expect("low-zoom tile frame")
+    }
+
+    #[test]
+    fn colours_each_object_by_category_and_leaves_unlabelled_objects_transparent() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+
+        let colors = layer.cached_categorical_colors().expect("payload");
+
+        assert_eq!(colors.colors_rgba.len(), 4);
+        assert_eq!(colors.colors_rgba[0][3], 255);
+        assert_eq!(colors.colors_rgba[0], colors.colors_rgba[3]);
+        assert_ne!(colors.colors_rgba[0], colors.colors_rgba[1]);
+        assert_eq!(colors.colors_rgba[2], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn camera_only_frames_reuse_the_colour_payload() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+
+        let first = layer.cached_categorical_colors().expect("payload");
+        let second = layer.cached_categorical_colors().expect("payload");
+
+        assert!(Arc::ptr_eq(&first.colors_rgba, &second.colors_rgba));
+        assert_eq!(first.generation, second.generation);
+    }
+
+    #[test]
+    fn colour_and_visibility_overrides_rebuild_the_payload_with_a_new_generation() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        let original = layer.cached_categorical_colors().expect("payload");
+
+        override_for(
+            &mut layer,
+            "tumour",
+            ObjectColorLevelOverride {
+                color_rgb: Some([1, 2, 3]),
+                ..ObjectColorLevelOverride::default()
+            },
+        );
+        let recoloured = layer.cached_categorical_colors().expect("payload");
+        assert_eq!(recoloured.colors_rgba[0], [1, 2, 3, 255]);
+        assert_ne!(recoloured.generation, original.generation);
+
+        override_for(
+            &mut layer,
+            "tumour",
+            ObjectColorLevelOverride {
+                visible: false,
+                ..ObjectColorLevelOverride::default()
+            },
+        );
+        let hidden = layer.cached_categorical_colors().expect("payload");
+        assert_eq!(hidden.colors_rgba[0][3], 0);
+        assert_eq!(hidden.colors_rgba[3][3], 0);
+        assert_eq!(hidden.colors_rgba[1][3], 255);
+        assert_ne!(hidden.generation, recoloured.generation);
+    }
+
+    #[test]
+    fn project_category_colours_reach_the_payload() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.cached_categorical_colors().expect("payload");
+
+        layer.category_colors.set("immune", [9, 8, 7]);
+
+        let colors = layer.cached_categorical_colors().expect("payload");
+        assert_eq!(colors.colors_rgba[1], [9, 8, 7, 255]);
+    }
+
+    #[test]
+    fn non_categorical_modes_have_no_payload_and_release_the_old_one() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.cached_categorical_colors().expect("payload");
+
+        layer.color_mode = ObjectColorMode::Single;
+
+        assert!(layer.cached_categorical_colors().is_none());
+        assert!(layer.categorical_color_payload.is_none());
+    }
+
+    #[test]
+    fn categorical_payload_does_not_collide_with_continuous_generations() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        let before = layer.continuous_color_generation;
+
+        let colors = layer.cached_categorical_colors().expect("payload");
+
+        assert_ne!(colors.generation, before);
+        assert_eq!(colors.generation, layer.continuous_color_generation);
+    }
+
+    #[test]
+    fn category_count_does_not_multiply_tile_compose_passes() {
+        let labels = ["a", "b", "c", "d", "e", "f"].map(Some);
+        let mut layer = categorical_layer(&labels);
+
+        let frame = plan_low_zoom_frame(&mut layer, true);
+
+        assert_eq!(frame.styles.len(), 1);
+        assert!(frame.styles[0].object_colors_rgba.is_some());
+        assert!(frame.styles[0].border.use_object_colors);
+    }
+
+    #[test]
+    fn outlines_only_tiles_compose_zero_alpha_fills_but_keep_borders() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.fill_cells = false;
+        layer.fill_opacity = 0.3;
+
+        let frame = plan_low_zoom_frame(&mut layer, true);
+
+        let style = &frame.styles[0];
+        assert_eq!(style.object_color_opacity, 0.0);
+        assert_eq!(style.selected_color.a(), 0);
+        assert!(style.border.enabled);
+        assert_eq!(
+            layer.fill_opacity, 0.3,
+            "the configured opacity is retained"
+        );
+    }
+
+    #[test]
+    fn filled_tiles_keep_the_configured_fill_opacity() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.fill_cells = true;
+        layer.fill_opacity = 0.5;
+
+        let frame = plan_low_zoom_frame(&mut layer, true);
+
+        assert_eq!(frame.styles[0].object_color_opacity, 0.5);
+    }
+
+    #[test]
+    fn texture_outlines_need_something_visible_to_draw() {
+        let mut layer = ObjectsLayer {
+            fill_cells: false,
+            opacity: 0.75,
+            width_screen_px: 1.0,
+            ..ObjectsLayer::default()
+        };
+        assert!(layer.texture_outline_style_eligible());
+
+        layer.width_screen_px = 0.0;
+        assert!(!layer.texture_outline_style_eligible());
+
+        layer.fill_cells = true;
+        layer.fill_opacity = 0.3;
+        assert!(layer.texture_outline_style_eligible());
+    }
+
+    #[test]
+    fn small_layers_join_the_texture_path_only_through_a_heavy_scene() {
+        let layer = categorical_layer(&MIXED_LABELS);
+        let mesh = layer.object_fill_mesh.as_ref().expect("fill mesh");
+
+        assert!(!tiles::object_fill_tile_path_eligible(mesh, 0.01, false));
+        assert!(tiles::object_fill_tile_path_eligible(mesh, 0.01, true));
+        assert!(
+            !tiles::object_fill_tile_path_eligible(mesh, 4.0, true),
+            "inspection zoom always stays on exact vector geometry"
+        );
+        assert!(!outline_mode::scene_workload_covers_small_layers(49_999));
+        assert!(outline_mode::scene_workload_covers_small_layers(50_000));
     }
 }

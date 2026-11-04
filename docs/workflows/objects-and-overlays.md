@@ -141,9 +141,14 @@ Use `Color by` to colour objects by a categorical property such as cell type,
 cluster, phenotype, or call state. If the object file uses lazy property loading,
 some properties may appear with `(load)` and are loaded when selected.
 
-When colouring by property, the legend appears below the filter controls. Legend
-checkboxes show or hide specific category values without changing the underlying
-object file.
+When colouring by property, a collapsible legend appears below the filter controls. Use `All`,
+`None`, `Invert`, or a row's `Only` button to choose which categories are shown; this does not
+change the underlying object file. Sort rows by count or name, and use `Pop out` to move the legend
+into a resizable window.
+
+Colours chosen in the legend, or with a palette from its `Colours` menu, are saved in the project
+and apply to that label in every ROI and colour column. A colour set for one view, such as by a deep
+link, takes priority for that view. `Reset` returns a label to its default colour.
 
 Choose `Continuous` to colour a numeric property without creating categories or quantile bins.
 Select a named palette or custom stops, linear or log10 scale, an automatic or fixed domain,

@@ -637,20 +637,41 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
             request,
             result,
         } => {
-            if request_is_cancelled(&request) {
-                reject_cancelled_request(request, diagnostics, "project object source scan");
+            if request.as_ref().is_some_and(request_is_cancelled) {
+                reject_cancelled_request(
+                    request.unwrap(),
+                    diagnostics,
+                    "project object source scan",
+                );
                 return;
             }
             match result {
                 Ok(sources) => {
                     if !model.install_project_object_preload_sources(&scope, sources) {
-                        reject_stale_project_worker(
-                            request,
-                            diagnostics,
-                            "project object source scan",
-                        );
+                        if let Some(request) = request {
+                            reject_stale_project_worker(
+                                request,
+                                diagnostics,
+                                "project object source scan",
+                            );
+                        } else {
+                            diagnostics
+                                .stale_worker_completions
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
                         return;
                     }
+                    publish_projection(
+                        model,
+                        render_document.clone(),
+                        presentation_tx,
+                        presentation_coalesce_rx,
+                        wake_ui,
+                        diagnostics,
+                    );
+                    let Some(request) = request else {
+                        return;
+                    };
                     let response = match request.command.method() {
                         "project.objects.preload.get" => model.project_object_preload_snapshot(),
                         "project.objects.preload.list_sources" => {
@@ -672,14 +693,18 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                     };
                     finish_request(request, response, diagnostics);
                 }
-                Err(error) => reject_actor_request(
-                    request,
-                    diagnostics,
-                    ControlError::new(
-                        ControlErrorKind::Application,
-                        format!("project object source scan failed: {error}"),
-                    ),
-                ),
+                Err(error) => {
+                    let message = format!("project object source scan failed: {error}");
+                    if let Some(request) = request {
+                        reject_actor_request(
+                            request,
+                            diagnostics,
+                            ControlError::new(ControlErrorKind::Application, message),
+                        );
+                    } else {
+                        eprintln!("{message}");
+                    }
+                }
             }
         }
         LoadCompletion::ProjectObjectPreload {

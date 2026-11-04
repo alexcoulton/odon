@@ -321,6 +321,7 @@ impl ObjectsLayer {
         self.lazy_property_cache_evictions = 0;
         self.color_legend_cache = None;
         self.continuous_color_payload = None;
+        self.categorical_color_payload = None;
         self.color_groups_cache.clear();
         let has_active_color_key = (self.color_mode == ObjectColorMode::Continuous
             && (self
@@ -453,6 +454,7 @@ impl ObjectsLayer {
         self.color_mapping = ObjectColorMapping::Single;
         self.resolved_continuous_domain = None;
         self.continuous_color_payload = None;
+        self.categorical_color_payload = None;
         self.color_level_overrides_property_key.clear();
         self.color_level_overrides.clear();
         self.pending_color_value_visibility = None;

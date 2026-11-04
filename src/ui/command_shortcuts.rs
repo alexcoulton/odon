@@ -31,10 +31,19 @@ struct ParsedShortcut {
 ///
 /// The actor rejects overlapping shortcuts before they reach this layer. The native realization
 /// still consumes the exact key event so legacy widgets cannot dispatch the same action again.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+/// On macOS, letter and comma shortcuts are realised as native menu accelerators instead, so only
+/// navigation keys (arrows, Enter, digits) are resolved here.
 pub(crate) fn resolve(
     ctx: &egui::Context,
     command_surface: &Value,
+) -> Option<CommandPresentationInvocation> {
+    resolve_for_platform(ctx, command_surface, ShortcutPlatform::current())
+}
+
+fn resolve_for_platform(
+    ctx: &egui::Context,
+    command_surface: &Value,
+    platform: ShortcutPlatform,
 ) -> Option<CommandPresentationInvocation> {
     if ctx.wants_keyboard_input() {
         return None;
@@ -47,6 +56,9 @@ pub(crate) fn resolve(
         .filter(|command| command_available(command))
         .find_map(|command| {
             let shortcut = command.get("shortcut")?;
+            if platform == ShortcutPlatform::MacOs && !is_navigation_shortcut(shortcut) {
+                return None;
+            }
             if !consume(ctx, Some(shortcut)) {
                 return None;
             }
@@ -98,11 +110,28 @@ pub(crate) fn neutral_label(shortcut: Option<&Value>) -> Option<String> {
             other => other.to_string(),
         })
         .collect::<Vec<_>>();
-    parts.push(shortcut.get("key")?.as_str()?.to_ascii_uppercase());
+    parts.push(key_label(shortcut.get("key")?.as_str()?));
     Some(parts.join("+"))
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn key_label(key: &str) -> String {
+    match key {
+        "arrow_up" => "↑".to_string(),
+        "arrow_down" => "↓".to_string(),
+        "arrow_left" => "←".to_string(),
+        "arrow_right" => "→".to_string(),
+        "enter" => "Enter".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+fn is_navigation_shortcut(shortcut: &Value) -> bool {
+    shortcut
+        .get("key")
+        .and_then(Value::as_str)
+        .is_some_and(odon::model::is_navigation_shortcut_key)
+}
+
 fn command_available(command: &Value) -> bool {
     command
         .pointer("/state/visible")
@@ -114,7 +143,6 @@ fn command_available(command: &Value) -> bool {
             .unwrap_or(true)
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn command_invocation(command_id: &str, command: &Value) -> CommandPresentationInvocation {
     let checked = command
         .pointer("/state/checked")
@@ -184,6 +212,21 @@ fn egui_key(key: &str) -> Option<egui::Key> {
         "y" => egui::Key::Y,
         "z" => egui::Key::Z,
         "comma" => egui::Key::Comma,
+        "arrow_up" => egui::Key::ArrowUp,
+        "arrow_down" => egui::Key::ArrowDown,
+        "arrow_left" => egui::Key::ArrowLeft,
+        "arrow_right" => egui::Key::ArrowRight,
+        "enter" => egui::Key::Enter,
+        "0" => egui::Key::Num0,
+        "1" => egui::Key::Num1,
+        "2" => egui::Key::Num2,
+        "3" => egui::Key::Num3,
+        "4" => egui::Key::Num4,
+        "5" => egui::Key::Num5,
+        "6" => egui::Key::Num6,
+        "7" => egui::Key::Num7,
+        "8" => egui::Key::Num8,
+        "9" => egui::Key::Num9,
         _ => return None,
     })
 }
@@ -234,7 +277,7 @@ mod tests {
             "state":{"visible":true,"enabled":true,"checked":false}
         }]});
         assert_eq!(
-            resolve(&context, &surface),
+            resolve_for_platform(&context, &surface, ShortcutPlatform::Other),
             Some(CommandPresentationInvocation {
                 command_id: "extension:org.example/check".to_string(),
                 checked: Some(true),
@@ -262,7 +305,10 @@ mod tests {
             "shortcut":{"key":"k","modifiers":["primary"]},
             "state":{"visible":true,"enabled":true,"checked":null}
         }]});
-        assert_eq!(resolve(&context, &surface), None);
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::Other),
+            None
+        );
         assert!(context.input(|input| input.key_pressed(egui::Key::K)));
         let _ = context.end_pass();
     }
@@ -277,7 +323,7 @@ mod tests {
             "state":{"visible":true,"enabled":true,"checked":null}
         }]});
         context.begin_pass(input_for(egui::Key::K, modifiers));
-        assert!(resolve(&context, &original).is_some());
+        assert!(resolve_for_platform(&context, &original, ShortcutPlatform::Other).is_some());
         let _ = context.end_pass();
 
         let changed = json!({"commands":[{
@@ -286,13 +332,16 @@ mod tests {
             "state":{"visible":true,"enabled":true,"checked":null}
         }]});
         context.begin_pass(input_for(egui::Key::K, modifiers));
-        assert_eq!(resolve(&context, &changed), None);
+        assert_eq!(
+            resolve_for_platform(&context, &changed, ShortcutPlatform::Other),
+            None
+        );
         assert!(context.input(|input| input.key_pressed(egui::Key::K)));
         let _ = context.end_pass();
 
         context.begin_pass(input_for(egui::Key::J, modifiers));
         assert_eq!(
-            resolve(&context, &changed),
+            resolve_for_platform(&context, &changed, ShortcutPlatform::Other),
             Some(CommandPresentationInvocation {
                 command_id: "extension:org.example/run".to_string(),
                 checked: None,
@@ -325,7 +374,10 @@ mod tests {
             "state":{"visible":true,"enabled":false,"checked":null}
         }]});
         context.begin_pass(input_for(egui::Key::Comma, modifiers));
-        assert_eq!(resolve(&context, &surface), None);
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::Other),
+            None
+        );
         assert!(context.input(|input| input.key_pressed(egui::Key::Comma)));
         let _ = context.end_pass();
     }
@@ -342,5 +394,72 @@ mod tests {
             neutral_label(Some(&json!({"key":"p","modifiers":["primary","shift"]}))),
             Some("Primary+Shift+P".to_string())
         );
+        assert_eq!(
+            neutral_label(Some(&json!({"key":"arrow_left","modifiers":["shift"]}))),
+            Some("Shift+←".to_string())
+        );
+    }
+
+    #[test]
+    fn macos_resolves_only_navigation_keys_leaving_letters_to_native_menus() {
+        let surface = json!({"commands":[
+            {
+                "id":"extension:org.example/next",
+                "shortcut":{"key":"arrow_right","modifiers":[]},
+                "state":{"visible":true,"enabled":true,"checked":null}
+            },
+            {
+                "id":"extension:org.example/letter",
+                "shortcut":{"key":"k","modifiers":[]},
+                "state":{"visible":true,"enabled":true,"checked":null}
+            }
+        ]});
+        let context = egui::Context::default();
+        context.begin_pass(input_for(egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::MacOs)
+                .map(|invocation| invocation.command_id),
+            Some("extension:org.example/next".to_string())
+        );
+        let _ = context.end_pass();
+
+        context.begin_pass(input_for(egui::Key::K, egui::Modifiers::NONE));
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::MacOs),
+            None
+        );
+        assert!(context.input(|input| input.key_pressed(egui::Key::K)));
+        let _ = context.end_pass();
+
+        context.begin_pass(input_for(egui::Key::K, egui::Modifiers::NONE));
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::Other)
+                .map(|invocation| invocation.command_id),
+            Some("extension:org.example/letter".to_string())
+        );
+        let _ = context.end_pass();
+    }
+
+    #[test]
+    fn focused_text_input_keeps_arrow_keys() {
+        let context = egui::Context::default();
+        let mut text = String::new();
+        context.begin_pass(Default::default());
+        egui::CentralPanel::default().show(&context, |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        let _ = context.end_pass();
+
+        context.begin_pass(input_for(egui::Key::ArrowLeft, egui::Modifiers::NONE));
+        let surface = json!({"commands":[{
+            "id":"extension:org.example/previous",
+            "shortcut":{"key":"arrow_left","modifiers":[]},
+            "state":{"visible":true,"enabled":true,"checked":null}
+        }]});
+        assert_eq!(
+            resolve_for_platform(&context, &surface, ShortcutPlatform::MacOs),
+            None
+        );
+        let _ = context.end_pass();
     }
 }

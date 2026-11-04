@@ -453,6 +453,94 @@ fn reinstalling_identical_control_payload_is_a_complete_no_op() {
 }
 
 #[test]
+fn legend_colour_edits_apply_project_wide_but_view_colours_still_win() {
+    let dir = TestObjectDir::new();
+    let path = dir.path("category-colors.geojson");
+    write_object_fixture(&path);
+    let cancel = AtomicBool::new(false);
+    let result = load_in_thread(path, 1.0, None, 1, &cancel).expect("load object fixture");
+    let mut layer = ObjectsLayer::default();
+    layer.install_load_result(result);
+    layer.set_color_by_property(Some("class".to_string()));
+    layer.ensure_color_groups();
+    let group = layer
+        .color_groups
+        .as_ref()
+        .expect("class groups")
+        .groups
+        .iter()
+        .find(|group| group.value_label == "tumor")
+        .expect("tumor group")
+        .clone();
+    let hashed = group.color_rgb;
+
+    layer.apply_legend_actions(vec![crate::objects::legend_ui::LegendAction::SetColor {
+        label: "tumor".to_string(),
+        rgb: [1, 2, 3],
+    }]);
+    assert_eq!(
+        layer.effective_color_group_rgb("class", &group),
+        Some([1, 2, 3])
+    );
+    assert_eq!(
+        layer.effective_color_group_rgb("another_column", &group),
+        Some([1, 2, 3]),
+        "the colour follows the label into other columns"
+    );
+
+    layer.color_level_overrides_property_key = "class".to_string();
+    layer
+        .color_level_overrides
+        .entry("tumor".to_string())
+        .or_default()
+        .color_rgb = Some([9, 9, 9]);
+    assert_eq!(
+        layer.effective_color_group_rgb("class", &group),
+        Some([9, 9, 9])
+    );
+
+    layer.apply_legend_actions(vec![crate::objects::legend_ui::LegendAction::ResetColor {
+        label: "tumor".to_string(),
+    }]);
+    assert_eq!(layer.effective_color_group_rgb("class", &group), Some(hashed));
+    assert!(layer.take_category_color_commit(true).is_none());
+    assert_eq!(
+        layer.take_category_color_commit(false),
+        Some(serde_json::json!({"category_colors": {}}))
+    );
+}
+
+#[test]
+fn actor_style_projection_defers_lazy_color_property_but_rejects_unknown_columns() {
+    let dir = TestObjectDir::new();
+    let path = dir.path("lazy-color-property.geojson");
+    write_object_fixture(&path);
+    let cancel = AtomicBool::new(false);
+    let result = load_in_thread(path, 1.0, None, 1, &cancel).expect("load object fixture");
+    let mut layer = ObjectsLayer::default();
+    layer.install_load_result(result);
+    layer.lazy_parquet_source = Some(LazyParquetSource {
+        available_property_columns: vec!["celltype".to_string()],
+        numeric_property_columns: Vec::new(),
+        loaded_property_columns: HashSet::new(),
+    });
+
+    let error = layer
+        .apply_actor_style_projection_json(&serde_json::json!({"color_property":"missing"}))
+        .expect_err("a column absent from the source cannot be deferred");
+    assert_eq!(error, "object property 'missing' is not loaded");
+
+    layer
+        .apply_actor_style_projection_json(&serde_json::json!({
+            "color_property":"celltype",
+            "color_mapping":{"mode":"categorical","property":"celltype"},
+        }))
+        .expect("a lazily available column is accepted before it is loaded");
+    assert_eq!(layer.color_property_key, "celltype");
+    assert_eq!(layer.color_mode, ObjectColorMode::ByProperty);
+}
+
+#[test]
 fn lazy_property_lru_evicts_old_columns_but_pins_active_references() {
     let dir = TestObjectDir::new();
     let path = dir.path("lazy-property-cache.geojson");

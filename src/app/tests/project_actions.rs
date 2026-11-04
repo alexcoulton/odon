@@ -26,7 +26,7 @@ fn actor_owned_project_action_bypasses_the_viewer_host_request_relay() {
     assert_eq!(intents.len(), 1);
     let intent = intents.remove(0);
     assert_eq!(intent.method, "project.rois.open");
-    assert_eq!(intent.params["roi"], "ROI-A");
+    assert_eq!(intent.params["roi"], "local:/tmp/fixture.ome.zarr");
     ControlCommand::decode(intent.method, intent.params)
         .expect("viewer project action emits a typed actor command");
 }
@@ -46,7 +46,7 @@ fn actor_owned_roi_selector_action_bypasses_the_viewer_host_request_relay() {
     assert_eq!(intents.len(), 1);
     let intent = intents.remove(0);
     assert_eq!(intent.method, "project.rois.open");
-    assert_eq!(intent.params["roi"], "ROI-B");
+    assert_eq!(intent.params["roi"], "local:/tmp/fixture.ome.zarr");
     ControlCommand::decode(intent.method, intent.params)
         .expect("ROI selector action emits a typed actor command");
 }

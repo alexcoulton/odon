@@ -29,7 +29,8 @@ pub(in crate::objects) use outline_mode::{
 };
 pub(crate) use presentation_state::ObjectPresentationStateStats;
 pub(in crate::objects) use presentation_state::{
-    ObjectPresentationStateCache, ObjectRenderStatePayload,
+    ObjectCategoricalColorPayload, ObjectColorsPayload, ObjectPresentationStateCache,
+    ObjectRenderStatePayload,
 };
 pub(in crate::objects) use selection_geometry::*;
 
@@ -60,8 +61,16 @@ impl ObjectsLayer {
             return;
         }
         let visibility_state_plan_started = std::time::Instant::now();
+        let object_colors = if self.display_mode == ObjectDisplayMode::Points {
+            None
+        } else {
+            continuous_colors
+                .as_ref()
+                .map(ObjectColorsPayload::from)
+                .or_else(|| self.cached_categorical_colors())
+        };
         let visibility_state = self.cached_visibility_state();
-        let continuous_outline_state = continuous_colors
+        let object_outline_state = object_colors
             .as_ref()
             .map(|_| self.cached_continuous_outline_state());
         let visibility_state_plan_ms =
@@ -126,7 +135,7 @@ impl ObjectsLayer {
         let render_generation = self.render_cache_generation();
         let local_screen_per_pixel = camera.zoom_screen_per_lvl0_px
             * display_scale.x.abs().max(display_scale.y.abs()).max(1.0e-9);
-        let (visible_outline_bins, visible_outline_records) = if (continuous_colors.is_some()
+        let (visible_outline_bins, visible_outline_records) = if (object_colors.is_some()
             || (self.show_selection_overlay && !self.selected_object_indices.is_empty()))
             && let Some(selection_lods) = self.object_selection_lods.as_ref()
             && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
@@ -213,26 +222,23 @@ impl ObjectsLayer {
             );
         } else {
             let texture_eligible = gpu_available
-                && self.fill_cells
-                && self.fill_opacity > 0.0
+                && self.texture_outline_style_eligible()
                 && self.gl_object_fill.stats().tile_supported != Some(false)
                 && self.object_fill_mesh.as_ref().is_some_and(|mesh| {
-                    tiles::object_fill_tile_path_eligible(mesh, local_screen_per_pixel)
+                    tiles::object_fill_tile_path_eligible(
+                        mesh,
+                        local_screen_per_pixel,
+                        outline_mode::scene_workload_covers_small_layers(
+                            self.outline_scene_records,
+                        ),
+                    )
                 });
             let (texture_outline_requested, texture_reason) =
                 self.outline_mode_runtime.resolve_preference(
                     local_screen_per_pixel,
-                    visible_outline_records,
+                    visible_outline_records.max(self.outline_scene_records),
                     texture_eligible,
                 );
-            let color_groups_binding = self.active_color_groups();
-            let active_color_groups = match self.color_mode {
-                ObjectColorMode::Single => None,
-                ObjectColorMode::ByProperty => color_groups_binding
-                    .as_ref()
-                    .filter(|g| g.property_key == self.color_property_key),
-                ObjectColorMode::Continuous => None,
-            };
 
             let fill_plan_started = std::time::Instant::now();
             let fill_outcome = self.draw_object_fills(
@@ -244,8 +250,7 @@ impl ObjectsLayer {
                 display_offset,
                 display_scale,
                 gpu_available,
-                active_color_groups.copied(),
-                continuous_colors.as_ref(),
+                object_colors.as_ref(),
                 texture_outline_requested,
                 &visibility_state,
             );
@@ -280,10 +285,8 @@ impl ObjectsLayer {
             let outline_plan_started = std::time::Instant::now();
             if gpu_available && vector_outlines_required {
                 let lod = &render_lods[lod_idx];
-                if active_color_groups.is_none()
-                    && (continuous_colors.is_some()
-                        || (self.show_selection_overlay
-                            && !self.selected_object_indices.is_empty()))
+                if (object_colors.is_some()
+                    || (self.show_selection_overlay && !self.selected_object_indices.is_empty()))
                     && let Some(selection_lods) = self.object_selection_lods.as_ref()
                     && let Some(selection_lod) =
                         selection_lods.get(choose_object_selection_lod_index(
@@ -292,7 +295,7 @@ impl ObjectsLayer {
                         ))
                     && let Some(object_count) = self.objects.as_ref().map(|objects| objects.len())
                 {
-                    let selection_state = if let Some(state) = continuous_outline_state.as_ref() {
+                    let selection_state = if let Some(state) = object_outline_state.as_ref() {
                         Arc::clone(&state.values)
                     } else {
                         Arc::clone(&self.selection_fill_state)
@@ -303,8 +306,7 @@ impl ObjectsLayer {
                             state_cache_id: object_render_cache_id(0x4a91, 0),
                             geometry_generation: self.outline_geometry_cache_generation(),
                             bins: Arc::clone(&selection_lod.bins),
-                            selection_generation: if let Some(state) =
-                                continuous_outline_state.as_ref()
+                            selection_generation: if let Some(state) = object_outline_state.as_ref()
                             {
                                 state.generation
                             } else {
@@ -313,10 +315,10 @@ impl ObjectsLayer {
                             selection_state,
                             object_count,
                             color_cache_id: object_render_cache_id(0x4a92, 0),
-                            color_generation: continuous_colors
+                            color_generation: object_colors
                                 .as_ref()
                                 .map_or(0, |payload| payload.generation),
-                            object_colors_rgba: continuous_colors
+                            object_colors_rgba: object_colors
                                 .as_ref()
                                 .map(|payload| Arc::clone(&payload.colors_rgba)),
                         },
@@ -333,7 +335,7 @@ impl ObjectsLayer {
                             primary_color: egui::Color32::from_rgba_unmultiplied(
                                 255, 255, 255, 235,
                             ),
-                            draw_unselected: continuous_colors.is_none(),
+                            draw_unselected: object_colors.is_none(),
                             visible: self.visible,
                             local_to_world_offset: display_offset,
                             local_to_world_scale: display_scale,
@@ -350,60 +352,23 @@ impl ObjectsLayer {
                         callback: Arc::new(cb),
                     });
                 } else {
-                    let mut items = Vec::new();
-                    if let Some(color_groups) = active_color_groups {
-                        items.reserve(color_groups.groups.len());
-                        for (group_idx, group) in color_groups.groups.iter().enumerate() {
-                            let Some(c) =
-                                self.effective_color_group_rgb(&color_groups.property_key, group)
-                            else {
-                                continue;
-                            };
-                            let group_lod = &group.lods
-                                [choose_lod_index(&group.lods, dataset_long_side_screen_px)];
-                            items.push(LineBinsGlDrawItem {
-                                data: LineBinsGlDrawData {
-                                    cache_id: object_property_render_cache_id(
-                                        0x4a00 | u32::from(lod.lod),
-                                        &color_groups.property_key,
-                                        group_idx,
-                                    ),
-                                    generation: group.fill_generation,
-                                    bins: Arc::clone(&group_lod.bins),
-                                },
-                                params: LineBinsGlDrawParams {
-                                    center_world: camera.center_world_lvl0,
-                                    zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                                    width_points: self.width_screen_px.max(0.0),
-                                    color: egui::Color32::from_rgba_unmultiplied(
-                                        c[0], c[1], c[2], a,
-                                    ),
-                                    visible: self.visible,
-                                    local_to_world_offset: display_offset,
-                                    local_to_world_scale: display_scale,
-                                },
-                                visible_world: visible_local,
-                            });
-                        }
-                    } else {
-                        items.push(LineBinsGlDrawItem {
-                            data: LineBinsGlDrawData {
-                                cache_id: object_render_cache_id(0x4a08, lod.lod as u64),
-                                generation: render_generation,
-                                bins: Arc::clone(&lod.bins),
-                            },
-                            params: LineBinsGlDrawParams {
-                                center_world: camera.center_world_lvl0,
-                                zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                                width_points: self.width_screen_px.max(0.0),
-                                color,
-                                visible: self.visible,
-                                local_to_world_offset: display_offset,
-                                local_to_world_scale: display_scale,
-                            },
-                            visible_world: visible_local,
-                        });
-                    }
+                    let items = vec![LineBinsGlDrawItem {
+                        data: LineBinsGlDrawData {
+                            cache_id: object_render_cache_id(0x4a08, lod.lod as u64),
+                            generation: render_generation,
+                            bins: Arc::clone(&lod.bins),
+                        },
+                        params: LineBinsGlDrawParams {
+                            center_world: camera.center_world_lvl0,
+                            zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
+                            width_points: self.width_screen_px.max(0.0),
+                            color,
+                            visible: self.visible,
+                            local_to_world_offset: display_offset,
+                            local_to_world_scale: display_scale,
+                        },
+                        visible_world: visible_local,
+                    }];
 
                     let renderer = self.gl.clone();
                     let cb = egui_glow::CallbackFn::new(move |info, painter| {
@@ -436,45 +401,8 @@ impl ObjectsLayer {
                         );
                     }
                 }
-            } else if !gpu_available && let Some(color_groups) = active_color_groups {
-                for group in &color_groups.groups {
-                    let Some(c) = self.effective_color_group_rgb(&color_groups.property_key, group)
-                    else {
-                        continue;
-                    };
-                    let group_lod =
-                        &group.lods[choose_lod_index(&group.lods, dataset_long_side_screen_px)];
-                    let stroke = egui::Stroke::new(
-                        self.width_screen_px.max(0.0),
-                        egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], a),
-                    );
-                    let (bx0, by0, bx1, by1) =
-                        group_lod.bins.bin_range_for_world_rect(visible_local);
-                    for by in by0..=by1 {
-                        for bx in bx0..=bx1 {
-                            let bin_index = by * group_lod.bins.bins_w + bx;
-                            for seg in group_lod.bins.bin_slice(bin_index) {
-                                let a = camera.world_to_screen(
-                                    self.local_to_world_point(
-                                        egui::pos2(seg[0], seg[1]),
-                                        local_to_world_offset,
-                                    ),
-                                    viewport,
-                                );
-                                let b = camera.world_to_screen(
-                                    self.local_to_world_point(
-                                        egui::pos2(seg[2], seg[3]),
-                                        local_to_world_offset,
-                                    ),
-                                    viewport,
-                                );
-                                ui.painter().line_segment([a, b], stroke);
-                            }
-                        }
-                    }
-                }
             } else if !gpu_available
-                && let Some(payload) = continuous_colors.as_ref()
+                && let Some(payload) = object_colors.as_ref()
                 && let Some(selection_lods) = self.object_selection_lods.as_ref()
                 && let Some(selection_lod) = selection_lods.get(choose_object_selection_lod_index(
                     selection_lods,
@@ -1100,15 +1028,19 @@ impl ObjectsLayer {
         (self.point_radius_screen_px() + 4.0) / camera.zoom_screen_per_lvl0_px.max(1e-6)
     }
 
-    fn effective_color_group_rgb(
+    pub(in crate::objects) fn effective_color_group_rgb(
         &self,
         property_key: &str,
         group: &ObjectColorGroup,
     ) -> Option<[u8; 3]> {
         self.color_value_visible_for_label(property_key, &group.value_label)
             .then_some(())?;
+        let default_rgb = self
+            .category_colors
+            .get(&group.value_label)
+            .unwrap_or(group.color_rgb);
         if self.color_level_overrides_property_key != property_key {
-            return Some(group.color_rgb);
+            return Some(default_rgb);
         }
         let override_style = self.color_level_overrides.get(&group.value_label).copied();
         if override_style.is_some_and(|style| !style.visible) {
@@ -1117,7 +1049,7 @@ impl ObjectsLayer {
         Some(
             override_style
                 .and_then(|style| style.color_rgb)
-                .unwrap_or(group.color_rgb),
+                .unwrap_or(default_rgb),
         )
     }
 

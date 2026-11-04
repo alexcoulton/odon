@@ -8,6 +8,8 @@ impl AppModel {
             return false;
         }
         self.project.replace(snapshot);
+        self.project_object_preload
+            .sync_scope(&self.project.snapshot());
         self.project_initialized = true;
         true
     }

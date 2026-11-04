@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
+use crate::objects::legend_ui::{
+    CategoryColors, LegendAction, LegendUiState, category_colors_params, legend_rows, ui_legend,
+};
 use crate::objects::{
     ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectsLayer, PreloadedObjectLayer,
     SelectedObjectDetails,
@@ -52,6 +55,8 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     color_mapping: ObjectColorMapping,
     continuous_domains_by_roi: HashMap<String, [f64; 2]>,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
+    category_colors: CategoryColors,
+    legend_ui: LegendUiState,
     property_cache_capacity: Option<usize>,
     actor_load_requested: BTreeSet<usize>,
     force_repaint_frames: u32,
@@ -77,6 +82,8 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             color_mapping: ObjectColorMapping::Single,
             continuous_domains_by_roi: HashMap::new(),
             color_level_overrides: HashMap::new(),
+            category_colors: CategoryColors::default(),
+            legend_ui: LegendUiState::default(),
             property_cache_capacity: None,
             actor_load_requested: BTreeSet::new(),
             force_repaint_frames: 0,
@@ -590,39 +597,35 @@ impl MosaicGeoJsonSegmentationOverlay {
             let legend = self.active_color_legend_entries();
             if !legend.is_empty() {
                 ui.separator();
-                ui.label(format!("Legend: {}", self.color_property_key));
-                egui::ScrollArea::vertical()
-                    .id_salt("mosaic_seg_objects_legend_scroll")
-                    .max_height(140.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        let property_key = self.color_property_key.clone();
-                        for entry in legend {
-                            let default_color = entry.color_rgb;
-                            let override_style = self
-                                .color_level_overrides
-                                .entry(property_key.clone())
-                                .or_default()
-                                .entry(entry.value_label.clone())
-                                .or_default();
-                            let mut visible = override_style.visible;
-                            let color_rgb = override_style.color_rgb.unwrap_or(default_color);
-                            let mut color =
-                                egui::Color32::from_rgb(color_rgb[0], color_rgb[1], color_rgb[2]);
-                            ui.horizontal(|ui| {
-                                if ui.checkbox(&mut visible, "").changed() {
-                                    override_style.visible = visible;
-                                }
-                                if ui.color_edit_button_srgba(&mut color).changed() {
-                                    let next_rgb = [color.r(), color.g(), color.b()];
-                                    override_style.color_rgb =
-                                        (next_rgb != default_color).then_some(next_rgb);
-                                }
-                                ui.label(format!("{} ({})", entry.value_label, entry.count));
-                            });
+                let property_key = self.color_property_key.clone();
+                let overrides = self.color_level_overrides.entry(property_key.clone());
+                let overrides = overrides.or_default();
+                let rows = legend_rows(legend, &self.category_colors, |label| {
+                    let style = overrides.get(label).copied().unwrap_or_default();
+                    (style.visible, style.color_rgb)
+                });
+                let actions = ui_legend(
+                    ui,
+                    "mosaic_seg_objects_legend",
+                    &property_key,
+                    &rows,
+                    &mut self.legend_ui,
+                );
+                for action in actions {
+                    match action {
+                        LegendAction::SetVisible { label, visible } => {
+                            overrides.entry(label).or_default().visible = visible;
                         }
-                    });
+                        LegendAction::SetColor { label, rgb } => {
+                            overrides.entry(label.clone()).or_default().color_rgb = None;
+                            self.category_colors.set(&label, rgb);
+                        }
+                        LegendAction::ResetColor { label } => {
+                            overrides.entry(label.clone()).or_default().color_rgb = None;
+                            self.category_colors.remove(&label);
+                        }
+                    }
+                }
             }
         } else if let ObjectColorMapping::Continuous {
             property,
@@ -803,6 +806,13 @@ impl MosaicGeoJsonSegmentationOverlay {
         let color_mapping = self.render_color_mapping();
         let domains_by_roi = self.continuous_domains_by_roi.clone();
         let color_level_overrides = self.current_color_level_overrides().clone();
+        // Taken from the previous frame, because this frame's work is only known after drawing.
+        let scene_outline_records = visible_items
+            .iter()
+            .filter(|(_, world_rect, _, _)| world_rect.intersects(visible_world))
+            .filter_map(|(item_id, _, _, _)| self.items.get(item_id)?.layer.as_ref())
+            .map(|layer| layer.outline_frame_stats().visible_records)
+            .sum::<usize>();
         for (item_id, world_rect, offset, scale) in visible_items {
             if !world_rect.intersects(visible_world) {
                 continue;
@@ -813,6 +823,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             let Some(layer) = st.layer.as_mut() else {
                 continue;
             };
+            layer.set_outline_scene_records(scene_outline_records);
             layer.set_display_transform(mosaic_transform(*offset, *scale));
             let item_color_mapping = color_mapping_with_domain(
                 &color_mapping,
@@ -1137,6 +1148,28 @@ impl MosaicGeoJsonSegmentationOverlay {
             out_of_range: *out_of_range,
             missing_color_rgb: *missing_color_rgb,
         }
+    }
+
+    /// Keeps every ROI layer on the same project-wide colours, including edits not yet committed.
+    pub(in crate::mosaic) fn sync_category_colors(
+        &mut self,
+        project: &std::collections::BTreeMap<String, [u8; 3]>,
+    ) {
+        self.category_colors.sync(project);
+        for st in self.items.values_mut() {
+            if let Some(layer) = st.layer.as_mut() {
+                layer.sync_category_colors(self.category_colors.colors());
+            }
+        }
+    }
+
+    pub(in crate::mosaic) fn take_category_color_commit(
+        &mut self,
+        pointer_down: bool,
+    ) -> Option<serde_json::Value> {
+        self.category_colors
+            .take_commit(pointer_down)
+            .map(|colors| category_colors_params(&colors))
     }
 
     fn active_color_legend_entries(&mut self) -> Vec<ObjectColorLegendEntry> {

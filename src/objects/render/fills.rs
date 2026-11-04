@@ -23,12 +23,12 @@ impl ObjectsLayer {
         display_offset: egui::Vec2,
         display_scale: egui::Vec2,
         gpu_available: bool,
-        active_color_groups: Option<&ObjectColorGroups>,
-        continuous_colors: Option<&ObjectContinuousColorPayload>,
+        object_colors: Option<&ObjectColorsPayload>,
         texture_outline_requested: bool,
         visibility_state: &ObjectRenderStatePayload,
     ) -> ObjectFillDrawOutcome {
-        if !self.fill_cells || self.fill_opacity <= 0.0 {
+        let fills_visible = self.effective_fill_opacity() > 0.0;
+        if !fills_visible && !texture_outline_requested {
             return ObjectFillDrawOutcome::default();
         }
         let Some(fill_mesh) = self.object_fill_mesh.as_ref() else {
@@ -46,8 +46,7 @@ impl ObjectsLayer {
                     camera,
                     display_offset,
                     display_scale,
-                    active_color_groups,
-                    continuous_colors,
+                    object_colors,
                     texture_outline_requested,
                     visibility_state,
                     ui.ctx().cumulative_frame_nr(),
@@ -74,8 +73,15 @@ impl ObjectsLayer {
                 .sum::<usize>()
                 <= Self::MAX_DIRECT_FILL_VERTICES
         });
-        let tile_compose = tile_coverage || (!direct_fallback_is_bounded && any_tile_coverage);
-        let texture_outline_active = texture_outline_requested && exact_tile_coverage;
+        // Outlines-only layers have nothing else on screen, so a coarser ancestor tile is a better
+        // stopgap than falling back to the heavy vector pass while finer tiles rasterize.
+        let texture_outline_active =
+            texture_outline_requested && (exact_tile_coverage || (!fills_visible && tile_coverage));
+        let tile_compose = if fills_visible {
+            tile_coverage || (!direct_fallback_is_bounded && any_tile_coverage)
+        } else {
+            texture_outline_active
+        };
         if !texture_outline_active && let Some(frame) = tile_frame.as_mut() {
             for style in &mut frame.styles {
                 style.border.enabled = false;
@@ -92,7 +98,9 @@ impl ObjectsLayer {
                 .as_ref()
                 .is_some_and(|frame| frame.selection_overlay);
 
-        if gpu_available {
+        if !fills_visible {
+            // Tiles only: outlines are drawn by the compose pass or the vector fallback.
+        } else if gpu_available {
             if !tile_coverage && direct_fallback_is_bounded {
                 self.draw_direct_object_fill_gpu(
                     ui,
@@ -102,8 +110,7 @@ impl ObjectsLayer {
                     display_offset,
                     display_scale,
                     fill_mesh,
-                    active_color_groups,
-                    continuous_colors,
+                    object_colors,
                     visibility_state,
                 );
             }
@@ -115,8 +122,7 @@ impl ObjectsLayer {
                 visible_local,
                 local_to_world_offset,
                 fill_mesh,
-                active_color_groups,
-                continuous_colors,
+                object_colors,
             );
         }
 
@@ -161,8 +167,7 @@ impl ObjectsLayer {
         display_offset: egui::Vec2,
         display_scale: egui::Vec2,
         fill_mesh: &ObjectFillMesh,
-        active_color_groups: Option<&ObjectColorGroups>,
-        continuous_colors: Option<&ObjectContinuousColorPayload>,
+        object_colors: Option<&ObjectColorsPayload>,
         visibility_state: &ObjectRenderStatePayload,
     ) {
         const SPATIAL_FILL_VERTEX_THRESHOLD: usize = 500_000;
@@ -191,60 +196,12 @@ impl ObjectsLayer {
                     fill_mesh.bounds_local,
                 )]
             });
-        let mut items = Vec::new();
-        if let Some(color_groups) = active_color_groups {
-            items.reserve(
-                color_groups
-                    .groups
-                    .len()
-                    .saturating_mul(fill_geometry.len()),
-            );
-            for (group_index, group) in color_groups.groups.iter().enumerate() {
-                let Some(rgb) = self.effective_color_group_rgb(&color_groups.property_key, group)
-                else {
-                    continue;
-                };
-                let color =
-                    egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-                for (cache_id, vertices_local, bounds_local) in &fill_geometry {
-                    items.push(ObjectFillGlDrawItem {
-                        data: ObjectFillGlDrawData {
-                            resource_cache_id: self.render_resource_cache_id,
-                            style_cache_id: self.render_style_cache_id,
-                            cache_id: *cache_id,
-                            state_cache_id: object_property_render_cache_id(
-                                0x4a21,
-                                &color_groups.property_key,
-                                group_index,
-                            ),
-                            generation: self.geometry_generation,
-                            vertices_local: Arc::clone(vertices_local),
-                            object_count: fill_mesh.object_count,
-                            selection_generation: group.fill_generation,
-                            selection_state: Arc::clone(&group.fill_state),
-                            color_cache_id: 0,
-                            color_generation: 0,
-                            object_colors_rgba: None,
-                        },
-                        params: ObjectFillGlDrawParams {
-                            center_world: camera.center_world_lvl0,
-                            zoom_screen_per_world: camera.zoom_screen_per_lvl0_px,
-                            selected_color: color,
-                            primary_color: color,
-                            visible: self.visible,
-                            local_to_world_offset: display_offset,
-                            local_to_world_scale: display_scale,
-                            object_color_opacity: 1.0,
-                        },
-                        visible_world: *bounds_local,
-                    });
-                }
-            }
-        } else {
-            let rgb = self.color_rgb;
-            let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-            for (cache_id, vertices_local, bounds_local) in &fill_geometry {
-                items.push(ObjectFillGlDrawItem {
+        let rgb = self.color_rgb;
+        let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
+        let items = fill_geometry
+            .iter()
+            .map(
+                |(cache_id, vertices_local, bounds_local)| ObjectFillGlDrawItem {
                     data: ObjectFillGlDrawData {
                         resource_cache_id: self.render_resource_cache_id,
                         style_cache_id: self.render_style_cache_id,
@@ -256,8 +213,8 @@ impl ObjectsLayer {
                         selection_generation: visibility_state.generation,
                         selection_state: Arc::clone(&visibility_state.values),
                         color_cache_id: object_render_cache_id(0x4a24, 0),
-                        color_generation: continuous_colors.map_or(0, |payload| payload.generation),
-                        object_colors_rgba: continuous_colors
+                        color_generation: object_colors.map_or(0, |payload| payload.generation),
+                        object_colors_rgba: object_colors
                             .map(|payload| Arc::clone(&payload.colors_rgba)),
                     },
                     params: ObjectFillGlDrawParams {
@@ -271,9 +228,9 @@ impl ObjectsLayer {
                         object_color_opacity: self.fill_opacity,
                     },
                     visible_world: *bounds_local,
-                });
-            }
-        }
+                },
+            )
+            .collect::<Vec<_>>();
 
         if items.is_empty() {
             return;
@@ -297,8 +254,7 @@ impl ObjectsLayer {
         visible_local: egui::Rect,
         local_to_world_offset: egui::Vec2,
         fill_mesh: &ObjectFillMesh,
-        active_color_groups: Option<&ObjectColorGroups>,
-        continuous_colors: Option<&ObjectContinuousColorPayload>,
+        object_colors: Option<&ObjectColorsPayload>,
     ) {
         let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let base_rgb = self.color_rgb;
@@ -308,24 +264,6 @@ impl ObjectsLayer {
             base_rgb[2],
             fill_alpha,
         );
-        let categorical_colors = active_color_groups.map(|color_groups| {
-            let mut colors = vec![egui::Color32::TRANSPARENT; fill_mesh.object_count];
-            for group in &color_groups.groups {
-                let Some(rgb) = self.effective_color_group_rgb(&color_groups.property_key, group)
-                else {
-                    continue;
-                };
-                let color =
-                    egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-                for (object_index, state) in group.fill_state.iter().copied().enumerate() {
-                    if state > 0 {
-                        colors[object_index] = color;
-                    }
-                }
-            }
-            colors
-        });
-
         let geometry = if fill_mesh.vertices_local.len() >= 500_000 {
             fill_mesh
                 .spatial_slices_for_local_rect(visible_local)
@@ -372,21 +310,15 @@ impl ObjectsLayer {
                 {
                     continue;
                 }
-                let color = categorical_colors
-                    .as_ref()
-                    .and_then(|colors| colors.get(object_index).copied())
-                    .or_else(|| {
-                        continuous_colors
-                            .and_then(|payload| payload.colors_rgba.get(object_index))
-                            .map(|rgba| {
-                                egui::Color32::from_rgba_unmultiplied(
-                                    rgba[0],
-                                    rgba[1],
-                                    rgba[2],
-                                    ((rgba[3] as f32) * self.fill_opacity.clamp(0.0, 1.0)).round()
-                                        as u8,
-                                )
-                            })
+                let color = object_colors
+                    .and_then(|payload| payload.colors_rgba.get(object_index))
+                    .map(|rgba| {
+                        egui::Color32::from_rgba_unmultiplied(
+                            rgba[0],
+                            rgba[1],
+                            rgba[2],
+                            ((rgba[3] as f32) * self.fill_opacity.clamp(0.0, 1.0)).round() as u8,
+                        )
                     })
                     .unwrap_or(base_color);
                 if color.a() == 0 {

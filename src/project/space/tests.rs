@@ -72,6 +72,81 @@ fn roi_link_target_accepts_specific_path_fragment() {
 }
 
 #[test]
+fn duplicate_roi_ids_support_row_range_toggle_and_filtered_selection() {
+    let mut project = ProjectSpace::default();
+    project.config.rois = ["a", "b", "c"]
+        .map(|sample| local_roi(&format!("/data/{sample}/ROI1.ome.zarr"), "ROI1.ome.zarr"))
+        .to_vec();
+    let keys = project
+        .config
+        .rois
+        .iter()
+        .map(|roi| roi.source_key().unwrap())
+        .collect::<Vec<_>>();
+    let visible = [0, 1, 2];
+    project
+        .select_browsed_roi(keys[1].clone(), &visible, false, false)
+        .unwrap();
+    assert_eq!(project.selected, HashSet::from([keys[1].clone()]));
+    project
+        .select_browsed_roi(keys[2].clone(), &visible, true, false)
+        .unwrap();
+    assert_eq!(
+        project.selected,
+        HashSet::from([keys[1].clone(), keys[2].clone()])
+    );
+    project
+        .select_browsed_roi(keys[0].clone(), &visible, false, true)
+        .unwrap();
+    assert_eq!(project.selected.len(), 3);
+    assert_eq!(project.focused.as_ref(), Some(&keys[0]));
+    project
+        .select_browsed_roi(keys[2].clone(), &[0, 2], false, true)
+        .unwrap();
+    assert_eq!(
+        project.selected,
+        HashSet::from([keys[0].clone(), keys[2].clone()])
+    );
+
+    project.set_control_actor_owned(true);
+    project
+        .select_browsed_roi(keys[1].clone(), &visible, false, false)
+        .unwrap();
+    project
+        .select_browsed_roi(keys[0].clone(), &visible, false, true)
+        .unwrap();
+    project.select_roi_source_keys(&keys, "replace").unwrap();
+    project.sync_filtered_selection(&[1]);
+    let intents = project.take_control_intents();
+    assert_eq!(
+        intents[0].params["source_keys"],
+        serde_json::json!([keys[1]])
+    );
+    assert_eq!(
+        intents[1].params["source_keys"],
+        serde_json::json!([keys[1], keys[2], keys[0]])
+    );
+    assert_eq!(intents[2].params["source_keys"], serde_json::json!(keys));
+    assert_eq!(
+        intents[3].params["source_keys"],
+        serde_json::json!([keys[1]])
+    );
+    for intent in intents {
+        odon::control::ControlCommand::decode(intent.method, intent.params).unwrap();
+    }
+    assert_eq!(
+        project.selected,
+        HashSet::from([keys[0].clone(), keys[2].clone()])
+    );
+    assert!(
+        project
+            .select_roi_source_keys(&["local:/missing".to_string()], "replace")
+            .is_err()
+    );
+    assert!(project.take_control_intents().is_empty());
+}
+
+#[test]
 fn load_preserves_saved_rois_when_local_paths_are_unavailable() {
     let unique = format!(
         "odon-project-load-test-{}-{}",
@@ -553,8 +628,8 @@ fn actor_owned_top_level_actions_emit_direct_commands_without_host_relays() {
             "project.objects.preload.clear",
         ]
     );
-    assert_eq!(intents[0].params["roi"], "ROI-A");
-    assert_eq!(intents[1].params["request"]["roi"], "ROI-A");
+    assert_eq!(intents[0].params["roi"], "local:/tmp/a.ome.zarr");
+    assert_eq!(intents[1].params["request"]["roi"], "local:/tmp/a.ome.zarr");
     assert_eq!(intents[8].params["mode"], "centroid_points");
     assert_eq!(intents[8].params["lazy_properties"], false);
     assert!(!project.submit_action_control_intent(&ProjectSpaceAction::CaptureCurrentView));

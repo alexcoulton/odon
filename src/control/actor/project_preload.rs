@@ -9,7 +9,7 @@ pub(super) fn begin_project_object_source_scan(
     let (scope, candidates) = model.project_object_preload_scan();
     match load_job_tx.try_send(LoadJob::ProjectObjectSourceScan {
         scope,
-        request,
+        request: Some(request),
         candidates,
     }) {
         Ok(()) => {
@@ -19,7 +19,35 @@ pub(super) fn begin_project_object_source_scan(
             let LoadJob::ProjectObjectSourceScan { request, .. } = error.into_inner() else {
                 unreachable!("project object source scan returns its own job")
             };
-            reject_worker_submission(request, diagnostics);
+            reject_worker_submission(request.expect("explicit source scan request"), diagnostics);
+        }
+    }
+}
+
+pub(super) fn enqueue_project_object_source_scan(
+    model: &mut AppModel,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) {
+    let Some((scope, candidates)) = model.take_pending_project_object_source_scan() else {
+        return;
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    match load_job_tx.try_send(LoadJob::ProjectObjectSourceScan {
+        scope,
+        request: None,
+        candidates,
+    }) {
+        Ok(()) => {
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(error) => {
+            let LoadJob::ProjectObjectSourceScan { scope, .. } = error.into_inner() else {
+                unreachable!("automatic source scan returns its own job")
+            };
+            model.retry_project_object_source_scan(&scope);
         }
     }
 }

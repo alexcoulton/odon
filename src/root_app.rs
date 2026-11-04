@@ -247,6 +247,7 @@ pub struct RootApp {
     control_external_revision: u64,
     control_project_revision: u64,
     control_last_observed_at: Instant,
+    frame_pacing: crate::app_support::frame_pacing::FramePacing,
     control_projection_applied_this_frame: Option<u64>,
     control_projection_revision_applied: u64,
     control_document_generation_applied: u64,
@@ -1089,11 +1090,23 @@ impl RootApp {
             return;
         }
         self.control_last_observed_at = Instant::now();
-        let observation = match &mut self.mode {
+        let mut observation = match &mut self.mode {
             Mode::Single(app) => app.control_renderer_observation_snapshot(),
             Mode::Mosaic { mosaic, .. } => mosaic.control_renderer_observation_snapshot(),
             _ => return,
         };
+        let frame_pacing = serde_json::to_value(self.frame_pacing.snapshot()).unwrap_or_default();
+        let retained_section = if matches!(self.mode, Mode::Mosaic { .. }) {
+            "mosaic_object_observation"
+        } else {
+            "performance"
+        };
+        if let Some(section) = observation
+            .get_mut(retained_section)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            section.insert("frame_pacing".to_string(), frame_pacing);
+        }
         let _ = self
             .control_runtime
             .report_renderer_observation(observation, self.control_projection_revision_applied);
@@ -1625,6 +1638,7 @@ impl RootApp {
             control_external_revision: 0,
             control_project_revision: 0,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            frame_pacing: Default::default(),
             control_projection_applied_this_frame: None,
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
@@ -1694,6 +1708,7 @@ impl RootApp {
             control_external_revision: 0,
             control_project_revision: 0,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            frame_pacing: Default::default(),
             control_projection_applied_this_frame: None,
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
@@ -1764,6 +1779,7 @@ impl RootApp {
             control_external_revision: 0,
             control_project_revision: 0,
             control_last_observed_at: Instant::now() - Duration::from_millis(34),
+            frame_pacing: Default::default(),
             control_projection_applied_this_frame: None,
             control_projection_revision_applied: 0,
             control_document_generation_applied: 0,
@@ -1831,8 +1847,11 @@ impl RootApp {
         });
     }
 
-    pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>) {
-        self.platform_deep_link_rx = Some(rx);
+    pub fn set_deep_link_receiver(&mut self, rx: Receiver<DeepLinkRequest>, ctx: &egui::Context) {
+        let ctx = ctx.clone();
+        self.platform_deep_link_rx = Some(crate::deep_link_ipc::forward_with_wake(rx, move || {
+            ctx.request_repaint();
+        }));
     }
 
     pub fn add_paths_to_project(&mut self, paths: Vec<PathBuf>) {
@@ -2037,6 +2056,7 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.frame_pacing.begin_frame(Instant::now());
         #[cfg(target_os = "macos")]
         if self.native_menu.is_none() {
             if let Ok(menu) = NativeMenu::init("odon", &self.control_command_surface_projection) {
@@ -2048,7 +2068,6 @@ impl eframe::App for RootApp {
         self.process_control_presentation_captures(ctx);
         self.process_control_platform_effects(ctx);
         if let Some(rx) = self.platform_deep_link_rx.as_ref() {
-            ctx.request_repaint_after(Duration::from_millis(100));
             let mut received_deep_link = false;
             while let Ok(request) = rx.try_recv() {
                 log_warn!("deep_link: received {:?}", request);
@@ -2082,7 +2101,6 @@ impl eframe::App for RootApp {
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
         if let Some(invocation) =
             crate::ui::command_shortcuts::resolve(ctx, &self.control_command_surface_projection)
         {
@@ -2389,19 +2407,18 @@ impl eframe::App for RootApp {
             };
             if let Some(project_space) = self.current_project_space_mut() {
                 if open_mosaic {
-                    let _ = project_space.select_roi_ids(&[], "replace");
+                    let _ = project_space.select_roi_source_keys(&[], "replace");
                 }
                 let count = sources.len();
                 for source in sources {
                     let source_key = source.source_key();
-                    if let Some(existing) = project_space
+                    if project_space
                         .rois()
                         .iter()
-                        .find(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
-                        .map(|roi| roi.id.clone())
+                        .any(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
                     {
                         if open_mosaic {
-                            let _ = project_space.select_roi_ids(&[existing], "add");
+                            let _ = project_space.select_roi_source_keys(&[source_key], "add");
                         }
                     } else {
                         project_space.add_roi_source(source);
@@ -2421,6 +2438,7 @@ impl eframe::App for RootApp {
         }
         self.report_control_viewport_geometry();
         self.report_control_presentation();
+        self.frame_pacing.finish_update(Instant::now());
         self.report_control_renderer_observation();
         crate::ui::help::show_help_window(ctx, &mut self.active_help_topic);
     }

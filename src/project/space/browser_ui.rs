@@ -249,13 +249,13 @@ impl ProjectSpace {
                     && !ui.ctx().wants_keyboard_input()
                     && !browse.filtered_indices.is_empty()
                 {
-                    let ids = browse
+                    let keys = browse
                         .filtered_indices
                         .iter()
                         .filter_map(|&index| self.config.rois.get(index))
-                        .map(|roi| roi.id.clone())
+                        .filter_map(ProjectRoi::source_key)
                         .collect::<Vec<_>>();
-                    if let Err(error) = self.select_roi_ids(&ids, "replace") {
+                    if let Err(error) = self.select_roi_source_keys(&keys, "replace") {
                         self.status = error;
                     }
                 }
@@ -379,63 +379,15 @@ impl ProjectSpace {
                 });
                 self.roi_list_hover_rect = has_rois.then_some(roi_frame_response.response.rect);
 
-                if let (Some(i), Some(_source_key)) = (clicked_index, clicked_key.clone()) {
+                if let (Some(i), Some(source_key)) = (clicked_index, clicked_key) {
                     let modifiers = ui.input(|inp| inp.modifiers);
-                    let cmd = modifiers.command;
-                    let shift = modifiers.shift;
-
-                    let focused_idx = self.focused.as_ref().and_then(|p| {
-                        visible_indices.iter().position(|&idx| {
-                            self.config
-                                .rois
-                                .get(idx)
-                                .and_then(ProjectRoi::source_key)
-                                .as_deref()
-                                == Some(p.as_str())
-                        })
-                    });
-                    let clicked_visible_idx = visible_indices
-                        .iter()
-                        .position(|&idx| idx == i)
-                        .unwrap_or_default();
-
-                    if shift {
-                        let mut ids = if let Some(fi) = focused_idx {
-                            let a = fi.min(clicked_visible_idx);
-                            let b = fi.max(clicked_visible_idx);
-                            visible_indices[a..=b]
-                                .iter()
-                                .filter_map(|&index| self.config.rois.get(index))
-                                .map(|roi| roi.id.clone())
-                                .collect::<Vec<_>>()
-                        } else {
-                            self.config
-                                .rois
-                                .get(i)
-                                .map(|roi| vec![roi.id.clone()])
-                                .unwrap_or_default()
-                        };
-                        if let Some(clicked_id) = self.config.rois.get(i).map(|roi| roi.id.clone())
-                            && let Some(position) = ids.iter().position(|id| id == &clicked_id)
-                        {
-                            ids.remove(position);
-                            ids.push(clicked_id);
-                        }
-                        if let Err(error) = self.select_roi_ids(&ids, "replace") {
-                            self.status = error;
-                        }
-                    } else if cmd {
-                        if let Some(id) = self.config.rois.get(i).map(|roi| roi.id.clone())
-                            && let Err(error) = self.select_roi_ids(&[id], "toggle")
-                        {
-                            self.status = error;
-                        }
-                    } else {
-                        if let Some(id) = self.config.rois.get(i).map(|roi| roi.id.clone())
-                            && let Err(error) = self.select_roi_ids(&[id], "replace")
-                        {
-                            self.status = error;
-                        }
+                    if let Err(error) = self.select_browsed_roi(
+                        source_key,
+                        &visible_indices,
+                        modifiers.command,
+                        modifiers.shift,
+                    ) {
+                        self.status = error;
                     }
 
                     if clicked_double {
@@ -501,12 +453,12 @@ impl ProjectSpace {
                         action = Some(ProjectSpaceAction::OpenMosaic);
                     }
                     if select_all_clicked {
-                        let ids = visible_indices
+                        let keys = visible_indices
                             .iter()
                             .filter_map(|&index| self.config.rois.get(index))
-                            .map(|roi| roi.id.clone())
+                            .filter_map(ProjectRoi::source_key)
                             .collect::<Vec<_>>();
-                        if let Err(error) = self.select_roi_ids(&ids, "replace") {
+                        if let Err(error) = self.select_roi_source_keys(&keys, "replace") {
                             self.status = error;
                         }
                     }

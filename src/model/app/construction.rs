@@ -506,6 +506,18 @@ impl AppModel {
         )
     }
 
+    pub(crate) fn take_pending_project_object_source_scan(
+        &mut self,
+    ) -> Option<(ProjectObjectPreloadScope, Vec<PathBuf>)> {
+        self.project_object_preload
+            .take_source_scan_pending()
+            .then(|| self.project_object_preload_scan())
+    }
+
+    pub(crate) fn retry_project_object_source_scan(&mut self, scope: &ProjectObjectPreloadScope) {
+        self.project_object_preload.retry_source_scan(scope);
+    }
+
     pub(crate) fn install_project_object_preload_sources(
         &mut self,
         scope: &ProjectObjectPreloadScope,

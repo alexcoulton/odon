@@ -49,6 +49,7 @@ impl ProjectModel {
                 "secondary_dataset": self.snapshot.secondary_dataset,
                 "default_threshold_marker": self.snapshot.default_threshold_marker,
                 "mosaic_segmentation_search_roots": self.snapshot.mosaic_segmentation_search_roots,
+                "category_colors": self.snapshot.config.category_colors,
                 "dataset_keys": self.snapshot.dataset_keys,
             },
         })
@@ -265,6 +266,10 @@ impl ProjectModel {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
         }
+        if let Some(value) = params.get("category_colors") {
+            self.snapshot.config.category_colors = serde_json::from_value(value.clone())
+                .map_err(|error| invalid(format!("invalid category colors: {error}")))?;
+        }
         self.mark_structural_change();
         Ok(json!({"updated": true, "project": self.project_json()}))
     }
@@ -411,14 +416,21 @@ impl ProjectModel {
     }
 
     fn select_rois(&mut self, params: &Value) -> Result<Value, ControlError> {
-        let ids = string_array(params, "ids")?;
-        let keys = ids
-            .iter()
-            .map(|id| {
-                let index = self.roi_index_by_id(id)?;
-                required_source_key(&self.snapshot.rois[index])
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let keys = if params.get("source_keys").is_some() {
+            let keys = string_array(params, "source_keys")?;
+            for key in &keys {
+                self.roi_index_by_source_key(key)?;
+            }
+            keys
+        } else {
+            string_array(params, "ids")?
+                .iter()
+                .map(|id| {
+                    let index = self.roi_index_by_id(id)?;
+                    required_source_key(&self.snapshot.rois[index])
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
         match params
             .get("mode")
             .and_then(Value::as_str)
@@ -532,6 +544,22 @@ impl ProjectModel {
             .rois
             .iter()
             .find(|roi| roi.source_key().as_deref() == Some(key))
+    }
+
+    pub(super) fn roi_index_by_source_key(&self, key: &str) -> Result<usize, ControlError> {
+        let mut matches = self
+            .snapshot
+            .rois
+            .iter()
+            .enumerate()
+            .filter(|(_, roi)| roi.source_key().as_deref() == Some(key));
+        let Some((index, _)) = matches.next() else {
+            return Err(not_found(format!("ROI source '{key}' was not found")));
+        };
+        if matches.next().is_some() {
+            return Err(conflict(format!("ROI source '{key}' is ambiguous")));
+        }
+        Ok(index)
     }
 
     pub(super) fn normalize_selection(&mut self) {

@@ -36,6 +36,7 @@ pub use app::{
 };
 #[doc(hidden)]
 pub use command_surface::command_surface_native_actions;
+pub use command_surface::is_navigation_shortcut_key;
 pub(crate) use command_surface::{
     CommandEvaluationContext, CommandInvocation, CommandSurfaceModel,
 };

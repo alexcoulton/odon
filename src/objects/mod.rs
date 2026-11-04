@@ -45,6 +45,7 @@ mod control_service;
 mod core;
 mod defaults;
 mod filter_query;
+pub(crate) mod legend_ui;
 mod measurements;
 pub(crate) use measurements::MeasurementUiAction;
 mod memory;
@@ -388,9 +389,14 @@ pub struct ObjectsLayer {
     color_mapping: ObjectColorMapping,
     resolved_continuous_domain: Option<[f64; 2]>,
     continuous_color_payload: Option<ObjectContinuousColorPayload>,
+    categorical_color_payload: Option<render::ObjectCategoricalColorPayload>,
     continuous_color_generation: u64,
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
+    category_colors: legend_ui::CategoryColors,
+    /// Visible outline records across every layer sharing the view, set by a mosaic host.
+    outline_scene_records: usize,
+    legend_ui: legend_ui::LegendUiState,
     pending_color_value_visibility: Option<PendingColorValueVisibility>,
     pending_color_value_colors: Option<PendingColorValueColors>,
     filter_mode: ObjectFilterMode,
@@ -866,7 +872,6 @@ struct ObjectColorGroups {
 struct ObjectColorGroup {
     value_label: String,
     color_rgb: [u8; 3],
-    lods: Vec<ObjectRenderLod>,
     point_positions_world: Arc<Vec<egui::Pos2>>,
     point_values: Arc<Vec<f32>>,
     fill_state: Arc<Vec<u8>>,

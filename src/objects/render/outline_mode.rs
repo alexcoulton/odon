@@ -10,6 +10,12 @@ const HEAVY_VECTOR_VISIBLE_RECORDS: usize = 1_000_000;
 const HEAVY_VECTOR_ENTER_MAX_SCREEN_PER_LOCAL_PIXEL: f32 = 0.75;
 const HEAVY_VECTOR_LEAVE_MAX_SCREEN_PER_LOCAL_PIXEL: f32 = 1.0;
 
+/// A mosaic's cost is the sum of its ROIs, so a layer too small to justify tiles on its own still
+/// joins the texture path once the scene is heavy. Uses the leave threshold for stable switching.
+pub(super) fn scene_workload_covers_small_layers(scene_records: usize) -> bool {
+    scene_records >= TEXTURE_LEAVE_MIN_VISIBLE_RECORDS
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ObjectOutlineMode {

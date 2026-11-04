@@ -38,15 +38,18 @@ impl ObjectsLayer {
         camera: &crate::camera::Camera,
         display_offset: egui::Vec2,
         display_scale: egui::Vec2,
-        active_color_groups: Option<&ObjectColorGroups>,
-        continuous_colors: Option<&ObjectContinuousColorPayload>,
+        object_colors: Option<&ObjectColorsPayload>,
         texture_outline_requested: bool,
         visibility_state: &ObjectRenderStatePayload,
         frame_generation: u64,
     ) -> Option<ObjectFillTileFrame> {
         let local_screen_per_pixel = camera.zoom_screen_per_lvl0_px
             * display_scale.x.abs().max(display_scale.y.abs()).max(1.0e-9);
-        if !object_fill_tile_path_eligible(fill_mesh, local_screen_per_pixel) {
+        if !object_fill_tile_path_eligible(
+            fill_mesh,
+            local_screen_per_pixel,
+            texture_outline_requested,
+        ) {
             return None;
         }
 
@@ -106,78 +109,36 @@ impl ObjectsLayer {
                 .cloned(),
         );
 
-        let fill_alpha = (self.fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let fill_opacity = self.effective_fill_opacity();
+        let fill_alpha = (fill_opacity * 255.0).round() as u8;
         let selection_overlay = self
             .object_fill_selection_tile_style(fill_mesh.object_count, texture_outline_requested);
-        let mut styles = Vec::new();
-        if let Some(color_groups) = active_color_groups {
-            styles.reserve(color_groups.groups.len());
-            for (group_index, group) in color_groups.groups.iter().enumerate() {
-                let Some(rgb) = self.effective_color_group_rgb(&color_groups.property_key, group)
-                else {
-                    continue;
-                };
-                let color =
-                    egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-                let border_color = egui::Color32::from_rgba_unmultiplied(
+        let rgb = self.color_rgb;
+        let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
+        let styles = vec![ObjectFillTileStyle {
+            style_cache_id: self.render_style_cache_id,
+            state_cache_id: object_render_cache_id(0x4a23, 0),
+            object_count: fill_mesh.object_count,
+            state_generation: visibility_state.generation,
+            object_state: Arc::clone(&visibility_state.values),
+            color_cache_id: object_render_cache_id(0x4a24, 0),
+            color_generation: object_colors.map_or(0, |payload| payload.generation),
+            object_colors_rgba: object_colors.map(|payload| Arc::clone(&payload.colors_rgba)),
+            selected_color: color,
+            primary_color: color,
+            object_color_opacity: fill_opacity,
+            selection_overlay: selection_overlay.clone(),
+            border: self.object_fill_tile_border_style(
+                texture_outline_requested,
+                egui::Color32::from_rgba_unmultiplied(
                     rgb[0],
                     rgb[1],
                     rgb[2],
                     (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-                );
-                styles.push(ObjectFillTileStyle {
-                    style_cache_id: self.render_style_cache_id,
-                    state_cache_id: object_property_render_cache_id(
-                        0x4a21,
-                        &color_groups.property_key,
-                        group_index,
-                    ),
-                    object_count: fill_mesh.object_count,
-                    state_generation: group.fill_generation,
-                    object_state: Arc::clone(&group.fill_state),
-                    color_cache_id: 0,
-                    color_generation: 0,
-                    object_colors_rgba: None,
-                    selected_color: color,
-                    primary_color: color,
-                    object_color_opacity: 1.0,
-                    selection_overlay: selection_overlay.clone(),
-                    border: self.object_fill_tile_border_style(
-                        texture_outline_requested,
-                        border_color,
-                        false,
-                    ),
-                });
-            }
-        } else {
-            let rgb = self.color_rgb;
-            let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill_alpha);
-            styles.push(ObjectFillTileStyle {
-                style_cache_id: self.render_style_cache_id,
-                state_cache_id: object_render_cache_id(0x4a23, 0),
-                object_count: fill_mesh.object_count,
-                state_generation: visibility_state.generation,
-                object_state: Arc::clone(&visibility_state.values),
-                color_cache_id: object_render_cache_id(0x4a24, 0),
-                color_generation: continuous_colors.map_or(0, |payload| payload.generation),
-                object_colors_rgba: continuous_colors
-                    .map(|payload| Arc::clone(&payload.colors_rgba)),
-                selected_color: color,
-                primary_color: color,
-                object_color_opacity: self.fill_opacity,
-                selection_overlay: selection_overlay.clone(),
-                border: self.object_fill_tile_border_style(
-                    texture_outline_requested,
-                    egui::Color32::from_rgba_unmultiplied(
-                        rgb[0],
-                        rgb[1],
-                        rgb[2],
-                        (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-                    ),
-                    continuous_colors.is_some(),
                 ),
-            });
-        }
+                object_colors.is_some(),
+            ),
+        }];
 
         (!styles.is_empty()).then_some(ObjectFillTileFrame {
             request_items,
@@ -193,6 +154,20 @@ impl ObjectsLayer {
                 local_to_world_scale: display_scale,
             },
         })
+    }
+
+    /// Fill opacity as actually drawn: outlines-only layers keep their configured opacity for
+    /// when fills are turned back on.
+    pub(in crate::objects) fn effective_fill_opacity(&self) -> f32 {
+        if self.fill_cells {
+            self.fill_opacity.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub(in crate::objects) fn texture_outline_style_eligible(&self) -> bool {
+        self.effective_fill_opacity() > 0.0 || (self.opacity > 0.0 && self.width_screen_px > 0.0)
     }
 
     pub(in crate::objects) fn object_fill_selection_tile_style(
@@ -269,10 +244,11 @@ pub(in crate::objects) fn object_fill_tile_object_count_supported(object_count: 
 pub(in crate::objects) fn object_fill_tile_path_eligible(
     fill_mesh: &ObjectFillMesh,
     local_screen_per_pixel: f32,
+    allow_small_mesh: bool,
 ) -> bool {
     const MIN_TILE_VERTEX_COUNT: usize = 500_000;
     const MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL: f32 = 2.0;
-    fill_mesh.vertices_local.len() >= MIN_TILE_VERTEX_COUNT
+    (allow_small_mesh || fill_mesh.vertices_local.len() >= MIN_TILE_VERTEX_COUNT)
         && object_fill_tile_object_count_supported(fill_mesh.object_count)
         && local_screen_per_pixel <= MAX_VECTOR_DETAIL_SCREEN_PER_LOCAL_PIXEL
 }

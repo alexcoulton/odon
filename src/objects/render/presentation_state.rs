@@ -8,6 +8,47 @@ pub(in crate::objects) struct ObjectRenderStatePayload {
     pub generation: u64,
 }
 
+/// One colour per object, so a layer draws in a single pass however many categories it has.
+#[derive(Debug, Clone)]
+pub(in crate::objects) struct ObjectColorsPayload {
+    pub colors_rgba: Arc<Vec<[u8; 4]>>,
+    pub generation: u64,
+}
+
+impl From<&ObjectContinuousColorPayload> for ObjectColorsPayload {
+    fn from(payload: &ObjectContinuousColorPayload) -> Self {
+        Self {
+            colors_rgba: Arc::clone(&payload.colors_rgba),
+            generation: payload.generation,
+        }
+    }
+}
+
+/// Everything categorical colours depend on. Compared per frame, so it must stay cheap to build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::objects) struct CategoricalColorSignature {
+    resource_cache_id: u64,
+    geometry_generation: u64,
+    object_count: usize,
+    property_key: String,
+    groups: Vec<(u64, Option<[u8; 3]>)>,
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::objects) struct ObjectCategoricalColorPayload {
+    signature: CategoricalColorSignature,
+    colors: ObjectColorsPayload,
+}
+
+impl ObjectCategoricalColorPayload {
+    pub(in crate::objects) fn retained_bytes(&self) -> usize {
+        self.colors
+            .colors_rgba
+            .len()
+            .saturating_mul(std::mem::size_of::<[u8; 4]>())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VisibilityStateKey {
     resource_cache_id: u64,
@@ -113,6 +154,65 @@ impl ObjectsLayer {
             .visibility_rebuilds
             .saturating_add(1);
         self.presentation_state_cache.visibility.clone()
+    }
+
+    /// Resolves categorical colours to the per-object form used by every polygon renderer. Objects
+    /// with no value, or in a hidden category, keep zero alpha and are not drawn.
+    pub(super) fn cached_categorical_colors(&mut self) -> Option<ObjectColorsPayload> {
+        if self.color_mode != ObjectColorMode::ByProperty {
+            self.categorical_color_payload = None;
+            return None;
+        }
+        let object_count = self.object_count();
+        let color_groups = self
+            .active_color_groups()
+            .filter(|groups| groups.property_key == self.color_property_key)?;
+        let signature = CategoricalColorSignature {
+            resource_cache_id: self.render_resource_cache_id,
+            geometry_generation: self.geometry_generation,
+            object_count,
+            property_key: color_groups.property_key.clone(),
+            groups: color_groups
+                .groups
+                .iter()
+                .map(|group| {
+                    (
+                        group.fill_generation,
+                        self.effective_color_group_rgb(&color_groups.property_key, group),
+                    )
+                })
+                .collect(),
+        };
+        if let Some(payload) = self
+            .categorical_color_payload
+            .as_ref()
+            .filter(|payload| payload.signature == signature)
+        {
+            return Some(payload.colors.clone());
+        }
+
+        let mut colors_rgba = vec![[0u8; 4]; object_count];
+        for (group, (_, rgb)) in color_groups.groups.iter().zip(&signature.groups) {
+            let Some([r, g, b]) = *rgb else {
+                continue;
+            };
+            for (color, state) in colors_rgba.iter_mut().zip(group.fill_state.iter()) {
+                if *state > 0 {
+                    *color = [r, g, b, 255];
+                }
+            }
+        }
+        // Shared with continuous colours because both occupy the same GPU colour-texture slot.
+        self.continuous_color_generation = self.continuous_color_generation.wrapping_add(1).max(1);
+        let colors = ObjectColorsPayload {
+            colors_rgba: Arc::new(colors_rgba),
+            generation: self.continuous_color_generation,
+        };
+        self.categorical_color_payload = Some(ObjectCategoricalColorPayload {
+            signature,
+            colors: colors.clone(),
+        });
+        Some(colors)
     }
 
     pub(super) fn cached_continuous_outline_state(&mut self) -> ObjectRenderStatePayload {

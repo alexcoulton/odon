@@ -7,6 +7,7 @@ mod continuous_ui;
 mod display_state;
 mod filters;
 mod lazy_cache;
+mod legend;
 mod property_loading;
 mod style;
 
@@ -471,38 +472,25 @@ impl ObjectsLayer {
 
         if self.color_mode == ObjectColorMode::ByProperty {
             ui.separator();
-            ui.label(format!("Legend: {}", self.color_property_key));
             if let Some(entries) = self.active_color_legend_entries() {
                 self.color_level_overrides_property_key = self.color_property_key.clone();
-                egui::ScrollArea::vertical()
-                    .id_salt("seg_objects_legend_scroll")
-                    .max_height(140.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        for entry in entries {
-                            let default_color = entry.color_rgb;
-                            let override_style = self
-                                .color_level_overrides
-                                .entry(entry.value_label.clone())
-                                .or_default();
-                            let mut visible = override_style.visible;
-                            let color_rgb = override_style.color_rgb.unwrap_or(default_color);
-                            let mut color =
-                                egui::Color32::from_rgb(color_rgb[0], color_rgb[1], color_rgb[2]);
-                            ui.horizontal(|ui| {
-                                if ui.checkbox(&mut visible, "").changed() {
-                                    override_style.visible = visible;
-                                }
-                                if ui.color_edit_button_srgba(&mut color).changed() {
-                                    let next_rgb = [color.r(), color.g(), color.b()];
-                                    override_style.color_rgb =
-                                        (next_rgb != default_color).then_some(next_rgb);
-                                }
-                                ui.label(format!("{} ({})", entry.value_label, entry.count));
-                            });
-                        }
-                    });
+                let rows = legend_ui::legend_rows(entries, &self.category_colors, |label| {
+                    let style = self
+                        .color_level_overrides
+                        .get(label)
+                        .copied()
+                        .unwrap_or_default();
+                    (style.visible, style.color_rgb)
+                });
+                let property = self.color_property_key.clone();
+                let actions = legend_ui::ui_legend(
+                    ui,
+                    "seg_objects_legend",
+                    &property,
+                    &rows,
+                    &mut self.legend_ui,
+                );
+                self.apply_legend_actions(actions);
             }
         }
 

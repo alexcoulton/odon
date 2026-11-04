@@ -361,7 +361,7 @@ pub(super) enum LoadCompletion {
     },
     ProjectObjectSourceScan {
         scope: ProjectObjectPreloadScope,
-        request: OdonControlRequest,
+        request: Option<OdonControlRequest>,
         result: anyhow::Result<Vec<ProjectObjectPreloadSource>>,
     },
     ProjectObjectPreload {
@@ -729,7 +729,7 @@ pub(super) enum LoadJob {
     },
     ProjectObjectSourceScan {
         scope: ProjectObjectPreloadScope,
-        request: OdonControlRequest,
+        request: Option<OdonControlRequest>,
         candidates: Vec<PathBuf>,
     },
     ProjectObjectPreload {

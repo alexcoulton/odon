@@ -41,6 +41,26 @@ The official Python library interprets the container, element versions,
 relationships, and coordinate graph. It sends Odon normalized generic
 resources; it never calls `datasets.open_spatialdata`.
 
+### Runnable synthetic example
+
+[`examples/python_spatialdata_adapter_demo.py`](../../examples/python_spatialdata_adapter_demo.py)
+creates a small real SpatialData store with an image, labels, shapes, points,
+and a table, then opens that backed object through the adapter. From a repository
+checkout with the SpatialData extra installed:
+
+```bash
+uv run --project python python examples/python_spatialdata_adapter_demo.py \
+  --launch --screenshot /tmp/odon-spatialdata-adapter-demo.png
+```
+
+Omit `--launch` to connect to an Odon instance that is already running. Use
+`--fixture-only` to create and inspect the source store without Odon. The script
+prints and asserts the transfer decision for every element: the image and labels
+must reference the same fixture root at `images/morphology` and `labels/nuclei`,
+while points and the table-enriched shapes use small session-only GeoParquet
+snapshots. Its reported `raster_copies_created_by_adapter` value is therefore
+zero.
+
 For a backed raster, Python sends only the existing store URI, element group
 path (for example `images/morphology`), resolved affine transform, and
 provenance. Rust opens the original OME-Zarr chunks lazily and owns IO, caches,

@@ -20,18 +20,6 @@ pub(in crate::objects) fn object_render_cache_id_usize(namespace: u32, index: us
     object_render_cache_id(namespace, index.min(u32::MAX as usize) as u64)
 }
 
-pub(in crate::objects) fn object_property_render_cache_id(
-    namespace: u32,
-    property_key: &str,
-    index: usize,
-) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    namespace.hash(&mut hasher);
-    property_key.hash(&mut hasher);
-    index.hash(&mut hasher);
-    hasher.finish()
-}
-
 impl ObjectFillMesh {
     pub(in crate::objects) fn bin_range_for_local_rect(
         &self,

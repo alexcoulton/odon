@@ -906,6 +906,18 @@
         "milestone": 6
       },
       {
+        "id": "root.frame_pacing",
+        "fields": ["frame_pacing"],
+        "current_class": "renderer",
+        "disposition": "retain",
+        "canonical_writer": "RootApp frame loop",
+        "projection_source": "none; measured locally each frame",
+        "renderer_consumers": "renderer observation diagnostics",
+        "persistence_consumers": "none",
+        "native_commit_point": "none; diagnostic only",
+        "milestone": 6
+      },
+      {
         "id": "root.projection_observation",
         "fields": ["control_external_revision", "control_project_revision", "control_last_observed_at", "control_projection_applied_this_frame", "control_projection_revision_applied", "control_document_generation_applied", "control_actor_mode_signature", "control_projection_gap"],
         "current_class": "renderer",

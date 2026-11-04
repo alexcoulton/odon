@@ -970,6 +970,36 @@ fn validate_command_modes(
     Ok(normalized)
 }
 
+/// Non-letter keys that are always realised by the in-canvas shortcut path (never as native menu
+/// accelerators), so they are suppressed while a text field has keyboard focus on every platform.
+pub(crate) const NAVIGATION_SHORTCUT_KEYS: &[&str] = &[
+    "arrow_up",
+    "arrow_down",
+    "arrow_left",
+    "arrow_right",
+    "enter",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+];
+
+pub fn is_navigation_shortcut_key(key: &str) -> bool {
+    NAVIGATION_SHORTCUT_KEYS.contains(&key)
+}
+
+fn is_supported_shortcut_key(key: &str) -> bool {
+    key == "comma"
+        || (key.len() == 1 && key.as_bytes()[0].is_ascii_alphabetic())
+        || is_navigation_shortcut_key(key)
+}
+
 fn validate_shortcut(value: Option<&Value>, method: &str) -> Result<Option<Value>, ControlError> {
     let Some(value) = value else {
         return Ok(None);
@@ -982,10 +1012,10 @@ fn validate_shortcut(value: Option<&Value>, method: &str) -> Result<Option<Value
     })?;
     validate_keys_for(object, &["key", "modifiers"], method)?;
     let key = validate_text_for(object.get("key"), "shortcut key", method)?;
-    if !(key == "comma" || (key.len() == 1 && key.as_bytes()[0].is_ascii_alphabetic())) {
+    if !is_supported_shortcut_key(key) {
         return Err(ControlError::invalid_params(
             method,
-            "shortcut key must be one ASCII letter or 'comma'",
+            "shortcut key must be one ASCII letter, one digit, 'comma', 'enter', or an arrow key",
         ));
     }
     let modifiers = object
@@ -2147,9 +2177,9 @@ fn command_surface_schema() -> Value {
             "handler_types":["native","control","event"],
             "extension_command_id":"extension:<extension-id>/<local-id>",
             "extension_readiness_states":["ready","not_ready","disconnected","incompatible_version"],
-            "shortcut_keys":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","comma"],
+            "shortcut_keys":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","comma","arrow_up","arrow_down","arrow_left","arrow_right","enter","0","1","2","3","4","5","6","7","8","9"],
             "shortcut_modifiers":["primary","shift","alt","control","super"],
-            "shortcut_display_labels":{"primary":"Primary","shift":"Shift","alt":"Alt","control":"Ctrl","super":"Super","comma":","},
+            "shortcut_display_labels":{"primary":"Primary","shift":"Shift","alt":"Alt","control":"Ctrl","super":"Super","comma":",","arrow_up":"↑","arrow_down":"↓","arrow_left":"←","arrow_right":"→","enter":"Enter"},
             "shortcut_platform":{
                 "name":shortcut_platform.name(),
                 "primary_modifier":shortcut_platform.primary(),
@@ -2448,6 +2478,30 @@ mod tests {
             schema["command"]["shortcut_display_labels"]["primary"],
             "Primary"
         );
+    }
+
+    #[test]
+    fn navigation_shortcut_keys_are_accepted_and_other_keys_rejected() {
+        let method = "ui.commands.register";
+        for key in ["arrow_up", "arrow_right", "enter", "0", "9", "k", "comma"] {
+            let shortcut = json!({"key":key,"modifiers":[]});
+            assert!(
+                validate_shortcut(Some(&shortcut), method).is_ok(),
+                "{key} should be accepted"
+            );
+        }
+        for key in ["space", "tab", "f1", "10", "arrowup"] {
+            let shortcut = json!({"key":key,"modifiers":[]});
+            assert!(
+                validate_shortcut(Some(&shortcut), method).is_err(),
+                "{key} should be rejected"
+            );
+        }
+        let schema = command_surface_schema();
+        let keys = schema["command"]["shortcut_keys"].as_array().unwrap();
+        for key in NAVIGATION_SHORTCUT_KEYS {
+            assert!(keys.contains(&json!(key)), "{key} missing from schema");
+        }
     }
 
     #[test]

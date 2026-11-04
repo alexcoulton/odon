@@ -1,4 +1,96 @@
 use super::*;
+
+#[test]
+fn duplicate_roi_ids_select_by_source_without_changing_project_records() {
+    let channels = spawn_test_actor();
+    let rois = ["a", "b", "c"].map(|sample| {
+        let mut roi = ProjectRoi {
+            id: "ROI1.ome.zarr".to_string(),
+            ..Default::default()
+        };
+        roi.set_dataset_source(DatasetSource::Local(PathBuf::from(format!(
+            "/tmp/{sample}/ROI1.ome.zarr"
+        ))));
+        roi
+    });
+    let keys = rois
+        .iter()
+        .map(|roi| roi.source_key().unwrap())
+        .collect::<Vec<_>>();
+    channels
+        .model_tx
+        .send(ActorModelUpdate::BootstrapProject(ProjectModelSnapshot {
+            config: ProjectConfig {
+                rois: rois.to_vec(),
+                ..Default::default()
+            },
+            rois: rois.to_vec(),
+            state: json!({"browser":{},"roi_views":{}}),
+            load_generation: 1,
+            ..Default::default()
+        }))
+        .unwrap();
+    let (list, list_rx) = request("project.rois.list", json!({}));
+    channels.request_tx.send(list).unwrap();
+    list_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    for (mode, selected, expected) in [
+        ("replace", vec![keys[1].clone()], vec![false, true, false]),
+        ("add", vec![keys[2].clone()], vec![false, true, true]),
+        ("toggle", vec![keys[1].clone()], vec![false, false, true]),
+        ("replace", keys.clone(), vec![true, true, true]),
+        ("remove", vec![keys[0].clone()], vec![false, true, true]),
+    ] {
+        let (select, select_rx) = request(
+            "project.rois.select",
+            json!({"source_keys":selected,"mode":mode}),
+        );
+        channels.request_tx.send(select).unwrap();
+        select_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        let (list, list_rx) = request("project.rois.list", json!({}));
+        channels.request_tx.send(list).unwrap();
+        let list = list_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            list["rois"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|roi| roi["selected"].as_bool().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    for params in [
+        json!({"ids":["ROI1.ome.zarr"]}),
+        json!({"source_keys":[keys[0],"local:/tmp/missing"]}),
+    ] {
+        let (select, select_rx) = request("project.rois.select", params);
+        channels.request_tx.send(select).unwrap();
+        assert!(
+            select_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .is_err()
+        );
+    }
+    let projection = channels.presentation_rx.try_recv().unwrap();
+    assert_eq!(projection.project.selected_source_keys, keys[1..].to_vec());
+    assert_eq!(
+        serde_json::to_value(projection.project.rois).unwrap(),
+        serde_json::to_value(rois).unwrap()
+    );
+}
+
 #[test]
 fn project_roi_transactions_complete_without_draining_the_ui_queue() {
     let channels = spawn_test_actor();

@@ -176,6 +176,7 @@ impl ProjectSpace {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn select_roi_ids(&mut self, ids: &[String], mode: &str) -> Result<(), String> {
         let keys = ids
             .iter()
@@ -186,12 +187,30 @@ impl ProjectSpace {
                     .ok_or_else(|| format!("ROI '{id}' has no dataset source"))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        self.select_roi_source_keys(&keys, mode)
+    }
+
+    /// Native rows already identify a dataset; do not reduce that identity to a repeated filename.
+    pub fn select_roi_source_keys(&mut self, keys: &[String], mode: &str) -> Result<(), String> {
+        for key in keys {
+            let count = self
+                .config
+                .rois
+                .iter()
+                .filter(|roi| roi.source_key().as_deref() == Some(key.as_str()))
+                .count();
+            match count {
+                1 => {}
+                0 => return Err(format!("ROI source '{key}' was not found")),
+                _ => return Err(format!("ROI source '{key}' is ambiguous")),
+            }
+        }
         if !matches!(mode, "replace" | "add" | "remove" | "toggle") {
             return Err("selection mode must be replace, add, remove, or toggle".to_string());
         }
         if self.submit_control_intent(
             "project.rois.select",
-            serde_json::json!({"ids":ids,"mode":mode}),
+            serde_json::json!({"source_keys":keys,"mode":mode}),
         ) {
             return Ok(());
         }
@@ -199,15 +218,18 @@ impl ProjectSpace {
             "replace" => {
                 self.selected.clear();
                 self.selected.extend(keys.iter().cloned());
+                if keys.is_empty() {
+                    self.focused = None;
+                }
             }
             "add" => self.selected.extend(keys.iter().cloned()),
             "remove" => {
-                for key in &keys {
+                for key in keys {
                     self.selected.remove(key.as_str());
                 }
             }
             "toggle" => {
-                for key in &keys {
+                for key in keys {
                     if !self.selected.remove(key.as_str()) {
                         self.selected.insert(key.clone());
                     }
@@ -220,6 +242,36 @@ impl ProjectSpace {
         }
         self.config_generation = self.config_generation.wrapping_add(1);
         Ok(())
+    }
+
+    pub(super) fn select_browsed_roi(
+        &mut self,
+        source_key: String,
+        visible_indices: &[usize],
+        toggle: bool,
+        range: bool,
+    ) -> Result<(), String> {
+        if range {
+            let visible_keys = visible_indices
+                .iter()
+                .filter_map(|&index| self.config.rois.get(index).and_then(ProjectRoi::source_key))
+                .collect::<Vec<_>>();
+            let clicked = visible_keys
+                .iter()
+                .position(|key| key == &source_key)
+                .ok_or_else(|| "Clicked ROI is not visible".to_string())?;
+            let focused = self
+                .focused
+                .as_ref()
+                .and_then(|focused| visible_keys.iter().position(|key| key == focused))
+                .unwrap_or(clicked);
+            let mut keys = visible_keys[focused.min(clicked)..=focused.max(clicked)].to_vec();
+            keys.retain(|key| key != &source_key);
+            keys.push(source_key);
+            self.select_roi_source_keys(&keys, "replace")
+        } else {
+            self.select_roi_source_keys(&[source_key], if toggle { "toggle" } else { "replace" })
+        }
     }
 
     #[cfg(test)]
@@ -546,14 +598,13 @@ impl ProjectSpace {
 
     pub fn add_roi_source(&mut self, source: DatasetSource) {
         let source_key = source.source_key();
-        if let Some(existing_id) = self
+        if self
             .config
             .rois
             .iter()
-            .find(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
-            .map(|roi| roi.id.clone())
+            .any(|roi| roi.source_key().as_deref() == Some(source_key.as_str()))
         {
-            if let Err(error) = self.select_roi_ids(&[existing_id], "replace") {
+            if let Err(error) = self.select_roi_source_keys(&[source_key], "replace") {
                 self.status = error;
             }
             return;

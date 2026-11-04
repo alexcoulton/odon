@@ -110,6 +110,8 @@ pub struct ProjectObjectPreloadProjection {
 pub(crate) struct ProjectObjectPreloadCatalog {
     scope: ProjectObjectPreloadScope,
     sources: Vec<ProjectObjectPreloadSource>,
+    // Scope changes schedule one worker scan, even if no API client inspects the catalog.
+    source_scan_pending: bool,
     resources: HashMap<(PathBuf, ProjectObjectPreloadSettings), Arc<ControlObjectResource>>,
     settings: ProjectObjectPreloadSettings,
     total: usize,
@@ -128,6 +130,7 @@ impl Default for ProjectObjectPreloadCatalog {
                 resource_generation: 0,
             },
             sources: Vec::new(),
+            source_scan_pending: false,
             resources: HashMap::new(),
             settings: ProjectObjectPreloadSettings::default(),
             total: 0,
@@ -146,8 +149,20 @@ impl ProjectObjectPreloadCatalog {
             return;
         }
         self.scope = scope;
-        self.invalidate();
+        self.sources.clear();
+        self.source_scan_pending = true;
+        self.clear();
         self.settings = ProjectObjectPreloadSettings::default();
+    }
+
+    pub(crate) fn take_source_scan_pending(&mut self) -> bool {
+        std::mem::take(&mut self.source_scan_pending)
+    }
+
+    pub(crate) fn retry_source_scan(&mut self, scope: &ProjectObjectPreloadScope) {
+        if self.scope == *scope {
+            self.source_scan_pending = true;
+        }
     }
 
     pub(crate) fn scope(&self) -> ProjectObjectPreloadScope {
@@ -160,7 +175,6 @@ impl ProjectObjectPreloadCatalog {
         candidate_count: usize,
     ) -> u64 {
         self.operation_generation = self.operation_generation.wrapping_add(1).max(1);
-        self.sources.clear();
         self.resources.clear();
         self.settings = settings;
         self.total = candidate_count;
@@ -187,6 +201,7 @@ impl ProjectObjectPreloadCatalog {
             return false;
         }
         self.sources = sources;
+        self.source_scan_pending = false;
         true
     }
 
@@ -202,6 +217,7 @@ impl ProjectObjectPreloadCatalog {
             return false;
         }
         self.sources = sources;
+        self.source_scan_pending = false;
         self.total = self.sources.len();
         self.done = self.total;
         self.failed = failed;
@@ -222,21 +238,17 @@ impl ProjectObjectPreloadCatalog {
     }
 
     pub(crate) fn clear(&mut self) -> (usize, bool, u64) {
+        // Releasing loaded objects must retain discovery so the UI can preload again.
         let removed = self.resources.len();
         let cancelled = self.loading;
         let generation = self.operation_generation;
-        self.invalidate();
-        (removed, cancelled, generation)
-    }
-
-    fn invalidate(&mut self) {
         self.operation_generation = self.operation_generation.wrapping_add(1).max(1);
-        self.sources.clear();
         self.resources.clear();
         self.total = 0;
         self.done = 0;
         self.failed = 0;
         self.loading = false;
+        (removed, cancelled, generation)
     }
 
     pub(crate) fn snapshot(&self) -> Value {

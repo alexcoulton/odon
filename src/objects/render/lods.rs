@@ -160,7 +160,6 @@ where
     use std::collections::BTreeMap;
     use std::hash::{Hash, Hasher};
 
-    let mut grouped: BTreeMap<String, Vec<Vec<egui::Pos2>>> = BTreeMap::new();
     let mut grouped_points: BTreeMap<String, Vec<egui::Pos2>> = BTreeMap::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut grouped_indices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -172,10 +171,6 @@ where
             .entry(value.clone())
             .and_modify(|count| *count += 1)
             .or_insert(1);
-        grouped
-            .entry(value.clone())
-            .or_default()
-            .extend(obj.polygons_world.iter().cloned());
         grouped_points
             .entry(value.clone())
             .or_default()
@@ -189,12 +184,6 @@ where
 
     let mut groups = Vec::new();
     for (value_label, _) in counts {
-        let polylines = grouped.remove(&value_label).unwrap_or_default();
-        let lods = if polylines.is_empty() {
-            Vec::new()
-        } else {
-            build_render_lods_from_polylines(&polylines)?
-        };
         let point_positions = grouped_points.remove(&value_label).unwrap_or_default();
         let mut object_indices = grouped_indices.remove(&value_label).unwrap_or_default();
         object_indices.sort_unstable();
@@ -214,7 +203,6 @@ where
         groups.push(ObjectColorGroup {
             color_rgb: hashed_color_rgb(property_key, &value_label),
             value_label,
-            lods,
             point_values: Arc::new(vec![1.0; point_positions.len()]),
             point_positions_world: Arc::new(point_positions),
             fill_state: Arc::new(fill_state),

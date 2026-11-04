@@ -121,8 +121,14 @@ impl ObjectsLayer {
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
+            // A saved presentation can name a lazily loaded column, or arrive before the objects
+            // do. Both resolve later: set_color_by_property starts the column load, and object
+            // load completion reapplies the requested property.
             if let Some(property) = property
+                && !self.is_loading()
+                && self.has_data()
                 && !self.property_store.has_loaded(property)
+                && !self.property_column_available_but_unloaded(property)
                 && !self.objects.as_ref().is_some_and(|objects| {
                     objects
                         .iter()

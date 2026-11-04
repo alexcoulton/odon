@@ -4,6 +4,7 @@ use super::*;
 
 mod commands;
 mod memory;
+mod project_metadata;
 mod shell;
 
 use memory::{validate_image_tile_cache, validate_tile_loading};
@@ -928,37 +929,7 @@ pub(in crate::control::command) fn validate_params(
                 ));
             }
         }
-        RequestShape::ProjectMetadata => {
-            let request: ProjectMetadataRequest =
-                serde_json::from_value(params.clone()).map_err(invalid)?;
-            validate_optional_nullable_string(
-                method,
-                "default_dataset",
-                request.default_dataset.as_ref(),
-            )?;
-            validate_optional_nullable_string(
-                method,
-                "secondary_dataset",
-                request.secondary_dataset.as_ref(),
-            )?;
-            validate_optional_nullable_string(
-                method,
-                "default_threshold_marker",
-                request.default_threshold_marker.as_ref(),
-            )?;
-            if request
-                .mosaic_segmentation_search_roots
-                .as_ref()
-                .is_some_and(|roots| {
-                    roots.len() > 4096 || roots.iter().any(|root| root.trim().is_empty())
-                })
-            {
-                return Err(ControlError::invalid_params(
-                    method,
-                    "search roots must contain at most 4096 non-empty paths",
-                ));
-            }
-        }
+        RequestShape::ProjectMetadata => project_metadata::validate(method, params)?,
         RequestShape::SamplesheetInspect => {
             let request: SamplesheetInspectRequest =
                 serde_json::from_value(params.clone()).map_err(invalid)?;
@@ -1182,6 +1153,16 @@ pub(in crate::control::command) fn validate_params(
         RequestShape::ProjectRoiSelect => {
             let request: ProjectRoiSelectRequest =
                 serde_json::from_value(params.clone()).map_err(invalid)?;
+            let (field, selectors) = match (&request.ids, &request.source_keys) {
+                (Some(ids), None) if params.get("source_keys").is_none() => ("ids", ids),
+                (None, Some(keys)) if params.get("ids").is_none() => ("source_keys", keys),
+                _ => {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        "provide exactly one of ids or source_keys",
+                    ));
+                }
+            };
             if !matches!(
                 request.mode.as_str(),
                 "replace" | "add" | "remove" | "toggle"
@@ -1192,15 +1173,14 @@ pub(in crate::control::command) fn validate_params(
                 ));
             }
             let mut unique = std::collections::BTreeSet::new();
-            if request.ids.len() > 100_000
-                || request
-                    .ids
+            if selectors.len() > 100_000
+                || selectors
                     .iter()
                     .any(|id| id.trim().is_empty() || !unique.insert(id))
             {
                 return Err(ControlError::invalid_params(
                     method,
-                    "ids must contain at most 100000 unique, non-empty ROI IDs",
+                    format!("{field} must contain at most 100000 unique, non-empty ROI selectors"),
                 ));
             }
         }

@@ -29,12 +29,13 @@ impl ProjectSpace {
 
     pub fn submit_action_control_intent(&mut self, action: &ProjectSpaceAction) -> bool {
         let (method, params) = match action {
-            ProjectSpaceAction::Open(roi) => {
-                ("project.rois.open", serde_json::json!({"roi":roi.id}))
-            }
+            ProjectSpaceAction::Open(roi) => (
+                "project.rois.open",
+                serde_json::json!({"roi":roi.source_key().unwrap_or_else(|| roi.id.clone())}),
+            ),
             ProjectSpaceAction::OpenView(roi, spec) => {
                 let mut request = spec.to_deep_link_request(None);
-                request.roi = Some(roi.id.clone());
+                request.roi = Some(roi.source_key().unwrap_or_else(|| roi.id.clone()));
                 ("deep_links.apply", serde_json::json!({"request":request}))
             }
             ProjectSpaceAction::OpenLocalPath(path) => {
@@ -216,6 +217,9 @@ impl ProjectSpace {
         self.config
             .mosaic_segmentation_search_roots
             .clone_from(&snapshot.mosaic_segmentation_search_roots);
+        self.config
+            .category_colors
+            .clone_from(&snapshot.config.category_colors);
         match snapshot
             .view_presets
             .iter()

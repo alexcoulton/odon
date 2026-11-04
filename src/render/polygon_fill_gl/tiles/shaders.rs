@@ -150,7 +150,8 @@ bool resolve_sample(ivec2 id_coord, bool overview_resolve, out vec4 resolved_col
     } else if (u_use_object_colors != 0) {
         vec4 fill_object_color = object_color;
         fill_object_color.a *= u_object_color_opacity;
-        if (fill_object_color.a <= 0.0) {
+        // An outlines-only layer has a zero-alpha fill but must still reach the border test.
+        if (fill_object_color.a <= 0.0 && u_border_enabled == 0) {
             return false;
         }
         resolved_color = fill_object_color;

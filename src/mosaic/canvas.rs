@@ -220,7 +220,7 @@ impl MosaicViewerApp {
         self.tiles_gl.prune_in_flight(&keep);
 
         if self.tiles_gl.has_queued_deletions()
-            || self.tiles_gl.stats().pending_cpu_bytes > 0
+            || self.tiles_gl.has_pending_uploads_for(&keep)
             || self.loader.response_queue_len() > 0
         {
             ui.ctx().request_repaint();

@@ -207,6 +207,10 @@ fn command_accelerator(command: &Value) -> anyhow::Result<Option<muda::accelerat
         .get("key")
         .and_then(Value::as_str)
         .context("shortcut key is missing")?;
+    if odon::model::is_navigation_shortcut_key(key) {
+        // Realised in-canvas by `command_shortcuts::resolve` so text fields keep these keys.
+        return Ok(None);
+    }
     let code = match key.to_ascii_lowercase().as_str() {
         "a" => Code::KeyA,
         "b" => Code::KeyB,

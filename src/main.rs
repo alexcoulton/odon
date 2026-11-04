@@ -296,7 +296,7 @@ fn main() -> anyhow::Result<()> {
                 Launch::Project { project_path } => {
                     let mut app = root_app::RootApp::new_project(cc, project_path.clone())?;
                     if let Some(rx) = deep_link_rx.take() {
-                        app.set_deep_link_receiver(rx);
+                        app.set_deep_link_receiver(rx, &cc.egui_ctx);
                     }
                     if let Some(req) = deep_link.clone() {
                         app.queue_deep_link(req);
@@ -313,7 +313,7 @@ fn main() -> anyhow::Result<()> {
                                 project_path.clone(),
                             )?;
                             if let Some(rx) = deep_link_rx.take() {
-                                app.set_deep_link_receiver(rx);
+                                app.set_deep_link_receiver(rx, &cc.egui_ctx);
                             }
                             if let Some(req) = deep_link.clone() {
                                 app.queue_deep_link(req);
@@ -326,7 +326,7 @@ fn main() -> anyhow::Result<()> {
                             // chooser dialog, instead of failing at startup.
                             let mut app = root_app::RootApp::new_project(cc, project_path.clone())?;
                             if let Some(rx) = deep_link_rx.take() {
-                                app.set_deep_link_receiver(rx);
+                                app.set_deep_link_receiver(rx, &cc.egui_ctx);
                             }
                             app.add_paths_to_project(vec![dataset_root.clone()]);
                             app.queue_open_root(dataset_root.clone());
@@ -341,7 +341,7 @@ fn main() -> anyhow::Result<()> {
                     let mosaic = mosaic::MosaicViewerApp::from_args(cc, args.clone())?;
                     let mut app = root_app::RootApp::new_mosaic(cc, mosaic, project_path.clone())?;
                     if let Some(rx) = deep_link_rx.take() {
-                        app.set_deep_link_receiver(rx);
+                        app.set_deep_link_receiver(rx, &cc.egui_ctx);
                     }
                     if let Some(req) = deep_link.clone() {
                         app.queue_deep_link(req);

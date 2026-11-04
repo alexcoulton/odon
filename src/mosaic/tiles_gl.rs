@@ -232,6 +232,12 @@ impl MosaicTilesGl {
         !self.inner.lock().in_flight.is_empty()
     }
 
+    /// Tiles only upload while being drawn, so pending tiles outside `drawn`, such as prefetched
+    /// ones, cannot make progress and must not keep the viewer repainting.
+    pub fn has_pending_uploads_for(&self, drawn: &HashSet<MosaicRawTileKey>) -> bool {
+        self.inner.lock().has_pending_uploads_for(drawn)
+    }
+
     pub fn loading_tile_count_for(&self, keep: &HashSet<MosaicRawTileKey>) -> usize {
         self.inner.lock().loading_count_for(keep)
     }
@@ -862,6 +868,12 @@ impl Inner {
         }
     }
 
+    fn has_pending_uploads_for(&self, drawn: &HashSet<MosaicRawTileKey>) -> bool {
+        drawn
+            .iter()
+            .any(|key| matches!(self.cache.peek(key), Some(TileState::Pending { .. })))
+    }
+
     fn loading_count_for(&self, keep: &HashSet<MosaicRawTileKey>) -> usize {
         keep.iter()
             .filter(|key| {
@@ -1191,6 +1203,27 @@ mod cache_tests {
         assert_eq!(inner.uploaded_texture_bytes, 0);
         assert_eq!(inner.tracked_bytes(), expected);
         assert_eq!(inner.cache.len(), 2);
+    }
+
+    #[test]
+    fn only_drawn_pending_tiles_require_another_frame() {
+        let mut inner = Inner::new(ImageTileCacheSettings::default());
+        let (drawn, prefetched) = (key(0, 0), key(0, 1));
+        inner.insert_pending(response(prefetched, 4, 4));
+
+        let drawn_tiles = HashSet::from([drawn]);
+        assert!(inner.pending_cpu_bytes > 0);
+        assert!(
+            !inner.has_pending_uploads_for(&drawn_tiles),
+            "a prefetched tile cannot upload until it is drawn, so it must not wake the viewer"
+        );
+        assert!(
+            !inner.has_pending_uploads_for(&HashSet::new()),
+            "nothing is drawn"
+        );
+
+        inner.insert_pending(response(drawn, 4, 4));
+        assert!(inner.has_pending_uploads_for(&drawn_tiles));
     }
 
     #[test]

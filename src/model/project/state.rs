@@ -33,8 +33,8 @@ impl ProjectModel {
     }
 
     pub(crate) fn activate_roi(&mut self, roi: &ProjectRoi) -> Result<(), ControlError> {
-        let index = self.roi_index_by_id(&roi.id)?;
-        let key = required_source_key(&self.snapshot.rois[index])?;
+        let key = required_source_key(roi)?;
+        self.roi_index_by_source_key(&key)?;
         self.snapshot.focused_source_key = Some(key.clone());
         self.snapshot.selected_source_keys = vec![key];
         self.mark_navigation_change();

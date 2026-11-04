@@ -313,7 +313,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
         ),
         method!(
             "project.rois.select",
-            "Select project ROIs by stable ID.",
+            "Select project ROIs by stable ID or exact dataset source key.",
             "project.write",
             true,
             false,

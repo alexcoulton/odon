@@ -54,6 +54,11 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub layer_groups: ProjectLayerGroups,
 
+    /// Project-wide object category colours, keyed by category label. They apply to matching
+    /// labels in any colour column and ROI, unless a view sets its own colour for that label.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub category_colors: BTreeMap<String, [u8; 3]>,
+
     /// Referenced data resources registered by the control API with project ownership.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub control_resources: Vec<serde_json::Value>,

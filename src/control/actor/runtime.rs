@@ -231,6 +231,13 @@ pub fn spawn_control_actor_with_services_and_ui(
                                 &wake_ui,
                             );
                         }
+                        if !presentation_captures.barrier_active() {
+                            super::project_preload::enqueue_project_object_source_scan(
+                                &mut model,
+                                &load_job_tx,
+                                &diagnostics,
+                            );
+                        }
                         if !presentation_captures.barrier_active()
                             && enqueue_auto_contrast_on_open(
                                 &mut model,

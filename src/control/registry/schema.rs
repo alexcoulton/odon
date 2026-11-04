@@ -536,7 +536,11 @@ fn request_schema(shape: RequestShape) -> Value {
                 "default_dataset": {"type": ["string", "null"]},
                 "secondary_dataset": {"type": ["string", "null"]},
                 "default_threshold_marker": {"type": ["string", "null"]},
-                "mosaic_segmentation_search_roots": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 4096}
+                "mosaic_segmentation_search_roots": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 4096},
+                "category_colors": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}
+                }
             },
             "additionalProperties": false,
         }),
@@ -686,9 +690,10 @@ fn request_schema(shape: RequestShape) -> Value {
             "type": "object",
             "properties": {
                 "ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 100000, "uniqueItems": true},
+                "source_keys": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 100000, "uniqueItems": true, "description": "Exact dataset source keys, including for legacy projects with repeated ROI IDs"},
                 "mode": {"type": "string", "enum": ["replace", "add", "remove", "toggle"], "default": "replace"}
             },
-            "required": ["ids"],
+            "oneOf": [{"required": ["ids"]}, {"required": ["source_keys"]}],
             "additionalProperties": false,
         }),
         RequestShape::MosaicFocus => json!({

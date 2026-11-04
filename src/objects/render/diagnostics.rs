@@ -11,6 +11,12 @@ impl ObjectsLayer {
         self.gl_object_selection.stats()
     }
 
+    /// A mosaic draws many layers at once, so the texture/vector outline choice has to consider
+    /// the whole scene: no single small ROI reaches the workload threshold on its own.
+    pub(crate) fn set_outline_scene_records(&mut self, records: usize) {
+        self.outline_scene_records = records;
+    }
+
     pub(crate) fn outline_frame_stats(&self) -> ObjectOutlineFrameStats {
         self.outline_frame_stats
     }
@@ -43,6 +49,11 @@ impl ObjectsLayer {
                 .saturating_mul(std::mem::size_of::<[u8; 4]>())
         });
 
+        let categorical_color_bytes = self
+            .categorical_color_payload
+            .as_ref()
+            .map_or(0, ObjectCategoricalColorPayload::retained_bytes);
+
         let gpu = serde_json::to_value(gpu).unwrap_or_default();
         serde_json::json!({
             "cpu": {
@@ -50,6 +61,7 @@ impl ObjectsLayer {
                 "binned_mesh_bytes": binned_mesh_bytes,
                 "spatial_bin_count": spatial_bin_count,
                 "continuous_color_bytes": continuous_color_bytes,
+                "categorical_color_bytes": categorical_color_bytes,
             },
             "gpu": gpu,
             "outline_gpu": outline_gpu,

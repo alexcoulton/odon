@@ -99,7 +99,7 @@ impl ProjectSpace {
             if selected == self.selected && focused == self.focused {
                 return;
             }
-            let mut ids = self
+            let mut keys = self
                 .config
                 .rois
                 .iter()
@@ -107,20 +107,15 @@ impl ProjectSpace {
                     roi.source_key()
                         .is_some_and(|key| selected.contains(key.as_str()))
                 })
-                .map(|roi| roi.id.clone())
+                .filter_map(ProjectRoi::source_key)
                 .collect::<Vec<_>>();
-            if let Some(focused_id) = focused.and_then(|key| {
-                self.config
-                    .rois
-                    .iter()
-                    .find(|roi| roi.source_key().as_deref() == Some(key.as_str()))
-                    .map(|roi| roi.id.clone())
-            }) && let Some(position) = ids.iter().position(|id| id == &focused_id)
+            if let Some(focused_key) = focused
+                && let Some(position) = keys.iter().position(|key| key == &focused_key)
             {
-                ids.remove(position);
-                ids.push(focused_id);
+                keys.remove(position);
+                keys.push(focused_key);
             }
-            if let Err(error) = self.select_roi_ids(&ids, "replace") {
+            if let Err(error) = self.select_roi_source_keys(&keys, "replace") {
                 self.status = error;
             }
             return;
