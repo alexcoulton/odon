@@ -540,7 +540,15 @@ fn request_schema(shape: RequestShape) -> Value {
                 "category_colors": {
                     "type": "object",
                     "additionalProperties": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}
-                }
+                },
+                "object_property_preferences": {
+                    "type": "object",
+                    "properties": {
+                        "pinned": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                        "recent": {"type": "array", "items": {"type": "string", "minLength": 1}}
+                    },
+                    "additionalProperties": false
+                },
             },
             "additionalProperties": false,
         }),
@@ -739,6 +747,8 @@ fn request_schema(shape: RequestShape) -> Value {
                 "layout": {"type": "string", "enum": ["fit_cells", "native_pixels"]},
                 "layout_mode": {"type": "string", "enum": ["fit_cells", "native_pixels"]},
                 "label_columns": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+                "label_font_size": {"type": "number", "minimum": crate::model::MIN_MOSAIC_LABEL_FONT_SIZE, "maximum": crate::model::MAX_MOSAIC_LABEL_FONT_SIZE},
+                "group_label_font_size": {"type": "number", "minimum": crate::model::MIN_MOSAIC_LABEL_FONT_SIZE, "maximum": crate::model::MAX_MOSAIC_LABEL_FONT_SIZE},
                 "fit": {"type": "boolean", "default": true}
             },
             "additionalProperties": false,
@@ -905,6 +915,7 @@ pub(super) fn request_schema_for(descriptor: &MethodDescriptor) -> Value {
                     "maxItems":2
                 }
             },
+            "unticked_categories": {"type":"string","enum":["hidden","hover_only","outline_only"]},
             "fill_cells": {"type":"boolean"},
             "fill_opacity": {"type":"number","minimum":0.0,"maximum":1.0}
         });

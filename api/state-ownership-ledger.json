@@ -712,6 +712,30 @@
         "milestone": 3
       },
       {
+        "id": "viewer.applied_workspace_fingerprint",
+        "fields": ["control_actor_workspace_fingerprint"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "actor projection consumer",
+        "projection_source": "RenderProjection workspace fingerprint",
+        "renderer_consumers": "skips re-applying an unchanged workspace section",
+        "persistence_consumers": "none",
+        "native_commit_point": "none",
+        "milestone": 6
+      },
+      {
+        "id": "viewer.native_camera_hold",
+        "fields": ["native_camera_hold"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "canvas pan/zoom gesture",
+        "projection_source": "projected viewport camera, observed but not applied while held",
+        "renderer_consumers": "keeps the locally applied gesture camera authoritative until the actor echoes it",
+        "persistence_consumers": "none",
+        "native_commit_point": "coalesced viewer.viewports.camera.set without a revision precondition",
+        "milestone": 6
+      },
+      {
         "id": "viewer.native_viewport_scope",
         "fields": ["native_viewport_command_scope"],
         "current_class": "transient_ui",
@@ -1052,6 +1076,18 @@
         "milestone": 3
       },
       {
+        "id": "mosaic.channel_contrast_draft",
+        "fields": ["desired_channel_contrast", "submitted_channel_contrast"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "egui mosaic contrast gesture and command submission",
+        "projection_source": "actor channel projection acknowledges pending contrast",
+        "renderer_consumers": "contrast control preview and command coalescing",
+        "persistence_consumers": "none; committed contrast remains actor-owned",
+        "native_commit_point": "typed viewer.channels.set_contrast command",
+        "milestone": 3
+      },
+      {
         "id": "mosaic.layer_selection_drafts",
         "fields": ["selected_channel_layers", "channel_select_anchor_idx", "selected_channel_group_id", "quick_contrast_target", "selected_overlay_layers", "overlay_select_anchor_pos"],
         "current_class": "transient_ui",
@@ -1125,7 +1161,7 @@
       },
       {
         "id": "mosaic.layout",
-        "fields": ["metadata_columns", "sort_by", "sort_secondary_enabled", "sort_by_secondary", "group_by", "show_group_labels", "group_gap", "layout_mode", "group_blocks", "show_text_labels", "label_columns", "grid_cols"],
+        "fields": ["metadata_columns", "sort_by", "sort_secondary_enabled", "sort_by_secondary", "group_by", "show_group_labels", "group_gap", "layout_mode", "group_blocks", "show_text_labels", "label_columns", "label_font_size", "group_label_font_size", "grid_cols"],
         "current_class": "actor_projection",
         "disposition": "retain",
         "canonical_writer": "ControlActor MosaicModel layout",
@@ -1169,6 +1205,18 @@
         "renderer_consumers": "close confirmation dialog",
         "persistence_consumers": "none",
         "native_commit_point": "typed lifecycle decision followed by platform effect",
+        "milestone": 6
+      },
+      {
+        "id": "mosaic.auto_contrast_projection",
+        "fields": ["control_auto_contrast_pending"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "ControlActor mosaic automatic contrast job",
+        "projection_source": "mosaic auto_contrast state",
+        "renderer_consumers": "channel panel Auto control",
+        "persistence_consumers": "none",
+        "native_commit_point": "viewer.channels.auto_contrast",
         "milestone": 6
       },
       {
@@ -1313,6 +1361,30 @@
         "renderer_consumers": "stale projection and shared-resource generation rejection",
         "persistence_consumers": "none",
         "native_commit_point": "none; projection observation",
+        "milestone": 6
+      },
+      {
+        "id": "mosaic.applied_projection_fingerprints",
+        "fields": ["applied_state_fingerprint", "tile_state_fingerprint"],
+        "current_class": "actor_projection",
+        "disposition": "retain",
+        "canonical_writer": "actor projection consumer",
+        "projection_source": "RenderProjection mosaic state fingerprint and projected tile-relevant state",
+        "renderer_consumers": "skips re-applying an unchanged state section and keeps valid in-flight tile requests",
+        "persistence_consumers": "none",
+        "native_commit_point": "none",
+        "milestone": 6
+      },
+      {
+        "id": "mosaic.native_camera_hold",
+        "fields": ["native_camera_hold"],
+        "current_class": "transient_ui",
+        "disposition": "retain",
+        "canonical_writer": "mosaic canvas pan/zoom gesture",
+        "projection_source": "projected mosaic camera, observed but not applied while held",
+        "renderer_consumers": "keeps the locally applied gesture camera authoritative until the actor echoes it",
+        "persistence_consumers": "none",
+        "native_commit_point": "coalesced viewer.camera.set",
         "milestone": 6
       },
       {

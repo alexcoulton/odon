@@ -326,6 +326,29 @@ pub(crate) enum ObjectTarget {
     SpatialShape(u64),
 }
 
+/// Camera of one view, projected to the renderer as plain data instead of JSON.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProjectedCamera {
+    pub center_world_lvl0: [f32; 2],
+    pub zoom_screen_per_lvl0_px: f32,
+}
+
+/// Navigation state of one single-image viewport.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectedViewportNavigation {
+    pub viewport_id: String,
+    pub navigation_revision: u64,
+    pub camera: ProjectedCamera,
+}
+
+/// The part of a projection that changes on every pan or zoom step. It is carried separately
+/// from the JSON sections so a camera move never requires the renderer to re-apply them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectedNavigation {
+    pub viewports: Vec<ProjectedViewportNavigation>,
+    pub mosaic_camera: Option<ProjectedCamera>,
+}
+
 #[derive(Clone)]
 pub struct ControlSecondaryObjectProjection {
     pub layer_id: u64,
@@ -831,6 +854,7 @@ fn overlay_project_viewport(
             ("fill_cells", "fill_cells"),
             ("fill_opacity", "fill_opacity"),
             ("selected_fill_opacity", "selected_fill_opacity"),
+            ("unticked_categories", "unticked_categories"),
             ("fast_rendering", "fast_rendering"),
         ] {
             if let Some(value) = display.get(saved_name) {
@@ -2077,6 +2101,7 @@ fn object_style_json(objects: &Value, resource: Option<&ControlObjectResource>) 
         "fill_cells": value("fill_cells"),
         "fill_opacity": value("fill_opacity"),
         "selected_fill_opacity": value("selected_fill_opacity"),
+        "unticked_categories": value("unticked_categories"),
         "show_selection_overlay": value("show_selection_overlay"),
         "fast_rendering": value("fast_rendering"),
         "color_mode": if color_property.as_str().is_some_and(|value| !value.is_empty()) {
@@ -2191,6 +2216,12 @@ fn apply_object_style_patch(objects: &mut Value, params: &Value) -> Result<bool,
             object.insert(name.to_string(), json!(value as f32));
         }
     }
+    if let Some(value) = params.get("unticked_categories") {
+        if !matches!(value.as_str(), Some("hidden" | "hover_only" | "outline_only")) {
+            return Err(invalid("unticked_categories must be hidden, hover_only, or outline_only"));
+        }
+        object.insert("unticked_categories".to_string(), value.clone());
+    }
     if let Some(value) = params.get("width_screen_px") {
         let value = value
             .as_f64()
@@ -2263,6 +2294,7 @@ fn apply_native_object_layer_presentation(
         "fill_cells",
         "fill_opacity",
         "selected_fill_opacity",
+        "unticked_categories",
         "fast_rendering",
     ] {
         if let Some(value) = display.get(name) {
@@ -2840,6 +2872,7 @@ fn project_segmentation_view_json(dataset: &DatasetModel, viewport: &ViewportMod
             "fill_cells":viewport.objects.get("fill_cells").cloned().unwrap_or(Value::Bool(false)),
             "fill_opacity":viewport.objects.get("fill_opacity").cloned().unwrap_or(json!(0.30_f32)),
             "selected_fill_opacity":viewport.objects.get("selected_fill_opacity").cloned().unwrap_or(json!(0.70_f32)),
+            "unticked_categories":viewport.objects.get("unticked_categories").cloned().unwrap_or(json!("hidden")),
             "fast_rendering":viewport.objects.get("fast_rendering").cloned().unwrap_or(Value::Bool(true)),
         },
     })
@@ -2897,6 +2930,7 @@ fn default_object_snapshot() -> Value {
         "fill_cells": false,
         "fill_opacity": 0.30_f32,
         "selected_fill_opacity": 0.70_f32,
+        "unticked_categories": "hidden",
         "show_selection_overlay": true,
         "fast_rendering": true,
         "color_property": "",

@@ -2269,7 +2269,7 @@ fn application_state_ownership_ledger_covers_every_host_field_exactly_once() {
     }
 
     assert_eq!(
-        total_fields, 290,
+        total_fields, 300,
         "review the ownership ledger when host fields change"
     );
 }

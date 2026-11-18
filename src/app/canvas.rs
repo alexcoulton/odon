@@ -1143,10 +1143,14 @@ impl OmeZarrViewerApp {
         // Loading indicator (top-right). Avoid capturing transient spinners in screenshots.
         if !screenshot_active {
             if self.show_tile_debug {
+                let mut debug_text = self.tile_debug_overlay_text();
+                if let Some(pacing) = crate::app_support::frame_pacing::hud_line(ctx) {
+                    debug_text = format!("{pacing}\n{debug_text}");
+                }
                 canvas_overlays::paint_hud(
                     ui,
                     rect.translate(egui::vec2(0.0, 18.0)),
-                    self.tile_debug_overlay_text(),
+                    debug_text,
                 );
             }
             let loading_text = self.loading_indicator_text();

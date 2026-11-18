@@ -78,7 +78,10 @@ impl OmeZarrViewerApp {
         ))
     }
 
+    /// Submits an explicit camera target (fit, zoom-to-object). The actor's projection applies it,
+    /// so any gesture hold is released first.
     pub(super) fn submit_native_camera(&mut self, camera: &Camera) -> bool {
+        self.native_camera_hold = None;
         let Some((viewport_id, revision)) = self.active_viewport_navigation_scope() else {
             return false;
         };
@@ -94,6 +97,106 @@ impl OmeZarrViewerApp {
                 "zoom_screen_per_lvl0_px":camera.zoom_screen_per_lvl0_px,
             }),
         )
+    }
+
+    /// Reports a pan/zoom step that was already applied to the local camera.
+    ///
+    /// Gesture steps are last-write-wins: they carry no revision precondition, only the newest
+    /// position is kept while one command is in flight, and the local camera stays authoritative
+    /// until the actor has caught up. A late projection therefore cannot reject or rewind a step.
+    pub(super) fn record_native_camera_gesture(&mut self) {
+        let Some((viewport_id, _)) = self.active_viewport_navigation_scope() else {
+            return;
+        };
+        let camera = self.camera.clone();
+        match self.native_camera_hold.as_mut() {
+            Some(held) if held.viewport_id == viewport_id => held.hold.record_local(camera),
+            _ => {
+                self.native_camera_hold = Some(NativeCameraHold {
+                    viewport_id,
+                    hold: crate::camera::CameraIntentHold::new(camera),
+                });
+            }
+        }
+        self.flush_native_camera_hold();
+    }
+
+    /// Drops a hold that settled while the renderer was idle, so the next projection applies.
+    pub(super) fn release_settled_native_camera_hold(&mut self) {
+        let in_flight = self.native_camera_command_in_flight();
+        if self
+            .native_camera_hold
+            .as_ref()
+            .is_some_and(|held| held.hold.settled(in_flight) && !held.hold.needs_wake())
+        {
+            self.native_camera_hold = None;
+        }
+    }
+
+    fn native_camera_command_in_flight(&self) -> bool {
+        self.native_command_ingress
+            .contains_pending("viewer.viewports.camera.set")
+    }
+
+    pub(super) fn flush_native_camera_hold(&mut self) {
+        let in_flight = self.native_camera_command_in_flight();
+        let Some(held) = self.native_camera_hold.as_mut() else {
+            return;
+        };
+        let Some(camera) = held.hold.take_unsent(in_flight) else {
+            return;
+        };
+        let params = serde_json::json!({
+            "viewport_id":held.viewport_id,
+            "center_world_lvl0":[
+                camera.center_world_lvl0.x,
+                camera.center_world_lvl0.y,
+            ],
+            "zoom_screen_per_lvl0_px":camera.zoom_screen_per_lvl0_px,
+        });
+        if !self.native_command_ingress.push(NativeControlIntent {
+            method: "viewer.viewports.camera.set",
+            params,
+        }) && let Some(held) = self.native_camera_hold.as_mut()
+        {
+            held.hold.mark_unsent();
+        }
+    }
+
+    /// Sends the newest unsent gesture camera and releases the hold once the actor caught up.
+    pub(super) fn tick_native_camera_hold(&mut self, ctx: &egui::Context) {
+        self.flush_native_camera_hold();
+        let in_flight = self.native_camera_command_in_flight();
+        let Some(held) = self.native_camera_hold.as_ref() else {
+            return;
+        };
+        if !held.hold.settled(in_flight) {
+            if held.hold.needs_wake() {
+                ctx.request_repaint_after(crate::camera::CameraIntentHold::POLL);
+            }
+            return;
+        }
+        let Some(held) = self.native_camera_hold.take() else {
+            return;
+        };
+        let viewport_id = held.viewport_id;
+        let Some(camera) = held.hold.finish() else {
+            return;
+        };
+        // The actor published a different camera while the gesture owned it; adopt it now.
+        if let Some(workspace) = self.viewport_workspace.as_mut() {
+            let linked = workspace.links().camera;
+            let active = workspace.active_id().as_str() == viewport_id;
+            for slot in workspace.viewports_mut() {
+                if linked || slot.id.as_str() == viewport_id {
+                    slot.state.camera = camera.clone();
+                }
+            }
+            if linked || active {
+                self.camera = camera;
+            }
+        }
+        ctx.request_repaint();
     }
 
     pub(super) fn submit_native_object_filter_at(
@@ -321,6 +424,7 @@ impl OmeZarrViewerApp {
                 "fill_cells": state.object_display.fill_cells,
                 "fill_opacity": state.object_display.fill_opacity,
                 "selected_fill_opacity": state.object_display.selected_fill_opacity,
+                "unticked_categories": state.object_display.unticked_categories,
                 "show_selection_overlay": state.object_show_selection_overlay,
                 "fast_rendering": state.object_display.fast_rendering,
                 "color_property": state.object_display.color_property_key,

@@ -49,6 +49,7 @@ impl ObjectsLayer {
             "fill_cells":self.fill_cells,
             "fill_opacity":self.fill_opacity,
             "selected_fill_opacity":self.selected_fill_opacity,
+            "unticked_categories":self.unticked_categories.as_str(),
             "show_selection_overlay":self.show_selection_overlay,
             "color_mapping":self.color_mapping,
         })
@@ -85,6 +86,12 @@ impl ObjectsLayer {
         set_unit_f32!(opacity, "opacity");
         set_unit_f32!(fill_opacity, "fill_opacity");
         set_unit_f32!(selected_fill_opacity, "selected_fill_opacity");
+        if let Some(value) = params.get("unticked_categories").and_then(serde_json::Value::as_str) {
+            let value = ObjectUntickedCategories::parse(value)
+                .ok_or_else(|| "unticked_categories must be hidden, hover_only, or outline_only".to_string())?;
+            changed |= self.unticked_categories != value;
+            self.unticked_categories = value;
+        }
         if let Some(value) = params
             .get("width_screen_px")
             .and_then(serde_json::Value::as_f64)

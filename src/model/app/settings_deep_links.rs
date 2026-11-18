@@ -335,6 +335,16 @@ impl AppModel {
         if self.dataset.is_some() {
             self.sync_current_dataset_view_to_project()?;
         }
+        if self.mode == ModelMode::Mosaic
+            && let Some(view) = self.mosaic.project_view_state()
+        {
+            self.project.set_mosaic_view_state(view)?;
+        }
+        if self.mode == ModelMode::Mosaic
+            && let Some(groups) = self.mosaic.project_layer_groups()
+        {
+            self.project.set_layer_groups(groups);
+        }
         self.project_persistence_payload()
     }
 

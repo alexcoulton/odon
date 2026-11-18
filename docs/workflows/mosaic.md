@@ -186,6 +186,21 @@ Channel settings are global in a mosaic. When you hide `CD45`, change the colour
 of `DAPI`, or adjust contrast for a marker, that setting applies across every
 ROI in the mosaic.
 
+## Text Label Sizes
+
+Select the `Text labels` layer and open `Properties`. Adjust `ROI font size` for
+sample labels and `Group font size` for headings such as patient names. Both
+controls accept 6–72 logical screen points and remain readable at a fixed screen
+size while zooming. Save the project to retain the sizes when reopening it.
+Existing projects keep the previous defaults of 13 points for ROI labels and 15
+points for group headings.
+
+The same settings are available from Python:
+
+```python
+app.mosaic.configure_layout(label_font_size=20, group_label_font_size=26, fit=False)
+```
+
 ## Navigation
 
 Use these controls while reviewing a mosaic:
@@ -284,6 +299,18 @@ The channel properties include:
 Because the settings are shared, a contrast adjustment made for one channel
 applies to every ROI. This is intentional: mosaic mode is designed for comparing
 marker patterns under a consistent display setup.
+
+When a mosaic opens, Odon sets contrast automatically from a coarse sample of
+each channel pooled across all ROIs, using the method in **Settings**. Limits
+you set by hand or saved in the project are kept. The **Auto** button above the
+channel list recalculates every channel, replacing limits set by hand. Each
+channel has one contrast setting for the whole mosaic, so very dim or very
+bright ROIs may still need manual adjustment.
+
+Saving the project stores each channel's colour, contrast, visibility, notes, and
+order, along with the mosaic layout and camera. Channels are matched by name when
+the project reopens, so settings carry over to a different selection of ROIs. Saving
+also stores channel groups and the object colouring, including the selected property.
 
 The top bar also provides quick channel stepping and compact contrast controls
 for rapid review.

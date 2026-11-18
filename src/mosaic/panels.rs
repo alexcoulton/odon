@@ -43,7 +43,32 @@ impl MosaicViewerApp {
                 ui.separator();
                 let mut show_text_labels = self.show_text_labels;
                 let mut label_columns = self.label_columns.clone();
+                let mut label_font_size = self.label_font_size;
+                let mut group_label_font_size = self.group_label_font_size;
                 let mut changed = ui.checkbox(&mut show_text_labels, "Visible").changed();
+                ui.horizontal(|ui| {
+                    ui.label("ROI font size");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut label_font_size)
+                                .range(MIN_MOSAIC_LABEL_FONT_SIZE..=MAX_MOSAIC_LABEL_FONT_SIZE)
+                                .speed(0.5)
+                                .suffix(" pt"),
+                        )
+                        .changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Group font size");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut group_label_font_size)
+                                .range(MIN_MOSAIC_LABEL_FONT_SIZE..=MAX_MOSAIC_LABEL_FONT_SIZE)
+                                .speed(0.5)
+                                .suffix(" pt"),
+                        )
+                        .changed();
+                });
+                ui.weak("Text size stays constant while zooming.");
                 ui.add_enabled_ui(show_text_labels, |ui| {
                     let mut available_columns = vec!["id".to_string()];
                     available_columns.extend(self.metadata_columns.iter().cloned());
@@ -106,6 +131,8 @@ impl MosaicViewerApp {
                     let mut params = self.layout_command_params();
                     params["show_text_labels"] = serde_json::json!(show_text_labels);
                     params["label_columns"] = serde_json::json!(label_columns);
+                    params["label_font_size"] = serde_json::json!(label_font_size);
+                    params["group_label_font_size"] = serde_json::json!(group_label_font_size);
                     self.submit_native_control_intent("mosaic.layout.configure", params);
                 }
             }

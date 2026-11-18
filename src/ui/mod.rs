@@ -11,6 +11,7 @@ pub(crate) mod icons;
 pub(crate) mod layer_list;
 pub(crate) mod left_panel;
 pub(crate) mod range_slider;
+pub(crate) mod property_picker;
 pub(crate) mod right_panel;
 pub(crate) mod roi_browser;
 pub(crate) mod shell_inspector;

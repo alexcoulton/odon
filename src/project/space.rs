@@ -323,6 +323,10 @@ pub struct ProjectMosaicViewState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub label_columns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_font_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_label_font_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<ProjectCameraState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<ProjectUiState>,

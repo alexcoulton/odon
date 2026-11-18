@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod actor_projection;
 mod actor_resource;
 mod assembly;
 mod config;

@@ -396,3 +396,35 @@ fn project_roi_mosaic_and_deep_link_commands_are_typed() {
     );
     assert!(ControlCommand::decode("deep_links.apply", json!({"request": {}})).is_ok());
 }
+
+#[test]
+fn mosaic_label_font_sizes_validate_range_and_type() {
+    for key in ["label_font_size", "group_label_font_size"] {
+        for size in [6.0, 18.5, 72.0] {
+            let mut params = json!({});
+            params[key] = json!(size);
+            assert!(ControlCommand::decode("mosaic.layout.configure", params).is_ok());
+        }
+        for value in [
+            json!(-1),
+            json!(0),
+            json!(5.9),
+            json!(72.1),
+            json!(1e300),
+            json!("20"),
+            json!(true),
+            json!([]),
+        ] {
+            let mut params = json!({});
+            params[key] = value;
+            assert!(ControlCommand::decode("mosaic.layout.configure", params).is_err());
+        }
+    }
+    assert!(
+        ControlCommand::decode(
+            "mosaic.layout.configure",
+            json!({"label_font_size":20.0,"group_label_font_size":100.0})
+        )
+        .is_err()
+    );
+}

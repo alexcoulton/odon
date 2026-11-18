@@ -85,6 +85,11 @@ pub(crate) trait ChannelListHost {
     fn layer_groups(&self) -> ProjectLayerGroups;
     fn set_layer_groups(&mut self, groups: ProjectLayerGroups);
     fn channels_changed(&mut self);
+    /// `None` hides the control for viewers without it. Otherwise, whether it can be used now.
+    fn auto_contrast_enabled(&self) -> Option<bool> {
+        None
+    }
+    fn request_auto_contrast(&mut self) {}
     fn layer_drag_mut(&mut self) -> &mut Option<ui_layer_list::LayerDragState<Self::LayerId>>;
     fn dragging_channel_idx(&self) -> Option<usize>;
     fn channel_layer_id(&self, idx: usize) -> Self::LayerId;
@@ -127,6 +132,18 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
             if resp.clicked() && host.apply_rgb_preset() {
                 channels_changed = true;
             }
+        }
+        if let Some(enabled) = host.auto_contrast_enabled()
+            && ui
+                .add_enabled(enabled, egui::Button::new("Auto"))
+                .on_hover_text(
+                    "Set contrast for every channel from pixels across all ROIs, using the \
+                     method in Settings. Replaces limits you set by hand.",
+                )
+                .on_disabled_hover_text("Computing automatic contrast...")
+                .clicked()
+        {
+            host.request_auto_contrast();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui_sort_button(host, ui);
@@ -315,6 +332,31 @@ pub(crate) fn show<H: ChannelListHost>(host: &mut H, ui: &mut egui::Ui, ctx: &eg
                     delete_group = Some(group_id);
                 }
             });
+            let inheritance = layer_groups::channel_group_color_inheritance(&groups_cfg, group_id);
+            let mut inherit_all = inheritance == layer_groups::ChannelGroupColorInheritance::All;
+            let inherit_response = ui
+                .add_enabled(
+                    inheritance != layer_groups::ChannelGroupColorInheritance::Empty,
+                    egui::Checkbox::new(&mut inherit_all, "Channels inherit group color")
+                        .indeterminate(
+                            inheritance == layer_groups::ChannelGroupColorInheritance::Mixed,
+                        ),
+                )
+                .on_hover_text(
+                    "Use the group color for every channel in this group. Turning this off \
+                     restores each channel's own color.",
+                )
+                .on_disabled_hover_text("Add channels to this group first.");
+            if inherit_response.changed()
+                && layer_groups::set_channel_group_color_inheritance(
+                    &mut groups_cfg,
+                    group_id,
+                    inherit_all,
+                )
+            {
+                groups_changed = true;
+                channels_changed = true;
+            }
 
             if members.is_empty() {
                 ui.label("(empty)");

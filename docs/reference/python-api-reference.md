@@ -265,7 +265,7 @@ Access: `app.channels` or `app.viewer.channels`. Channel visibility, presentatio
 | `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. (completion: immediate_semantic) |
 | `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task; completion: retained_background; cancellation: cooperative) |
-| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single, mosaic | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
 
 ### Planes
 
@@ -351,7 +351,7 @@ Access: `app.projects.rois`. ROI CRUD, ordering, selection, focus, and opening.
 | `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
 | `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; completion: immediate_semantic; event: project.rois.changed) |
 | `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. (completion: immediate_semantic) |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID or exact dataset source key. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
@@ -1034,7 +1034,7 @@ Constructor: `ShellPropertyChange(node_id: 'str', property: 'str', before: 'Any'
 
 Access: use in shell patches. Stable schema-version-1 built-in and extension-host IDs.
 
-Constructor: `ShellId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+Constructor: `ShellId(*values)`
 
 This value type has no public methods beyond its fields.
 
@@ -1042,7 +1042,7 @@ This value type has no public methods beyond its fields.
 
 Access: use in `ShellLayoutNode` builders. Stable built-in component and application-owned extension-host mount IDs.
 
-Constructor: `ShellMountId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+Constructor: `ShellMountId(*values)`
 
 This value type has no public methods beyond its fields.
 
@@ -1119,7 +1119,7 @@ Constructor: `ShellLayoutNode(id: 'str', type: 'ShellLayoutType \| str', childre
 
 Access: use in `ShellLayoutNode`. Supported desired-layout node kinds.
 
-Constructor: `ShellLayoutType(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
+Constructor: `ShellLayoutType(*values)`
 
 This value type has no public methods beyond its fields.
 
@@ -1638,7 +1638,7 @@ Access: `app.channels`. Async channel resource.
 | `list_groups() -> 'Any'` | `viewer.channels.list_groups` | project, single, mosaic | List channel groups. (completion: immediate_semantic) |
 | `set_group(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.channels.set_group` | single, mosaic | Set channel grouping. (mutates; completion: immediate_semantic; event: viewer.channels.changed) |
 | `intensity_stats(**params: 'Any') -> 'Any'` | `viewer.channels.intensity_stats` | single | Get channel intensity statistics. (task; completion: retained_background; cancellation: cooperative) |
-| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
+| `auto_contrast(*, channels: 'Sequence[str \| int] \| None' = None, viewport_id: 'str \| None' = None, overwrite_manual: 'bool' = True) -> 'Any'` | `viewer.channels.auto_contrast` | single, mosaic | Compute and apply automatic contrast to one or more channels. (mutates; task; completion: retained_background; cancellation: cooperative; event: viewer.channels.changed) |
 
 ### Async planes
 
@@ -1724,7 +1724,7 @@ Access: `app.projects.rois`. Async ROI resource.
 | `remove(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.remove` | project, single, mosaic | Remove a project ROI. (mutates; completion: immediate_semantic; event: project.rois.changed) |
 | `reorder(ids: 'Iterable[str]', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.reorder` | project, single, mosaic | Set the exact project ROI order. (mutates; completion: immediate_semantic; event: project.rois.changed) |
 | `get_selection() -> 'Any'` | `project.rois.get_selection` | project, single, mosaic | Get focused and selected project ROIs. (completion: immediate_semantic) |
-| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
+| `select(ids: 'Iterable[str]', *, mode: 'str' = 'replace', if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.select` | project, single, mosaic | Select project ROIs by stable ID or exact dataset source key. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `focus(roi_id: 'str', *, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.focus` | project, single, mosaic | Focus a project ROI by stable ID. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `next(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.next` | project, single, mosaic | Focus the next project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |
 | `previous(step: 'int' = 1, *, wrap: 'bool' = True, if_revision: 'int \| None' = None) -> 'Any'` | `project.rois.previous` | project, single, mosaic | Focus the previous project ROI. (mutates; completion: immediate_semantic; event: project.rois.selection_changed) |

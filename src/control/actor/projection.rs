@@ -17,6 +17,129 @@ impl RenderDocument {
     }
 }
 
+/// Content fingerprints of the JSON sections that are expensive for the renderer to apply.
+///
+/// A fingerprint covers everything the renderer consumes from its section except navigation
+/// (cameras and navigation revisions), which travels typed in [`RenderProjection::navigation`],
+/// and it also covers the identity of the shared resources applied together with the section.
+/// Two projections with equal fingerprints carry the same section, so the renderer may skip
+/// re-applying it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectionFingerprints {
+    pub workspace: u64,
+    pub mosaic_state: u64,
+}
+
+/// Hashes a JSON value.
+pub fn json_fingerprint(value: &Value, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    match value {
+        Value::Null => 0u8.hash(hasher),
+        Value::Bool(value) => (1u8, value).hash(hasher),
+        Value::Number(number) => {
+            2u8.hash(hasher);
+            if let Some(value) = number.as_u64() {
+                (0u8, value).hash(hasher);
+            } else if let Some(value) = number.as_i64() {
+                (1u8, value).hash(hasher);
+            } else {
+                (2u8, number.as_f64().unwrap_or(f64::NAN).to_bits()).hash(hasher);
+            }
+        }
+        Value::String(value) => (3u8, value).hash(hasher),
+        Value::Array(values) => {
+            (4u8, values.len()).hash(hasher);
+            for value in values {
+                json_fingerprint(value, hasher);
+            }
+        }
+        Value::Object(map) => {
+            5u8.hash(hasher);
+            for (key, value) in map {
+                key.hash(hasher);
+                json_fingerprint(value, hasher);
+            }
+            6u8.hash(hasher);
+        }
+    }
+}
+
+/// Hashes the members of a JSON object except the top-level keys in `skip`.
+pub fn json_object_fingerprint(
+    value: &Value,
+    skip: &[&str],
+    hasher: &mut impl std::hash::Hasher,
+) {
+    use std::hash::Hash;
+    let Some(map) = value.as_object() else {
+        json_fingerprint(value, hasher);
+        return;
+    };
+    for (key, value) in map {
+        if !skip.contains(&key.as_str()) {
+            key.hash(hasher);
+            json_fingerprint(value, hasher);
+        }
+    }
+}
+
+fn arc_identity<T>(resource: Option<&Arc<T>>, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    resource
+        .map(|resource| Arc::as_ptr(resource) as usize)
+        .hash(hasher);
+}
+
+impl ProjectionFingerprints {
+    fn of(projection: &RenderProjection) -> Self {
+        use std::hash::{Hash, Hasher};
+        let workspace = projection.workspace.as_ref().map_or(0, |workspace| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            // `performance` only echoes the renderer's own observation back to it, and each
+            // viewport's camera and navigation revision travel in `navigation`.
+            json_object_fingerprint(workspace, &["performance", "viewports"], &mut hasher);
+            for viewport in workspace
+                .get("viewports")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                json_object_fingerprint(
+                    viewport,
+                    &["camera", "navigation_revision"],
+                    &mut hasher,
+                );
+                0xffu8.hash(&mut hasher);
+            }
+            arc_identity(projection.object_resource.as_ref(), &mut hasher);
+            arc_identity(
+                projection.segmentation_geojson_resource.as_ref(),
+                &mut hasher,
+            );
+            arc_identity(projection.label_resource.as_ref(), &mut hasher);
+            hasher.finish()
+        });
+        let mosaic_state = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            json_object_fingerprint(&projection.mosaic_state, &["camera"], &mut hasher);
+            json_fingerprint(projection.memory_state.as_ref(), &mut hasher);
+            for (item_id, resource) in &projection.mosaic_object_resources {
+                item_id.hash(&mut hasher);
+                arc_identity(Some(resource), &mut hasher);
+            }
+            for (item_id, resource) in &projection.mosaic_pinned_levels {
+                item_id.hash(&mut hasher);
+                arc_identity(Some(resource), &mut hasher);
+            }
+            hasher.finish()
+        };
+        Self {
+            workspace,
+            mosaic_state,
+        }
+    }
+}
+
 pub struct RenderProjection {
     pub revision: u64,
     pub mode: ModelMode,
@@ -54,6 +177,8 @@ pub struct RenderProjection {
     pub secondary_object_layers: Vec<crate::model::ControlSecondaryObjectProjection>,
     pub annotation_layers: Vec<crate::model::ControlAnnotationLayerProjection>,
     pub label_resource: Option<Arc<ControlLabelResource>>,
+    pub navigation: crate::model::ProjectedNavigation,
+    pub fingerprints: ProjectionFingerprints,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +255,10 @@ pub(super) fn publish_projection(
         secondary_object_layers: model.secondary_object_projections(),
         annotation_layers: model.annotation_projections(),
         label_resource: model.label_resource(),
+        navigation: model.projected_navigation(),
+        fingerprints: ProjectionFingerprints::default(),
     };
+    projection.fingerprints = ProjectionFingerprints::of(&projection);
     let mut coalesced = false;
     loop {
         match tx.try_send(projection) {

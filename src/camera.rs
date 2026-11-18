@@ -169,3 +169,148 @@ mod tests {
         assert!(screen_max.y <= viewport().bottom());
     }
 }
+
+/// Renderer-side ownership of the camera while a native pan/zoom gesture is in progress.
+///
+/// Camera gestures are applied locally first and then reported to the control actor. The actor's
+/// projection of an earlier gesture step can arrive after the renderer has already moved on, so
+/// while a hold is active the local camera stays authoritative and projected cameras are only
+/// observed. At most one camera command is kept in flight; newer positions replace the unsent one.
+/// Once the actor has caught up (or stopped answering) the hold settles and any differing camera
+/// the actor published in the meantime (for example from a remote client) is handed back.
+#[derive(Debug, Clone)]
+pub struct CameraIntentHold {
+    camera: Camera,
+    unsent: bool,
+    last_local_change: std::time::Instant,
+    matched: bool,
+    suppressed: Option<Camera>,
+}
+
+impl CameraIntentHold {
+    /// Quiet period after the last local change before the actor may own the camera again.
+    const SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
+    /// Upper bound on waiting for the actor to echo the local camera.
+    const ECHO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+    /// How soon the renderer should look at an active hold again.
+    pub const POLL: std::time::Duration = std::time::Duration::from_millis(16);
+
+    pub fn new(camera: Camera) -> Self {
+        Self {
+            camera,
+            unsent: true,
+            last_local_change: std::time::Instant::now(),
+            matched: false,
+            suppressed: None,
+        }
+    }
+
+    pub fn camera(&self) -> &Camera {
+        &self.camera
+    }
+
+    pub fn record_local(&mut self, camera: Camera) {
+        self.camera = camera;
+        self.unsent = true;
+        self.matched = false;
+        self.last_local_change = std::time::Instant::now();
+    }
+
+    /// Returns the camera to submit when nothing is in flight and the latest value is unsent.
+    pub fn take_unsent(&mut self, in_flight: bool) -> Option<Camera> {
+        if !self.unsent || in_flight {
+            return None;
+        }
+        self.unsent = false;
+        Some(self.camera.clone())
+    }
+
+    /// Marks the latest camera as unsent again after a failed submission.
+    pub fn mark_unsent(&mut self) {
+        self.unsent = true;
+    }
+
+    /// Records the actor's camera and returns the camera the renderer should keep showing.
+    pub fn observe_projected(&mut self, projected: &Camera) -> Camera {
+        if Self::same(projected, &self.camera) {
+            self.matched = !self.unsent;
+            self.suppressed = None;
+        } else {
+            self.matched = false;
+            self.suppressed = Some(projected.clone());
+        }
+        self.camera.clone()
+    }
+
+    pub fn settled(&self, in_flight: bool) -> bool {
+        if self.unsent || in_flight {
+            return false;
+        }
+        let quiet = self.last_local_change.elapsed();
+        quiet >= Self::SETTLE && (self.matched || quiet >= Self::ECHO_TIMEOUT)
+    }
+
+    /// Whether the renderer has to wake itself to finish this hold: either a newer camera is
+    /// waiting for the in-flight command to be answered, or a hidden actor camera must be adopted
+    /// once the hold settles. Otherwise the hold is released lazily on the next frame or
+    /// projection, so an idle hold never keeps the renderer repainting.
+    pub fn needs_wake(&self) -> bool {
+        self.unsent || self.suppressed.is_some()
+    }
+
+    /// Ends the hold, returning an actor camera that was hidden while it was active.
+    pub fn finish(self) -> Option<Camera> {
+        self.suppressed
+    }
+
+    fn same(a: &Camera, b: &Camera) -> bool {
+        let close = |x: f32, y: f32| (x - y).abs() <= 1e-4 * x.abs().max(y.abs()).max(1.0);
+        close(a.center_world_lvl0.x, b.center_world_lvl0.x)
+            && close(a.center_world_lvl0.y, b.center_world_lvl0.y)
+            && close(a.zoom_screen_per_lvl0_px, b.zoom_screen_per_lvl0_px)
+    }
+}
+
+#[cfg(test)]
+mod camera_intent_hold_tests {
+    use super::*;
+
+    fn camera(x: f32) -> Camera {
+        Camera {
+            center_world_lvl0: egui::pos2(x, 0.0),
+            zoom_screen_per_lvl0_px: 1.0,
+        }
+    }
+
+    #[test]
+    fn stale_projection_never_replaces_the_local_camera_and_one_command_is_in_flight() {
+        let mut hold = CameraIntentHold::new(camera(1.0));
+        assert_eq!(hold.take_unsent(false).unwrap().center_world_lvl0.x, 1.0);
+        hold.record_local(camera(2.0));
+        assert!(hold.take_unsent(true).is_none());
+        hold.record_local(camera(3.0));
+        // The projection of the first step arrives late.
+        assert_eq!(hold.observe_projected(&camera(1.0)).center_world_lvl0.x, 3.0);
+        assert!(!hold.settled(false));
+        // Only the newest position is sent once the first command has been answered.
+        assert_eq!(hold.take_unsent(false).unwrap().center_world_lvl0.x, 3.0);
+        assert!(hold.take_unsent(false).is_none());
+        assert_eq!(hold.observe_projected(&camera(3.0)).center_world_lvl0.x, 3.0);
+        hold.last_local_change -= CameraIntentHold::SETTLE;
+        assert!(!hold.settled(true));
+        assert!(hold.settled(false));
+        assert!(hold.finish().is_none());
+    }
+
+    #[test]
+    fn differing_actor_camera_is_returned_when_the_hold_ends() {
+        let mut hold = CameraIntentHold::new(camera(1.0));
+        hold.take_unsent(false);
+        hold.observe_projected(&camera(9.0));
+        hold.last_local_change -= CameraIntentHold::SETTLE;
+        assert!(!hold.settled(false));
+        hold.last_local_change -= CameraIntentHold::ECHO_TIMEOUT;
+        assert!(hold.settled(false));
+        assert_eq!(hold.finish().unwrap().center_world_lvl0.x, 9.0);
+    }
+}

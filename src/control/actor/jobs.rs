@@ -327,6 +327,11 @@ pub(super) enum LoadCompletion {
         spec: ObjectExportSpec,
         result: anyhow::Result<ObjectExportResult>,
     },
+    MosaicAutoContrast {
+        request: Option<OdonControlRequest>,
+        spec: MosaicAutoContrastSpec,
+        result: anyhow::Result<MosaicAutoContrastResult>,
+    },
     MosaicOpen {
         generation: u64,
         request: OdonControlRequest,
@@ -363,6 +368,14 @@ pub(super) enum LoadCompletion {
         scope: ProjectObjectPreloadScope,
         request: Option<OdonControlRequest>,
         result: anyhow::Result<Vec<ProjectObjectPreloadSource>>,
+    },
+    /// One more source of a running preload has been attempted. Not a completion of the job:
+    /// the worker keeps going and still sends `ProjectObjectPreload` at the end.
+    ProjectObjectPreloadProgress {
+        generation: u64,
+        scope: ProjectObjectPreloadScope,
+        done: usize,
+        total: usize,
     },
     ProjectObjectPreload {
         generation: u64,
@@ -467,6 +480,11 @@ impl LoadCompletion {
         matches!(self, Self::ScreenshotWrite { .. })
     }
 
+    /// Whether this message ends its worker job. Progress reports do not.
+    pub(super) const fn finishes_job(&self) -> bool {
+        !matches!(self, Self::ProjectObjectPreloadProgress { .. })
+    }
+
     pub(super) const fn domain(&self) -> CompletionDomain {
         match self {
             Self::DatasetInspect { .. }
@@ -491,6 +509,7 @@ impl LoadCompletion {
             | Self::SamplesheetExport { .. }
             | Self::ProjectDiscovery { .. }
             | Self::ProjectObjectSourceScan { .. }
+            | Self::ProjectObjectPreloadProgress { .. }
             | Self::ProjectObjectPreload { .. } => CompletionDomain::Project,
             Self::ProjectViewApply { .. } => CompletionDomain::Project,
             Self::ObjectResource { .. }
@@ -512,7 +531,10 @@ impl LoadCompletion {
             Self::MaskImport { .. } | Self::MaskExport { .. } | Self::MaskAppend { .. } => {
                 CompletionDomain::Masks
             }
-            Self::MosaicOpen { .. } | Self::MosaicObjects { .. } | Self::MosaicMemoryPin { .. } => {
+            Self::MosaicOpen { .. }
+            | Self::MosaicObjects { .. }
+            | Self::MosaicMemoryPin { .. }
+            | Self::MosaicAutoContrast { .. } => {
                 CompletionDomain::Mosaic
             }
             Self::ScreenshotWrite { .. } => CompletionDomain::Presentation,
@@ -646,6 +668,10 @@ pub(super) enum LoadJob {
     MosaicMemoryPin {
         request: OdonControlRequest,
         spec: MosaicMemoryPinSpec,
+    },
+    MosaicAutoContrast {
+        request: Option<OdonControlRequest>,
+        spec: MosaicAutoContrastSpec,
     },
     ThresholdLoad {
         request: OdonControlRequest,

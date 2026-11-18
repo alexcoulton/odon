@@ -112,6 +112,8 @@ impl MosaicViewerApp {
             group_blocks,
             show_text_labels: true,
             label_columns: vec!["id".to_string()],
+            label_font_size: DEFAULT_MOSAIC_LABEL_FONT_SIZE,
+            group_label_font_size: DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE,
             grid_cols,
             show_left_panel: true,
             show_right_panel: true,
@@ -120,6 +122,7 @@ impl MosaicViewerApp {
             system_memory_last_refresh: None,
             pending_memory_load: None,
             control_actor_memory_state: serde_json::json!({}),
+            control_auto_contrast_pending: false,
             tile_request_generation: 1,
             last_tile_request_signature: None,
             renderer_status,
@@ -138,6 +141,9 @@ impl MosaicViewerApp {
             consumed_mosaic_resource_generation,
             consumed_mosaic_object_generation: 0,
             native_command_ingress: NativeControlIngress::detached(),
+            native_camera_hold: None,
+            applied_state_fingerprint: None,
+            tile_state_fingerprint: None,
         }
     }
 }

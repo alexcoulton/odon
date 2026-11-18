@@ -652,7 +652,10 @@ impl ObjectsLayer {
         object_index: usize,
         obj: &GeoJsonObjectFeature,
     ) -> bool {
-        if self.color_mode != ObjectColorMode::ByProperty || self.color_property_key.is_empty() {
+        if self.color_mode != ObjectColorMode::ByProperty
+            || self.color_property_key.is_empty()
+            || !self.unticked_categories.is_hidden()
+        {
             return true;
         }
         let Some(value_label) =

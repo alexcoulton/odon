@@ -354,6 +354,7 @@ pub struct ObjectsLayer {
     pub fill_cells: bool,
     pub fill_opacity: f32,
     pub selected_fill_opacity: f32,
+    pub unticked_categories: ObjectUntickedCategories,
     pub show_selection_overlay: bool,
     pub fast_rendering: bool,
 
@@ -396,6 +397,7 @@ pub struct ObjectsLayer {
     color_level_overrides_property_key: String,
     color_level_overrides: BTreeMap<String, ObjectColorLevelOverride>,
     category_colors: legend_ui::CategoryColors,
+    property_preferences: crate::ui::property_picker::PropertyPreferencesDraft,
     /// Visible outline records across every layer sharing the view, set by a mosaic host.
     outline_scene_records: usize,
     legend_ui: legend_ui::LegendUiState,
@@ -890,6 +892,51 @@ struct ObjectContinuousColorPayload {
     generation: u64,
 }
 
+/// What unticking a category in the legend does to its cells.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectUntickedCategories {
+    /// Removed from view, hover, and selection.
+    #[default]
+    Hidden,
+    /// Not drawn, but can still be hovered and selected. Ticked categories are also filled, so a
+    /// category stands out while every cell can still be identified.
+    HoverOnly,
+    /// As `HoverOnly`, but also drawn as a faint neutral outline, to show the surrounding cells.
+    OutlineOnly,
+}
+
+impl ObjectUntickedCategories {
+    pub(crate) fn is_hidden(&self) -> bool {
+        *self == Self::Hidden
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::HoverOnly => "hover_only",
+            Self::OutlineOnly => "outline_only",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hidden" => Some(Self::Hidden),
+            "hover_only" => Some(Self::HoverOnly),
+            "outline_only" => Some(Self::OutlineOnly),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Hidden => "Hidden",
+            Self::HoverOnly => "Hover only",
+            Self::OutlineOnly => "Outline only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObjectColorMode {
     Single,
@@ -990,6 +1037,8 @@ pub(crate) struct ObjectProjectDisplayState {
     pub fill_opacity: f32,
     #[serde(default = "default_selected_fill_opacity")]
     pub selected_fill_opacity: f32,
+    #[serde(default, skip_serializing_if = "ObjectUntickedCategories::is_hidden")]
+    pub unticked_categories: ObjectUntickedCategories,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub fast_rendering: bool,
 }

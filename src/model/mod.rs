@@ -32,6 +32,7 @@ pub(crate) use app::{
 };
 pub use app::{
     AppModel, ChannelIntensitySpec, ControlSecondaryObjectProjection, ModelDispatch, ModelMode,
+    ProjectedCamera, ProjectedNavigation, ProjectedViewportNavigation,
     SettingsMutationOutcome, SettingsSaveOperation,
 };
 #[doc(hidden)]
@@ -47,9 +48,13 @@ pub use memory::{
     ControlPinnedLevelResource, TileLoadingPolicy, TilePrefetchAggressiveness, TilePrefetchMode,
 };
 pub(crate) use memory::{PinnedMemoryModel, SystemMemorySnapshot, TileLoadingModel};
-pub use mosaic::{ControlMosaicItemResource, ControlMosaicResource};
+pub use mosaic::{
+    ControlMosaicItemResource, ControlMosaicResource, DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE,
+    DEFAULT_MOSAIC_LABEL_FONT_SIZE, MAX_MOSAIC_LABEL_FONT_SIZE, MIN_MOSAIC_LABEL_FONT_SIZE,
+};
 pub(crate) use mosaic::{
-    MosaicMemoryPinItemSpec, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicModel,
+    MosaicAutoContrastChannelResult, MosaicAutoContrastChannelSpec, MosaicAutoContrastItemSpec,
+    MosaicAutoContrastResult, MosaicAutoContrastSpec, MosaicMemoryPinItemSpec, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicModel,
     MosaicObjectLoadResult, MosaicObjectLoadSpec,
 };
 pub use object_color::{

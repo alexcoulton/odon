@@ -311,13 +311,19 @@ impl OmeZarrViewerApp {
         }
 
         let can_pan_primary = self.tool_mode == ToolMode::Pan || space_down;
+        // The canvas senses clicks as well as drags, so egui withholds `dragged_by` until the
+        // pointer has travelled its click tolerance and discards that travel. Pan from the press
+        // itself instead, so the image follows the pointer from the first moved pixel.
         if can_pan_primary
             && self.dragging_mask_vertex.is_none()
-            && response.dragged_by(egui::PointerButton::Primary)
+            && response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_down())
         {
             let delta = ui.input(|i| i.pointer.delta());
-            self.camera.pan_by_screen_delta(delta);
-            camera_changed = true;
+            if delta != egui::Vec2::ZERO {
+                self.camera.pan_by_screen_delta(delta);
+                camera_changed = true;
+            }
         }
 
         let can_move_primary = self.tool_mode == ToolMode::MoveLayer && !space_down;
@@ -570,8 +576,7 @@ impl OmeZarrViewerApp {
         }
 
         if camera_changed {
-            let desired = self.camera.clone();
-            self.submit_native_camera(&desired);
+            self.record_native_camera_gesture();
             self.hist_dirty = true;
             self.hist_navigation_dirty_since = Some(Instant::now());
         }

@@ -2695,3 +2695,127 @@ fn native_object_layer_replacement_applies_full_display_and_legend_state() {
         "filter evaluation remains on its worker-backed command path"
     );
 }
+
+mod mosaic_auto_contrast_on_open {
+    use super::*;
+
+    fn mosaic_resource(generation: u64) -> ControlMosaicResource {
+        let opened = crate::data::document::open_local_ome_zarr(&fixture()).unwrap();
+        ControlMosaicResource {
+            generation,
+            source: "auto-contrast-test".to_string(),
+            base_dir: None,
+            initial_columns: Some(1),
+            metadata_columns: Arc::new(Vec::new()),
+            items: Arc::new(vec![crate::model::ControlMosaicItemResource {
+                id: 0,
+                roi_id: "A".to_string(),
+                metadata: std::collections::HashMap::new(),
+                document: opened.into_control(),
+                segmentation_path: None,
+            }]),
+        }
+    }
+
+    fn model_with(_: &[&str]) -> AppModel {
+        let mut model = AppModel::project();
+        model.bootstrap_mosaic(mosaic_resource(1)).unwrap();
+        model
+    }
+
+    fn set_contrast(model: &mut AppModel, channel: usize, min: f32, max: f32) {
+        model
+            .dispatch(
+                "viewer.channels.set_contrast",
+                &json!({"channel":channel,"min":min,"max":max}),
+            )
+            .unwrap()
+            .unwrap();
+    }
+
+    fn windows(model: &mut AppModel) -> Vec<Value> {
+        model
+            .dispatch("viewer.channels.list", &json!({}))
+            .unwrap()
+            .unwrap()
+            .response["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|channel| channel["window"].clone())
+            .collect()
+    }
+
+    #[test]
+    fn group_state_keeps_color_inheritance_for_every_member() {
+        let mut model = model_with(&[]);
+        let state = json!({
+            "channel_groups":[
+                {"id":1,"name":"T cells","expanded":true,"color_rgb":[10,20,30]}
+            ],
+            "channel_members":{
+                "DAPI":{"group_id":1,"inherit_color":true},
+                "CD3":{"group_id":1,"inherit_color":true},
+            },
+        });
+        model
+            .dispatch("viewer.channels.set_group", &json!({"state":state}))
+            .unwrap()
+            .unwrap();
+
+        let groups = model
+            .dispatch("viewer.channels.list_groups", &json!({}))
+            .unwrap()
+            .unwrap()
+            .response;
+        let members = groups["groups"][0]["members"].as_array().unwrap();
+        assert_eq!(members.len(), 2);
+        assert!(members.iter().all(|member| member["inherit_color"] == true));
+    }
+
+    #[test]
+    fn opening_queues_contrast_only_when_the_setting_is_enabled() {
+        let mut model = model_with(&["A"]);
+        assert!(model.mosaic_auto_contrast_on_open_spec().unwrap().is_some());
+
+        model.settings.auto_contrast.enabled_on_open = false;
+        model.bootstrap_mosaic(mosaic_resource(2)).unwrap();
+        assert!(model.mosaic_auto_contrast_on_open_spec().unwrap().is_none());
+    }
+
+    #[test]
+    fn an_all_manual_mosaic_stops_queuing_without_recording_an_error() {
+        let mut model = model_with(&["A"]);
+        for channel in 0..5 {
+            set_contrast(&mut model, channel, 10.0, 20.0);
+        }
+
+        assert!(model.mosaic_auto_contrast_on_open_spec().unwrap().is_none());
+        assert!(model.mosaic.auto_contrast_snapshot().get("error").is_none());
+        assert!(!model.mosaic.auto_contrast_on_open_queued());
+    }
+
+    #[test]
+    fn project_windows_differing_from_metadata_count_as_manual() {
+        let mut model = model_with(&["A"]);
+        let metadata = windows(&mut model);
+        let state = json!({"mosaic":{"channels":[
+            {"name":"DAPI","window":[0.0, 19200.0]},
+            {"name":"CD3","window":metadata[1]},
+        ]}});
+        model
+            .mosaic
+            .restore_project_state(&state, &Default::default())
+            .unwrap();
+
+        let spec = model.mosaic_auto_contrast_on_open_spec().unwrap().unwrap();
+
+        let eligible = spec
+            .channels
+            .iter()
+            .map(|channel| channel.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(!eligible.contains(&"DAPI"), "a saved choice is kept");
+        assert!(eligible.contains(&"CD3"), "a saved metadata window is not a choice");
+    }
+}

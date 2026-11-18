@@ -360,12 +360,20 @@ impl MosaicViewerApp {
         let tile_loading_count = self.tiles_gl.loading_tile_count_for(&keep);
 
         if !screenshot_active {
-            let hud = format!(
+            let mut hud = format!(
                 "zoom {:.5} center ({:.0}, {:.0})",
                 self.camera.zoom_screen_per_lvl0_px,
                 self.camera.center_world_lvl0.x,
                 self.camera.center_world_lvl0.y
             );
+            if self.show_tile_debug
+                && let Some(pacing) = crate::app_support::frame_pacing::hud_line(ui.ctx())
+            {
+                hud = format!("{hud}\n{pacing}");
+            }
+            if self.show_tile_debug && self.seg_geojson.visible {
+                hud = format!("{hud}\n{}", self.seg_geojson.object_tile_debug_line());
+            }
             canvas_overlays::paint_hud(ui, rect, hud);
         }
 
@@ -858,10 +866,32 @@ impl MosaicViewerApp {
     pub(super) fn draw_text_labels(&self, ui: &mut egui::Ui, viewport: egui::Rect) {
         let visible_world = visible_world_rect(&self.camera, viewport);
         let painter = ui.painter();
-        let font = egui::FontId::proportional(13.0);
+        let font = egui::FontId::proportional(self.label_font_size);
         let fg = egui::Color32::from_gray(240);
         let bg = egui::Color32::from_black_alpha(160);
         let line_gap = 1.0;
+        // Headings and ROI labels use screen-sized fonts, so world-space header gaps
+        // alone cannot prevent overlap when zoomed out or using a larger font.
+        let group_label_bottoms = if self.show_group_labels {
+            self.group_blocks
+                .iter()
+                .map(|group| {
+                    let top = self
+                        .camera
+                        .world_to_screen(group.world_rect.left_top(), viewport)
+                        .y
+                        + 8.0;
+                    let galley = painter.layout_no_wrap(
+                        group.name.clone(),
+                        egui::FontId::proportional(self.group_label_font_size),
+                        fg,
+                    );
+                    (group.world_rect, top + galley.size().y + 8.0)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
         for it in &self.items {
             let world_rect = item_rect(it);
@@ -869,7 +899,13 @@ impl MosaicViewerApp {
                 continue;
             }
             let screen_min = self.camera.world_to_screen(world_rect.left_top(), viewport);
-            let pos = screen_min + egui::vec2(6.0, 6.0);
+            let mut pos = screen_min + egui::vec2(6.0, 6.0);
+            if let Some((_, bottom)) = group_label_bottoms
+                .iter()
+                .find(|(bounds, _)| bounds.contains(world_rect.center()))
+            {
+                pos.y = pos.y.max(*bottom);
+            }
 
             let lines = label_values_for_item(it, &self.label_columns);
             if lines.is_empty() {
@@ -903,7 +939,7 @@ impl MosaicViewerApp {
         }
         let visible_world = visible_world_rect(&self.camera, viewport);
         let painter = ui.painter();
-        let font = egui::FontId::proportional(15.0);
+        let font = egui::FontId::proportional(self.group_label_font_size);
         let fg = egui::Color32::from_gray(245);
         let bg = egui::Color32::from_black_alpha(200);
 

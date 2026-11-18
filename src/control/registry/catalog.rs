@@ -1998,7 +1998,7 @@ pub static METHODS: LazyLock<Vec<MethodDescriptor>> = LazyLock::new(|| {
             true,
             true,
             Some("viewer.channels.changed"),
-            SINGLE_MODE,
+            VIEWER_MODES,
             Object
         ),
         method!(

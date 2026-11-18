@@ -1270,6 +1270,26 @@ pub(in crate::control::command) fn validate_params(
                     "at least one layout property is required",
                 ));
             }
+            for (key, size) in [
+                ("label_font_size", request.label_font_size),
+                ("group_label_font_size", request.group_label_font_size),
+            ] {
+                if size.is_some_and(|size| {
+                    !size.is_finite()
+                        || !(f64::from(crate::model::MIN_MOSAIC_LABEL_FONT_SIZE)
+                            ..=f64::from(crate::model::MAX_MOSAIC_LABEL_FONT_SIZE))
+                            .contains(&size)
+                }) {
+                    return Err(ControlError::invalid_params(
+                        method,
+                        format!(
+                            "{key} must be between {} and {} screen points",
+                            crate::model::MIN_MOSAIC_LABEL_FONT_SIZE,
+                            crate::model::MAX_MOSAIC_LABEL_FONT_SIZE
+                        ),
+                    ));
+                }
+            }
             if request.columns == Some(0)
                 || request
                     .group_gap

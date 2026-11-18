@@ -448,6 +448,7 @@ impl MosaicModel {
         for &(index, minimum, maximum) in &windows {
             changed |= self.channels[index].window != Some((minimum, maximum));
             self.channels[index].window = Some((minimum, maximum));
+            self.channels[index].contrast_manual = true;
         }
         let window_results = windows
             .iter()

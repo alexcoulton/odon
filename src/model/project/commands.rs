@@ -50,6 +50,7 @@ impl ProjectModel {
                 "default_threshold_marker": self.snapshot.default_threshold_marker,
                 "mosaic_segmentation_search_roots": self.snapshot.mosaic_segmentation_search_roots,
                 "category_colors": self.snapshot.config.category_colors,
+                "object_property_preferences": self.snapshot.config.object_property_preferences,
                 "dataset_keys": self.snapshot.dataset_keys,
             },
         })
@@ -269,6 +270,12 @@ impl ProjectModel {
         if let Some(value) = params.get("category_colors") {
             self.snapshot.config.category_colors = serde_json::from_value(value.clone())
                 .map_err(|error| invalid(format!("invalid category colors: {error}")))?;
+        }
+        if let Some(value) = params.get("object_property_preferences") {
+            self.snapshot.config.object_property_preferences =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    invalid(format!("invalid object property preferences: {error}"))
+                })?;
         }
         self.mark_structural_change();
         Ok(json!({"updated": true, "project": self.project_json()}))

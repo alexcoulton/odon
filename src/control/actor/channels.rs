@@ -150,6 +150,97 @@ pub(super) fn begin_auto_contrast(
     }
 }
 
+pub(super) fn begin_mosaic_auto_contrast(
+    model: &mut AppModel,
+    request: OdonControlRequest,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) -> bool {
+    let mut candidate = model.clone();
+    let spec = match candidate.prepare_mosaic_auto_contrast(request.command.params()) {
+        Ok(spec) => spec,
+        Err(error) => {
+            reject_actor_request(request, diagnostics, error);
+            return false;
+        }
+    };
+    if !candidate.mark_mosaic_auto_contrast_started(&spec) {
+        reject_actor_request(
+            request,
+            diagnostics,
+            ControlError::new(
+                ControlErrorKind::Conflict,
+                "automatic contrast was superseded before it started",
+            ),
+        );
+        return false;
+    }
+    match load_job_tx.try_send(LoadJob::MosaicAutoContrast {
+        request: Some(request),
+        spec,
+    }) {
+        Ok(()) => {
+            *model = candidate;
+            diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(crossbeam_channel::TrySendError::Full(LoadJob::MosaicAutoContrast {
+            request: Some(request),
+            ..
+        }))
+        | Err(crossbeam_channel::TrySendError::Disconnected(LoadJob::MosaicAutoContrast {
+            request: Some(request),
+            ..
+        })) => {
+            reject_actor_request(
+                request,
+                diagnostics,
+                ControlError::new(
+                    ControlErrorKind::NotReady,
+                    "Odon's resource workers could not start automatic contrast",
+                ),
+            );
+            false
+        }
+        Err(_) => unreachable!("submitted mosaic automatic contrast job changed variant"),
+    }
+}
+
+/// Returns whether the model changed and needs publishing.
+pub(super) fn enqueue_mosaic_auto_contrast_on_open(
+    model: &mut AppModel,
+    load_job_tx: &Sender<LoadJob>,
+    diagnostics: &ActorDiagnostics,
+) -> bool {
+    let spec = match model.mosaic_auto_contrast_on_open_spec() {
+        Ok(Some(spec)) => spec,
+        Ok(None) => return false,
+        Err(error) => {
+            model.fail_mosaic_auto_contrast_on_open_preparation(error.message);
+            return true;
+        }
+    };
+    match load_job_tx.try_send(LoadJob::MosaicAutoContrast {
+        request: None,
+        spec: spec.clone(),
+    }) {
+        Ok(()) => {
+            let started = model.mark_mosaic_auto_contrast_started(&spec);
+            if started {
+                diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);
+            }
+            started
+        }
+        Err(crossbeam_channel::TrySendError::Full(_)) => false,
+        Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+            model.fail_mosaic_auto_contrast_on_open_preparation(
+                "Odon's resource workers are unavailable",
+            );
+            true
+        }
+    }
+}
+
 pub(super) fn enqueue_auto_contrast_on_open(
     model: &mut AppModel,
     render_document: &Option<Arc<RenderDocument>>,

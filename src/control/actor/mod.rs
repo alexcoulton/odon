@@ -51,7 +51,9 @@ use crate::model::{
     ControlObjectFilterResult, ControlObjectResource, ControlPinnedLevelResource,
     ControlSegmentationGeoJsonResource, ControlThresholdPreviewResource, DeepLinkApplyGuard,
     DeepLinkCurrentResources, LabelZarrDataset, MeasurementMetric, MeasurementSpec, MemoryPinSpec,
-    ModelMode, MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult,
+    ModelMode, MosaicAutoContrastChannelResult, MosaicAutoContrastChannelSpec,
+    MosaicAutoContrastItemSpec, MosaicAutoContrastResult, MosaicAutoContrastSpec,
+    MosaicMemoryPinResult, MosaicMemoryPinSpec, MosaicObjectLoadResult,
     MosaicObjectLoadSpec, ObjectExportFormat, ObjectExportResult, ObjectExportSpec,
     ObjectResourceLoader, ObjectTarget, ProjectModelSnapshot, ProjectObjectPreloadScope,
     ProjectObjectPreloadSettings, ProjectObjectPreloadSource, ProjectViewApplySpec,
@@ -112,9 +114,10 @@ use annotations::begin_annotation_load;
 use application::{
     begin_lifecycle_request, begin_settings_mutation, enqueue_recent_project_persistence,
 };
-use channel_io::read_auto_contrast;
+use channel_io::{read_auto_contrast, read_mosaic_auto_contrast};
 pub use channel_io::read_channel_intensity_stats;
-use channels::{begin_auto_contrast, begin_channel_intensity, enqueue_auto_contrast_on_open};
+use channels::{
+    begin_mosaic_auto_contrast, enqueue_mosaic_auto_contrast_on_open, begin_auto_contrast, begin_channel_intensity, enqueue_auto_contrast_on_open};
 use completion::{finish_load, reject_actor_request};
 use datasets::{
     begin_data_resource_load, begin_dataset_inspection, begin_ome_zarr_load,
@@ -158,7 +161,10 @@ use project_preload::{begin_project_object_preload, begin_project_object_source_
 use project_roi::begin_project_roi_open;
 use project_views::begin_project_view_apply;
 use projection::publish_projection;
-pub use projection::{PlatformEffect, RenderDocument, RenderProjection};
+pub use projection::{
+    PlatformEffect, ProjectionFingerprints, RenderDocument, RenderProjection, json_fingerprint,
+    json_object_fingerprint,
+};
 use projects::{
     begin_project_discovery, begin_project_open, begin_project_save, begin_samplesheet_export,
     begin_samplesheet_import, begin_samplesheet_inspect,

@@ -91,6 +91,56 @@ impl FramePacing {
     }
 }
 
+const HUD_REFRESH: Duration = Duration::from_millis(250);
+
+#[derive(Clone)]
+struct HudLine {
+    text: String,
+    refreshed_at: Instant,
+}
+
+fn hud_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("odon.frame-pacing.hud-line")
+}
+
+impl FramePacing {
+    /// Publishes a one-line summary for the canvas debug overlays, refreshed a few times a second
+    /// so the numbers stay readable.
+    pub(crate) fn publish_hud_line(&self, ctx: &eframe::egui::Context, now: Instant) {
+        let fresh = ctx.data(|data| {
+            data.get_temp::<HudLine>(hud_id())
+                .is_some_and(|line| now.saturating_duration_since(line.refreshed_at) < HUD_REFRESH)
+        });
+        if fresh {
+            return;
+        }
+        let snapshot = self.snapshot();
+        let text = format!(
+            "frame p50 {:.1} p95 {:.1} max {:.1} ms  slow(>25ms) {}/{}  update p95 {:.1} ms",
+            snapshot.interval_p50_ms,
+            snapshot.interval_p95_ms,
+            snapshot.interval_max_ms,
+            snapshot.over_25_ms,
+            snapshot.window_samples,
+            snapshot.update_p95_ms,
+        );
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                hud_id(),
+                HudLine {
+                    text,
+                    refreshed_at: now,
+                },
+            );
+        });
+    }
+}
+
+/// The most recently published frame-pacing summary, if any frame has been measured.
+pub(crate) fn hud_line(ctx: &eframe::egui::Context) -> Option<String> {
+    ctx.data(|data| data.get_temp::<HudLine>(hud_id()).map(|line| line.text))
+}
+
 fn push_bounded(samples: &mut VecDeque<f32>, value: f32) {
     if samples.len() == WINDOW_FRAMES {
         samples.pop_front();

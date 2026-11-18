@@ -1,5 +1,27 @@
 use super::*;
 
+/// One channel of a viewport as projected by the control actor. Absent `visible`/`color_rgb`
+/// keep the renderer's value; an absent or null `window` means the channel has no window.
+#[derive(Debug, serde::Deserialize)]
+struct ProjectedViewportChannel {
+    index: usize,
+    #[serde(default)]
+    visible: Option<bool>,
+    #[serde(default)]
+    color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    window: Option<ProjectedChannelWindow>,
+    #[serde(default)]
+    selected: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum ProjectedChannelWindow {
+    Pair([f32; 2]),
+    Range { min: f32, max: f32 },
+}
+
 impl OmeZarrViewerApp {
     pub fn apply_control_actor_channel_compute(
         &mut self,
@@ -553,6 +575,9 @@ impl OmeZarrViewerApp {
         &mut self,
         projection: &serde_json::Value,
     ) -> Result<(), String> {
+        // A full apply invalidates whatever section was recorded as applied; the caller records
+        // the new fingerprint once this succeeds.
+        self.control_actor_workspace_fingerprint = None;
         if let Some(labels) = projection.get("labels") {
             let generation = labels
                 .get("generation")
@@ -758,6 +783,93 @@ impl OmeZarrViewerApp {
         result
     }
 
+    /// A pan/zoom gesture owns the camera until the actor has caught up; a projection of an
+    /// earlier gesture step must not rewind it.
+    fn camera_after_native_hold(
+        &mut self,
+        viewport_id: &str,
+        camera_linked: bool,
+        projected: Camera,
+    ) -> Camera {
+        match self.native_camera_hold.as_mut() {
+            Some(held) if held.viewport_id == viewport_id => {
+                held.hold.observe_projected(&projected)
+            }
+            Some(held) if camera_linked => held.hold.camera().clone(),
+            _ => projected,
+        }
+    }
+
+    /// Fingerprint of the workspace section this renderer last applied in full.
+    pub(crate) fn control_actor_workspace_fingerprint(&self) -> Option<u64> {
+        self.control_actor_workspace_fingerprint
+    }
+
+    pub(crate) fn set_control_actor_workspace_fingerprint(&mut self, fingerprint: Option<u64>) {
+        self.control_actor_workspace_fingerprint = fingerprint;
+    }
+
+    /// Applies a projection in which only navigation changed: each viewport's camera and
+    /// navigation revision. Returns false, changing nothing, when the projected viewports do not
+    /// match the renderer's workspace, in which case the full workspace section must be applied.
+    pub(crate) fn apply_control_actor_navigation(
+        &mut self,
+        navigation: &[odon::model::ProjectedViewportNavigation],
+    ) -> bool {
+        let valid = |camera: &odon::model::ProjectedCamera| {
+            camera.center_world_lvl0.iter().all(|value| value.is_finite())
+                && camera.zoom_screen_per_lvl0_px.is_finite()
+                && camera.zoom_screen_per_lvl0_px > 0.0
+        };
+        let matches = self.viewport_workspace.as_ref().is_some_and(|workspace| {
+            workspace.viewports().len() == navigation.len()
+                && workspace
+                    .viewports()
+                    .iter()
+                    .zip(navigation)
+                    .all(|(slot, projected)| {
+                        slot.id.as_str() == projected.viewport_id && valid(&projected.camera)
+                    })
+        });
+        if !matches {
+            return false;
+        }
+        self.release_settled_native_camera_hold();
+        let Some(mut workspace) = self.viewport_workspace.take() else {
+            return false;
+        };
+        let camera_linked = workspace.links().camera;
+        let active_id = workspace.active_id().clone();
+        let mut active_camera_changed = false;
+        for (slot, projected) in workspace.viewports_mut().iter_mut().zip(navigation) {
+            let camera = self.camera_after_native_hold(
+                slot.id.as_str(),
+                camera_linked,
+                Camera {
+                    center_world_lvl0: egui::pos2(
+                        projected.camera.center_world_lvl0[0],
+                        projected.camera.center_world_lvl0[1],
+                    ),
+                    zoom_screen_per_lvl0_px: projected.camera.zoom_screen_per_lvl0_px,
+                },
+            );
+            let changed = camera.center_world_lvl0 != slot.state.camera.center_world_lvl0
+                || camera.zoom_screen_per_lvl0_px != slot.state.camera.zoom_screen_per_lvl0_px;
+            if changed && slot.id == active_id {
+                active_camera_changed = true;
+                self.camera = camera.clone();
+            }
+            slot.state.camera = camera;
+            slot.navigation_revision = projected.navigation_revision.max(1);
+        }
+        if active_camera_changed {
+            self.hist_dirty = true;
+            self.hist_navigation_dirty_since = Some(Instant::now());
+        }
+        self.viewport_workspace = Some(workspace);
+        true
+    }
+
     fn apply_control_actor_viewports_projection(
         &mut self,
         projection: &serde_json::Value,
@@ -779,10 +891,8 @@ impl OmeZarrViewerApp {
                 active.state.capture_runtime(self);
             }
         }
-        let fallback = current
-            .as_ref()
-            .map(|workspace| workspace.active().state.clone())
-            .unwrap_or_else(|| ViewerViewportState::capture(self));
+        // Only a viewport the renderer has not seen before needs a starting state.
+        let mut fallback: Option<ViewerViewportState> = None;
         let projected_masks = self
             .mask_layers
             .iter()
@@ -796,6 +906,12 @@ impl OmeZarrViewerApp {
             })
             .collect::<Vec<_>>();
 
+        self.release_settled_native_camera_hold();
+        let camera_linked = projection
+            .get("links")
+            .and_then(|links| links.get("camera"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
         let mut slots = Vec::with_capacity(projected_viewports.len());
         for projected in projected_viewports {
             let id = projected
@@ -809,13 +925,20 @@ impl OmeZarrViewerApp {
                 .filter(|title| !title.trim().is_empty())
                 .ok_or_else(|| format!("actor projection viewport '{id}' has no title"))?
                 .to_string();
-            let mut state = current
-                .as_ref()
-                .and_then(|workspace| workspace.get(&id))
-                .map(|viewport| viewport.state.clone())
-                .unwrap_or_else(|| fallback.clone());
+            let mut state = match current.as_ref().and_then(|workspace| workspace.get(&id)) {
+                Some(viewport) => viewport.state.clone(),
+                None => fallback
+                    .get_or_insert_with(|| {
+                        current
+                            .as_ref()
+                            .map(|workspace| workspace.active().state.clone())
+                            .unwrap_or_else(|| ViewerViewportState::capture(self))
+                    })
+                    .clone(),
+            };
             state.masks.clone_from(&projected_masks);
             Self::apply_actor_viewport_projection(&mut state, projected)?;
+            state.camera = self.camera_after_native_hold(id.as_str(), camera_linked, state.camera);
             self.apply_actor_native_layer_topology(&mut state, projected)?;
             slots.push(ViewportSlot {
                 id,
@@ -843,6 +966,13 @@ impl OmeZarrViewerApp {
             .iter()
             .map(|viewport| viewport.id.clone())
             .collect::<HashSet<_>>();
+        if self
+            .native_camera_hold
+            .as_ref()
+            .is_some_and(|held| !slots.iter().any(|slot| slot.id.as_str() == held.viewport_id))
+        {
+            self.native_camera_hold = None;
+        }
         if current_active.as_ref() != Some(&active)
             || previous_viewport_ids != projected_viewport_ids
         {
@@ -1024,55 +1154,30 @@ impl OmeZarrViewerApp {
             }
         }
 
-        if let Some(channels) = projected
-            .get("channels")
-            .and_then(serde_json::Value::as_array)
-        {
+        if let Some(channels) = projected.get("channels") {
+            use serde::Deserialize;
+            let channels = Vec::<ProjectedViewportChannel>::deserialize(channels)
+                .map_err(|error| format!("actor viewport channels are invalid: {error}"))?;
             for projected_channel in channels {
-                let Some(index) = projected_channel
-                    .get("index")
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|index| usize::try_from(index).ok())
-                else {
-                    continue;
-                };
                 let Some(channel) = state
                     .channels
                     .iter_mut()
-                    .find(|channel| channel.index == index)
+                    .find(|channel| channel.index == projected_channel.index)
                 else {
                     continue;
                 };
-                if let Some(visible) = projected_channel
-                    .get("visible")
-                    .and_then(serde_json::Value::as_bool)
-                {
+                if let Some(visible) = projected_channel.visible {
                     channel.visible = visible;
                 }
-                if let Some(color) = projected_channel
-                    .get("color_rgb")
-                    .and_then(ViewerViewportState::rgb_from_json)
-                {
-                    channel.color_rgb = color;
+                if let Some(color_rgb) = projected_channel.color_rgb {
+                    channel.color_rgb = color_rgb;
                 }
-                channel.window = projected_channel.get("window").and_then(|window| {
-                    if window.is_null() {
-                        return None;
-                    }
-                    if let Some(values) = window.as_array().filter(|values| values.len() == 2) {
-                        return Some((values[0].as_f64()? as f32, values[1].as_f64()? as f32));
-                    }
-                    Some((
-                        window.get("min")?.as_f64()? as f32,
-                        window.get("max")?.as_f64()? as f32,
-                    ))
+                channel.window = projected_channel.window.map(|window| match window {
+                    ProjectedChannelWindow::Pair([minimum, maximum]) => (minimum, maximum),
+                    ProjectedChannelWindow::Range { min, max } => (min, max),
                 });
-                if projected_channel
-                    .get("selected")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    state.selected_channel = index;
+                if projected_channel.selected {
+                    state.selected_channel = projected_channel.index;
                 }
             }
         }
@@ -1194,6 +1299,13 @@ impl OmeZarrViewerApp {
                 .and_then(serde_json::Value::as_f64)
             {
                 state.object_display.selected_fill_opacity = (value as f32).clamp(0.0, 1.0);
+            }
+            if let Some(mode) = objects
+                .get("unticked_categories")
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::objects::ObjectUntickedCategories::parse)
+            {
+                state.object_display.unticked_categories = mode;
             }
             if let Some(value) = objects
                 .get("show_selection_overlay")

@@ -19,6 +19,7 @@ impl ObjectsLayer {
             fill_cells: self.fill_cells,
             fill_opacity: self.fill_opacity,
             selected_fill_opacity: self.selected_fill_opacity,
+            unticked_categories: self.unticked_categories,
             fast_rendering: self.fast_rendering,
         }
     }
@@ -67,6 +68,7 @@ impl ObjectsLayer {
         self.fill_cells = state.fill_cells;
         self.fill_opacity = state.fill_opacity.clamp(0.0, 1.0);
         self.selected_fill_opacity = state.selected_fill_opacity.clamp(0.0, 1.0);
+        self.unticked_categories = state.unticked_categories;
         self.fast_rendering = state.fast_rendering;
         self.filtered_color_groups = None;
         self.color_legend_cache = None;
@@ -179,6 +181,7 @@ impl ObjectsLayer {
         self.fill_cells = false;
         self.fill_opacity = 0.30;
         self.selected_fill_opacity = 0.70;
+        self.unticked_categories = ObjectUntickedCategories::Hidden;
         self.fast_rendering = true;
         self.color_groups = None;
         self.filtered_color_groups = None;

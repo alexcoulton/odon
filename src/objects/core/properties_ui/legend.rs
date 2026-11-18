@@ -17,6 +17,9 @@ impl ObjectsLayer {
                         .color_rgb = None;
                     self.category_colors.set(&label, rgb);
                 }
+                legend_ui::LegendAction::SetUntickedCategories(mode) => {
+                    self.unticked_categories = mode;
+                }
                 legend_ui::LegendAction::ResetColor { label } => {
                     self.color_level_overrides
                         .entry(label.clone())
@@ -33,6 +36,17 @@ impl ObjectsLayer {
         project: &std::collections::BTreeMap<String, [u8; 3]>,
     ) {
         self.category_colors.sync(project);
+    }
+
+    pub(crate) fn sync_property_preferences(
+        &mut self,
+        project: &crate::data::project_config::ObjectPropertyPreferences,
+    ) {
+        self.property_preferences.sync(project);
+    }
+
+    pub(crate) fn take_property_preferences_commit(&mut self) -> Option<serde_json::Value> {
+        self.property_preferences.take_commit()
     }
 
     /// The project-metadata params for any released category colour edit.

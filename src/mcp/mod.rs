@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod client;
+mod native_ingress;
 mod runtime;
 pub mod tools;
 

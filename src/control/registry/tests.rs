@@ -455,3 +455,13 @@ fn actor_capability_registry_has_unique_known_methods() {
         );
     }
 }
+
+#[test]
+fn mosaic_label_font_sizes_are_exposed_in_layout_schema() {
+    let schema = request_schema_for(method("mosaic.layout.configure").unwrap());
+    for key in ["label_font_size", "group_label_font_size"] {
+        assert_eq!(schema["properties"][key]["type"], "number");
+        assert_eq!(schema["properties"][key]["minimum"], 6.0);
+        assert_eq!(schema["properties"][key]["maximum"], 72.0);
+    }
+}

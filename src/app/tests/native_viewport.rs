@@ -214,3 +214,93 @@ fn native_object_filter_command_keeps_worker_evaluation_and_revision_guard() {
     assert_eq!(intent.params["if_presentation_revision"], 4);
     assert!(intent.params.get("mode").is_some());
 }
+
+#[test]
+fn late_projection_of_an_earlier_pan_step_does_not_rewind_the_gesture() {
+    let mut app = fixture_app();
+    let mut model = actor_model_fixture(&mut app);
+
+    // First pan step: applied locally and reported straight away.
+    app.camera.center_world_lvl0 = egui::pos2(10.0, 20.0);
+    app.record_native_camera_gesture();
+    // Two more steps happen while that command is still in flight; nothing else is queued.
+    app.camera.center_world_lvl0 = egui::pos2(30.0, 40.0);
+    app.record_native_camera_gesture();
+    app.camera.center_world_lvl0 = egui::pos2(50.0, 60.0);
+    app.record_native_camera_gesture();
+
+    let first = take_one(&mut app, "viewer.viewports.camera.set");
+    assert_eq!(first.params["center_world_lvl0"][0], 10.0);
+    assert!(first.params.get("if_navigation_revision").is_none());
+    replay(&mut model, first);
+    let first_projection = model.render_workspace_snapshot().unwrap();
+
+    // The projection of the first step arrives late and must not rewind the camera.
+    app.apply_control_actor_workspace_projection(&first_projection)
+        .expect("stale projection still applies");
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(50.0, 60.0));
+
+    // Only the newest position is sent next, and the actor accepts it even though the renderer
+    // never reported the intermediate navigation revision.
+    app.flush_native_camera_hold();
+    let latest = take_one(&mut app, "viewer.viewports.camera.set");
+    assert_eq!(latest.params["center_world_lvl0"][0], 50.0);
+    replay(&mut model, latest);
+    let latest_projection = model.render_workspace_snapshot().unwrap();
+    app.apply_control_actor_workspace_projection(&latest_projection)
+        .expect("current projection applies");
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(50.0, 60.0));
+}
+
+#[test]
+fn navigation_only_projection_moves_cameras_without_reapplying_the_workspace() {
+    let mut app = fixture_app();
+    let _model = actor_model_fixture(&mut app);
+    let viewport_id = app
+        .viewport_workspace
+        .as_ref()
+        .unwrap()
+        .active_id()
+        .as_str()
+        .to_string();
+    let navigation = |x: f32, revision: u64| {
+        vec![odon::model::ProjectedViewportNavigation {
+            viewport_id: viewport_id.clone(),
+            navigation_revision: revision,
+            camera: odon::model::ProjectedCamera {
+                center_world_lvl0: [x, 7.0],
+                zoom_screen_per_lvl0_px: 3.0,
+            },
+        }]
+    };
+
+    assert!(app.apply_control_actor_navigation(&navigation(100.0, 5)));
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(100.0, 7.0));
+    assert_eq!(app.camera.zoom_screen_per_lvl0_px, 3.0);
+    let workspace = app.viewport_workspace.as_ref().unwrap();
+    assert_eq!(workspace.active().navigation_revision, 5);
+    assert_eq!(
+        workspace.active().state.camera.center_world_lvl0,
+        egui::pos2(100.0, 7.0)
+    );
+
+    // A pan gesture in progress keeps owning the camera on this path too.
+    app.camera.center_world_lvl0 = egui::pos2(500.0, 7.0);
+    app.record_native_camera_gesture();
+    assert!(app.apply_control_actor_navigation(&navigation(100.0, 6)));
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(500.0, 7.0));
+    assert_eq!(
+        app.viewport_workspace
+            .as_ref()
+            .unwrap()
+            .active()
+            .navigation_revision,
+        6
+    );
+
+    // A different viewport set cannot be realized from navigation alone.
+    let mut other = navigation(1.0, 7);
+    other[0].viewport_id = "viewport-unknown".to_string();
+    assert!(!app.apply_control_actor_navigation(&other));
+    assert_eq!(app.camera.center_world_lvl0, egui::pos2(500.0, 7.0));
+}

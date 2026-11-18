@@ -239,12 +239,16 @@ pub fn spawn_control_actor_with_services_and_ui(
                             );
                         }
                         if !presentation_captures.barrier_active()
-                            && enqueue_auto_contrast_on_open(
+                            && (enqueue_auto_contrast_on_open(
                                 &mut model,
                                 &render_document,
                                 &load_job_tx,
                                 &diagnostics,
-                            )
+                            ) || enqueue_mosaic_auto_contrast_on_open(
+                                &mut model,
+                                &load_job_tx,
+                                &diagnostics,
+                            ))
                         {
                             publish_projection(
                                 &mut model,

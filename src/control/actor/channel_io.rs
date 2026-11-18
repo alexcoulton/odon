@@ -119,11 +119,133 @@ pub(crate) fn read_auto_contrast(
         .collect()
 }
 
+/// One histogram per channel across every ROI, because a mosaic has one contrast per channel. An
+/// unreadable ROI is reported rather than failing the others; only a total failure is an error.
+pub(crate) fn read_mosaic_auto_contrast(
+    spec: &MosaicAutoContrastSpec,
+    cancelled: &impl Fn() -> bool,
+) -> anyhow::Result<MosaicAutoContrastResult> {
+    let mut histograms = vec![vec![0_u64; 65_536]; spec.channels.len()];
+    let mut totals = vec![(0_u64, 0_u16); spec.channels.len()];
+    let mut failed_items = Vec::new();
+    for item in &spec.items {
+        let outcome = spec.channels.iter().enumerate().try_for_each(
+            |(position, channel)| -> anyhow::Result<()> {
+                anyhow::ensure!(!cancelled(), "automatic contrast was cancelled");
+                let Some(local_channel) = item.channel_map.get(channel.index).copied().flatten()
+                else {
+                    return Ok(());
+                };
+                let read = mosaic_channel_read(item, channel, local_channel)?;
+                let (values, _) = read_opened_channel_values(&item.document, &read)?;
+                let (samples, observed_max) = &mut totals[position];
+                add_to_histogram(&mut histograms[position], samples, observed_max, values);
+                Ok(())
+            },
+        );
+        if let Err(error) = outcome {
+            anyhow::ensure!(!cancelled(), "automatic contrast was cancelled");
+            failed_items.push((item.item_id, format!("{error:#}")));
+        }
+    }
+    anyhow::ensure!(
+        failed_items.len() < spec.items.len(),
+        "no mosaic image could be read: {}",
+        failed_items
+            .first()
+            .map_or("no images", |(_, error)| error.as_str())
+    );
+    let channels = spec
+        .channels
+        .iter()
+        .zip(histograms.iter().zip(&totals))
+        .filter(|(_, (_, (samples, _)))| *samples > 0)
+        .map(|(channel, (histogram, (samples, observed_max)))| {
+            let (min, max) = crate::settings::auto_contrast_window_from_histogram(
+                spec.settings,
+                histogram,
+                *samples,
+                *observed_max,
+            );
+            MosaicAutoContrastChannelResult {
+                index: channel.index,
+                min,
+                max,
+                sample_count: *samples,
+            }
+        })
+        .collect();
+    Ok(MosaicAutoContrastResult {
+        channels,
+        failed_items,
+    })
+}
+
+fn add_to_histogram(
+    histogram: &mut [u64],
+    samples: &mut u64,
+    observed_max: &mut u16,
+    values: impl IntoIterator<Item = u16>,
+) {
+    for value in values {
+        histogram[value as usize] = histogram[value as usize].saturating_add(1);
+        *samples = samples.saturating_add(1);
+        *observed_max = (*observed_max).max(value);
+    }
+}
+
+fn mosaic_channel_read(
+    item: &MosaicAutoContrastItemSpec,
+    channel: &MosaicAutoContrastChannelSpec,
+    local_channel: u64,
+) -> anyhow::Result<ChannelIntensitySpec> {
+    let descriptor = &item.document.descriptor;
+    let level = descriptor
+        .levels
+        .get(item.level)
+        .ok_or_else(|| anyhow::anyhow!("missing level {}", item.level))?;
+    let (y, x) = (descriptor.dims.y, descriptor.dims.x);
+    let height = level.shape.get(y).copied().unwrap_or(0);
+    let width = level.shape.get(x).copied().unwrap_or(0);
+    let ranges = (0..level.shape.len())
+        .map(|dimension| {
+            if Some(dimension) == descriptor.dims.c {
+                local_channel..local_channel.saturating_add(1)
+            } else if dimension == y || dimension == x {
+                0..level.shape[dimension]
+            } else {
+                0..1
+            }
+        })
+        .collect();
+    Ok(ChannelIntensitySpec {
+        channel_index: channel.index,
+        channel_name: channel.name.clone(),
+        level_number: level.index,
+        downsample: level.downsample,
+        zarr_path: format!("/{}", level.path.trim_start_matches('/')),
+        dtype: level.dtype.clone(),
+        ranges,
+        bins: None,
+        abs_max: descriptor.abs_max.max(1.0),
+        client_request_id: None,
+        source_channel: local_channel as usize,
+        region: [0, height, 0, width],
+    })
+}
+
 fn read_channel_values(
     document: &RenderDocument,
     spec: &ChannelIntensitySpec,
 ) -> anyhow::Result<(Vec<u16>, Vec<usize>)> {
-    if let crate::data::document::DocumentResource::Alternate(resource) = &document.opened.resource
+    read_opened_channel_values(&document.opened, spec)
+}
+
+fn read_opened_channel_values(
+    document: &crate::data::document::ControlOpenedDocument,
+    spec: &ChannelIntensitySpec,
+) -> anyhow::Result<(Vec<u16>, Vec<usize>)> {
+    if let crate::data::document::DocumentResource::Alternate(resource) = &document.resource
         && let Some(reader) = resource.intensity_reader()
     {
         let [y0, y1, x0, x1] = spec.region;
@@ -138,7 +260,7 @@ fn read_channel_values(
             })?;
         return Ok((data.values, data.shape));
     }
-    let array = Array::open(Arc::clone(document.store()), &spec.zarr_path)?;
+    let array = Array::open(Arc::clone(document.resource.store()), &spec.zarr_path)?;
     let subset = ArraySubset::new_with_ranges(&spec.ranges);
     let data = retrieve_image_subset_u16(&array, &subset, &spec.dtype)?;
     let shape = data.shape().to_vec();

@@ -19,6 +19,10 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use eframe::egui;
 use glow::HasContext;
+use odon::model::{
+    DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE, DEFAULT_MOSAIC_LABEL_FONT_SIZE,
+    MAX_MOSAIC_LABEL_FONT_SIZE, MIN_MOSAIC_LABEL_FONT_SIZE,
+};
 use rfd::FileDialog;
 
 use self::io::{
@@ -251,6 +255,8 @@ pub struct MosaicViewerApp {
     group_blocks: Vec<GroupBlock>,
     show_text_labels: bool,
     label_columns: Vec<String>,
+    label_font_size: f32,
+    group_label_font_size: f32,
     grid_cols: usize,
     show_left_panel: bool,
     show_right_panel: bool,
@@ -259,6 +265,7 @@ pub struct MosaicViewerApp {
     system_memory_last_refresh: Option<Instant>,
     pending_memory_load: Option<PendingMemoryAction<serde_json::Value>>,
     control_actor_memory_state: serde_json::Value,
+    control_auto_contrast_pending: bool,
     tile_request_generation: u64,
     last_tile_request_signature: Option<TileRequestSignature>,
 
@@ -278,6 +285,11 @@ pub struct MosaicViewerApp {
     consumed_mosaic_resource_generation: u64,
     consumed_mosaic_object_generation: u64,
     native_command_ingress: NativeControlIngress,
+    native_camera_hold: Option<crate::camera::CameraIntentHold>,
+    /// Fingerprint of the actor state section this renderer last applied in full.
+    applied_state_fingerprint: Option<u64>,
+    /// Fingerprint of the projected state that in-flight tile requests depend on.
+    tile_state_fingerprint: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -287,6 +299,17 @@ struct MosaicScreenshotCaptureAdapter {
 
 impl ChannelListHost for MosaicViewerApp {
     type LayerId = MosaicLayerId;
+
+    fn auto_contrast_enabled(&self) -> Option<bool> {
+        Some(!self.control_auto_contrast_pending)
+    }
+
+    fn request_auto_contrast(&mut self) {
+        self.submit_native_control_intent(
+            "viewer.channels.auto_contrast",
+            serde_json::json!({"overwrite_manual":true}),
+        );
+    }
 
     fn channel_search(&self) -> &str {
         &self.channel_list_search

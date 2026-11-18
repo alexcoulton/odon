@@ -20,9 +20,16 @@ use super::{
     SystemMemorySnapshot,
 };
 
+pub(crate) use auto_contrast::{
+    MosaicAutoContrastChannelResult, MosaicAutoContrastChannelSpec, MosaicAutoContrastItemSpec,
+    MosaicAutoContrastResult, MosaicAutoContrastSpec,
+};
+
+mod auto_contrast;
 mod layout;
 mod memory;
 mod objects;
+mod persistence;
 mod presentation;
 #[cfg(test)]
 mod tests;
@@ -31,6 +38,12 @@ const DEFAULT_LOGICAL_CANVAS: [f32; 2] = [960.0, 720.0];
 const DEFAULT_GRID_PAD: f32 = 64.0;
 const DEFAULT_GROUP_GAP: f32 = 96.0;
 const GROUP_HEADER_HEIGHT: f32 = 48.0;
+
+/// Mosaic text sizes are logical screen points, independent of the image zoom.
+pub const DEFAULT_MOSAIC_LABEL_FONT_SIZE: f32 = 13.0;
+pub const DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE: f32 = 15.0;
+pub const MIN_MOSAIC_LABEL_FONT_SIZE: f32 = 6.0;
+pub const MAX_MOSAIC_LABEL_FONT_SIZE: f32 = 72.0;
 
 /// Immutable, worker-prepared data for one mosaic item.
 ///
@@ -114,6 +127,8 @@ struct MosaicChannelModel {
     visible: bool,
     color_rgb: [u8; 3],
     window: Option<(f32, f32)>,
+    /// Set by hand or saved in the project, as opposed to read from the image metadata.
+    contrast_manual: bool,
     note: String,
 }
 
@@ -204,12 +219,19 @@ enum MosaicPinnedLevelState {
     Failed(String),
 }
 
+#[derive(Debug, Clone)]
+struct MosaicGroupBlock {
+    name: String,
+    bounds: [[f32; 2]; 2],
+}
+
 /// Canonical, renderer-independent semantic mosaic state.
 #[derive(Debug, Clone)]
 pub(crate) struct MosaicModel {
     resource: Option<Arc<ControlMosaicResource>>,
     items: Vec<MosaicItemModel>,
     channels: Vec<MosaicChannelModel>,
+    auto_contrast: auto_contrast::MosaicAutoContrastState,
     active_channel: usize,
     channel_order: Vec<usize>,
     channel_search: String,
@@ -221,6 +243,7 @@ pub(crate) struct MosaicModel {
     left_tab: String,
     right_tab: String,
     group_by: String,
+    group_blocks: Vec<MosaicGroupBlock>,
     sort_by: String,
     sort_secondary_enabled: bool,
     sort_by_secondary: String,
@@ -230,6 +253,8 @@ pub(crate) struct MosaicModel {
     show_group_labels: bool,
     show_text_labels: bool,
     label_columns: Vec<String>,
+    label_font_size: f32,
+    group_label_font_size: f32,
     grid_cell_size: [f32; 2],
     grid_pad: f32,
     bounds: [[f32; 2]; 2],
@@ -267,6 +292,7 @@ impl Default for MosaicModel {
             resource: None,
             items: Vec::new(),
             channels: Vec::new(),
+            auto_contrast: Default::default(),
             active_channel: 0,
             channel_order: Vec::new(),
             channel_search: String::new(),
@@ -278,6 +304,7 @@ impl Default for MosaicModel {
             left_tab: "layers".to_string(),
             right_tab: "properties".to_string(),
             group_by: String::new(),
+            group_blocks: Vec::new(),
             sort_by: "id".to_string(),
             sort_secondary_enabled: false,
             sort_by_secondary: "id".to_string(),
@@ -287,6 +314,8 @@ impl Default for MosaicModel {
             show_group_labels: true,
             show_text_labels: true,
             label_columns: vec!["id".to_string()],
+            label_font_size: DEFAULT_MOSAIC_LABEL_FONT_SIZE,
+            group_label_font_size: DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE,
             grid_cell_size: [1.0, 1.0],
             grid_pad: DEFAULT_GRID_PAD,
             bounds: [[0.0, 0.0], [1.0, 1.0]],
@@ -470,6 +499,8 @@ impl MosaicModel {
         self.show_group_labels = true;
         self.show_text_labels = true;
         self.label_columns = vec!["id".to_string()];
+        self.label_font_size = DEFAULT_MOSAIC_LABEL_FONT_SIZE;
+        self.group_label_font_size = DEFAULT_MOSAIC_GROUP_LABEL_FONT_SIZE;
         self.grid_cell_size = grid_cell_size;
         self.grid_pad = DEFAULT_GRID_PAD;
         self.show_left_panel = true;
@@ -512,16 +543,16 @@ impl MosaicModel {
 
         if let Some(channels) = state.get("channels").and_then(Value::as_array) {
             for (position, projected) in channels.iter().enumerate() {
-                let index = projected
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .and_then(|name| {
-                        self.channels
-                            .iter()
-                            .position(|channel| channel.name == name)
-                    })
-                    .unwrap_or(position);
-                let Some(channel) = self.channels.get_mut(index) else {
+                // A named channel absent from this mosaic must not land on whichever channel
+                // shares its position. Only entries without a name are matched by position.
+                let index = match projected.get("name").and_then(Value::as_str) {
+                    Some(name) => self
+                        .channels
+                        .iter()
+                        .position(|channel| channel.name == name),
+                    None => Some(position),
+                };
+                let Some(channel) = index.and_then(|index| self.channels.get_mut(index)) else {
                     continue;
                 };
                 if let Some(visible) = projected["visible"].as_bool() {
@@ -541,17 +572,23 @@ impl MosaicModel {
                     .as_array()
                     .filter(|values| values.len() == 2)
                 {
-                    channel.window = values[0]
+                    let saved = values[0]
                         .as_f64()
                         .zip(values[1].as_f64())
                         .map(|(minimum, maximum)| (minimum as f32, maximum as f32));
+                    // Projects also save untouched metadata windows, which stay eligible for
+                    // automatic contrast. Anything else was chosen deliberately.
+                    channel.contrast_manual = saved != channel.window;
+                    channel.window = saved;
                 }
                 if let Some(note) = projected["note"].as_str() {
                     channel.note = note.to_string();
                 }
             }
         }
-        if let Some(order) = state.get("channel_order").and_then(Value::as_array) {
+        if let Some(order) = self.saved_channel_order(state) {
+            self.channel_order = order;
+        } else if let Some(order) = state.get("channel_order").and_then(Value::as_array) {
             let order = order
                 .iter()
                 .filter_map(Value::as_u64)
@@ -564,12 +601,18 @@ impl MosaicModel {
                 self.channel_order = order;
             }
         }
-        if let Some(active) = state
-            .get("active_channel")
-            .and_then(Value::as_u64)
-            .map(|index| index as usize)
-            .filter(|index| *index < self.channels.len())
-        {
+        let saved_active_channel = match state.get("active_channel_name").and_then(Value::as_str) {
+            Some(name) => self
+                .channels
+                .iter()
+                .position(|channel| channel.name == name),
+            None => state
+                .get("active_channel")
+                .and_then(Value::as_u64)
+                .map(|index| index as usize)
+                .filter(|index| *index < self.channels.len()),
+        };
+        if let Some(active) = saved_active_channel {
             self.active_channel = active;
         }
 
@@ -654,8 +697,20 @@ impl MosaicModel {
         }
         self.sync_semantics_from_native_layers()?;
 
+        // An unusable saved style should cost the styling, not the ability to open the mosaic.
+        if let Some(style) = state.get("object_style")
+            && self.set_object_style(&json!({"style":style})).is_err()
+        {
+            eprintln!("mosaic: ignoring saved object style that is no longer valid");
+        }
+
         if let Some(camera) = state.get("camera") {
+            let fitted = (self.camera_center, self.camera_zoom);
             self.set_camera(camera)?;
+            // A camera saved for a larger mosaic can otherwise open on empty space.
+            if !self.camera_center_is_on_mosaic() {
+                (self.camera_center, self.camera_zoom) = fitted;
+            }
         }
         Ok(())
     }
@@ -697,6 +752,8 @@ impl MosaicModel {
                 "show_group_labels":self.show_group_labels,
                 "show_text_labels":self.show_text_labels,
                 "label_columns":self.label_columns,
+                "label_font_size":self.label_font_size,
+                "group_label_font_size":self.group_label_font_size,
                 "unresolved_fields":unresolved,
             },
             "rois":self.items.iter().enumerate().map(|(index,item)| json!({
@@ -708,6 +765,13 @@ impl MosaicModel {
                 "selected":self.selected_ids.contains(&item.id),
             })).collect::<Vec<_>>(),
         }))
+    }
+
+    pub(crate) fn projected_camera(&self) -> Option<super::ProjectedCamera> {
+        self.resource.as_ref().map(|_| super::ProjectedCamera {
+            center_world_lvl0: self.camera_center,
+            zoom_screen_per_lvl0_px: self.camera_zoom,
+        })
     }
 
     pub(crate) fn projection_state(&self) -> Value {
@@ -726,6 +790,10 @@ impl MosaicModel {
                 "focused":self.focused_id == Some(item.id),
             })).collect::<Vec<_>>(),
             "bounds":{"min":self.bounds[0],"max":self.bounds[1]},
+            "group_blocks":self.group_blocks.iter().map(|group| json!({
+                "name":group.name,
+                "bounds":{"min":group.bounds[0],"max":group.bounds[1]},
+            })).collect::<Vec<_>>(),
             "camera":self.camera_snapshot(),
             "left_tab":self.left_tab,
             "right_tab":self.right_tab,
@@ -740,6 +808,8 @@ impl MosaicModel {
                 "show_group_labels":self.show_group_labels,
                 "show_text_labels":self.show_text_labels,
                 "label_columns":self.label_columns,
+                "label_font_size":self.label_font_size,
+                "group_label_font_size":self.group_label_font_size,
             },
             "panels":{"left":self.show_left_panel,"right":self.show_right_panel},
             "smooth_pixels":self.smooth_pixels,
@@ -749,6 +819,7 @@ impl MosaicModel {
             "object_style":self.object_style,
             "object_property_cache":self.object_property_cache_snapshot(),
             "object_selections":self.object_selection_projection(),
+            "auto_contrast":self.auto_contrast_snapshot(),
             "channels":self.channels.iter().map(|channel| json!({
                 "index":channel.index,
                 "name":channel.name,
@@ -877,6 +948,7 @@ fn default_mosaic_object_style() -> Value {
         "fill_cells":false,
         "fill_opacity":0.30,
         "selected_fill_opacity":0.70,
+        "unticked_categories":"hidden",
         "color_property_key":"",
         "color_mapping":{"mode":"single"},
         "continuous_domains_by_roi":{},
@@ -1109,6 +1181,7 @@ fn mosaic_channel(index: usize, channel: &ChannelInfo) -> MosaicChannelModel {
         visible: channel.visible,
         color_rgb: channel.color_rgb,
         window: channel.window,
+        contrast_manual: false,
         note: channel.note.clone(),
     }
 }

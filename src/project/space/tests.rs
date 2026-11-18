@@ -297,6 +297,8 @@ fn save_then_load_preserves_roi_view_masks_groups_and_browser_state() {
         group_by: Some("response".to_string()),
         layout_mode: Some("fit_cells".to_string()),
         label_columns: vec!["sample".to_string(), "cohort".to_string()],
+        label_font_size: Some(18.5),
+        group_label_font_size: Some(26.0),
         ..Default::default()
     };
 

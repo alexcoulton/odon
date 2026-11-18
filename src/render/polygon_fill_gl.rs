@@ -300,6 +300,8 @@ pub struct ObjectFillGlDrawParams {
     pub local_to_world_offset: egui::Vec2,
     pub local_to_world_scale: egui::Vec2,
     pub object_color_opacity: f32,
+    /// Leaves partially transparent objects unfilled.
+    pub fill_opaque_objects_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -360,6 +362,10 @@ pub struct ObjectFillGlStats {
     pub tile_evictions: u64,
     pub tile_pending: usize,
     pub tile_peak_pending: usize,
+    /// Tiles requested by every layer in the most recent completed frame.
+    pub tile_frame_requested: usize,
+    /// Tile levels currently given up, scene-wide, to keep that demand inside the cache.
+    pub tile_detail_reduction: u8,
     pub last_tile_raster_vertices: u64,
     pub last_tile_raster_draw_calls: u64,
     pub last_tile_compose_draw_calls: u64,
@@ -534,6 +540,7 @@ impl ObjectFillGlRenderer {
         let u_color_tex_size = objects.u_color_tex_size.clone();
         let u_use_object_colors = objects.u_use_object_colors.clone();
         let u_object_color_opacity = objects.u_object_color_opacity.clone();
+        let u_fill_opaque_objects_only = objects.u_fill_opaque_objects_only.clone();
 
         let viewport_pt = info.viewport;
         let ppp = info.pixels_per_point.max(1e-6);
@@ -667,6 +674,10 @@ impl ObjectFillGlRenderer {
                     u_use_object_colors.as_ref(),
                     i32::from(color_texture.is_some()),
                 );
+                gl.uniform_1_i32(
+                    u_fill_opaque_objects_only.as_ref(),
+                    i32::from(item.params.fill_opaque_objects_only),
+                );
                 gl.uniform_1_f32(
                     u_object_color_opacity.as_ref(),
                     item.params.object_color_opacity.clamp(0.0, 1.0),
@@ -777,6 +788,9 @@ struct ObjectFillInner {
     tile_evictions: u64,
     tile_pending: usize,
     tile_peak_pending: usize,
+    tile_frame_requested: usize,
+    last_tile_frame_requested: usize,
+    tile_detail_reduction: u8,
     last_tile_raster_vertices: u64,
     last_tile_raster_draw_calls: u64,
     last_tile_compose_draw_calls: u64,
@@ -839,6 +853,9 @@ impl ObjectFillInner {
             tile_evictions: 0,
             tile_pending: 0,
             tile_peak_pending: 0,
+            tile_frame_requested: 0,
+            last_tile_frame_requested: 0,
+            tile_detail_reduction: 0,
             last_tile_raster_vertices: 0,
             last_tile_raster_draw_calls: 0,
             last_tile_compose_draw_calls: 0,
@@ -887,6 +904,8 @@ impl ObjectFillInner {
             tile_evictions: self.tile_evictions,
             tile_pending: self.tile_pending,
             tile_peak_pending: self.tile_peak_pending,
+            tile_frame_requested: self.last_tile_frame_requested,
+            tile_detail_reduction: self.tile_detail_reduction,
             last_tile_raster_vertices: self.last_tile_raster_vertices,
             last_tile_raster_draw_calls: self.last_tile_raster_draw_calls,
             last_tile_compose_draw_calls: self.last_tile_compose_draw_calls,
@@ -1217,6 +1236,7 @@ struct ObjectFillGlObjects {
     u_color_tex_size: Option<glow::UniformLocation>,
     u_use_object_colors: Option<glow::UniformLocation>,
     u_object_color_opacity: Option<glow::UniformLocation>,
+    u_fill_opaque_objects_only: Option<glow::UniformLocation>,
 }
 
 impl ObjectFillGlObjects {
@@ -1256,6 +1276,9 @@ impl ObjectFillGlObjects {
             u_color_tex: unsafe { gl.get_uniform_location(program, "u_color_tex") },
             u_color_tex_size: unsafe { gl.get_uniform_location(program, "u_color_tex_size") },
             u_use_object_colors: unsafe { gl.get_uniform_location(program, "u_use_object_colors") },
+            u_fill_opaque_objects_only: unsafe {
+                gl.get_uniform_location(program, "u_fill_opaque_objects_only")
+            },
             u_object_color_opacity: unsafe {
                 gl.get_uniform_location(program, "u_object_color_opacity")
             },
@@ -1377,6 +1400,7 @@ uniform sampler2D u_color_tex;
 uniform ivec2 u_color_tex_size;
 uniform int u_use_object_colors;
 uniform float u_object_color_opacity;
+uniform int u_fill_opaque_objects_only;
 uniform vec4 u_selected_color;
 uniform vec4 u_primary_color;
 
@@ -1406,6 +1430,9 @@ void main() {
             discard;
         }
         vec4 object_color = texelFetch(u_color_tex, ivec2(color_x, color_y), 0);
+        if (u_fill_opaque_objects_only != 0 && object_color.a < 0.999) {
+            discard;
+        }
         object_color.a *= u_object_color_opacity;
         if (object_color.a <= 0.0) {
             discard;
@@ -1415,6 +1442,16 @@ void main() {
     }
     out_color = state > 0.75 ? u_primary_color : u_selected_color;
 }"#;
+
+#[cfg(test)]
+pub(crate) fn object_fill_fragment_shader() -> &'static str {
+    OBJECT_FILL_FRAG_330
+}
+
+#[cfg(test)]
+pub(crate) fn tile_compose_fragment_shader() -> &'static str {
+    tiles::compose_fragment_shader()
+}
 
 #[cfg(test)]
 mod object_fill_tests {
@@ -1430,6 +1467,7 @@ mod object_fill_tests {
             local_to_world_offset: egui::vec2(10.0, 20.0),
             local_to_world_scale: egui::vec2(2.0, 3.0),
             object_color_opacity: 1.0,
+            fill_opaque_objects_only: false,
         }
     }
 

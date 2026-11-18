@@ -707,6 +707,23 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
                 }
             }
         }
+        LoadCompletion::ProjectObjectPreloadProgress {
+            generation,
+            scope,
+            done,
+            total,
+        } => {
+            if model.report_project_object_preload_progress(&scope, generation, done, total) {
+                publish_projection(
+                    model,
+                    render_document.clone(),
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                );
+            }
+        }
         LoadCompletion::ProjectObjectPreload {
             generation,
             scope,

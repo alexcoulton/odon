@@ -1005,6 +1005,8 @@ fn configure_mosaic_layout_tool_schema() -> Value {
                     "type": "array",
                     "items": {"type": "string"}
                 },
+                "label_font_size": {"type": "number", "minimum": crate::model::MIN_MOSAIC_LABEL_FONT_SIZE, "maximum": crate::model::MAX_MOSAIC_LABEL_FONT_SIZE},
+                "group_label_font_size": {"type": "number", "minimum": crate::model::MIN_MOSAIC_LABEL_FONT_SIZE, "maximum": crate::model::MAX_MOSAIC_LABEL_FONT_SIZE},
                 "group_gap": {"type": "number"},
                 "fit": {"type": "boolean", "default": true}
             },
@@ -1230,6 +1232,16 @@ mod tests {
                 names.contains(required),
                 "missing core MCP tool: {required}"
             );
+        }
+    }
+
+    #[test]
+    fn mosaic_label_font_sizes_are_available_to_mcp_clients() {
+        let schema = configure_mosaic_layout_tool_schema();
+        for key in ["label_font_size", "group_label_font_size"] {
+            assert_eq!(schema["inputSchema"]["properties"][key]["type"], "number");
+            assert_eq!(schema["inputSchema"]["properties"][key]["minimum"], 6.0);
+            assert_eq!(schema["inputSchema"]["properties"][key]["maximum"], 72.0);
         }
     }
 

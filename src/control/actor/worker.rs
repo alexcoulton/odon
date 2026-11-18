@@ -1,3 +1,4 @@
+use super::completion::request_is_cancelled;
 use super::*;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -551,6 +552,21 @@ pub(super) fn spawn_resource_workers(
                                 break;
                             }
                         }
+                        LoadJob::MosaicAutoContrast { request, spec } => {
+                            let result = read_mosaic_auto_contrast(&spec, &|| {
+                                request.as_ref().is_some_and(request_is_cancelled)
+                            });
+                            if completions
+                                .send(LoadCompletion::MosaicAutoContrast {
+                                    request,
+                                    spec,
+                                    result,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                         LoadJob::MosaicMemoryPin { request, spec } => {
                             let result = load_mosaic_pinned_memory_on_worker(&spec, &request);
                             if completions
@@ -856,11 +872,24 @@ pub(super) fn spawn_resource_workers(
                             settings,
                             candidates,
                         } => {
+                            // Sources load one after another in this single job; tell the actor
+                            // after each so the renderer's progress advances as they finish.
+                            let mut report_progress = |done: usize, total: usize| {
+                                let _ = completions.send(
+                                    LoadCompletion::ProjectObjectPreloadProgress {
+                                        generation,
+                                        scope: scope.clone(),
+                                        done,
+                                        total,
+                                    },
+                                );
+                            };
                             let result = preload_project_objects(
                                 object_loader.as_deref(),
                                 &request,
                                 settings,
                                 candidates,
+                                &mut report_progress,
                             );
                             if completions
                                 .send(LoadCompletion::ProjectObjectPreload {

@@ -64,6 +64,40 @@ impl ProjectModel {
         Ok(())
     }
 
+    pub(crate) fn set_layer_groups(
+        &mut self,
+        groups: &crate::data::project_config::ProjectLayerGroups,
+    ) {
+        if &self.snapshot.config.layer_groups == groups {
+            return;
+        }
+        self.snapshot.config.layer_groups.clone_from(groups);
+        self.mark_structural_change();
+    }
+
+    /// Replaces the saved mosaic view. Annotation layers are saved separately and are kept.
+    pub(crate) fn set_mosaic_view_state(&mut self, view: Value) -> Result<(), ControlError> {
+        let state = self
+            .snapshot
+            .state
+            .as_object_mut()
+            .ok_or_else(|| invalid("project state must be an object"))?;
+        let previous = state.get("mosaic");
+        let mut next = view;
+        let next_object = next
+            .as_object_mut()
+            .ok_or_else(|| invalid("project mosaic state must be an object"))?;
+        if let Some(layers) = previous.and_then(|mosaic| mosaic.get("annotation_layers")) {
+            next_object.insert("annotation_layers".to_string(), layers.clone());
+        }
+        if previous == Some(&next) {
+            return Ok(());
+        }
+        state.insert("mosaic".to_string(), next);
+        self.mark_structural_change();
+        Ok(())
+    }
+
     pub(crate) fn set_mosaic_annotation_layers(
         &mut self,
         layers: Vec<ProjectAnnotationLayerState>,

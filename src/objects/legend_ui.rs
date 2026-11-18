@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use eframe::egui;
 
-use super::ObjectColorLegendEntry;
+use super::{ObjectColorLegendEntry, ObjectUntickedCategories};
 
 const INLINE_HEIGHT: f32 = 500.0;
 const LABEL_MIN_WIDTH: f32 = 70.0;
@@ -149,6 +149,7 @@ pub(crate) enum LegendAction {
     SetVisible { label: String, visible: bool },
     SetColor { label: String, rgb: [u8; 3] },
     ResetColor { label: String },
+    SetUntickedCategories(ObjectUntickedCategories),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -200,6 +201,44 @@ fn palette_actions(rows: &[LegendRow], palette: &[[u8; 3]]) -> Vec<LegendAction>
             rgb: *rgb,
         })
         .collect()
+}
+
+fn ui_unticked_categories(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    current: ObjectUntickedCategories,
+    actions: &mut Vec<LegendAction>,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Unticked categories");
+        let mut next = current;
+        egui::ComboBox::from_id_salt((id_salt, "unticked"))
+            .selected_text(current.label())
+            .show_ui(ui, |ui| {
+                for (option, hint) in [
+                    (
+                        ObjectUntickedCategories::Hidden,
+                        "Removed from view and hover.",
+                    ),
+                    (
+                        ObjectUntickedCategories::HoverOnly,
+                        "Not drawn, but can still be hovered and selected. Ticked categories \
+                         are filled, even if Fill cells is off.",
+                    ),
+                    (
+                        ObjectUntickedCategories::OutlineOnly,
+                        "As Hover only, with a faint neutral outline to show the surrounding \
+                         cells. Zoomed out, these outlines merge into a light wash.",
+                    ),
+                ] {
+                    ui.selectable_value(&mut next, option, option.label())
+                        .on_hover_text(hint);
+                }
+            });
+        if next != current {
+            actions.push(LegendAction::SetUntickedCategories(next));
+        }
+    });
 }
 
 fn ui_toolbar(
@@ -414,11 +453,13 @@ fn ui_contents(
     ui: &mut egui::Ui,
     id_salt: &str,
     rows: &[LegendRow],
+    unticked: ObjectUntickedCategories,
     state: &mut LegendUiState,
     actions: &mut Vec<LegendAction>,
     inline: bool,
 ) {
     ui_toolbar(ui, id_salt, rows, state, actions);
+    ui_unticked_categories(ui, id_salt, unticked, actions);
     let scroll = egui::ScrollArea::vertical().id_salt((id_salt, "scroll"));
     // A nested scroll area otherwise collapses to egui's small default height.
     let scroll = if inline {
@@ -438,6 +479,7 @@ pub(crate) fn ui_legend(
     id_salt: &str,
     property: &str,
     rows: &[LegendRow],
+    unticked: ObjectUntickedCategories,
     state: &mut LegendUiState,
 ) -> Vec<LegendAction> {
     let mut actions = Vec::new();
@@ -454,7 +496,7 @@ pub(crate) fn ui_legend(
                     }
                 });
             } else {
-                ui_contents(ui, id_salt, rows, state, &mut actions, true);
+                ui_contents(ui, id_salt, rows, unticked, state, &mut actions, true);
             }
         });
     if state.popped_out {
@@ -466,7 +508,7 @@ pub(crate) fn ui_legend(
             .min_width(WINDOW_MIN_WIDTH)
             .resizable(true)
             .show(ui.ctx(), |ui| {
-                ui_contents(ui, id_salt, rows, state, &mut actions, false);
+                ui_contents(ui, id_salt, rows, unticked, state, &mut actions, false);
             });
         if !open {
             state.popped_out = false;

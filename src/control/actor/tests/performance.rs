@@ -135,3 +135,57 @@ fn camera_projection_reuses_large_object_resource_without_copying_geometry() {
     assert!(Arc::ptr_eq(before_resource, after_resource));
     assert!(Arc::ptr_eq(&after_resource.features, &features));
 }
+
+#[test]
+fn camera_moves_change_typed_navigation_but_not_the_workspace_fingerprint() {
+    let (dataset, _) = OmeZarrDataset::open_local(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr"),
+    )
+    .expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let (projection_tx, projection_rx) = crossbeam_channel::bounded(1);
+    let diagnostics = ActorDiagnostics::shared();
+    let wake: UiWake = Arc::new(|| {});
+    let publish = |model: &mut AppModel| {
+        publish_projection(
+            model,
+            None,
+            &projection_tx,
+            &projection_rx,
+            &wake,
+            &diagnostics,
+        );
+        projection_rx.recv().unwrap()
+    };
+
+    let before = publish(&mut model);
+    let viewport_id = before.navigation.viewports[0].viewport_id.clone();
+    model
+        .dispatch(
+            "viewer.viewports.camera.set",
+            &json!({"viewport_id":viewport_id,"center_world_lvl0":[32.0,48.0],"zoom":2.0}),
+        )
+        .unwrap()
+        .unwrap();
+    let moved = publish(&mut model);
+    assert_eq!(moved.fingerprints.workspace, before.fingerprints.workspace);
+    assert_eq!(
+        moved.navigation.viewports[0].camera.center_world_lvl0,
+        [32.0, 48.0]
+    );
+    assert_eq!(moved.navigation.viewports[0].camera.zoom_screen_per_lvl0_px, 2.0);
+    assert!(
+        moved.navigation.viewports[0].navigation_revision
+            > before.navigation.viewports[0].navigation_revision
+    );
+
+    // Anything else the renderer consumes still changes the fingerprint, including the camera
+    // *link* flag, whose key is also called "camera".
+    model
+        .dispatch("viewer.viewport_links.set", &json!({"camera":false}))
+        .unwrap()
+        .unwrap();
+    let unlinked = publish(&mut model);
+    assert_ne!(unlinked.fingerprints.workspace, moved.fingerprints.workspace);
+}

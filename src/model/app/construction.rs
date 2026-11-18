@@ -197,6 +197,7 @@ impl AppModel {
             .restore_project_state(&project.state, &project.config.layer_groups)?;
         self.mosaic
             .apply_fast_object_rendering_setting(self.settings.fast_object_rendering);
+        self.reset_mosaic_auto_contrast_for_resource();
         let annotations = project
             .state
             .get("mosaic")
@@ -231,6 +232,7 @@ impl AppModel {
             .restore_project_state(&project.state, &project.config.layer_groups)?;
         self.mosaic
             .apply_fast_object_rendering_setting(self.settings.fast_object_rendering);
+        self.reset_mosaic_auto_contrast_for_resource();
         let annotations = project
             .state
             .get("mosaic")
@@ -281,6 +283,31 @@ impl AppModel {
 
     pub(crate) fn mosaic_projection_state(&self) -> Value {
         self.mosaic.projection_state()
+    }
+
+    pub(crate) fn projected_navigation(&self) -> ProjectedNavigation {
+        ProjectedNavigation {
+            viewports: self
+                .dataset
+                .as_ref()
+                .map(|dataset| {
+                    dataset
+                        .workspace
+                        .viewports()
+                        .iter()
+                        .map(|slot| ProjectedViewportNavigation {
+                            viewport_id: slot.id.as_str().to_string(),
+                            navigation_revision: slot.navigation_revision,
+                            camera: ProjectedCamera {
+                                center_world_lvl0: slot.state.center,
+                                zoom_screen_per_lvl0_px: slot.state.zoom,
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            mosaic_camera: self.mosaic.projected_camera(),
+        }
     }
 
     pub(crate) fn annotation_projections(&self) -> Vec<ControlAnnotationLayerProjection> {
@@ -586,6 +613,20 @@ impl AppModel {
             "Project object preload ready",
         );
         true
+    }
+
+    /// Returns true when the reported progress belongs to the running preload and changed it.
+    pub(crate) fn report_project_object_preload_progress(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        done: usize,
+        total: usize,
+    ) -> bool {
+        let project = self.project_snapshot();
+        self.project_object_preload.sync_scope(&project);
+        self.project_object_preload
+            .report_progress(scope, generation, done, total)
     }
 
     pub(crate) fn fail_project_object_preload(

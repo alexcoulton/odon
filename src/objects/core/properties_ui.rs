@@ -1,6 +1,7 @@
 //! Object properties UI, presentation, legends, color grouping, and filter configuration.
 
 use super::*;
+use crate::ui::property_picker;
 
 mod colors;
 mod continuous_ui;
@@ -130,33 +131,35 @@ impl ObjectsLayer {
             ObjectColorMode::Single => {}
             ObjectColorMode::ByProperty => {
                 let mut next_property = self.color_property_key.clone();
-                ui.horizontal(|ui| {
-                    ui.label("Property");
-                    egui::ComboBox::from_id_salt("seg_objects_categorical_property")
-                        .selected_text(if next_property.is_empty() {
-                            "Choose a property".to_string()
-                        } else {
-                            next_property.clone()
-                        })
-                        .show_ui(ui, |ui| {
-                            for key in &self.color_property_keys {
-                                ui.selectable_value(&mut next_property, key.clone(), key);
-                            }
-                            if let Some(source) = self.lazy_parquet_source.as_ref() {
-                                for key in source
-                                    .available_property_columns
-                                    .iter()
-                                    .filter(|key| !self.color_property_keys.contains(*key))
-                                {
-                                    ui.selectable_value(
-                                        &mut next_property,
-                                        key.clone(),
-                                        format!("{key} (load)"),
-                                    );
-                                }
-                            }
-                        });
-                });
+                let lazy_columns = self
+                    .lazy_parquet_source
+                    .iter()
+                    .flat_map(|source| source.available_property_columns.iter())
+                    .filter(|key| !self.color_property_keys.contains(*key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let names = self
+                    .color_property_keys
+                    .iter()
+                    .chain(&lazy_columns)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut items = property_picker::classify_properties(&names);
+                for item in &mut items {
+                    if lazy_columns.contains(&item.id) {
+                        item.label = format!("{} (load)", item.id);
+                    }
+                }
+                if let Some(next) = property_picker::show(
+                    ui,
+                    "seg_objects_categorical_property",
+                    "Property",
+                    &items,
+                    &next_property,
+                    &mut self.property_preferences,
+                ) {
+                    next_property = next;
+                }
                 if next_property != self.color_property_key {
                     self.set_color_by_property(Some(next_property));
                 }
@@ -174,20 +177,14 @@ impl ObjectsLayer {
                     missing_color_rgb,
                 } = &mut next_mapping
                 {
-                    ui.horizontal(|ui| {
-                        ui.label("Numeric property");
-                        egui::ComboBox::from_id_salt("seg_objects_continuous_property")
-                            .selected_text(if property.is_empty() {
-                                "Choose a numeric property".to_string()
-                            } else {
-                                property.clone()
-                            })
-                            .show_ui(ui, |ui| {
-                                for key in &numeric_keys {
-                                    ui.selectable_value(property, key.clone(), key);
-                                }
-                            });
-                    });
+                    property_picker::show_numeric(
+                        ui,
+                        "seg_objects_continuous_property",
+                        "Numeric property",
+                        &numeric_keys,
+                        property,
+                        &mut self.property_preferences,
+                    );
                     ui.horizontal(|ui| {
                         ui.label("Palette");
                         let selected = match palette {
@@ -488,6 +485,7 @@ impl ObjectsLayer {
                     "seg_objects_legend",
                     &property,
                     &rows,
+                    self.unticked_categories,
                     &mut self.legend_ui,
                 );
                 self.apply_legend_actions(actions);

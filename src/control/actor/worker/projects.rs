@@ -29,6 +29,7 @@ pub(in crate::control::actor) fn preload_project_objects(
     request: &OdonControlRequest,
     settings: ProjectObjectPreloadSettings,
     candidates: Vec<PathBuf>,
+    report_progress: &mut dyn FnMut(usize, usize),
 ) -> anyhow::Result<ProjectObjectPreloadWorkerResult> {
     let loader =
         object_loader.ok_or_else(|| anyhow::anyhow!("object resource loader is unavailable"))?;
@@ -41,6 +42,7 @@ pub(in crate::control::actor) fn preload_project_objects(
     let mut resources = Vec::new();
     let mut failures = Vec::new();
     let total = sources.len();
+    report_progress(0, total);
     for (index, source) in sources.iter().enumerate() {
         if request
             .task_id
@@ -54,6 +56,7 @@ pub(in crate::control::actor) fn preload_project_objects(
             Ok(resource) => resources.push((source.path.clone(), resource)),
             Err(error) => failures.push((source.path.clone(), error.to_string())),
         }
+        report_progress(index + 1, total);
         if let Some(task_id) = request.task_id.as_deref() {
             let _ = request.task_registry.progress(
                 task_id,
@@ -237,6 +240,7 @@ pub(in crate::control::actor) fn saved_project_label_name(view: Option<&Value>) 
                 .get("label_name")?
                 .as_str()
         })
+        .filter(|label| !label.is_empty())
         .map(str::to_string)
 }
 

@@ -395,6 +395,94 @@ fn native_ingress_reaches_actor_without_root_update() {
     assert_eq!(project["rois"][0]["id"], "native-no-frame");
 }
 
+fn wait_for_native_ingress(ingress: &crate::mcp::NativeCommandIngress, method: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ingress.contains_pending(method) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!ingress.contains_pending(method), "{method} was answered");
+}
+
+#[test]
+fn native_gesture_steps_are_last_write_wins_and_other_rejections_are_reported() {
+    let ctx = egui::Context::default();
+    let runtime =
+        OdonControlBridge::spawn_inner("127.0.0.1:0", ctx.clone(), false, false, None, None, None)
+            .expect("spawn local actor");
+    let ingress = runtime.native_command_ingress();
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/synthetic_5ch.ome.zarr");
+    assert!(ingress.submit("datasets.open_ome_zarr", json!({"path":fixture})));
+    wait_for_native_ingress(&ingress, "datasets.open_ome_zarr");
+
+    let camera = |x: f64, revision: u64| {
+        json!({
+            "viewport_id":"viewport-1",
+            "if_navigation_revision":revision,
+            "center_world_lvl0":[x, 0.0],
+            "zoom_screen_per_lvl0_px":1.0,
+        })
+    };
+    let center_x = || {
+        runtime
+            .submit_native_command_with_reply(
+                &ctx,
+                "viewer.viewports.camera.get",
+                json!({"viewport_id":"viewport-1"}),
+            )
+            .expect("query camera")
+            .recv_timeout(Duration::from_secs(2))
+            .expect("camera reply")
+            .expect("camera query succeeds")["result"]["center_world_lvl0"][0]
+            .as_f64()
+            .unwrap()
+    };
+
+    // Outside a gesture a stale revision is rejected, and the rejection is reported.
+    assert!(ingress.submit("viewer.viewports.camera.set", camera(10.0, 1)));
+    assert!(ingress.submit("viewer.viewports.camera.set", camera(20.0, 1)));
+    wait_for_native_ingress(&ingress, "viewer.viewports.camera.set");
+    assert_eq!(center_x(), 10.0);
+    let rejections = ingress.take_rejections();
+    assert_eq!(rejections.len(), 1, "{rejections:?}");
+    assert!(rejections[0].starts_with("viewer.viewports.camera.set: "));
+
+    // Within one pointer gesture every step is built against the revision the renderer saw when
+    // the gesture began. Only the newest waits behind the one in flight, and it is rebased onto
+    // the revision the gesture's own first step produced instead of being dropped.
+    ingress.set_gesture_active(true);
+    for x in [30.0, 40.0, 50.0, 60.0] {
+        assert!(ingress.submit("viewer.viewports.camera.set", camera(x, 2)));
+    }
+    wait_for_native_ingress(&ingress, "viewer.viewports.camera.set");
+    assert_eq!(center_x(), 60.0);
+
+    // Commands that are not absolute-value setters are never coalesced, even when a batch of
+    // the same method is issued while the pointer is still down.
+    for id in ["batch-a", "batch-b", "batch-c", "batch-d"] {
+        assert!(ingress.submit(
+            "project.rois.add",
+            json!({"id":id,"path":format!("/tmp/{id}.ome.zarr")}),
+        ));
+    }
+    ingress.set_gesture_active(false);
+    wait_for_native_ingress(&ingress, "project.rois.add");
+    let rois = runtime
+        .submit_native_command_with_reply(&ctx, "project.rois.list", json!({}))
+        .expect("query rois")
+        .recv_timeout(Duration::from_secs(2))
+        .expect("roi reply")
+        .expect("roi query succeeds");
+    let ids = rois["rois"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|roi| roi["id"].as_str())
+        .filter(|id| id.starts_with("batch-"))
+        .count();
+    assert_eq!(ids, 4);
+}
+
 #[test]
 fn tcp_bridge_validates_envelopes_and_roundtrips_app_replies() {
     let bridge = OdonControlBridge::spawn("127.0.0.1:0", egui::Context::default())

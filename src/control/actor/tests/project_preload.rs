@@ -314,3 +314,118 @@ fn clearing_project_object_preload_rejects_its_late_worker_completion() {
     let _ = std::fs::remove_file(project_path);
     let _ = std::fs::remove_file(source_path);
 }
+
+#[test]
+fn project_object_preload_projects_progress_after_each_source() {
+    struct SteppedLoader {
+        started: Sender<()>,
+        release: Mutex<Receiver<()>>,
+    }
+    impl ObjectResourceLoader for SteppedLoader {
+        fn load(
+            &self,
+            path: PathBuf,
+            downsample_factor: f32,
+        ) -> anyhow::Result<ControlObjectResource> {
+            let _ = self.started.send(());
+            let _ = self.release.lock().unwrap().recv();
+            Ok(ControlObjectResource {
+                source: path,
+                downsample_factor,
+                features: Arc::new(Vec::new()),
+                property_names: Arc::new(Vec::new()),
+                property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
+                numeric_summaries: Arc::new(Default::default()),
+                memory_diagnostics: Arc::new(Default::default()),
+                renderer_payload: None,
+            })
+        }
+    }
+
+    let (started_tx, started_rx) = crossbeam_channel::bounded(4);
+    let (release_tx, release_rx) = crossbeam_channel::bounded(4);
+    let events = EventHub::shared();
+    let resources = ResourceRegistry::shared(events);
+    let channels = spawn_control_actor_with_services(
+        Arc::new(|| {}),
+        resources,
+        Some(Arc::new(SteppedLoader {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+        })),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let (project_path, first_source) = temporary_preload_paths("progress");
+    let sources = (0..3)
+        .map(|index| first_source.with_extension(format!("{index}.parquet")))
+        .collect::<Vec<_>>();
+    let (create, create_rx) = request("project.create", json!({}));
+    channels.request_tx.send(create).unwrap();
+    create_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    for (index, source) in sources.iter().enumerate() {
+        std::fs::write(source, b"fixture").unwrap();
+        let (add, add_rx) = request(
+            "project.rois.add",
+            json!({
+                "id":format!("roi-{index}"),
+                "path":format!("/tmp/progress-roi-{index}.zarr"),
+                "segmentation_path":source,
+            }),
+        );
+        channels.request_tx.send(add).unwrap();
+        add_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+    let (save, save_rx) = request("project.save_as", json!({"path":project_path}));
+    channels.request_tx.send(save).unwrap();
+    save_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    let (start, start_rx) = request("project.objects.preload.start", json!({}));
+    channels.request_tx.send(start).unwrap();
+
+    // Each source is released only after the previous step's progress has been observed, so the
+    // renderer demonstrably sees 1/3 and 2/3 while the job is still running.
+    for done in 1..=2u64 {
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("preload worker started a source");
+        release_tx.send(()).unwrap();
+        let projection = wait_for_preload_projection(&channels, |projection| {
+            projection.project_object_preload.state["done"] == done
+        });
+        assert_eq!(projection.project_object_preload.state["total"], 3);
+        assert_eq!(projection.project_object_preload.state["loading"], true);
+    }
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("preload worker started the last source");
+    release_tx.send(()).unwrap();
+    let completed = start_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed["completed"], true);
+    assert_eq!(completed["preload"]["cached"], 3);
+    let finished = wait_for_preload_projection(&channels, |projection| {
+        projection.project_object_preload.state["loading"] == false
+    });
+    assert_eq!(finished.project_object_preload.state["done"], 3);
+
+    let _ = std::fs::remove_file(project_path);
+    for source in sources {
+        let _ = std::fs::remove_file(source);
+    }
+}

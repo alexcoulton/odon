@@ -39,6 +39,25 @@ impl MosaicModel {
 
     pub(super) fn configure_layout(&mut self, params: &Value) -> Result<Value, ControlError> {
         self.require_resource()?;
+        // Project restores bypass typed command decoding. Validate both sizes before mutation.
+        let font_size = |key: &str| -> Result<Option<f32>, ControlError> {
+            let Some(value) = params.get(key).filter(|value| !value.is_null()) else {
+                return Ok(None);
+            };
+            value.as_f64()
+                .filter(|size| size.is_finite()
+                    && (f64::from(MIN_MOSAIC_LABEL_FONT_SIZE)..=f64::from(MAX_MOSAIC_LABEL_FONT_SIZE)).contains(size))
+                .map(|size| Some(size as f32))
+                .ok_or_else(|| invalid(format!("{key} must be between {MIN_MOSAIC_LABEL_FONT_SIZE} and {MAX_MOSAIC_LABEL_FONT_SIZE} screen points")))
+        };
+        let label_font_size = font_size("label_font_size")?;
+        let group_label_font_size = font_size("group_label_font_size")?;
+        if let Some(size) = label_font_size {
+            self.label_font_size = size;
+        }
+        if let Some(size) = group_label_font_size {
+            self.group_label_font_size = size;
+        }
         if let Some(group_by) = params.get("group_by").and_then(Value::as_str) {
             self.group_by = group_by.trim().to_string();
         }
@@ -121,6 +140,8 @@ impl MosaicModel {
             "show_group_labels":self.show_group_labels,
             "show_text_labels":self.show_text_labels,
             "label_columns":self.label_columns,
+            "label_font_size":self.label_font_size,
+            "group_label_font_size":self.group_label_font_size,
         })
     }
 
@@ -359,6 +380,7 @@ impl MosaicModel {
     }
 
     pub(super) fn apply_layout(&mut self) {
+        self.group_blocks.clear();
         let focused = self.focused_id;
         let group_by = self.group_by.clone();
         let sort_by = self.sort_by.clone();
@@ -425,12 +447,19 @@ impl MosaicModel {
                 self.grid_pad,
                 self.layout_mode,
             );
+            self.group_blocks.push(MosaicGroupBlock {
+                name: group_value(&self.items[start], &self.group_by),
+                bounds: [[0.0, y], [width, y + GROUP_HEADER_HEIGHT + height]],
+            });
             max_width = max_width.max(width);
             y += GROUP_HEADER_HEIGHT + height;
             if end < self.items.len() {
                 y += self.group_gap;
             }
             start = end;
+        }
+        for group in &mut self.group_blocks {
+            group.bounds[1][0] = max_width;
         }
         self.bounds = [[0.0, 0.0], [max_width.max(1.0), y.max(1.0)]];
     }

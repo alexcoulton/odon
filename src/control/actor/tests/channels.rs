@@ -10,7 +10,7 @@ fn open_fixture(channels: &ControlActorChannels) {
         .unwrap();
 }
 
-fn bootstrap_auto_contrast(channels: &ControlActorChannels, enabled_on_open: bool) {
+pub(super) fn bootstrap_auto_contrast(channels: &ControlActorChannels, enabled_on_open: bool) {
     let mut settings = AppSettings::default();
     settings.auto_contrast.enabled_on_open = enabled_on_open;
     channels

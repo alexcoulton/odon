@@ -141,10 +141,29 @@ Use `Color by` to colour objects by a categorical property such as cell type,
 cluster, phenotype, or call state. If the object file uses lazy property loading,
 some properties may appear with `(load)` and are loaded when selected.
 
+The `Property` picker can be searched by typing any part of a name, and groups
+columns by name, with rarely useful ones collapsed under `Other`. Click a star to
+pin a property to the top. Use the arrows beside the picker, or the `[` and `]`
+keys, to step through your pinned properties or the current group. When numeric
+columns describe markers, such as `marker_CD3_p90_intensity`, you choose a marker
+and a statistic separately, and switching marker keeps the statistic.
+
+Pins and recent choices are stored in the project. Like other project changes,
+they are written to the project file when you save.
+
 When colouring by property, a collapsible legend appears below the filter controls. Use `All`,
 `None`, `Invert`, or a row's `Only` button to choose which categories are shown; this does not
 change the underlying object file. Sort rows by count or name, and use `Pop out` to move the legend
 into a resizable window.
+
+`Unticked categories` sets what unticking does. `Hidden` removes those cells from
+view and hover. `Hover only` stops drawing them but leaves them available to hover
+and select, and fills the ticked categories even if `Fill cells` is off. Use it with
+`Only` to see where one category sits, while still being able to identify any other
+cell under the pointer. `Outline only` does the same and also draws unticked cells
+with a faint neutral outline for context. When zoomed far out, cells are too small
+for separate outlines, so they merge into a light wash. The hover tooltip lists the property you are colouring by
+first.
 
 Colours chosen in the legend, or with a palette from its `Colours` menu, are saved in the project
 and apply to that label in every ROI and colour column. A colour set for one view, such as by a deep

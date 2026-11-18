@@ -63,6 +63,8 @@ pub struct ObjectFillTileStyle {
     pub selected_color: egui::Color32,
     pub primary_color: egui::Color32,
     pub object_color_opacity: f32,
+    /// Leaves partially transparent objects unfilled, while their borders still draw.
+    pub fill_opaque_objects_only: bool,
     pub selection_overlay: Option<ObjectFillTileSelectionStyle>,
     pub border: ObjectFillTileBorderStyle,
 }
@@ -125,6 +127,7 @@ pub(super) struct ObjectFillTileGlObjects {
     compose_u_color_tex_size: Option<glow::UniformLocation>,
     compose_u_use_object_colors: Option<glow::UniformLocation>,
     compose_u_object_color_opacity: Option<glow::UniformLocation>,
+    compose_u_fill_opaque_objects_only: Option<glow::UniformLocation>,
     compose_u_selected_color: Option<glow::UniformLocation>,
     compose_u_primary_color: Option<glow::UniformLocation>,
     compose_u_selection_tex: Option<glow::UniformLocation>,
@@ -190,6 +193,9 @@ impl ObjectFillTileGlObjects {
             compose_u_use_object_colors: unsafe {
                 gl.get_uniform_location(compose_program, "u_use_object_colors")
             },
+            compose_u_fill_opaque_objects_only: unsafe {
+                gl.get_uniform_location(compose_program, "u_fill_opaque_objects_only")
+            },
             compose_u_object_color_opacity: unsafe {
                 gl.get_uniform_location(compose_program, "u_object_color_opacity")
             },
@@ -246,6 +252,12 @@ impl ObjectFillTileGlObjects {
 }
 
 impl ObjectFillGlRenderer {
+    /// Tile levels every layer sharing this cache should currently give up so the scene's tiles
+    /// fit in it. Decided from the previous frame's combined demand.
+    pub fn id_tile_detail_reduction(&self) -> u8 {
+        self.inner.lock().tile_detail_reduction
+    }
+
     pub fn id_tiles_have_exact_coverage(&self, keys: &[ObjectFillTileKey]) -> bool {
         let inner = self.inner.lock();
         inner.tile_gl_objects.is_some()
@@ -291,7 +303,14 @@ impl ObjectFillGlRenderer {
         let mut inner = self.inner.lock();
         if !inner.tile_gl_init_attempted {
             inner.tile_gl_init_attempted = true;
-            inner.tile_gl_objects = ObjectFillTileGlObjects::new(gl).ok();
+            inner.tile_gl_objects = match ObjectFillTileGlObjects::new(gl) {
+                Ok(objects) => Some(objects),
+                Err(error) => {
+                    // Without these programs the low-zoom object overlay silently draws nothing.
+                    crate::log_warn!("object tile shaders could not be built: {error:#}");
+                    None
+                }
+            };
         }
         let Some(tile_gl) = inner.tile_gl_objects.clone() else {
             return result;
@@ -299,6 +318,9 @@ impl ObjectFillGlRenderer {
         result.supported = true;
         inner.delete_queued(gl);
         inner.begin_tile_frame(params.frame_generation);
+        inner.tile_frame_requested = inner
+            .tile_frame_requested
+            .saturating_add(request_items.len());
         inner.tile_visible = inner.tile_visible.saturating_add(draw_items.len());
         inner.tile_requests = inner
             .tile_requests
@@ -404,6 +426,15 @@ impl ObjectFillInner {
             return;
         }
         self.tile_frame_generation = frame_generation;
+        // The frame that just ended tells how many tiles the whole scene wants at the current
+        // level of detail; settle the level the next frames are planned at from it.
+        self.tile_detail_reduction = next_id_tile_detail_reduction(
+            self.tile_detail_reduction,
+            self.tile_frame_requested,
+            self.tile_budget_bytes / id_tile_bytes().max(1),
+        );
+        self.last_tile_frame_requested = self.tile_frame_requested;
+        self.tile_frame_requested = 0;
         self.tile_frame_generated = 0;
         self.tile_frame_raster_vertices = 0;
         self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
@@ -603,9 +634,7 @@ impl ObjectFillInner {
         gl: &Arc<glow::Context>,
         tile_gl: &ObjectFillTileGlObjects,
     ) -> Option<ObjectFillPendingIdTileGpu> {
-        let bytes = (OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
-            .saturating_mul(OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
-            .saturating_mul(std::mem::size_of::<u32>());
+        let bytes = id_tile_bytes();
         if bytes > self.tile_budget_bytes {
             return None;
         }
@@ -807,6 +836,10 @@ impl ObjectFillInner {
                     tile_gl.compose_u_use_object_colors.as_ref(),
                     i32::from(color_texture.is_some()),
                 );
+                gl_ref.uniform_1_i32(
+                    tile_gl.compose_u_fill_opaque_objects_only.as_ref(),
+                    i32::from(style.fill_opaque_objects_only),
+                );
                 gl_ref.uniform_1_f32(
                     tile_gl.compose_u_object_color_opacity.as_ref(),
                     style.object_color_opacity.clamp(0.0, 1.0),
@@ -955,6 +988,52 @@ impl ObjectFillInner {
     }
 }
 
+fn id_tile_bytes() -> usize {
+    (OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
+        .saturating_mul(OBJECT_FILL_ID_TILE_PHYSICAL_SIZE_PX as usize)
+        .saturating_mul(std::mem::size_of::<u32>())
+}
+
+/// Coarsest reduction the planner will be asked for. Three levels is an eighth of the linear
+/// resolution, which takes a scene that wanted 64 times the cache down to one that fits.
+const MAX_ID_TILE_DETAIL_REDUCTION: u8 = 3;
+
+/// Chooses how many tile levels the scene must give up so that every tile one frame needs fits
+/// in the cache at once.
+///
+/// The cache is shared by all layers, while each layer plans its own tiles. When their combined
+/// demand exceeds the cache, building one needed tile evicts another needed tile and the scene
+/// regenerates tiles forever without ever being complete. Each level of reduction halves the
+/// linear tile resolution and so quarters the demand.
+///
+/// `demand` was measured with `current` already applied. Detail is given up as soon as the
+/// demand passes 80% of the cache and is only restored once the finer level would fit within
+/// 60%, so a scene near the limit does not flip between levels (and rebuild its tiles) as the
+/// camera moves.
+fn next_id_tile_detail_reduction(current: u8, demand: usize, capacity_tiles: usize) -> u8 {
+    if capacity_tiles == 0 {
+        return current;
+    }
+    let current = current.min(MAX_ID_TILE_DETAIL_REDUCTION);
+    let full_detail_demand = demand.saturating_mul(1usize << (2 * u32::from(current)));
+    let demand_at = |reduction: u8| full_detail_demand >> (2 * u32::from(reduction));
+
+    let mut needed = 0u8;
+    while needed < MAX_ID_TILE_DETAIL_REDUCTION
+        && demand_at(needed) > capacity_tiles.saturating_mul(4) / 5
+    {
+        needed += 1;
+    }
+    if needed >= current {
+        return needed;
+    }
+    let mut relaxed = current;
+    while relaxed > needed && demand_at(relaxed - 1) <= capacity_tiles.saturating_mul(3) / 5 {
+        relaxed -= 1;
+    }
+    relaxed
+}
+
 fn color_f32(color: egui::Color32) -> [f32; 4] {
     [
         color.r() as f32 / 255.0,
@@ -1071,8 +1150,41 @@ fn object_fill_tile_interior_uv(relative_x: i32, relative_y: i32, factor: i32) -
 }
 
 #[cfg(test)]
+pub(super) fn compose_fragment_shader() -> &'static str {
+    ID_TILE_COMPOSE_FRAG_330
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detail_is_reduced_until_scene_demand_fits_and_restored_with_hysteresis() {
+        let capacity = 250;
+        // Comfortably inside the cache: full detail.
+        assert_eq!(next_id_tile_detail_reduction(0, 150, capacity), 0);
+        // More than the cache can hold at once: give up one level (a quarter of the tiles).
+        assert_eq!(next_id_tile_detail_reduction(0, 430, capacity), 1);
+        // Far more: several levels in one step rather than thrashing down one at a time.
+        assert_eq!(next_id_tile_detail_reduction(0, 5_000, capacity), 3);
+        // The next frame measures the reduced demand (430 / 4) and must stay put.
+        assert_eq!(next_id_tile_detail_reduction(1, 108, capacity), 1);
+        // Only once the finer level would fit with margin (<= 60%) is detail restored.
+        assert_eq!(next_id_tile_detail_reduction(1, 45, capacity), 1);
+        assert_eq!(next_id_tile_detail_reduction(1, 37, capacity), 0);
+        // A frame with no tile work at all returns to full detail.
+        assert_eq!(next_id_tile_detail_reduction(2, 0, capacity), 0);
+        // Whatever it decides is stable when fed its own outcome.
+        for demand in [1usize, 60, 199, 201, 400, 999, 4_000, 100_000] {
+            let chosen = next_id_tile_detail_reduction(0, demand, capacity);
+            let measured = demand >> (2 * u32::from(chosen));
+            assert_eq!(
+                next_id_tile_detail_reduction(chosen, measured, capacity),
+                chosen,
+                "demand {demand}"
+            );
+        }
+    }
 
     #[test]
     fn tile_key_excludes_camera_and_style_state() {

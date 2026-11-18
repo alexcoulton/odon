@@ -67,6 +67,29 @@ impl eframe::App for OmeZarrViewerApp {
             });
         }
 
+        let property_preferences = self
+            .project_space
+            .config()
+            .object_property_preferences
+            .clone();
+        self.seg_objects
+            .sync_property_preferences(&property_preferences);
+        let mut property_preferences_commit = self.seg_objects.take_property_preferences_commit();
+        for layer in &mut self.spatial_layers.shapes {
+            if let Some(objects) = layer.object_layer_mut() {
+                objects.sync_property_preferences(&property_preferences);
+                if let Some(params) = objects.take_property_preferences_commit() {
+                    property_preferences_commit = Some(params);
+                }
+            }
+        }
+        if let Some(params) = property_preferences_commit {
+            self.native_command_ingress.push(NativeControlIntent {
+                method: "project.update_metadata",
+                params,
+            });
+        }
+
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close
@@ -83,6 +106,7 @@ impl eframe::App for OmeZarrViewerApp {
             self.open_mapping_settings();
         }
 
+        self.tick_native_camera_hold(ctx);
         self.drain_tiles(ctx);
         self.drain_raw_tiles();
         self.drain_label_tiles();

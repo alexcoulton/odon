@@ -1,8 +1,10 @@
 //! Actor-owned channel histogram and automatic-contrast operation state.
 
 use super::*;
+use crate::model::{MosaicAutoContrastResult, MosaicAutoContrastSpec};
 
 const DEFAULT_MAX_SCAN_PIXELS: u64 = 2_000_000;
+const MOSAIC_AUTO_CONTRAST_SCOPE: &str = "mosaic_auto_contrast";
 
 #[derive(Debug, Clone)]
 pub(super) struct ChannelComputeModel {
@@ -270,44 +272,12 @@ impl AppModel {
         if channels.is_empty() {
             return Err(invalid("no channels are eligible for automatic contrast"));
         }
-        let mut settings = self.settings.auto_contrast;
-        if let Some(value) = params.get("method") {
-            let method = value
-                .as_str()
-                .ok_or_else(|| invalid("method must be a string"))?;
-            settings.method = match method {
-                "zero_to_p97" => AutoContrastMethod::ZeroToP97,
-                "p1_to_p99" => AutoContrastMethod::P1ToP99,
-                "zero_to_max" => AutoContrastMethod::ZeroToMax,
-                _ => return Err(invalid(format!("unknown auto-contrast method '{method}'"))),
-            };
-        }
-        if let Some(value) = params.get("lower_percentile") {
-            let lower = value
-                .as_u64()
-                .ok_or_else(|| invalid("lower_percentile must be an integer from 0 to 99"))?;
-            settings.lower_percentile = u8::try_from(lower)
-                .map_err(|_| invalid("lower_percentile must be from 0 to 99"))?;
-        }
-        if let Some(value) = params.get("upper_percentile") {
-            let upper = value
-                .as_u64()
-                .ok_or_else(|| invalid("upper_percentile must be an integer from 1 to 100"))?;
-            settings.upper_percentile = u8::try_from(upper)
-                .map_err(|_| invalid("upper_percentile must be from 1 to 100"))?;
-        }
-        if settings.lower_percentile >= settings.upper_percentile
-            || settings.lower_percentile > 99
-            || settings.upper_percentile == 0
-            || settings.upper_percentile > 100
-        {
-            return Err(invalid("automatic-contrast percentiles are invalid"));
-        }
+        let settings = auto_contrast_settings_from_params(self.settings.auto_contrast, params)?;
         Ok(AutoContrastSpec {
             document_generation: self.document_generation,
             operation_generation,
             viewport_id,
-            settings: settings.normalized(),
+            settings,
             channels,
         })
     }
@@ -486,6 +456,94 @@ impl AppModel {
         Some(response)
     }
 
+    pub(crate) fn prepare_mosaic_auto_contrast(
+        &mut self,
+        params: &Value,
+    ) -> Result<MosaicAutoContrastSpec, ControlError> {
+        let settings = auto_contrast_settings_from_params(self.settings.auto_contrast, params)?;
+        self.mosaic.prepare_auto_contrast(settings, params)
+    }
+
+    pub(crate) fn mosaic_auto_contrast_on_open_spec(
+        &mut self,
+    ) -> Result<Option<MosaicAutoContrastSpec>, ControlError> {
+        if self.mode != ModelMode::Mosaic || !self.mosaic.auto_contrast_on_open_queued() {
+            return Ok(None);
+        }
+        if !self.mosaic.auto_contrast_on_open_has_channels() {
+            self.mosaic.reset_auto_contrast(false);
+            return Ok(None);
+        }
+        self.prepare_mosaic_auto_contrast(&json!({"overwrite_manual":false}))
+            .map(Some)
+    }
+
+    pub(crate) fn fail_mosaic_auto_contrast_on_open_preparation(
+        &mut self,
+        message: impl Into<String>,
+    ) {
+        self.mosaic.cancel_auto_contrast_on_open(message);
+    }
+
+    pub(crate) fn mark_mosaic_auto_contrast_started(
+        &mut self,
+        spec: &MosaicAutoContrastSpec,
+    ) -> bool {
+        if !self.mosaic.mark_auto_contrast_started(spec) {
+            return false;
+        }
+        self.readiness.begin_scoped(
+            OperationKind::ChannelCompute,
+            MOSAIC_AUTO_CONTRAST_SCOPE,
+            spec.operation_generation,
+            "Computing automatic mosaic contrast",
+        );
+        true
+    }
+
+    pub(crate) fn install_mosaic_auto_contrast(
+        &mut self,
+        spec: &MosaicAutoContrastSpec,
+        result: &MosaicAutoContrastResult,
+    ) -> Option<Value> {
+        let response = self.mosaic.install_auto_contrast(spec, result)?;
+        self.readiness.finish_scoped(
+            OperationKind::ChannelCompute,
+            MOSAIC_AUTO_CONTRAST_SCOPE,
+            spec.operation_generation,
+            "Automatic mosaic contrast ready",
+        );
+        Some(response)
+    }
+
+    pub(crate) fn fail_mosaic_auto_contrast(
+        &mut self,
+        spec: &MosaicAutoContrastSpec,
+        message: impl Into<String>,
+    ) -> bool {
+        let message = message.into();
+        if !self.mosaic.fail_auto_contrast(spec, message.clone()) {
+            return false;
+        }
+        self.readiness.fail_scoped(
+            OperationKind::ChannelCompute,
+            MOSAIC_AUTO_CONTRAST_SCOPE,
+            spec.operation_generation,
+            message,
+        );
+        true
+    }
+
+    /// Runs after a mosaic resource and its saved project state are installed.
+    pub(super) fn reset_mosaic_auto_contrast_for_resource(&mut self) {
+        self.mosaic
+            .reset_auto_contrast(self.settings.auto_contrast.enabled_on_open);
+        self.readiness.cancel_kind_pending(
+            OperationKind::ChannelCompute,
+            "Channel compute superseded by mosaic replacement",
+        );
+    }
+
     pub(crate) fn fail_auto_contrast(
         &mut self,
         spec: &AutoContrastSpec,
@@ -514,6 +572,46 @@ impl AppModel {
         );
         true
     }
+}
+
+/// The configured settings with any per-request overrides applied.
+pub(super) fn auto_contrast_settings_from_params(
+    mut settings: AutoContrastSettings,
+    params: &Value,
+) -> Result<AutoContrastSettings, ControlError> {
+    if let Some(value) = params.get("method") {
+        let method = value
+            .as_str()
+            .ok_or_else(|| invalid("method must be a string"))?;
+        settings.method = match method {
+            "zero_to_p97" => AutoContrastMethod::ZeroToP97,
+            "p1_to_p99" => AutoContrastMethod::P1ToP99,
+            "zero_to_max" => AutoContrastMethod::ZeroToMax,
+            _ => return Err(invalid(format!("unknown auto-contrast method '{method}'"))),
+        };
+    }
+    if let Some(value) = params.get("lower_percentile") {
+        let lower = value
+            .as_u64()
+            .ok_or_else(|| invalid("lower_percentile must be an integer from 0 to 99"))?;
+        settings.lower_percentile =
+            u8::try_from(lower).map_err(|_| invalid("lower_percentile must be from 0 to 99"))?;
+    }
+    if let Some(value) = params.get("upper_percentile") {
+        let upper = value
+            .as_u64()
+            .ok_or_else(|| invalid("upper_percentile must be an integer from 1 to 100"))?;
+        settings.upper_percentile =
+            u8::try_from(upper).map_err(|_| invalid("upper_percentile must be from 1 to 100"))?;
+    }
+    if settings.lower_percentile >= settings.upper_percentile
+        || settings.lower_percentile > 99
+        || settings.upper_percentile == 0
+        || settings.upper_percentile > 100
+    {
+        return Err(invalid("automatic-contrast percentiles are invalid"));
+    }
+    Ok(settings.normalized())
 }
 
 fn choose_auto_contrast_level(dataset: &OmeZarrDataset, viewport: &ViewportModel) -> usize {

@@ -55,6 +55,12 @@ impl ObjectsLayer {
 
         let (target_screen_per_pixel, fallback_screen_per_pixel) =
             object_fill_tile_planning_scales(local_screen_per_pixel, texture_outline_requested);
+        // The tile cache is shared with every other layer on screen. When the scene as a whole
+        // wants more tiles than it holds, all layers step down together rather than evicting
+        // each other's tiles every frame.
+        let detail_scale = 0.5f32.powi(i32::from(self.gl_object_fill.id_tile_detail_reduction()));
+        let target_screen_per_pixel = target_screen_per_pixel * detail_scale;
+        let fallback_screen_per_pixel = fallback_screen_per_pixel * detail_scale;
         let target_specs = plan_object_fill_tiles(
             visible_local,
             fill_mesh.bounds_local,
@@ -127,6 +133,7 @@ impl ObjectsLayer {
             selected_color: color,
             primary_color: color,
             object_color_opacity: fill_opacity,
+            fill_opaque_objects_only: self.fill_opaque_objects_only(),
             selection_overlay: selection_overlay.clone(),
             border: self.object_fill_tile_border_style(
                 texture_outline_requested,
@@ -159,11 +166,30 @@ impl ObjectsLayer {
     /// Fill opacity as actually drawn: outlines-only layers keep their configured opacity for
     /// when fills are turned back on.
     pub(in crate::objects) fn effective_fill_opacity(&self) -> f32 {
-        if self.fill_cells {
+        if self.fill_cells || self.highlights_ticked_categories() {
             self.fill_opacity.clamp(0.0, 1.0)
         } else {
             0.0
         }
+    }
+
+    /// With unticked categories left undrawn, ticked ones need a fill to stand out, even when
+    /// fills are otherwise off. Only applies once something is actually unticked.
+    fn highlights_ticked_categories(&self) -> bool {
+        !self.unticked_categories.is_hidden()
+            && self.color_mode == ObjectColorMode::ByProperty
+            && self.color_level_overrides_property_key == self.color_property_key
+            && self
+                .color_level_overrides
+                .values()
+                .any(|style| !style.visible)
+    }
+
+    /// In this mode the colour table marks outline-only cells with partial alpha, so the fill
+    /// passes must skip anything not fully opaque while outlines still draw it faintly.
+    pub(in crate::objects) fn fill_opaque_objects_only(&self) -> bool {
+        self.unticked_categories == ObjectUntickedCategories::OutlineOnly
+            && self.color_mode == ObjectColorMode::ByProperty
     }
 
     pub(in crate::objects) fn texture_outline_style_eligible(&self) -> bool {

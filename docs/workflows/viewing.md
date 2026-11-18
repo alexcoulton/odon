@@ -94,6 +94,12 @@ Common actions:
 - sort channels by name or visibility
 - group related channels for repeated review
 
+To colour a whole group at once, expand it and tick `Channels inherit group
+color`. Every channel in the group then uses the group colour, and unticking it
+restores each channel's own colour. A channel can still opt out individually
+with `Inherit group color` in its properties, which shows the group checkbox as
+partly filled.
+
 Reducing the number of visible channels is often the fastest way to improve
 responsiveness on very large images, remote data, or high-channel-count
 datasets.

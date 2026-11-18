@@ -201,6 +201,8 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
             "focused":mosaic.focused_core_id,
             "fast_objects":mosaic.seg_geojson.fast_rendering,
             "show_group_labels":mosaic.show_group_labels,
+            "label_font_size":mosaic.label_font_size,
+            "group_label_font_size":mosaic.group_label_font_size,
         })
     };
     let before = semantic_snapshot(&mosaic);
@@ -225,6 +227,8 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     mosaic.step_focused_core(&ctx, 1);
     mosaic.set_fast_object_rendering(false);
     mosaic.submit_layout_value("show_group_labels", serde_json::json!(false));
+    mosaic.submit_layout_value("label_font_size", serde_json::json!(26.0));
+    mosaic.submit_layout_value("group_label_font_size", serde_json::json!(32.0));
 
     let intents = mosaic.take_native_control_intents();
     assert_eq!(
@@ -245,6 +249,8 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
             "mosaic.focus.next",
             "viewer.objects.rendering.set_fast",
             "mosaic.layout.configure",
+            "mosaic.layout.configure",
+            "mosaic.layout.configure",
         ]
     );
     for intent in &intents {
@@ -262,10 +268,17 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
     assert_eq!(contrast.params["channels"], serde_json::json!([1, 2]));
     assert_eq!(contrast.params["min"], 5.0);
     assert_eq!(contrast.params["max"], 100.0);
+    assert_eq!(intents[intents.len() - 2].params["label_font_size"], 26.0);
+    assert_eq!(
+        intents[intents.len() - 1].params["group_label_font_size"],
+        32.0
+    );
     assert_eq!(semantic_snapshot(&mosaic), before);
 
     let projection = serde_json::json!({
         "generation":1,
+        "layout":{"label_font_size":26.0,"group_label_font_size":32.0},
+        "group_blocks":[{"name":"Patient 1","bounds":{"min":[0.0,0.0],"max":[200.0,400.0]}}],
         "native_layers":[{
             "layer_id":"text_labels",
             "stack":"overlays",
@@ -277,6 +290,23 @@ fn actor_owned_mosaic_interactions_emit_commands_without_semantic_mutation() {
         .apply_control_actor_state(&projection, &serde_json::json!({}), &[], &[])
         .expect("apply actor projection");
     assert!(!mosaic.show_text_labels);
+    assert_eq!(mosaic.label_font_size, 26.0);
+    assert_eq!(mosaic.group_label_font_size, 32.0);
+    assert_eq!(mosaic.group_blocks.len(), 1);
+    assert_eq!(mosaic.group_blocks[0].name, "Patient 1");
+    assert_eq!(
+        mosaic.group_blocks[0].world_rect.max,
+        egui::pos2(200.0, 400.0)
+    );
+    mosaic
+        .apply_control_actor_state(
+            &serde_json::json!({"generation":1,"group_blocks":[]}),
+            &serde_json::json!({}),
+            &[],
+            &[],
+        )
+        .expect("clear group headings");
+    assert!(mosaic.group_blocks.is_empty());
     assert_eq!(mosaic.active_layer, MosaicLayerId::TextLabels);
     assert!(
         mosaic.take_native_control_intents().is_empty(),
@@ -332,5 +362,80 @@ fn mosaic_contrast_coalesces_drag_updates_and_batches_distinct_windows() {
         mosaic.control_channel_snapshot(),
         channels_before,
         "optimistic contrast is render-only until projected by the actor"
+    );
+}
+
+#[test]
+fn unchanged_actor_state_is_skipped_and_tile_requests_survive_unrelated_changes() {
+    let dir = TestMosaicDir::new();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr");
+    let sheet = dir.0.join("fingerprint-mosaic.csv");
+    fs::write(
+        &sheet,
+        format!(
+            "id,path,cohort\nROI-A,{},A\nROI-B,{},B\n",
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .expect("write fingerprint mosaic samplesheet");
+    let ctx = egui::Context::default();
+    let mut mosaic = MosaicViewerApp::from_samplesheet_runtime(&ctx, true, &sheet, Some(2))
+        .expect("construct fingerprint mosaic");
+    mosaic.consumed_mosaic_resource_generation = 1;
+    let ids = mosaic.items.iter().map(|item| item.id).collect::<Vec<_>>();
+    let state = |selected: usize, offset_x: f32| {
+        serde_json::json!({
+            "generation":1,
+            "items":ids.iter().map(|id| serde_json::json!({
+                "id":id,
+                "offset_world":[if *id == ids[0] { offset_x } else { 5000.0 }, 0.0],
+                "scale":1.0,
+                "selected":*id == selected,
+            })).collect::<Vec<_>>(),
+            "camera":{"center_world_lvl0":[10.0, 20.0],"zoom_screen_per_lvl0_px":1.0},
+        })
+    };
+    let empty = serde_json::json!({});
+    let camera = |x: f32| {
+        Some(odon::model::ProjectedCamera {
+            center_world_lvl0: [x, 20.0],
+            zoom_screen_per_lvl0_px: 1.0,
+        })
+    };
+
+    mosaic
+        .apply_control_actor_projection(&state(ids[0], 0.0), &empty, &[], &[], 1, camera(10.0))
+        .expect("first projection applies in full");
+    assert!(mosaic.selected_core_ids.contains(&ids[0]));
+    let tile_generation = mosaic.tile_request_generation;
+
+    // Same fingerprint: the state section is not consulted at all, only the camera moves.
+    mosaic
+        .apply_control_actor_projection(&empty, &empty, &[], &[], 1, camera(99.0))
+        .expect("camera-only projection skips the state section");
+    assert_eq!(mosaic.camera.center_world_lvl0, egui::pos2(99.0, 20.0));
+    assert!(mosaic.selected_core_ids.contains(&ids[0]));
+    assert_eq!(mosaic.tile_request_generation, tile_generation);
+
+    // A selection change is applied, but in-flight tile requests stay valid.
+    mosaic
+        .apply_control_actor_projection(&state(ids[1], 0.0), &empty, &[], &[], 2, camera(10.0))
+        .expect("selection projection applies");
+    assert!(mosaic.selected_core_ids.contains(&ids[1]));
+    assert_eq!(mosaic.tile_request_generation, tile_generation);
+
+    // Moving an item changes which tiles are needed, so those requests are invalidated.
+    mosaic
+        .apply_control_actor_projection(&state(ids[1], 250.0), &empty, &[], &[], 3, camera(10.0))
+        .expect("layout projection applies");
+    assert_ne!(mosaic.tile_request_generation, tile_generation);
+
+    // An item without an identity is rejected instead of being silently defaulted.
+    let invalid = serde_json::json!({"generation":1,"items":[{"offset_world":[0.0, 0.0]}]});
+    assert!(
+        mosaic
+            .apply_control_actor_projection(&invalid, &empty, &[], &[], 4, camera(10.0))
+            .is_err()
     );
 }

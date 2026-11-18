@@ -10,6 +10,7 @@ struct ProjectMetadataRequest {
     default_threshold_marker: Option<Value>,
     mosaic_segmentation_search_roots: Option<Vec<String>>,
     category_colors: Option<std::collections::BTreeMap<String, [u8; 3]>>,
+    object_property_preferences: Option<crate::data::project_config::ObjectPropertyPreferences>,
 }
 
 pub(super) fn validate(method: &str, params: &Value) -> Result<(), ControlError> {
@@ -45,6 +46,21 @@ pub(super) fn validate(method: &str, params: &Value) -> Result<(), ControlError>
         return Err(ControlError::invalid_params(
             method,
             "category colors must contain at most 4096 non-empty labels",
+        ));
+    }
+    if request
+        .object_property_preferences
+        .as_ref()
+        .is_some_and(|preferences| {
+            let names = preferences.pinned.iter().chain(&preferences.recent);
+            preferences.pinned.len() > 4096
+                || preferences.recent.len() > 4096
+                || names.into_iter().any(|name| name.trim().is_empty())
+        })
+    {
+        return Err(ControlError::invalid_params(
+            method,
+            "object property preferences must contain at most 4096 non-empty names",
         ));
     }
     Ok(())

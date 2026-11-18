@@ -109,6 +109,8 @@ impl MosaicViewerApp {
                 layout_mode: Some(self.layout_mode.storage_key().to_string()),
                 show_text_labels: Some(self.show_text_labels),
                 label_columns: self.label_columns.clone(),
+                label_font_size: Some(self.label_font_size),
+                group_label_font_size: Some(self.group_label_font_size),
                 camera: Some(self.project_camera_state()),
                 ui: Some(self.project_ui_state()),
                 annotation_layers,

@@ -735,6 +735,38 @@ mod categorical_rendering_tests {
     }
 
     #[test]
+    fn retick_of_a_hidden_category_rebuilds_the_low_zoom_visibility_table() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::Hidden;
+        let hidden = ObjectColorLevelOverride {
+            visible: false,
+            color_rgb: None,
+        };
+        let shown = ObjectColorLevelOverride {
+            visible: true,
+            color_rgb: None,
+        };
+
+        // Everything unticked: the texture renderer hides every labelled object.
+        override_for(&mut layer, "tumour", hidden);
+        override_for(&mut layer, "immune", hidden);
+        let all_hidden = layer.cached_visibility_state();
+        assert_eq!(*all_hidden.values, vec![0, 0, 255, 0]);
+
+        // Ticking one category back on must reach the same table, not only the colour table the
+        // vector renderer uses, or the category stays invisible when zoomed out.
+        override_for(&mut layer, "tumour", shown);
+        let tumour_only = layer.cached_visibility_state();
+        assert_eq!(*tumour_only.values, vec![255, 0, 255, 255]);
+        assert_ne!(tumour_only.generation, all_hidden.generation);
+
+        // Frames that change nothing keep reusing it.
+        let again = layer.cached_visibility_state();
+        assert!(Arc::ptr_eq(&again.values, &tumour_only.values));
+        assert_eq!(again.generation, tumour_only.generation);
+    }
+
+    #[test]
     fn camera_only_frames_reuse_the_colour_payload() {
         let mut layer = categorical_layer(&MIXED_LABELS);
 
@@ -849,6 +881,240 @@ mod categorical_rendering_tests {
         let frame = plan_low_zoom_frame(&mut layer, true);
 
         assert_eq!(frame.styles[0].object_color_opacity, 0.5);
+    }
+
+    fn untick(layer: &mut ObjectsLayer, label: &str) {
+        override_for(
+            layer,
+            label,
+            ObjectColorLevelOverride {
+                visible: false,
+                ..ObjectColorLevelOverride::default()
+            },
+        );
+    }
+
+    #[test]
+    fn hidden_unticked_cells_cannot_be_interacted_with() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        untick(&mut layer, "tumour");
+
+        assert!(!layer.is_index_visible(0));
+        assert!(layer.is_index_visible(1));
+    }
+
+    #[test]
+    fn hover_only_cells_can_be_interacted_with_but_are_not_drawn() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        untick(&mut layer, "tumour");
+
+        assert!(layer.is_index_visible(0));
+        let colors = layer.cached_categorical_colors().expect("payload");
+        assert_eq!(colors.colors_rgba[0][3], 0, "unticked cells stay undrawn");
+        assert_eq!(colors.colors_rgba[3][3], 0);
+        assert_eq!(colors.colors_rgba[1][3], 255, "ticked cells are drawn");
+    }
+
+    #[test]
+    fn outline_only_cells_get_a_faint_neutral_colour_and_stay_interactive() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::OutlineOnly;
+        untick(&mut layer, "tumour");
+
+        assert!(layer.is_index_visible(0));
+        let colors = layer.cached_categorical_colors().expect("payload");
+        let outline = colors.colors_rgba[0];
+        assert_eq!(colors.colors_rgba[3], outline);
+        assert!(outline[3] > 0 && outline[3] < 255, "drawn, but marked as not filled");
+        assert_eq!((outline[0], outline[1]), (outline[1], outline[2]), "neutral");
+        assert_eq!(colors.colors_rgba[1][3], 255, "ticked cells stay fully opaque");
+        assert_eq!(colors.colors_rgba[2], [0, 0, 0, 0], "cells with no value stay undrawn");
+    }
+
+    #[test]
+    fn changing_the_unticked_mode_rebuilds_the_colour_table() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        untick(&mut layer, "tumour");
+        let hover_only = layer.cached_categorical_colors().expect("payload");
+        assert_eq!(hover_only.colors_rgba[0][3], 0);
+
+        layer.unticked_categories = ObjectUntickedCategories::OutlineOnly;
+        let outline_only = layer.cached_categorical_colors().expect("payload");
+
+        assert_ne!(outline_only.generation, hover_only.generation);
+        assert!(outline_only.colors_rgba[0][3] > 0);
+    }
+
+    #[test]
+    fn only_outline_only_mode_asks_the_fill_passes_to_skip_faint_cells() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        assert!(!layer.fill_opaque_objects_only());
+        assert!(!plan_low_zoom_frame(&mut layer, true).styles[0].fill_opaque_objects_only);
+
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        assert!(!layer.fill_opaque_objects_only());
+
+        layer.unticked_categories = ObjectUntickedCategories::OutlineOnly;
+        assert!(layer.fill_opaque_objects_only());
+        assert!(plan_low_zoom_frame(&mut layer, true).styles[0].fill_opaque_objects_only);
+
+        layer.color_mode = ObjectColorMode::Continuous;
+        assert!(
+            !layer.fill_opaque_objects_only(),
+            "continuous colours may legitimately be translucent"
+        );
+    }
+
+    #[test]
+    fn outline_only_also_fills_ticked_categories_with_fill_off() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.fill_cells = false;
+        layer.fill_opacity = 0.3;
+        layer.unticked_categories = ObjectUntickedCategories::OutlineOnly;
+        assert_eq!(layer.effective_fill_opacity(), 0.0);
+
+        untick(&mut layer, "tumour");
+        assert_eq!(layer.effective_fill_opacity(), 0.3);
+    }
+
+    #[test]
+    fn both_fill_shaders_honour_the_opaque_only_switch() {
+        for (name, source) in [
+            ("direct", crate::render::polygon_fill_gl::object_fill_fragment_shader()),
+            ("tiles", crate::render::polygon_fill_gl::tile_compose_fragment_shader()),
+        ] {
+            assert!(
+                source.contains("uniform int u_fill_opaque_objects_only;"),
+                "{name} shader declares the switch"
+            );
+            assert!(
+                source.contains("u_fill_opaque_objects_only != 0 && object_color.a < 0.999"),
+                "{name} shader uses the switch"
+            );
+        }
+    }
+
+    #[test]
+    fn filters_still_remove_cells_in_hover_only_mode() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        layer.filtered_mask = Some(Arc::new(vec![false, true, true, true]));
+
+        assert!(!layer.is_index_visible(0), "a filter means not in the analysis");
+        assert!(layer.is_index_visible(1));
+    }
+
+    #[test]
+    fn ticked_categories_fill_when_something_is_unticked_even_with_fill_off() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.fill_cells = false;
+        layer.fill_opacity = 0.3;
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        assert_eq!(
+            layer.effective_fill_opacity(),
+            0.0,
+            "with everything ticked, nothing needs highlighting"
+        );
+
+        untick(&mut layer, "tumour");
+        assert_eq!(layer.effective_fill_opacity(), 0.3);
+
+        layer.unticked_categories = ObjectUntickedCategories::Hidden;
+        assert_eq!(layer.effective_fill_opacity(), 0.0, "other modes respect Fill cells");
+    }
+
+    #[test]
+    fn highlighting_ignores_overrides_from_another_property() {
+        let mut layer = categorical_layer(&MIXED_LABELS);
+        layer.unticked_categories = ObjectUntickedCategories::HoverOnly;
+        untick(&mut layer, "tumour");
+        layer.color_level_overrides_property_key = "another_column".to_string();
+
+        assert_eq!(layer.effective_fill_opacity(), 0.0);
+    }
+
+    #[test]
+    fn the_tooltip_leads_with_whichever_property_is_being_coloured_by() {
+        let mut object = categorical_object(0, None);
+        for key in 'a'..='p' {
+            object
+                .inline_properties
+                .insert(format!("{key}_column"), serde_json::json!(1));
+        }
+        object
+            .inline_properties
+            .insert("zzz_any_project_column".to_string(), serde_json::json!("Tumour"));
+        let mut layer = ObjectsLayer::default();
+        layer.objects = Some(Arc::new(vec![object.clone()]));
+
+        let keys = |layer: &ObjectsLayer| {
+            layer
+                .tooltip_properties(0, &object, 3)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&layer), ["a_column", "b_column", "c_column"]);
+
+        layer.color_mapping = ObjectColorMapping::categorical("zzz_any_project_column");
+        assert_eq!(keys(&layer), ["zzz_any_project_column", "a_column", "b_column"]);
+    }
+
+    #[test]
+    fn the_coloured_property_is_the_very_first_tooltip_line() {
+        let mut object = categorical_object(0, None);
+        object.inline_properties.insert("a_column".to_string(), serde_json::json!(1));
+        object
+            .inline_properties
+            .insert("any_project_column".to_string(), serde_json::json!("Tumour"));
+        let mut layer = ObjectsLayer::default();
+        let center = egui::pos2(0.0, 0.0);
+
+        let uncoloured = layer.tooltip_lines(0, &object, center);
+        assert!(uncoloured[0].starts_with("id: "), "{uncoloured:?}");
+        assert_eq!(uncoloured[4], "a_column: 1");
+
+        layer.color_mapping = ObjectColorMapping::categorical("any_project_column");
+        let lines = layer.tooltip_lines(0, &object, center);
+        assert_eq!(lines[0], "any_project_column: Tumour");
+        assert!(lines[1].starts_with("id: "), "{lines:?}");
+        assert_eq!(lines[5], "a_column: 1");
+        assert_eq!(lines.iter().filter(|line| line.contains("Tumour")).count(), 1);
+
+        layer.color_mapping = ObjectColorMapping::categorical("missing_column");
+        assert!(layer.tooltip_lines(0, &object, center)[0].starts_with("id: "));
+    }
+
+    #[test]
+    fn a_coloured_property_the_cell_lacks_does_not_disturb_the_tooltip() {
+        let object = categorical_object(0, Some("tumour"));
+        let mut layer = ObjectsLayer::default();
+        layer.color_mapping = ObjectColorMapping::categorical("missing_column");
+
+        let properties = layer.tooltip_properties(0, &object, 11);
+        assert_eq!(properties, [("class".to_string(), "tumour".to_string())]);
+    }
+
+    #[test]
+    fn the_legend_action_changes_the_setting_and_older_projects_default_to_hidden() {
+        let mut layer = ObjectsLayer::default();
+        assert_eq!(layer.unticked_categories, ObjectUntickedCategories::Hidden);
+
+        layer.apply_legend_actions(vec![legend_ui::LegendAction::SetUntickedCategories(
+            ObjectUntickedCategories::HoverOnly,
+        )]);
+        assert_eq!(layer.unticked_categories, ObjectUntickedCategories::HoverOnly);
+
+        let saved = serde_json::to_value(layer.project_display_state()).unwrap();
+        assert_eq!(saved["unticked_categories"], "hover_only");
+        let mut restored = ObjectsLayer::default();
+        restored.apply_project_display_state(&serde_json::from_value(saved).unwrap());
+        assert_eq!(restored.unticked_categories, ObjectUntickedCategories::HoverOnly);
+
+        let older: ObjectProjectDisplayState = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(older.unticked_categories, ObjectUntickedCategories::Hidden);
     }
 
     #[test]

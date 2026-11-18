@@ -226,6 +226,7 @@ impl ObjectsLayer {
                         local_to_world_offset: display_offset,
                         local_to_world_scale: display_scale,
                         object_color_opacity: self.fill_opacity,
+                        fill_opaque_objects_only: self.fill_opaque_objects_only(),
                     },
                     visible_world: *bounds_local,
                 },
@@ -264,6 +265,7 @@ impl ObjectsLayer {
             base_rgb[2],
             fill_alpha,
         );
+        let fill_opaque_only = self.fill_opaque_objects_only();
         let geometry = if fill_mesh.vertices_local.len() >= 500_000 {
             fill_mesh
                 .spatial_slices_for_local_rect(visible_local)
@@ -312,6 +314,7 @@ impl ObjectsLayer {
                 }
                 let color = object_colors
                     .and_then(|payload| payload.colors_rgba.get(object_index))
+                    .filter(|rgba| !fill_opaque_only || rgba[3] == 255)
                     .map(|rgba| {
                         egui::Color32::from_rgba_unmultiplied(
                             rgba[0],

@@ -595,8 +595,12 @@ impl RootApp {
                 }
             }
         }
-        self.control_command_surface_projection = projection.command_surface.clone();
-        self.control_shell_projection = projection.shell.clone();
+        if self.control_command_surface_projection != projection.command_surface {
+            self.control_command_surface_projection = projection.command_surface.clone();
+        }
+        if self.control_shell_projection != projection.shell {
+            self.control_shell_projection = projection.shell.clone();
+        }
         if self.app_settings != projection.settings {
             self.app_settings = projection.settings.clone();
             if !self.settings_open {
@@ -736,11 +740,13 @@ impl RootApp {
                 mosaic
                     .project_space_mut()
                     .apply_control_actor_project_projection(&projection.project);
-                if let Err(error) = mosaic.apply_control_actor_state(
+                if let Err(error) = mosaic.apply_control_actor_projection(
                     &projection.mosaic_state,
                     projection.memory_state.as_ref(),
                     &projection.mosaic_object_resources,
                     &projection.mosaic_pinned_levels,
+                    projection.fingerprints.mosaic_state,
+                    projection.navigation.mosaic_camera,
                 ) {
                     log_warn!("could not apply actor mosaic state: {error}");
                     return false;
@@ -780,6 +786,8 @@ impl RootApp {
                         projection.object_resource.as_ref(),
                         projection.segmentation_geojson_resource.as_ref(),
                         projection.label_resource.as_ref(),
+                        projection.fingerprints.workspace,
+                        &projection.navigation,
                     );
                 }
                 log_warn!(
@@ -973,6 +981,8 @@ impl RootApp {
             projection.object_resource.as_ref(),
             projection.segmentation_geojson_resource.as_ref(),
             projection.label_resource.as_ref(),
+            projection.fingerprints.workspace,
+            &projection.navigation,
         )
     }
 
@@ -1059,6 +1069,8 @@ impl RootApp {
             &Arc<odon::model::ControlSegmentationGeoJsonResource>,
         >,
         label_resource: Option<&Arc<odon::model::ControlLabelResource>>,
+        fingerprint: u64,
+        navigation: &odon::model::ProjectedNavigation,
     ) -> bool {
         let Some(workspace) = workspace else {
             log_warn!("single-viewer actor projection has no workspace");
@@ -1068,6 +1080,14 @@ impl RootApp {
             log_warn!("actor projection could not establish a single-image viewer");
             return false;
         };
+        // Nothing but cameras moved since the workspace section was last applied in full, so
+        // only navigation has to be realized.
+        if app.control_actor_workspace_fingerprint() == Some(fingerprint)
+            && app.apply_control_actor_navigation(&navigation.viewports)
+        {
+            return true;
+        }
+        app.set_control_actor_workspace_fingerprint(None);
         if let Some(resource) = object_resource {
             let generation = workspace
                 .get("object_resource")
@@ -1108,6 +1128,7 @@ impl RootApp {
             log_warn!("actor render projection could not be applied: {error}");
             return false;
         }
+        app.set_control_actor_workspace_fingerprint(Some(fingerprint));
         true
     }
 
@@ -1353,7 +1374,7 @@ impl RootApp {
                             self.settings_draft.auto_contrast.normalized();
 
                         ui.add_space(8.0);
-                        let can_apply_now = matches!(self.mode, Mode::Single(_));
+                        let can_apply_now = matches!(self.mode, Mode::Single(_) | Mode::Mosaic { .. });
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(
@@ -1379,12 +1400,12 @@ impl RootApp {
                             }
                             settings_help_button(
                                 ui,
-                                "Applies the current auto-contrast method immediately to the open single-image viewer.",
+                                "Applies the current auto-contrast method immediately to the open image or mosaic.",
                             );
                         });
                         if !can_apply_now {
                             ui.label(
-                                "Open a single dataset viewer to apply these settings immediately.",
+                                "Open an image or mosaic to apply these settings immediately.",
                             );
                         }
                     }
@@ -2082,12 +2103,22 @@ impl RootApp {
 
 impl eframe::App for RootApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.frame_pacing.begin_frame(Instant::now());
+        let frame_started = Instant::now();
+        self.frame_pacing.begin_frame(frame_started);
+        self.frame_pacing.publish_hud_line(ctx, frame_started);
         #[cfg(target_os = "macos")]
         if self.native_menu.is_none() {
             if let Ok(menu) = NativeMenu::init("odon", &self.control_command_surface_projection) {
                 self.native_menu = Some(menu);
             }
+        }
+        self.native_command_ingress
+            .set_gesture_active(ctx.input(|input| {
+                // The release frame still belongs to the gesture: it carries its final value.
+                input.pointer.any_down() || input.pointer.any_released()
+            }));
+        for rejection in self.native_command_ingress.take_rejections() {
+            log_warn!("native command rejected by the control actor: {rejection}");
         }
         self.handle_viewport_screenshot_events(ctx);
         self.process_control_presentations(ctx);

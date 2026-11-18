@@ -24,6 +24,10 @@ impl From<&ObjectContinuousColorPayload> for ObjectColorsPayload {
     }
 }
 
+/// Neutral so ticked categories keep their colour to themselves, and faint because outlines of
+/// sub-pixel cells merge into a wash when zoomed out.
+const OUTLINE_ONLY_RGBA: [u8; 4] = [210, 210, 210, 90];
+
 /// Everything categorical colours depend on. Compared per frame, so it must stay cheap to build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::objects) struct CategoricalColorSignature {
@@ -31,6 +35,7 @@ pub(in crate::objects) struct CategoricalColorSignature {
     geometry_generation: u64,
     object_count: usize,
     property_key: String,
+    unticked_categories: ObjectUntickedCategories,
     groups: Vec<(u64, Option<[u8; 3]>)>,
 }
 
@@ -54,6 +59,10 @@ struct VisibilityStateKey {
     resource_cache_id: u64,
     geometry_generation: u64,
     filter_generation: u64,
+    unticked_categories: ObjectUntickedCategories,
+    /// Which categories are ticked, when that decides visibility. See
+    /// [`ObjectsLayer::category_visibility_fingerprint`].
+    category_visibility: u64,
     object_count: usize,
 }
 
@@ -125,12 +134,62 @@ impl ObjectPresentationStateStats {
 }
 
 impl ObjectsLayer {
+    /// Identifies everything besides the filter that [`Self::is_index_visible`] reads: with
+    /// unticked categories hidden, an object's visibility follows the legend ticks of the colour
+    /// property. The cached visibility table must be rebuilt whenever this changes, otherwise the
+    /// low-zoom texture renderer keeps hiding (or showing) categories as they were first ticked
+    /// while the vector renderer, which reads the colour table, follows the legend.
+    ///
+    /// Zero whenever categories do not affect visibility. Cheap enough to compute every frame:
+    /// it only walks the legend, never the objects.
+    fn category_visibility_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        if self.color_mode != ObjectColorMode::ByProperty
+            || self.color_property_key.is_empty()
+            || !self.unticked_categories.is_hidden()
+        {
+            return 0;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.color_property_key.hash(&mut hasher);
+        // Property values that arrive later (lazily loaded columns) change the labels objects
+        // resolve to; the colour groups are rebuilt from them, so track their identity too.
+        if let Some(groups) = self.active_color_groups() {
+            groups.property_key.hash(&mut hasher);
+            for group in &groups.groups {
+                group.fill_generation.hash(&mut hasher);
+            }
+        }
+        if self.color_level_overrides_property_key == self.color_property_key {
+            let mut hidden = self
+                .color_level_overrides
+                .iter()
+                .filter(|(_, style)| !style.visible)
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>();
+            hidden.sort_unstable();
+            hidden.hash(&mut hasher);
+        }
+        if let Some(pending) = self
+            .pending_color_value_visibility
+            .as_ref()
+            .filter(|pending| pending.property_key == self.color_property_key)
+        {
+            pending.visible_values.hash(&mut hasher);
+            pending.hidden_values.hash(&mut hasher);
+        }
+        // Never collide with the "categories do not matter" value.
+        hasher.finish().max(1)
+    }
+
     pub(super) fn cached_visibility_state(&mut self) -> ObjectRenderStatePayload {
         let object_count = self.object_count();
         let key = VisibilityStateKey {
             resource_cache_id: self.render_resource_cache_id,
             geometry_generation: self.geometry_generation,
             filter_generation: self.filter_generation,
+            unticked_categories: self.unticked_categories,
+            category_visibility: self.category_visibility_fingerprint(),
             object_count,
         };
         if self.presentation_state_cache.visibility_key == Some(key) {
@@ -172,6 +231,7 @@ impl ObjectsLayer {
             geometry_generation: self.geometry_generation,
             object_count,
             property_key: color_groups.property_key.clone(),
+            unticked_categories: self.unticked_categories,
             groups: color_groups
                 .groups
                 .iter()
@@ -193,12 +253,16 @@ impl ObjectsLayer {
 
         let mut colors_rgba = vec![[0u8; 4]; object_count];
         for (group, (_, rgb)) in color_groups.groups.iter().zip(&signature.groups) {
-            let Some([r, g, b]) = *rgb else {
-                continue;
+            let group_color = match *rgb {
+                Some([r, g, b]) => [r, g, b, 255],
+                None if self.unticked_categories == ObjectUntickedCategories::OutlineOnly => {
+                    OUTLINE_ONLY_RGBA
+                }
+                None => continue,
             };
             for (color, state) in colors_rgba.iter_mut().zip(group.fill_state.iter()) {
                 if *state > 0 {
-                    *color = [r, g, b, 255];
+                    *color = group_color;
                 }
             }
         }

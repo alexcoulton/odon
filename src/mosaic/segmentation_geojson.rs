@@ -7,8 +7,9 @@ use eframe::egui;
 use crate::objects::legend_ui::{
     CategoryColors, LegendAction, LegendUiState, category_colors_params, legend_rows, ui_legend,
 };
+use crate::ui::property_picker::{self, PropertyPreferencesDraft};
 use crate::objects::{
-    ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectsLayer, PreloadedObjectLayer,
+    ObjectColorLegendEntry, ObjectColorLevelOverride, ObjectUntickedCategories, ObjectsLayer, PreloadedObjectLayer,
     SelectedObjectDetails,
 };
 use crate::render::polygon_fill_gl::ObjectFillGlRenderer;
@@ -34,6 +35,7 @@ struct SharedStyle {
     fill_cells: bool,
     fill_opacity: f32,
     selected_fill_opacity: f32,
+    unticked_categories: ObjectUntickedCategories,
     fast_rendering: bool,
     downsample_factor: f32,
 }
@@ -47,6 +49,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     pub fill_cells: bool,
     pub fill_opacity: f32,
     pub selected_fill_opacity: f32,
+    pub unticked_categories: ObjectUntickedCategories,
     pub fast_rendering: bool,
     pub downsample_factor: f32,
 
@@ -57,6 +60,7 @@ pub struct MosaicGeoJsonSegmentationOverlay {
     continuous_domains_by_roi: HashMap<String, [f64; 2]>,
     color_level_overrides: HashMap<String, HashMap<String, ObjectColorLevelOverride>>,
     category_colors: CategoryColors,
+    property_preferences: PropertyPreferencesDraft,
     legend_ui: LegendUiState,
     property_cache_capacity: Option<usize>,
     canonical_paths: HashMap<PathBuf, PathBuf>,
@@ -76,6 +80,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             fill_cells: false,
             fill_opacity: 0.30,
             selected_fill_opacity: 0.70,
+            unticked_categories: ObjectUntickedCategories::Hidden,
             fast_rendering: true,
             downsample_factor: 1.0,
             samplesheet_dir: None,
@@ -85,6 +90,7 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
             continuous_domains_by_roi: HashMap::new(),
             color_level_overrides: HashMap::new(),
             category_colors: CategoryColors::default(),
+            property_preferences: PropertyPreferencesDraft::default(),
             legend_ui: LegendUiState::default(),
             property_cache_capacity: None,
             canonical_paths: HashMap::new(),
@@ -97,6 +103,19 @@ impl Default for MosaicGeoJsonSegmentationOverlay {
 }
 
 impl MosaicGeoJsonSegmentationOverlay {
+    /// One line for the tile-debug overlay describing the shared object tile cache.
+    pub(crate) fn object_tile_debug_line(&self) -> String {
+        let stats = self.object_fill_renderer.stats();
+        format!(
+            "object tiles: {} requested, {} cached ({:.0}/{:.0} MB), detail -{} level(s)",
+            stats.tile_frame_requested,
+            stats.tile_entries,
+            stats.tile_bytes as f64 / 1.0e6,
+            stats.tile_budget_bytes as f64 / 1.0e6,
+            stats.tile_detail_reduction,
+        )
+    }
+
     pub(crate) fn set_object_fill_renderer(&mut self, renderer: ObjectFillGlRenderer) {
         self.object_fill_renderer = renderer.clone();
         for state in self.items.values_mut() {
@@ -127,6 +146,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             "fill_cells":self.fill_cells,
             "fill_opacity":self.fill_opacity,
             "selected_fill_opacity":self.selected_fill_opacity,
+            "unticked_categories":self.unticked_categories.as_str(),
             "color_property_key":self.color_property_key,
             "color_mapping":self.color_mapping,
             "continuous_domains_by_roi":self.continuous_domains_by_roi,
@@ -170,6 +190,13 @@ impl MosaicGeoJsonSegmentationOverlay {
             .and_then(serde_json::Value::as_f64)
         {
             self.selected_fill_opacity = value as f32;
+        }
+        if let Some(mode) = style
+            .get("unticked_categories")
+            .and_then(serde_json::Value::as_str)
+            .and_then(ObjectUntickedCategories::parse)
+        {
+            self.unticked_categories = mode;
         }
         if let Some(value) = style
             .get("color_property_key")
@@ -524,16 +551,17 @@ impl MosaicGeoJsonSegmentationOverlay {
         match self.color_mapping.clone() {
             ObjectColorMapping::Single => {}
             ObjectColorMapping::Categorical { mut property } => {
-                ui.horizontal(|ui| {
-                    ui.label("Property");
-                    egui::ComboBox::from_id_salt("mosaic_seg_objects_categorical_property")
-                        .selected_text(property.clone())
-                        .show_ui(ui, |ui| {
-                            for key in available_color_properties {
-                                ui.selectable_value(&mut property, key.clone(), key);
-                            }
-                        });
-                });
+                let items = property_picker::classify_properties(&available_color_properties);
+                if let Some(next) = property_picker::show(
+                    ui,
+                    "mosaic_seg_objects_categorical_property",
+                    "Property",
+                    &items,
+                    &property,
+                    &mut self.property_preferences,
+                ) {
+                    property = next;
+                }
                 self.color_property_key = property.clone();
                 self.color_mapping = ObjectColorMapping::categorical(property);
             }
@@ -549,16 +577,14 @@ impl MosaicGeoJsonSegmentationOverlay {
                     ..
                 } = &mut mapping
                 {
-                    ui.horizontal(|ui| {
-                        ui.label("Numeric property");
-                        egui::ComboBox::from_id_salt("mosaic_seg_objects_continuous_property")
-                            .selected_text(property.clone())
-                            .show_ui(ui, |ui| {
-                                for key in &available_numeric_properties {
-                                    ui.selectable_value(property, key.clone(), key);
-                                }
-                            });
-                    });
+                    property_picker::show_numeric(
+                        ui,
+                        "mosaic_seg_objects_continuous_property",
+                        "Numeric property",
+                        &available_numeric_properties,
+                        property,
+                        &mut self.property_preferences,
+                    );
                     ui.horizontal(|ui| {
                         ui.label("Palette");
                         let label = match palette {
@@ -631,6 +657,7 @@ impl MosaicGeoJsonSegmentationOverlay {
                     "mosaic_seg_objects_legend",
                     &property_key,
                     &rows,
+                    self.unticked_categories,
                     &mut self.legend_ui,
                 );
                 for action in actions {
@@ -641,6 +668,9 @@ impl MosaicGeoJsonSegmentationOverlay {
                         LegendAction::SetColor { label, rgb } => {
                             overrides.entry(label.clone()).or_default().color_rgb = None;
                             self.category_colors.set(&label, rgb);
+                        }
+                        LegendAction::SetUntickedCategories(mode) => {
+                            self.unticked_categories = mode;
                         }
                         LegendAction::ResetColor { label } => {
                             overrides.entry(label.clone()).or_default().color_rgb = None;
@@ -1065,6 +1095,8 @@ impl MosaicGeoJsonSegmentationOverlay {
                 "tile_budget_bytes": gpu.tile_budget_bytes,
                 "tile_pending": gpu.tile_pending,
                 "tile_peak_pending": gpu.tile_peak_pending,
+                "tile_frame_requested": gpu.tile_frame_requested,
+                "tile_detail_reduction": gpu.tile_detail_reduction,
                 "tile_frame_generation": gpu.tile_frame_generation,
                 "tile_frame_generated": gpu.tile_frame_generated,
                 "tile_frame_raster_vertices": gpu.tile_frame_raster_vertices,
@@ -1185,6 +1217,19 @@ impl MosaicGeoJsonSegmentationOverlay {
         }
     }
 
+    pub(in crate::mosaic) fn sync_property_preferences(
+        &mut self,
+        project: &crate::data::project_config::ObjectPropertyPreferences,
+    ) {
+        self.property_preferences.sync(project);
+    }
+
+    pub(in crate::mosaic) fn take_property_preferences_commit(
+        &mut self,
+    ) -> Option<serde_json::Value> {
+        self.property_preferences.take_commit()
+    }
+
     pub(in crate::mosaic) fn take_category_color_commit(
         &mut self,
         pointer_down: bool,
@@ -1229,6 +1274,7 @@ impl MosaicGeoJsonSegmentationOverlay {
             fill_cells: self.fill_cells,
             fill_opacity: self.fill_opacity,
             selected_fill_opacity: self.selected_fill_opacity,
+            unticked_categories: self.unticked_categories,
             fast_rendering: self.fast_rendering,
             downsample_factor: self.downsample_factor,
         }
@@ -1343,6 +1389,7 @@ fn apply_style(
     layer.fill_cells = style.fill_cells;
     layer.fill_opacity = style.fill_opacity;
     layer.selected_fill_opacity = style.selected_fill_opacity;
+    layer.unticked_categories = style.unticked_categories;
     layer.fast_rendering = style.fast_rendering;
     layer.downsample_factor = style.downsample_factor;
     let _ = layer.set_color_mapping(color_mapping.clone());

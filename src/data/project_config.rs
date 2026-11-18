@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::dataset_source::DatasetSource;
 
+/// Stored by name, so they carry across ROIs and to columns that appear only in some of them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ObjectPropertyPreferences {
+    pub pinned: Vec<String>,
+    pub recent: Vec<String>,
+}
+
+impl ObjectPropertyPreferences {
+    pub fn is_empty(&self) -> bool {
+        self.pinned.is_empty() && self.recent.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectConfig {
     /// Explicit list of ROIs/datasets available in this project.
@@ -58,6 +72,10 @@ pub struct ProjectConfig {
     /// labels in any colour column and ROI, unless a view sets its own colour for that label.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub category_colors: BTreeMap<String, [u8; 3]>,
+
+    /// Object properties pinned or recently chosen in the colour property picker.
+    #[serde(default, skip_serializing_if = "ObjectPropertyPreferences::is_empty")]
+    pub object_property_preferences: ObjectPropertyPreferences,
 
     /// Referenced data resources registered by the control API with project ownership.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

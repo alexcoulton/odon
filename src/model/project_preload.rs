@@ -205,6 +205,24 @@ impl ProjectObjectPreloadCatalog {
         true
     }
 
+    /// Records how far a running preload has got. Ignored for a superseded operation.
+    pub(crate) fn report_progress(
+        &mut self,
+        scope: &ProjectObjectPreloadScope,
+        generation: u64,
+        done: usize,
+        total: usize,
+    ) -> bool {
+        if !self.is_current(scope, generation) {
+            return false;
+        }
+        let done = done.min(total);
+        let changed = self.total != total || self.done != done;
+        self.total = total;
+        self.done = done;
+        changed
+    }
+
     pub(crate) fn finish(
         &mut self,
         scope: &ProjectObjectPreloadScope,

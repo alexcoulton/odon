@@ -322,6 +322,7 @@ pub fn is_actor_owned_mosaic_shared_method(method: &str) -> bool {
             | "memory.tiles.get"
             | "memory.tiles.set"
             | "memory.get"
+            | "viewer.channels.auto_contrast"
             | "memory.pin"
             | "memory.unpin"
             | "memory.unpin_all"

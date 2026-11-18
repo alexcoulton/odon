@@ -644,6 +644,8 @@ struct MosaicLayoutRequest {
     layout: Option<String>,
     layout_mode: Option<String>,
     label_columns: Option<Vec<String>>,
+    label_font_size: Option<f64>,
+    group_label_font_size: Option<f64>,
     fit: Option<bool>,
 }
 

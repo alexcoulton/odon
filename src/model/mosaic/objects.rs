@@ -96,6 +96,12 @@ impl MosaicModel {
                         .ok_or_else(|| invalid("downsample_factor must be greater than zero"))?;
                     next_object.insert(key.clone(), json!(number));
                 }
+                "unticked_categories" => {
+                    if !matches!(value.as_str(), Some("hidden" | "hover_only" | "outline_only")) {
+                        return Err(invalid("unticked_categories must be hidden, hover_only, or outline_only"));
+                    }
+                    next_object.insert(key.clone(), value.clone());
+                }
                 "fill_cells" => {
                     value
                         .as_bool()

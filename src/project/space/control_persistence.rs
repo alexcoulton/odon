@@ -220,6 +220,9 @@ impl ProjectSpace {
         self.config
             .category_colors
             .clone_from(&snapshot.config.category_colors);
+        self.config
+            .object_property_preferences
+            .clone_from(&snapshot.config.object_property_preferences);
         match snapshot
             .view_presets
             .iter()

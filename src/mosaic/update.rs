@@ -15,7 +15,13 @@ impl eframe::App for MosaicViewerApp {
         if let Some(params) = self.seg_geojson.take_category_color_commit(pointer_down) {
             self.submit_native_control_intent("project.update_metadata", params);
         }
+        self.seg_geojson
+            .sync_property_preferences(&self.project_space.config().object_property_preferences);
+        if let Some(params) = self.seg_geojson.take_property_preferences_commit() {
+            self.submit_native_control_intent("project.update_metadata", params);
+        }
         self.flush_pending_channel_contrast();
+        self.tick_native_camera_hold(ctx);
         // Napari-like "close window" prompt.
         // - Cmd/Ctrl+W opens confirmation
         // - Cmd/Ctrl+W again confirms close

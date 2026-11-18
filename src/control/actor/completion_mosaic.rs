@@ -13,6 +13,59 @@ pub(super) fn finish(completion: LoadCompletion, context: CompletionContext<'_>)
         ..
     } = context;
     match completion {
+        LoadCompletion::MosaicAutoContrast {
+            request,
+            spec,
+            result,
+        } => {
+            let outcome = match result {
+                _ if request.as_ref().is_some_and(request_is_cancelled) => {
+                    Err("automatic contrast was cancelled".to_string())
+                }
+                Ok(result) => Ok(model.install_mosaic_auto_contrast(&spec, &result)),
+                Err(error) => Err(format!("failed to compute automatic contrast: {error:#}")),
+            };
+            let changed = match &outcome {
+                Ok(response) => response.is_some(),
+                Err(message) => model.fail_mosaic_auto_contrast(&spec, message.clone()),
+            };
+            if changed {
+                publish_projection(
+                    model,
+                    render_document.clone(),
+                    presentation_tx,
+                    presentation_coalesce_rx,
+                    wake_ui,
+                    diagnostics,
+                );
+            } else {
+                diagnostics
+                    .stale_worker_completions
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            let Some(request) = request else {
+                return;
+            };
+            match outcome {
+                Ok(Some(response)) => finish_request(request, response, diagnostics),
+                Ok(None) => reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::new(
+                        ControlErrorKind::Conflict,
+                        "automatic contrast was superseded by a newer operation",
+                    ),
+                ),
+                Err(_) if request_is_cancelled(&request) => {
+                    reject_cancelled_request(request, diagnostics, "automatic contrast");
+                }
+                Err(message) => reject_actor_request(
+                    request,
+                    diagnostics,
+                    ControlError::new(ControlErrorKind::Application, message),
+                ),
+            }
+        }
         LoadCompletion::MosaicOpen {
             generation,
             request,

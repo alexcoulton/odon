@@ -41,6 +41,7 @@ uniform sampler2D u_color_tex;
 uniform ivec2 u_color_tex_size;
 uniform int u_use_object_colors;
 uniform float u_object_color_opacity;
+uniform int u_fill_opaque_objects_only;
 uniform vec4 u_selected_color;
 uniform vec4 u_primary_color;
 uniform sampler2D u_selection_tex;
@@ -149,6 +150,9 @@ bool resolve_sample(ivec2 id_coord, bool overview_resolve, out vec4 resolved_col
             : u_selection_selected_color;
     } else if (u_use_object_colors != 0) {
         vec4 fill_object_color = object_color;
+        if (u_fill_opaque_objects_only != 0 && object_color.a < 0.999) {
+            fill_object_color.a = 0.0;
+        }
         fill_object_color.a *= u_object_color_opacity;
         // An outlines-only layer has a zero-alpha fill but must still reach the border test.
         if (fill_object_color.a <= 0.0 && u_border_enabled == 0) {
@@ -184,7 +188,8 @@ void accumulate_sample(
     vec2 texel_position,
     bool overview_resolve,
     inout vec3 premultiplied_rgb,
-    inout float alpha_sum
+    inout float alpha_sum,
+    inout float hits
 ) {
     vec4 sample_color;
     if (!resolve_sample(
@@ -196,6 +201,7 @@ void accumulate_sample(
     }
     premultiplied_rgb += sample_color.rgb * sample_color.a;
     alpha_sum += sample_color.a;
+    hits += 1.0;
 }
 
 void main() {
@@ -209,35 +215,38 @@ void main() {
         return;
     }
 
-    vec2 quarter_footprint = max(u_texels_per_fragment, vec2(0.0)) * 0.25;
+    // One display pixel covers several ID texels here, each holding a different cell. Sample a
+    // regular grid across the pixel's footprint: 2 x 2 while it spans at most two texels, where
+    // more samples would only re-read the same texels, and 4 x 4 beyond that. With too few
+    // samples the cells that happen to be hit change as the view moves, so sparse categories
+    // sparkle and jump in brightness between zoom levels.
+    vec2 footprint = max(u_texels_per_fragment, vec2(0.0));
+    int grid = max(footprint.x, footprint.y) > 2.0 ? 4 : 2;
     vec3 premultiplied_rgb = vec3(0.0);
     float alpha_sum = 0.0;
-    accumulate_sample(
-        texel_position + vec2(-quarter_footprint.x, -quarter_footprint.y),
-        true,
-        premultiplied_rgb,
-        alpha_sum
-    );
-    accumulate_sample(
-        texel_position + vec2(quarter_footprint.x, -quarter_footprint.y),
-        true,
-        premultiplied_rgb,
-        alpha_sum
-    );
-    accumulate_sample(
-        texel_position + vec2(-quarter_footprint.x, quarter_footprint.y),
-        true,
-        premultiplied_rgb,
-        alpha_sum
-    );
-    accumulate_sample(
-        texel_position + vec2(quarter_footprint.x, quarter_footprint.y),
-        true,
-        premultiplied_rgb,
-        alpha_sum
-    );
-    if (alpha_sum <= 0.0) {
+    float hits = 0.0;
+    for (int sample_y = 0; sample_y < 4; ++sample_y) {
+        for (int sample_x = 0; sample_x < 4; ++sample_x) {
+            if (sample_x >= grid || sample_y >= grid) {
+                continue;
+            }
+            vec2 grid_offset = (vec2(float(sample_x), float(sample_y)) + 0.5) / float(grid) - 0.5;
+            accumulate_sample(
+                texel_position + grid_offset * footprint,
+                true,
+                premultiplied_rgb,
+                alpha_sum,
+                hits
+            );
+        }
+    }
+    if (hits <= 0.0 || alpha_sum <= 0.0) {
         discard;
     }
-    out_color = vec4(premultiplied_rgb / alpha_sum, alpha_sum * 0.25);
+    // Opacity follows how much of the pixel visible cells cover, but along a square-root curve:
+    // linear coverage makes a category that fills a few percent of a pixel all but invisible,
+    // and the overlay then changes strength abruptly once cells grow to a whole pixel.
+    float coverage = hits / float(grid * grid);
+    float mean_alpha = alpha_sum / hits;
+    out_color = vec4(premultiplied_rgb / alpha_sum, mean_alpha * sqrt(coverage));
 }"#;

@@ -976,6 +976,13 @@ impl ViewerViewportState {
         {
             presentation.display.selected_fill_opacity = (opacity as f32).clamp(0.0, 1.0);
         }
+        if let Some(mode) = value
+            .get("unticked_categories")
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::objects::ObjectUntickedCategories::parse)
+        {
+            presentation.display.unticked_categories = mode;
+        }
         if let Some(fast) = value
             .get("fast_rendering")
             .and_then(serde_json::Value::as_bool)
@@ -1961,6 +1968,7 @@ pub struct OmeZarrViewerApp {
     control_actor_object_selection_generation: u64,
     control_actor_mask_generation: u64,
     control_actor_workspace_revision: u64,
+    control_actor_workspace_fingerprint: Option<u64>,
     pending_control_actor_mask_projection: Option<serde_json::Value>,
     control_actor_threshold_generation: u64,
     control_actor_analysis_generation: u64,
@@ -2018,6 +2026,7 @@ pub struct OmeZarrViewerApp {
     screenshot_capture: ViewerScreenshotCaptureAdapter,
     viewport_workspace: Option<ViewportWorkspace<ViewerViewportState>>,
     native_viewport_command_scope: Option<NativeViewportCommandScope>,
+    native_camera_hold: Option<NativeCameraHold>,
     viewport_layer_groups: ProjectLayerGroups,
     viewport_raw_active_keys: Option<HashSet<RawTileKey>>,
     viewport_cpu_active_keys: Option<HashSet<TileKey>>,
@@ -2026,6 +2035,13 @@ pub struct OmeZarrViewerApp {
     viewport_frame_plan_ms: f32,
     viewport_frame_plan_ema_ms: f32,
     viewport_frame_plan_samples: u64,
+}
+
+/// Local camera ownership for the viewport the user is currently panning or zooming.
+#[derive(Debug, Clone)]
+struct NativeCameraHold {
+    viewport_id: String,
+    hold: crate::camera::CameraIntentHold,
 }
 
 #[derive(Debug, Clone)]
@@ -2095,6 +2111,14 @@ impl NativeControlIngress {
 
     pub fn contains_pending(&self, method: &str) -> bool {
         self.inner.contains_pending(method)
+    }
+
+    pub fn set_gesture_active(&self, active: bool) {
+        self.inner.set_gesture_active(active);
+    }
+
+    pub fn take_rejections(&self) -> Vec<String> {
+        self.inner.take_rejections()
     }
 
     #[cfg(test)]

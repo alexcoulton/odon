@@ -15,7 +15,27 @@ impl ObjectsLayer {
         let obj = objects.get(idx)?;
         let centroid_world = self.local_to_world_point(obj.centroid_world, local_to_world_offset);
 
+        Some(self.tooltip_lines(idx, obj, centroid_world))
+    }
+
+    /// The property being coloured by comes first of all, ahead of the cell's own details.
+    pub(super) fn tooltip_lines(
+        &self,
+        idx: usize,
+        obj: &GeoJsonObjectFeature,
+        centroid_world: egui::Pos2,
+    ) -> Vec<String> {
+        const MAX_TOOLTIP_PROPERTIES: usize = 11;
+        let mut properties = self
+            .tooltip_properties(idx, obj, MAX_TOOLTIP_PROPERTIES)
+            .into_iter()
+            .map(|(key, text)| (self.color_mapping.property() == Some(key.as_str()), key, text))
+            .peekable();
+
         let mut lines = Vec::new();
+        if let Some((_, key, text)) = properties.next_if(|(coloured_by, _, _)| *coloured_by) {
+            lines.push(format!("{key}: {text}"));
+        }
         lines.push(format!("id: {}", obj.id));
         lines.push(format!("area_px: {:.2}", obj.area_px));
         lines.push(format!("perimeter_px: {:.2}", obj.perimeter_px));
@@ -23,17 +43,24 @@ impl ObjectsLayer {
             "centroid: ({:.2}, {:.2})",
             centroid_world.x, centroid_world.y
         ));
+        lines.extend(properties.map(|(_, key, text)| format!("{key}: {text}")));
+        lines
+    }
 
-        const MAX_TOOLTIP_PROPERTIES: usize = 11;
-        for (key, text) in self
-            .loaded_property_display_pairs(idx, obj)
-            .into_iter()
-            .take(MAX_TOOLTIP_PROPERTIES)
-        {
-            lines.push(format!("{key}: {text}"));
+    /// The list is alphabetical and cut short, so the property being coloured by goes first:
+    /// that is what a hover is usually asking about, whatever the column is called.
+    pub(super) fn tooltip_properties(
+        &self,
+        idx: usize,
+        obj: &GeoJsonObjectFeature,
+        limit: usize,
+    ) -> Vec<(String, String)> {
+        let mut properties = self.loaded_property_display_pairs(idx, obj);
+        if let Some(coloured_by) = self.color_mapping.property() {
+            properties.sort_by_key(|(key, _)| key != coloured_by);
         }
-
-        Some(lines)
+        properties.truncate(limit);
+        properties
     }
 
     pub(crate) fn control_selection_state_after_click(

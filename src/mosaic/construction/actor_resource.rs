@@ -1,5 +1,38 @@
 use super::*;
 
+/// One shared mosaic channel as projected by the control actor. Absent or null fields keep the
+/// renderer's value.
+#[derive(Debug, serde::Deserialize)]
+struct ProjectedMosaicChannel {
+    index: usize,
+    #[serde(default)]
+    visible: Option<bool>,
+    #[serde(default)]
+    color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    window: Option<[f32; 2]>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    active: bool,
+}
+
+/// One mosaic item as projected by the control actor.
+#[derive(Debug, serde::Deserialize)]
+struct ProjectedMosaicItem {
+    id: usize,
+    #[serde(default)]
+    offset_world: Option<[f32; 2]>,
+    #[serde(default)]
+    scale: Option<f32>,
+    #[serde(default)]
+    placed_size: Option<[f32; 2]>,
+    #[serde(default)]
+    selected: bool,
+    #[serde(default)]
+    focused: bool,
+}
+
 impl MosaicViewerApp {
     pub(crate) fn apply_control_actor_annotation_layers(
         &mut self,
@@ -169,6 +202,9 @@ impl MosaicViewerApp {
         object_resources: &[(usize, Arc<odon::model::ControlObjectResource>)],
         pinned_levels: &[(usize, Arc<odon::model::ControlPinnedLevelResource>)],
     ) -> Result<(), String> {
+        // A full apply invalidates whatever section was recorded as applied; only the
+        // fingerprint-aware entry point records the new one once this succeeds.
+        self.applied_state_fingerprint = None;
         let generation = state
             .get("generation")
             .and_then(serde_json::Value::as_u64)
@@ -180,15 +216,14 @@ impl MosaicViewerApp {
             ));
         }
 
-        if let Some(projected_items) = state.get("items").and_then(serde_json::Value::as_array) {
+        if let Some(projected_items) = state.get("items") {
+            use serde::Deserialize;
+            let projected_items = Vec::<ProjectedMosaicItem>::deserialize(projected_items)
+                .map_err(|error| format!("invalid actor mosaic items: {error}"))?;
             let order = projected_items
                 .iter()
                 .enumerate()
-                .filter_map(|(position, item)| {
-                    item.get("id")
-                        .and_then(serde_json::Value::as_u64)
-                        .map(|id| (id as usize, position))
-                })
+                .map(|(position, item)| (item.id, position))
                 .collect::<HashMap<_, _>>();
             if order.len() != self.items.len()
                 || self.items.iter().any(|item| !order.contains_key(&item.id))
@@ -198,26 +233,32 @@ impl MosaicViewerApp {
             self.items.sort_by_key(|item| order[&item.id]);
             self.selected_core_ids.clear();
             self.focused_core_id = None;
-            for projected in projected_items {
-                let id = projected["id"].as_u64().unwrap_or_default() as usize;
-                let item = self
-                    .items
-                    .iter_mut()
-                    .find(|item| item.id == id)
-                    .ok_or_else(|| format!("actor mosaic item {id} is missing"))?;
-                if let Some(offset) = json_vec2(projected.get("offset_world")) {
+            // Items were just sorted into projected order, so each projected entry normally lines
+            // up with its position; fall back to a search only if IDs are missing or repeated.
+            for (position, projected) in projected_items.iter().enumerate() {
+                let id = projected.id;
+                let index = if self.items.get(position).is_some_and(|item| item.id == id) {
+                    position
+                } else {
+                    self.items
+                        .iter()
+                        .position(|item| item.id == id)
+                        .ok_or_else(|| format!("actor mosaic item {id} is missing"))?
+                };
+                let item = &mut self.items[index];
+                if let Some(offset) = projected.offset_world {
                     item.offset = egui::vec2(offset[0], offset[1]);
                 }
-                if let Some(scale) = projected.get("scale").and_then(serde_json::Value::as_f64) {
-                    item.scale = scale as f32;
+                if let Some(scale) = projected.scale {
+                    item.scale = scale;
                 }
-                if let Some(size) = json_vec2(projected.get("placed_size")) {
+                if let Some(size) = projected.placed_size {
                     item.placed_size = egui::vec2(size[0], size[1]);
                 }
-                if projected["selected"].as_bool() == Some(true) {
+                if projected.selected {
                     self.selected_core_ids.insert(id);
                 }
-                if projected["focused"].as_bool() == Some(true) {
+                if projected.focused {
                     self.focused_core_id = Some(id);
                 }
             }
@@ -232,16 +273,39 @@ impl MosaicViewerApp {
                 );
             }
         }
+        if let Some(groups) = state
+            .get("group_blocks")
+            .and_then(serde_json::Value::as_array)
+        {
+            self.group_blocks = groups
+                .iter()
+                .filter_map(|group| {
+                    let name = group.get("name")?.as_str()?.to_string();
+                    let bounds = group.get("bounds")?;
+                    let min = json_vec2(bounds.get("min"))?;
+                    let max = json_vec2(bounds.get("max"))?;
+                    Some(GroupBlock {
+                        name,
+                        world_rect: egui::Rect::from_min_max(
+                            egui::pos2(min[0], min[1]),
+                            egui::pos2(max[0], max[1]),
+                        ),
+                    })
+                })
+                .collect();
+        }
         if let Some(camera) = state.get("camera") {
+            let mut projected = self.camera.clone();
             if let Some(center) = json_vec2(camera.get("center_world_lvl0")) {
-                self.camera.center_world_lvl0 = egui::pos2(center[0], center[1]);
+                projected.center_world_lvl0 = egui::pos2(center[0], center[1]);
             }
             if let Some(zoom) = camera
                 .get("zoom_screen_per_lvl0_px")
                 .and_then(serde_json::Value::as_f64)
             {
-                self.camera.zoom_screen_per_lvl0_px = zoom as f32;
+                projected.zoom_screen_per_lvl0_px = zoom as f32;
             }
+            self.apply_projected_camera(projected);
         }
         if let Some(tab) = state
             .get("left_tab")
@@ -300,6 +364,18 @@ impl MosaicViewerApp {
                 .and_then(serde_json::Value::as_bool)
             {
                 self.show_text_labels = value;
+            }
+            if let Some(value) = layout
+                .get("label_font_size")
+                .and_then(serde_json::Value::as_f64)
+            {
+                self.label_font_size = value as f32;
+            }
+            if let Some(value) = layout
+                .get("group_label_font_size")
+                .and_then(serde_json::Value::as_f64)
+            {
+                self.group_label_font_size = value as f32;
             }
             if let Some(values) = layout
                 .get("label_columns")
@@ -374,50 +450,28 @@ impl MosaicViewerApp {
             };
             self.seg_geojson.set_property_cache_capacity(capacity);
         }
-        if let Some(channels) = state.get("channels").and_then(serde_json::Value::as_array) {
+        if let Some(channels) = state.get("channels") {
+            use serde::Deserialize;
+            let channels = Vec::<ProjectedMosaicChannel>::deserialize(channels)
+                .map_err(|error| format!("invalid actor mosaic channels: {error}"))?;
             for projected in channels {
-                let Some(index) = projected
-                    .get("index")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|index| index as usize)
-                else {
+                let Some(channel) = self.channels.get_mut(projected.index) else {
                     continue;
                 };
-                let Some(channel) = self.channels.get_mut(index) else {
-                    continue;
-                };
-                if let Some(value) = projected
-                    .get("visible")
-                    .and_then(serde_json::Value::as_bool)
-                {
-                    channel.visible = value;
+                if let Some(visible) = projected.visible {
+                    channel.visible = visible;
                 }
-                if let Some(values) = projected
-                    .get("color_rgb")
-                    .and_then(serde_json::Value::as_array)
-                    .filter(|values| values.len() == 3)
-                {
-                    channel.color_rgb = [
-                        values[0].as_u64().unwrap_or(channel.color_rgb[0] as u64) as u8,
-                        values[1].as_u64().unwrap_or(channel.color_rgb[1] as u64) as u8,
-                        values[2].as_u64().unwrap_or(channel.color_rgb[2] as u64) as u8,
-                    ];
+                if let Some(color_rgb) = projected.color_rgb {
+                    channel.color_rgb = color_rgb;
                 }
-                if let Some(values) = projected
-                    .get("window")
-                    .and_then(serde_json::Value::as_array)
-                    .filter(|values| values.len() == 2)
-                {
-                    channel.window = values[0]
-                        .as_f64()
-                        .zip(values[1].as_f64())
-                        .map(|(minimum, maximum)| (minimum as f32, maximum as f32));
+                if let Some([minimum, maximum]) = projected.window {
+                    channel.window = Some((minimum, maximum));
                 }
-                if let Some(value) = projected.get("note").and_then(serde_json::Value::as_str) {
-                    channel.note = value.to_string();
+                if let Some(note) = projected.note {
+                    channel.note = note;
                 }
-                if projected.get("active").and_then(serde_json::Value::as_bool) == Some(true) {
-                    self.selected_channel = index;
+                if projected.active {
+                    self.selected_channel = projected.index;
                 }
             }
             self.reconcile_channel_contrast_projection();
@@ -509,9 +563,18 @@ impl MosaicViewerApp {
         self.seg_geojson
             .reconcile_actor_load_state(&state["objects"]);
         self.control_actor_memory_state = memory_state.clone();
+        self.control_auto_contrast_pending = state["auto_contrast"]["pending"]
+            .as_bool()
+            .unwrap_or(false);
         self.pinned_levels.replace_control_resources(pinned_levels);
-        self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
-        self.last_tile_request_signature = None;
+        // Only invalidate in-flight tile work when something it depends on changed. A projection
+        // that merely moved the selection or a contrast window leaves those requests valid.
+        let tile_state = Self::projected_tile_state_fingerprint(state, pinned_levels);
+        if self.tile_state_fingerprint != Some(tile_state) {
+            self.tile_state_fingerprint = Some(tile_state);
+            self.tile_request_generation = self.tile_request_generation.wrapping_add(1).max(1);
+            self.last_tile_request_signature = None;
+        }
         Ok(())
     }
 

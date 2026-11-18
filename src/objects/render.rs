@@ -656,6 +656,7 @@ impl ObjectsLayer {
             local_to_world_offset: display_offset,
             local_to_world_scale: display_scale,
             object_color_opacity: 1.0,
+            fill_opaque_objects_only: false,
         };
 
         let mut items = Vec::new();
@@ -1054,7 +1055,7 @@ impl ObjectsLayer {
     }
 
     fn should_use_fill_proxy_points(&self, lod: &ObjectRenderLod) -> bool {
-        self.fast_rendering && self.fill_cells && self.fill_opacity > 0.0 && lod.lod >= 2
+        self.fast_rendering && self.effective_fill_opacity() > 0.0 && lod.lod >= 2
     }
 
     fn should_use_fast_proxy_points(&self, dataset_long_side_screen_px: f32) -> bool {

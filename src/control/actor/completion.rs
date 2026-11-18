@@ -26,9 +26,11 @@ pub(super) fn finish_load(
     wake_ui: &UiWake,
     diagnostics: &ActorDiagnostics,
 ) {
-    diagnostics
-        .workers_completed
-        .fetch_add(1, Ordering::Relaxed);
+    if completion.finishes_job() {
+        diagnostics
+            .workers_completed
+            .fetch_add(1, Ordering::Relaxed);
+    }
     let domain = completion.domain();
     let context = CompletionContext {
         model,

@@ -172,6 +172,7 @@ fn display_restore_preserves_runtime_color_overrides_for_same_property() {
     );
 
     let saved_state = ObjectProjectDisplayState {
+        unticked_categories: Default::default(),
         color_property_key: Some("broad_cell_type".to_string()),
         color_mapping: None,
         color_level_overrides: BTreeMap::new(),
