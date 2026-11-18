@@ -1,4 +1,8 @@
-"""Asynchronous, resource-oriented wrappers over Odon control methods."""
+"""Asynchronous, resource-oriented wrappers over Odon control methods.
+
+Generated from ``resources.py`` by ``scripts/generate_async_resources.py``; edit the
+synchronous module and regenerate instead of changing this file.
+"""
 
 from __future__ import annotations
 
@@ -36,11 +40,15 @@ def _continuous_color_mapping(
     out_of_range: str = "clamp",
     missing_color_rgb: Sequence[int] | None = None,
 ) -> dict[str, Any]:
+    """Build and validate Odon's portable continuous object-colour contract."""
     if not property.strip():
         raise ValueError("property must not be empty")
-    palette_value: Any = palette if isinstance(palette, str) else [dict(stop) for stop in palette]
-    if not isinstance(palette, str) and len(palette_value) < 2:
-        raise ValueError("custom palettes require at least two stops")
+    if isinstance(palette, str):
+        palette_value: Any = palette
+    else:
+        palette_value = [dict(stop) for stop in palette]
+        if len(palette_value) < 2:
+            raise ValueError("custom palettes require at least two stops")
     if isinstance(domain, str):
         if domain != "auto":
             raise ValueError("domain must be 'auto' or a two-number sequence")
@@ -159,6 +167,8 @@ class AsyncApplication:
 
     @property
     def cached_state(self) -> Any:
+        """The last state fetched by this resource, without network IO."""
+
         return deepcopy(self._cached_state)
 
     async def get_loading_state(self) -> Any:
@@ -246,9 +256,7 @@ class AsyncApplication:
             _with_revision({"save": save}, if_revision),
         )
 
-    async def open_ome_zarr(
-        self, path: str | Path, *, if_revision: int | None = None
-    ) -> Any:
+    async def open_ome_zarr(self, path: str | Path, *, if_revision: int | None = None) -> Any:
         return await self._client.tasks.start(
             "datasets.open_ome_zarr",
             _with_revision({"path": str(path)}, if_revision),
@@ -299,9 +307,7 @@ class AsyncDatasets:
     async def open_ome_zarr(
         self, path: str | Path, *, if_revision: int | None = None
     ) -> Any:
-        return await self._client.application.open_ome_zarr(
-            path, if_revision=if_revision
-        )
+        return await self._client.application.open_ome_zarr(path, if_revision=if_revision)
 
     async def open_resource(
         self,
@@ -409,7 +415,7 @@ class AsyncDatasets:
 
 
 class AsyncS3Datasets:
-    """Asynchronous session-only S3 operations."""
+    """Session-only S3 credentials, browsing, and opening."""
 
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
@@ -460,7 +466,7 @@ class AsyncS3Datasets:
 
 
 class AsyncDeepLinks:
-    """Asynchronous deep-link operations."""
+    """Parse, generate, and queue Odon deep links."""
 
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
@@ -532,29 +538,23 @@ class AsyncViewer:
             params["center_world_lvl0"] = [float(center[0]), float(center[1])]
         if zoom is not None:
             params["zoom"] = float(zoom)
-        return await self._client.call(
-            "viewer.camera.set", _with_revision(params, if_revision)
-        )
+        return await self._client.call("viewer.camera.set", _with_revision(params, if_revision))
 
     async def fit(self, *, if_revision: int | None = None) -> Any:
-        """Fit content after Rust has completed the first canvas layout."""
+        """Fit content, waiting for Rust to finish the first canvas layout if needed."""
         return await self._client.call("viewer.camera.fit", _with_revision({}, if_revision))
 
     async def zoom_in(
         self, factor: float | None = None, *, if_revision: int | None = None
     ) -> Any:
         params = {} if factor is None else {"factor": factor}
-        return await self._client.call(
-            "viewer.camera.zoom_in", _with_revision(params, if_revision)
-        )
+        return await self._client.call("viewer.camera.zoom_in", _with_revision(params, if_revision))
 
     async def zoom_out(
         self, factor: float | None = None, *, if_revision: int | None = None
     ) -> Any:
         params = {} if factor is None else {"factor": factor}
-        return await self._client.call(
-            "viewer.camera.zoom_out", _with_revision(params, if_revision)
-        )
+        return await self._client.call("viewer.camera.zoom_out", _with_revision(params, if_revision))
 
     async def get_smooth_pixels(self) -> Any:
         return await self._client.call("viewer.rendering.get_smooth_pixels")
@@ -562,17 +562,13 @@ class AsyncViewer:
     async def get_rendering_state(self) -> Any:
         return await self._client.call("viewer.rendering.get_state")
 
-    async def set_smooth_pixels(
-        self, smooth: bool, *, if_revision: int | None = None
-    ) -> Any:
+    async def set_smooth_pixels(self, smooth: bool, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "viewer.rendering.set_smooth_pixels",
             _with_revision({"smooth": smooth}, if_revision),
         )
 
-    async def set_left_tab(
-        self, tab: str, *, if_revision: int | None = None
-    ) -> Any:
+    async def set_left_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "viewer.ui.set_left_tab", _with_revision({"tab": tab}, if_revision)
         )
@@ -610,13 +606,11 @@ class AsyncViewer:
         }
         if not params:
             raise ValueError("left and/or right is required")
-        return await self._client.call(
-            "viewer.panels.set", _with_revision(params, if_revision)
-        )
+        return await self._client.call("viewer.panels.set", _with_revision(params, if_revision))
 
 
 class AsyncViewport:
-    """A stable asynchronous handle to one native Odon viewport."""
+    """A stable handle to one native Odon viewport."""
 
     def __init__(self, client: "AsyncClient", viewport_id: str) -> None:
         self._client = client
@@ -624,9 +618,7 @@ class AsyncViewport:
         self.objects = AsyncViewportObjects(self)
 
     async def get(self) -> Any:
-        return await self._client.call(
-            "viewer.viewports.get", {"viewport_id": self.id}
-        )
+        return await self._client.call("viewer.viewports.get", {"viewport_id": self.id})
 
     async def set_active(self, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
@@ -689,7 +681,7 @@ class AsyncViewport:
         if_revision: int | None = None,
         if_navigation_revision: int | None = None,
     ) -> Any:
-        """Fit the image after Rust has laid out this viewport."""
+        """Fit the image, waiting for Rust to lay out this viewport if needed."""
         return await self._client.call(
             "viewer.viewports.camera.fit",
             _with_viewport_revision(
@@ -1109,7 +1101,7 @@ class AsyncViewport:
 
 
 class AsyncViewportObjects:
-    """Async object presentation/filter resource bound to a stable viewport."""
+    """Object presentation and filter resource bound to one stable viewport."""
 
     def __init__(self, viewport: AsyncViewport) -> None:
         self._viewport = viewport
@@ -1145,6 +1137,7 @@ class AsyncViewportObjects:
         if_revision: int | None = None,
         if_presentation_revision: int | None = None,
     ) -> Any:
+        """Colour objects by exact numeric values using a continuous palette."""
         style = {
             "color_mapping": _continuous_color_mapping(
                 property,
@@ -1245,8 +1238,7 @@ class AsyncViewportWorkspace:
         params: dict[str, Any] = {"layout": layout}
         if viewports is not None:
             params["viewports"] = [
-                item.id if isinstance(item, AsyncViewport) else item
-                for item in viewports
+                item.id if isinstance(item, AsyncViewport) else item for item in viewports
             ]
         if ratio is not None:
             params["ratio"] = ratio
@@ -1286,7 +1278,7 @@ class AsyncViewportWorkspace:
 
 
 class AsyncViewportLinks:
-    """Async canonical resource for the fixed comparison link group."""
+    """Canonical resource for the milestone's fixed comparison link group."""
 
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
@@ -1297,15 +1289,14 @@ class AsyncViewportLinks:
         unknown = set(result).difference({"camera", "plane", "selection"})
         if unknown:
             raise ValueError(f"unknown linked fields: {sorted(unknown)}")
+        # Selection identity is shared by the document in this milestone.
         if "selection" not in result:
             result.append("selection")
         return result
 
     @staticmethod
     def _viewport_ids(viewports: Iterable[AsyncViewport | str]) -> list[str]:
-        return [
-            item.id if isinstance(item, AsyncViewport) else item for item in viewports
-        ]
+        return [item.id if isinstance(item, AsyncViewport) else item for item in viewports]
 
     async def list(self) -> Any:
         return await self._client.call("viewer.viewport_links.list")
@@ -1477,9 +1468,7 @@ class AsyncChannels:
     async def get_active(self) -> Any:
         return await self._client.call("viewer.channels.get_active")
 
-    async def set_active(
-        self, channel: str | int, *, if_revision: int | None = None
-    ) -> Any:
+    async def set_active(self, channel: str | int, *, if_revision: int | None = None) -> Any:
         key = "index" if isinstance(channel, int) else "name"
         return await self._client.call(
             "viewer.channels.set_active", _with_revision({key: channel}, if_revision)
@@ -1725,9 +1714,7 @@ class AsyncNativeLayers:
         return await self._client.call("viewer.native_layers.list")
 
     async def get(self, layer_id: str) -> Any:
-        return await self._client.call(
-            "viewer.native_layers.get", {"layer_id": layer_id}
-        )
+        return await self._client.call("viewer.native_layers.get", {"layer_id": layer_id})
 
     async def set_active(
         self, layer_id: str, *, if_revision: int | None = None
@@ -1804,9 +1791,7 @@ class AsyncProjects:
         self, *, default_dataset: str | None = None, if_revision: int | None = None
     ) -> Any:
         params = {} if default_dataset is None else {"default_dataset": default_dataset}
-        return await self._client.call(
-            "project.create", _with_revision(params, if_revision)
-        )
+        return await self._client.call("project.create", _with_revision(params, if_revision))
 
     async def open(self, path: str | Path, *, if_revision: int | None = None) -> Any:
         return await self._client.tasks.start(
@@ -1988,9 +1973,7 @@ class AsyncProjectRois:
             "project.rois.remove", _with_revision({"id": roi_id}, if_revision)
         )
 
-    async def reorder(
-        self, ids: Iterable[str], *, if_revision: int | None = None
-    ) -> Any:
+    async def reorder(self, ids: Iterable[str], *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "project.rois.reorder", _with_revision({"ids": list(ids)}, if_revision)
         )
@@ -2031,9 +2014,7 @@ class AsyncProjectRois:
             _with_revision({"step": step, "wrap": wrap}, if_revision),
         )
 
-    async def open(
-        self, roi: str | int, *, if_revision: int | None = None, **params: Any
-    ) -> Any:
+    async def open(self, roi: str | int, *, if_revision: int | None = None, **params: Any) -> Any:
         key = "index" if isinstance(roi, int) else "id"
         return await self._client.tasks.start(
             "project.rois.open",
@@ -2106,9 +2087,7 @@ class AsyncProjectViews:
             _with_revision({**self._selector(view), "new_name": new_name}, if_revision),
         )
 
-    async def delete(
-        self, view: str | int, *, if_revision: int | None = None
-    ) -> Any:
+    async def delete(self, view: str | int, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "project.views.delete",
             _with_revision(self._selector(view), if_revision),
@@ -2235,9 +2214,7 @@ class AsyncLabels:
     async def get(self) -> Any:
         return await self._client.call("viewer.labels.get")
 
-    async def load(
-        self, name: str | None = None, *, if_revision: int | None = None
-    ) -> Any:
+    async def load(self, name: str | None = None, *, if_revision: int | None = None) -> Any:
         params = {} if name is None else {"name": name}
         return await self._client.call(
             "viewer.labels.load", _with_revision(params, if_revision)
@@ -2412,18 +2389,14 @@ class AsyncObjects:
             label=f"Load segmentation GeoJSON from {path}",
         )
 
-    async def reload_segmentation_geojson(
-        self, *, if_revision: int | None = None
-    ) -> Any:
+    async def reload_segmentation_geojson(self, *, if_revision: int | None = None) -> Any:
         return await self._client.tasks.start(
             "viewer.segmentation_geojson.source.reload",
             _with_revision({}, if_revision),
             label="Reload segmentation GeoJSON",
         )
 
-    async def clear_segmentation_geojson(
-        self, *, if_revision: int | None = None
-    ) -> Any:
+    async def clear_segmentation_geojson(self, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "viewer.segmentation_geojson.source.clear",
             _with_revision({}, if_revision),
@@ -2454,6 +2427,7 @@ class AsyncObjects:
         if_revision: int | None = None,
         **selector: Any,
     ) -> Any:
+        """Colour the selected object resource by an exact numeric property."""
         return await self.set_style(
             if_revision=if_revision,
             **selector,
@@ -2692,16 +2666,14 @@ class AsyncObjects:
             _with_revision(params, if_revision),
         )
 
-    async def clear_filter(
-        self, *, if_revision: int | None = None, **selector: Any
-    ) -> Any:
+    async def clear_filter(self, *, if_revision: int | None = None, **selector: Any) -> Any:
         return await self._client.call(
             "viewer.objects.clear_filter", _with_revision(selector, if_revision)
         )
 
 
 class AsyncAnnotations:
-    """Async actor-owned point annotation layers."""
+    """Actor-owned point annotation layers backed by optional Parquet resources."""
 
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
@@ -2782,9 +2754,7 @@ class AsyncAnnotations:
             label=f"Load annotation layer {layer_id}",
         )
 
-    async def reload(
-        self, layer_id: int, *, if_revision: int | None = None
-    ) -> Any:
+    async def reload(self, layer_id: int, *, if_revision: int | None = None) -> Any:
         return await self._client.tasks.start(
             "viewer.annotations.source.reload",
             _with_revision({"layer_id": layer_id}, if_revision),
@@ -2927,9 +2897,7 @@ class AsyncMasks:
         )
 
     async def undo(self, *, if_revision: int | None = None) -> Any:
-        return await self._client.call(
-            "viewer.masks.undo", _with_revision({}, if_revision)
-        )
+        return await self._client.call("viewer.masks.undo", _with_revision({}, if_revision))
 
     async def import_geojson(
         self,
@@ -3113,9 +3081,18 @@ class AsyncAnalysis:
     async def get(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
         return await self._client.call("viewer.analysis.get", _object_target(target, layer_id))
 
-    async def set(self, state: Mapping[str, Any], *, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
+    async def set(
+        self,
+        state: Mapping[str, Any],
+        *,
+        target: str = "objects",
+        layer_id: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
         params = {**_object_target(target, layer_id), "state": dict(state)}
-        return await self._client.call("viewer.analysis.set", _with_revision(params, if_revision))
+        return await self._client.call(
+            "viewer.analysis.set", _with_revision(params, if_revision)
+        )
 
     async def histogram(
         self,
@@ -3178,17 +3155,52 @@ class AsyncAnalysis:
         )
 
     async def get_warmup(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.analysis.warmup.get", _object_target(target, layer_id))
+        return await self._client.call(
+            "viewer.analysis.warmup.get", _object_target(target, layer_id)
+        )
 
-    async def warmup(self, *, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
-        return await self._client.tasks.start("viewer.analysis.warmup.start", _with_revision(_object_target(target, layer_id), if_revision), label="Warm object analysis")
+    async def warmup(
+        self,
+        *,
+        target: str = "objects",
+        layer_id: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        return await self._client.tasks.start(
+            "viewer.analysis.warmup.start",
+            _with_revision(_object_target(target, layer_id), if_revision),
+            label="Warm object analysis",
+        )
 
-    async def import_preset(self, path: str | Path, *, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
+    async def import_preset(
+        self,
+        path: str | Path,
+        *,
+        target: str = "objects",
+        layer_id: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
         params = {**_object_target(target, layer_id), "path": str(path)}
-        return await self._client.call("viewer.analysis.presets.import", _with_revision(params, if_revision))
+        return await self._client.call(
+            "viewer.analysis.presets.import", _with_revision(params, if_revision)
+        )
 
-    async def export_preset(self, path: str | Path, *, overwrite: bool = False, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.analysis.presets.export", {**_object_target(target, layer_id), "path": str(path), "overwrite": overwrite})
+    async def export_preset(
+        self,
+        path: str | Path,
+        *,
+        overwrite: bool = False,
+        target: str = "objects",
+        layer_id: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.analysis.presets.export",
+            {
+                **_object_target(target, layer_id),
+                "path": str(path),
+                "overwrite": overwrite,
+            },
+        )
 
 
 class AsyncMeasurements:
@@ -3196,14 +3208,35 @@ class AsyncMeasurements:
         self._client = client
 
     async def get(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.measurements.get", _object_target(target, layer_id))
+        return await self._client.call(
+            "viewer.measurements.get", _object_target(target, layer_id)
+        )
 
-    async def configure(self, *, metric: str | None = None, level: int | None = None, concurrency: int | None = None, filtered_only: bool | None = None, prefix: str | None = None, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
+    async def configure(
+        self,
+        *,
+        metric: str | None = None,
+        level: int | None = None,
+        concurrency: int | None = None,
+        filtered_only: bool | None = None,
+        prefix: str | None = None,
+        target: str = "objects",
+        layer_id: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
         params = _object_target(target, layer_id)
-        for key, value in {"metric": metric, "level": level, "concurrency": concurrency, "filtered_only": filtered_only, "prefix": prefix}.items():
+        for key, value in {
+            "metric": metric,
+            "level": level,
+            "concurrency": concurrency,
+            "filtered_only": filtered_only,
+            "prefix": prefix,
+        }.items():
             if value is not None:
                 params[key] = value
-        return await self._client.call("viewer.measurements.configure", _with_revision(params, if_revision))
+        return await self._client.call(
+            "viewer.measurements.configure", _with_revision(params, if_revision)
+        )
 
     async def start(
         self,
@@ -3227,13 +3260,30 @@ class AsyncMeasurements:
             ),
             **configuration,
         }
-        return await self._client.tasks.start("viewer.measurements.start", _with_revision(params, if_revision), label="Measure polygon intensities")
+        return await self._client.tasks.start(
+            "viewer.measurements.start",
+            _with_revision(params, if_revision),
+            label="Measure polygon intensities",
+        )
 
-    async def cancel(self, *, target: str = "objects", layer_id: int | None = None, if_revision: int | None = None) -> Any:
-        return await self._client.call("viewer.measurements.cancel", _with_revision(_object_target(target, layer_id), if_revision))
+    async def cancel(
+        self,
+        *,
+        target: str = "objects",
+        layer_id: int | None = None,
+        if_revision: int | None = None,
+    ) -> Any:
+        return await self._client.call(
+            "viewer.measurements.cancel",
+            _with_revision(_object_target(target, layer_id), if_revision),
+        )
 
-    async def list_generated_properties(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("viewer.measurements.properties.list", _object_target(target, layer_id))
+    async def list_generated_properties(
+        self, *, target: str = "objects", layer_id: int | None = None
+    ) -> Any:
+        return await self._client.call(
+            "viewer.measurements.properties.list", _object_target(target, layer_id)
+        )
 
 
 class AsyncObjectExports:
@@ -3241,10 +3291,14 @@ class AsyncObjectExports:
         self._client = client
 
     async def list_columns(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("exports.objects.columns", _object_target(target, layer_id))
+        return await self._client.call(
+            "exports.objects.columns", _object_target(target, layer_id)
+        )
 
     async def get_state(self, *, target: str = "objects", layer_id: int | None = None) -> Any:
-        return await self._client.call("exports.objects.get_state", _object_target(target, layer_id))
+        return await self._client.call(
+            "exports.objects.get_state", _object_target(target, layer_id)
+        )
 
     async def export(
         self,
@@ -3278,15 +3332,25 @@ class AsyncObjectExports:
             params["format"] = format
         if columns is not None:
             params["columns"] = list(columns)
-        return await self._client.tasks.start("exports.objects.start", _with_revision(params, if_revision), label=f"Export objects to {path}")
+        return await self._client.tasks.start(
+            "exports.objects.start",
+            _with_revision(params, if_revision),
+            label=f"Export objects to {path}",
+        )
 
     async def export_csv(self, path: str | Path, **options: Any) -> Any:
         params = self._export_params(path, **options)
-        return await self._client.tasks.start("exports.objects.export_csv", params, label=f"Export CSV to {path}")
+        return await self._client.tasks.start(
+            "exports.objects.export_csv", params, label=f"Export CSV to {path}"
+        )
 
     async def export_geoparquet(self, path: str | Path, **options: Any) -> Any:
         params = self._export_params(path, **options)
-        return await self._client.tasks.start("exports.objects.export_geoparquet", params, label=f"Export GeoParquet to {path}")
+        return await self._client.tasks.start(
+            "exports.objects.export_geoparquet",
+            params,
+            label=f"Export GeoParquet to {path}",
+        )
 
     @staticmethod
     def _export_params(path: str | Path, **options: Any) -> dict[str, Any]:
@@ -3317,9 +3381,7 @@ class AsyncMosaic:
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
 
-    async def configure_layout(
-        self, *, if_revision: int | None = None, **params: Any
-    ) -> Any:
+    async def configure_layout(self, *, if_revision: int | None = None, **params: Any) -> Any:
         return await self._client.call(
             "mosaic.layout.configure", _with_revision(params, if_revision)
         )
@@ -3349,7 +3411,8 @@ class AsyncMosaic:
 
     async def select_all(self, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
-            "mosaic.selection.set", _with_revision({"mode": "all"}, if_revision)
+            "mosaic.selection.set",
+            _with_revision({"mode": "all"}, if_revision),
         )
 
     async def select_range(
@@ -3414,9 +3477,7 @@ class AsyncMosaic:
         )
 
     async def fit_all(self, *, if_revision: int | None = None) -> Any:
-        return await self._client.call(
-            "mosaic.fit_all", _with_revision({}, if_revision)
-        )
+        return await self._client.call("mosaic.fit_all", _with_revision({}, if_revision))
 
     async def get_object_state(self) -> Any:
         return await self._client.call("mosaic.objects.get_state")
@@ -3438,7 +3499,11 @@ class AsyncMosaic:
         capacity: int | None = 2,
         if_revision: int | None = None,
     ) -> Any:
-        """Bound lazily loaded mosaic properties without unloading object geometry."""
+        """Bound lazily loaded mosaic properties without unloading object geometry.
+
+        ``capacity`` is counted per ROI. Active styling, filter, and Analysis
+        threshold properties remain pinned even when that temporarily exceeds the limit.
+        """
         if policy not in {"lru", "unbounded"}:
             raise ValueError("policy must be 'lru' or 'unbounded'")
         if policy == "lru" and (capacity is None or capacity < 1):
@@ -3466,6 +3531,7 @@ class AsyncMosaic:
         fill_cells: bool | None = None,
         fill_opacity: float | None = None,
     ) -> Any:
+        """Apply continuous object colours, optionally with one domain per ROI."""
         return await self.set_object_style(
             color_mapping=_continuous_color_mapping(
                 property,
@@ -3520,9 +3586,7 @@ class AsyncMosaic:
             _compact({"item_id": item_id, "roi_id": roi_id}),
         )
 
-    async def load_selected_objects(
-        self, *, if_revision: int | None = None
-    ) -> Any:
+    async def load_selected_objects(self, *, if_revision: int | None = None) -> Any:
         return await self._client.tasks.start(
             "mosaic.objects.load_selected",
             _with_revision({}, if_revision),
@@ -3559,9 +3623,7 @@ class AsyncMosaic:
             "mosaic.objects.cancel_load", _with_revision({}, if_revision)
         )
 
-    async def set_left_tab(
-        self, tab: str, *, if_revision: int | None = None
-    ) -> Any:
+    async def set_left_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "mosaic.ui.set_left_tab", _with_revision({"tab": tab}, if_revision)
         )
@@ -3582,9 +3644,7 @@ class AsyncMosaic:
             "mosaic.rendering.set", _with_revision(params, if_revision)
         )
 
-    async def set_right_tab(
-        self, tab: str, *, if_revision: int | None = None
-    ) -> Any:
+    async def set_right_tab(self, tab: str, *, if_revision: int | None = None) -> Any:
         return await self._client.call(
             "mosaic.ui.set_right_tab", _with_revision({"tab": tab}, if_revision)
         )

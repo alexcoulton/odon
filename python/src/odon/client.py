@@ -16,6 +16,7 @@ from .errors import (
     RequestTimeoutError,
     remote_error_from_message,
 )
+from ._version import __version__
 from .models import DEFAULT_REQUESTED_CAPABILITIES, Hello
 from .events import Events
 from .tasks import Tasks
@@ -47,7 +48,7 @@ class Client:
         instance: Instance | str | None = None,
         timeout: float = 10.0,
         client_name: str = "odon-client",
-        client_version: str = "0.1.0",
+        client_version: str = __version__,
         requested_capabilities: Sequence[str] | None = None,
     ) -> None:
         if host is None and port is None:
@@ -82,35 +83,40 @@ class Client:
         )
         self._reader_thread.start()
 
-        requested = tuple(
-            DEFAULT_REQUESTED_CAPABILITIES
-            if requested_capabilities is None
-            else requested_capabilities
-        )
-        if any(not isinstance(capability, str) or not capability for capability in requested):
-            self.close()
-            raise ValueError("requested_capabilities must contain non-empty strings")
+        # The socket and both worker threads already exist. Whatever goes wrong while
+        # negotiating the session (a rejected token, a timeout, a malformed reply), release
+        # them instead of leaking a half-open connection the caller never receives.
+        try:
+            requested = tuple(
+                DEFAULT_REQUESTED_CAPABILITIES
+                if requested_capabilities is None
+                else requested_capabilities
+            )
+            if any(not isinstance(capability, str) or not capability for capability in requested):
+                raise ValueError("requested_capabilities must contain non-empty strings")
 
-        hello_result = self.call(
-            "system.hello",
-            {
-                "client": {"name": client_name, "version": client_version},
-                "protocol_versions": [1],
-                "requested_capabilities": list(requested),
-                **({"token": token} if token is not None else {}),
-            },
-        )
-        if not isinstance(hello_result, Mapping):
+            hello_result = self.call(
+                "system.hello",
+                {
+                    "client": {"name": client_name, "version": client_version},
+                    "protocol_versions": [1],
+                    "requested_capabilities": list(requested),
+                    **({"token": token} if token is not None else {}),
+                },
+            )
+            if not isinstance(hello_result, Mapping):
+                raise ProtocolError("system.hello returned a non-object result")
+            self.hello = Hello.from_result(hello_result)
+            self._max_inline_payload_bytes = self.hello.max_inline_payload_bytes
+            logger.debug(
+                "connected to Odon instance=%s session=%s protocol=%s",
+                self.hello.instance_id,
+                self.hello.session_id,
+                self.hello.protocol_version,
+            )
+        except BaseException:
             self.close()
-            raise ProtocolError("system.hello returned a non-object result")
-        self.hello = Hello.from_result(hello_result)
-        self._max_inline_payload_bytes = self.hello.max_inline_payload_bytes
-        logger.debug(
-            "connected to Odon instance=%s session=%s protocol=%s",
-            self.hello.instance_id,
-            self.hello.session_id,
-            self.hello.protocol_version,
-        )
+            raise
 
         self.application = Application(self)
         self.datasets = Datasets(self)
@@ -319,7 +325,7 @@ def connect(
     token: str | None = None,
     instance: Instance | str | None = None,
     client_name: str = "odon-client",
-    client_version: str = "0.1.0",
+    client_version: str = __version__,
     requested_capabilities: Sequence[str] | None = None,
 ) -> Client:
     """Connect to a running Odon instance."""

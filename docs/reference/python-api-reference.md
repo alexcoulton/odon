@@ -1034,7 +1034,7 @@ Constructor: `ShellPropertyChange(node_id: 'str', property: 'str', before: 'Any'
 
 Access: use in shell patches. Stable schema-version-1 built-in and extension-host IDs.
 
-Constructor: `ShellId(*values)`
+Constructor: `ShellId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
 
 This value type has no public methods beyond its fields.
 
@@ -1042,7 +1042,7 @@ This value type has no public methods beyond its fields.
 
 Access: use in `ShellLayoutNode` builders. Stable built-in component and application-owned extension-host mount IDs.
 
-Constructor: `ShellMountId(*values)`
+Constructor: `ShellMountId(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
 
 This value type has no public methods beyond its fields.
 
@@ -1119,7 +1119,7 @@ Constructor: `ShellLayoutNode(id: 'str', type: 'ShellLayoutType \| str', childre
 
 Access: use in `ShellLayoutNode`. Supported desired-layout node kinds.
 
-Constructor: `ShellLayoutType(*values)`
+Constructor: `ShellLayoutType(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)`
 
 This value type has no public methods beyond its fields.
 
@@ -1435,7 +1435,7 @@ Access: `app.application`. Async application resource.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `get_state() -> 'Any'` | `app.get_state` | project, single, mosaic, transition | Get current application and viewer state. (completion: immediate_semantic) |
-| `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
+| `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | The last state fetched by this resource, without network IO. |
 | `get_loading_state() -> 'Any'` | `app.get_loading_state` | project, single, mosaic, transition | Get loading diagnostics. (completion: immediate_semantic) |
 | `list_methods() -> 'Any'` | `system.describe_methods` | protocol | List control methods and request schemas. (completion: immediate_semantic) |
 | `describe_events() -> 'Any'` | `system.describe_events` | protocol | Describe initial event families and envelope fields. (completion: immediate_semantic) |
@@ -1504,7 +1504,7 @@ Access: `app.viewer`. Async viewer resource.
 | `get_state() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Get state. |
 | `cached_state (property)` | SDK-local/delegated | Inherited from delegated operation | Cached state. |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.set` | single, mosaic | Set camera state. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
-| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content after Rust has completed the first canvas layout. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
+| `fit(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.fit` | single, mosaic | Fit content, waiting for Rust to finish the first canvas layout if needed. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
 | `zoom_in(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_in` | single, mosaic | Zoom in. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
 | `zoom_out(factor: 'float \| None' = None, *, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.camera.zoom_out` | single, mosaic | Zoom out. (mutates; completion: immediate_semantic; event: viewer.camera.changed) |
 | `get_smooth_pixels() -> 'Any'` | `viewer.rendering.get_smooth_pixels` | single, mosaic | Get image interpolation state. (completion: immediate_semantic) |
@@ -1566,7 +1566,7 @@ Access: returned by `app.viewer.viewports`. Stable asynchronous viewport handle.
 | `remove(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.remove` | single | Remove a viewport while preserving the final remaining view. (mutates; completion: immediate_semantic; event: viewer.viewports.removed) |
 | `get_camera() -> 'Any'` | `viewer.viewports.camera.get` | single | Get camera state for an explicit viewport. (completion: immediate_semantic) |
 | `set_camera(*, center: 'Sequence[float] \| None' = None, zoom: 'float \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.set` | single | Set camera state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
-| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image after Rust has laid out this viewport. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
+| `fit_camera(*, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.camera.fit` | single | Fit the image, waiting for Rust to lay out this viewport if needed. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
 | `get_plane() -> 'Any'` | `viewer.viewports.planes.get` | single | Get plane state for an explicit viewport. (completion: immediate_semantic) |
 | `set_plane(*, mode: 'str \| None' = None, slice: 'int \| None' = None, if_revision: 'int \| None' = None, if_navigation_revision: 'int \| None' = None) -> 'Any'` | `viewer.viewports.planes.set` | single | Set plane state for an explicit viewport and propagate configured links. (mutates; completion: immediate_semantic; event: viewer.viewports.navigation.changed) |
 | `list_channels() -> 'Any'` | `viewer.viewports.channels.get` | single | Get channel presentation for an explicit viewport. (completion: immediate_semantic) |
@@ -1601,7 +1601,7 @@ Access: `viewport.objects`. Async object presentation and filter operations boun
 | --- | --- | --- | --- |
 | `get_style() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
 | `set_style(*, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None, **style: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
-| `color_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
+| `color_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Colour objects by exact numeric values using a continuous palette. |
 | `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
 | `get_filter() -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
 | `set_filter(query: 'str \| None' = None, *, mode: 'str \| None' = None, clauses: 'Iterable[Mapping[str, Any]] \| None' = None, logic: 'str \| None' = None, if_revision: 'int \| None' = None, if_presentation_revision: 'int \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Create and control a linked two-viewport comparison workspace |
@@ -1801,7 +1801,7 @@ Access: `app.objects`. Async object resource.
 | `clear_segmentation_geojson(*, if_revision: 'int \| None' = None) -> 'Any'` | `viewer.segmentation_geojson.source.clear` | single | Clear the actor-owned segmentation GeoJSON line source and shared resource. (mutates; completion: immediate_semantic; event: viewer.segmentation_geojson.source.changed) |
 | `get_style(**selector: 'Any') -> 'Any'` | `viewer.objects.style.get` | single | Get complete object appearance, color-property, and bounded legend state. (completion: immediate_semantic) |
 | `set_style(*, if_revision: 'int \| None' = None, **params: 'Any') -> 'Any'` | `viewer.objects.style.set` | single | Set object visibility, stroke, fill, selection overlay, and color-property appearance. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
-| `color_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Polygon, point, proxy, and selection rendering state |
+| `color_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Colour the selected object resource by an exact numeric property. |
 | `set_legend(entries: 'Iterable[Mapping[str, Any]]', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.legend.set` | single | Set visibility and color overrides for object color-property legend values. (mutates; completion: immediate_semantic; event: viewer.objects.style.changed) |
 | `get_fast_rendering(**selector: 'Any') -> 'Any'` | `viewer.objects.rendering.get_fast` | single, mosaic | Get fast object-rendering mode. (completion: immediate_semantic) |
 | `set_fast_rendering(enabled: 'bool', *, if_revision: 'int \| None' = None, **selector: 'Any') -> 'Any'` | `viewer.objects.rendering.set_fast` | single, mosaic | Set fast object-rendering mode. (mutates; completion: immediate_semantic; event: viewer.objects.rendering.changed) |
@@ -1946,7 +1946,7 @@ Access: `app.mosaic`. Async mosaic resource.
 | `set_object_style(**style: 'Any') -> 'Any'` | `mosaic.objects.style.set` | mosaic | Set actor-owned global mosaic object presentation and legend style. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
 | `get_object_property_cache() -> 'Any'` | `mosaic.objects.property_cache.get` | mosaic | Get the lazy mosaic object-property retention policy. (completion: immediate_semantic) |
 | `set_object_property_cache(*, policy: 'str' = 'lru', capacity: 'int \| None' = 2, if_revision: 'int \| None' = None) -> 'Any'` | `mosaic.objects.property_cache.set` | mosaic | Bound lazily loaded mosaic properties without unloading object geometry. (mutates; completion: immediate_semantic; event: mosaic.objects.changed) |
-| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, domains_by_roi: 'Mapping[str, Sequence[float]] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Mosaic object loading and memory controls |
+| `color_objects_by_continuous(property: 'str', *, palette: 'str \| Iterable[Mapping[str, Any]]' = 'viridis', domain: 'str \| Sequence[float]' = 'auto', scale: 'str' = 'linear', reverse: 'bool' = False, out_of_range: 'str' = 'clamp', missing_color_rgb: 'Sequence[int] \| None' = None, domains_by_roi: 'Mapping[str, Sequence[float]] \| None' = None, fill_cells: 'bool \| None' = None, fill_opacity: 'float \| None' = None) -> 'Any'` | SDK-local/delegated | Inherited from delegated operation | Apply continuous object colours, optionally with one domain per ROI. |
 | `get_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.get` | mosaic | Get actor-owned per-ROI mosaic object selections. (completion: immediate_semantic) |
 | `replace_object_selection(*, selected_indices: 'Sequence[int]', item_id: 'int \| None' = None, roi_id: 'str \| None' = None, primary_index: 'int \| None' = None, expected_generation: 'int \| None' = None) -> 'Any'` | `mosaic.objects.selection.replace` | mosaic | Atomically replace one ROI's mosaic object selection. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
 | `clear_object_selection(*, item_id: 'int \| None' = None, roi_id: 'str \| None' = None) -> 'Any'` | `mosaic.objects.selection.clear` | mosaic | Clear actor-owned mosaic object selections globally or for one ROI. (mutates; completion: immediate_semantic; event: mosaic.objects.selection.changed) |
@@ -2002,7 +2002,7 @@ Access: returned by `app.layers`. Async external-layer handle.
 | `layer_id (property)` | SDK-local/delegated | Inherited from delegated operation | Layer id. |
 | `revision (property)` | SDK-local/delegated | Inherited from delegated operation | Revision. |
 | `refresh() -> "'AsyncLayer'"` | SDK-local/delegated | Inherited from delegated operation | Refresh. |
-| `update(**changes: 'Any') -> "'AsyncLayer'"` | SDK-local/delegated | Inherited from delegated operation | Update. |
+| `update(*, name: 'str \| None' = None, visible: 'bool \| None' = None, opacity: 'float \| None' = None, style: 'Mapping[str, Any] \| None' = None, if_revision: 'int \| None' = None) -> "'AsyncLayer'"` | SDK-local/delegated | Inherited from delegated operation | Update. |
 | `remove() -> 'None'` | SDK-local/delegated | Inherited from delegated operation | Remove. |
 
 ### Async tasks
@@ -2118,6 +2118,7 @@ Access: returned by `app.ui.register_extension()`. Async UI extension handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `id (property)` | SDK-local/delegated | Inherited from delegated operation | Id. |
+| `granted_capabilities (property)` | SDK-local/delegated | Inherited from delegated operation | Granted capabilities. |
 | `set_readiness(ready: 'bool', *, reason: 'str \| None' = None) -> "'AsyncExtension'"` | `ui.extensions.set_readiness` | protocol | Set the owned extension's connected-session readiness state. (mutates; completion: immediate_semantic) |
 | `register(root: 'Component', *, location: 'str' = 'shell', contribution_id: 'str \| None' = None) -> 'AsyncContribution'` | `ui.contributions.register` | protocol | Register a validated component tree. (mutates; completion: immediate_semantic) |
 | `on_interaction(callback: 'Callable[[UiInteraction], Any \| Awaitable[Any]]', *, action: 'str \| None' = None, component_id: 'str \| None' = None) -> 'AsyncInteractionSubscription'` | SDK-local/delegated | Inherited from delegated operation | Subscribe to normalized interactions from this extension's components. |
@@ -2137,7 +2138,9 @@ Access: returned by `extension.register()`. Async UI contribution handle.
 | Member | Control method | Modes | Contract |
 | --- | --- | --- | --- |
 | `contribution_id (property)` | SDK-local/delegated | Inherited from delegated operation | Contribution id. |
+| `revision (property)` | SDK-local/delegated | Inherited from delegated operation | Revision. |
 | `shell_mount (property)` | SDK-local/delegated | Inherited from delegated operation | Shell mount. |
+| `ownership (property)` | SDK-local/delegated | Inherited from delegated operation | Ownership. |
 | `mount(node_id: 'str', **kwargs: 'Any') -> 'ShellLayoutNode'` | SDK-local/delegated | Inherited from delegated operation | Create a keyed shell node that renders this contribution. |
 | `patch_values(values: 'Mapping[str, Any]', *, if_revision: 'int \| None' = None) -> "'AsyncContribution'"` | `ui.contributions.patch_values` | protocol | Atomically patch retained UI values. (mutates; completion: immediate_semantic) |
 | `remove() -> 'None'` | `ui.contributions.remove` | protocol | Remove an owned component tree. (mutates; completion: immediate_semantic) |

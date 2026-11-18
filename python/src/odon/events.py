@@ -38,6 +38,7 @@ class Events:
         self._callbacks: list[tuple[tuple[str, ...], EventCallback]] = []
         self._lock = threading.Lock()
         self._closed = False
+        self._polled = False
         self.dropped_events = 0
         self._worker = threading.Thread(
             target=self._run_callbacks, name="odon-event-callbacks", daemon=True
@@ -91,6 +92,7 @@ class Events:
     def next(self, timeout: float | None = None) -> Event:
         """Block until the next event arrives, or raise ``queue.Empty``."""
 
+        self._polled = True
         event = self._queue.get(timeout=timeout)
         if event is None:
             raise ConnectionClosedError("Odon event stream is closed")
@@ -110,11 +112,27 @@ class Events:
         if self._closed:
             return
         event = Event.from_params(params)
-        for destination in (self._queue, self._callback_queue):
-            try:
-                destination.put_nowait(event)
-            except queue.Full:
+        try:
+            self._callback_queue.put_nowait(event)
+        except queue.Full:
+            self.dropped_events += 1
+        # The polling queue keeps the most recent events for ``next()``/``iter()``. Until
+        # something actually reads it, nobody is waiting on those events, so the oldest is
+        # discarded quietly instead of every later event being counted as dropped.
+        try:
+            self._queue.put_nowait(event)
+        except queue.Full:
+            if self._polled:
                 self.dropped_events += 1
+            else:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._queue.put_nowait(event)
+                except queue.Full:
+                    pass
 
     def _run_callbacks(self) -> None:
         while (event := self._callback_queue.get()) is not None:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .errors import RequestTimeoutError, TaskCancelledError, TaskFailedError
 from .models import Event, TaskSnapshot
+from .tasks import COMPLETION_RECHECK_SECONDS
 
 if TYPE_CHECKING:
     from .async_client import AsyncClient
@@ -64,17 +65,29 @@ class AsyncTask:
         try:
             if (await self.refresh()).done:
                 return self._result()
-            try:
-                if timeout is None:
-                    await completed.wait()
-                else:
-                    await asyncio.wait_for(completed.wait(), timeout)
-            except TimeoutError as error:
-                raise RequestTimeoutError(
-                    f"timed out waiting for task {self.task_id!r}; the retained Odon "
-                    "task may still be running (await task.cancel() explicitly to request "
-                    "cooperative cancellation)"
-                ) from error
+            loop = asyncio.get_running_loop()
+            deadline = None if timeout is None else loop.time() + timeout
+            while not completed.is_set():
+                remaining = None if deadline is None else deadline - loop.time()
+                if remaining is not None and remaining <= 0:
+                    raise RequestTimeoutError(
+                        f"timed out waiting for task {self.task_id!r}; the retained Odon "
+                        "task may still be running (await task.cancel() explicitly to request "
+                        "cooperative cancellation)"
+                    )
+                recheck = COMPLETION_RECHECK_SECONDS
+                try:
+                    await asyncio.wait_for(
+                        completed.wait(),
+                        recheck if remaining is None else min(recheck, remaining),
+                    )
+                    break
+                # ``asyncio.TimeoutError`` only became the builtin ``TimeoutError`` in 3.11.
+                except asyncio.TimeoutError:
+                    # Completion is normally pushed as an event; re-read the task in case
+                    # that event never arrived.
+                    if (await self.refresh()).done:
+                        break
             return self._result()
         finally:
             self._tasks._client.events.remove_callback(receive)

@@ -61,6 +61,40 @@ jobs:
           python -m build --wheel --outdir dist/python-client python
           python -m build --wheel --outdir dist/odon-cellpose extensions/odon-cellpose
 
+  python-sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+
+    name: Python SDK (${{ matrix.python }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Python toolchain
+        uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python }}"
+
+      - name: Install SDK with array support
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./python[arrays]"
+
+      - name: Generated sources are current
+        run: python scripts/generate_async_resources.py --check
+
+      - name: Python SDK tests
+        env:
+          PYTHONPATH: python/src
+        run: python -m unittest discover -s python/tests -v
+
   coverage:
     runs-on: ubuntu-latest
 

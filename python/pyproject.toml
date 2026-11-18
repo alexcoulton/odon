@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "odon-client"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Pure-Python client for controlling a running Odon viewer"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,9 @@ spatialdata = ["spatialdata>=0.6,<0.9; python_version >= '3.11'"]
 
 [project.urls]
 Repository = "https://github.com/alexcoulton/odon"
+
+[tool.hatch.version]
+path = "src/odon/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/odon"]

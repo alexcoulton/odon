@@ -25,6 +25,7 @@ class AsyncEvents:
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue(maxsize=max_queue)
         self._callbacks: list[tuple[tuple[str, ...], AsyncEventCallback]] = []
         self._closed = False
+        self._polled = False
         self.dropped_events = 0
 
     async def subscribe(
@@ -62,6 +63,7 @@ class AsyncEvents:
         self._callbacks = [item for item in self._callbacks if item[1] is not callback]
 
     async def next(self, timeout: float | None = None) -> Event:
+        self._polled = True
         if timeout is None:
             event = await self._queue.get()
         else:
@@ -81,10 +83,20 @@ class AsyncEvents:
         if self._closed:
             return
         event = Event.from_params(params)
+        # The polling queue keeps the most recent events for ``next()``/``iter()``. Until
+        # something actually reads it, nobody is waiting on those events, so the oldest is
+        # discarded quietly instead of every later event being counted as dropped.
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            self.dropped_events += 1
+            if self._polled:
+                self.dropped_events += 1
+            else:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                self._queue.put_nowait(event)
         for patterns, callback in tuple(self._callbacks):
             if any(pattern_matches(pattern, event.name) for pattern in patterns):
                 try:

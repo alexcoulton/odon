@@ -27,8 +27,25 @@ class AsyncLayer:
         self.snapshot = (await self._layers.get(self.layer_id)).snapshot
         return self
 
-    async def update(self, **changes: Any) -> "AsyncLayer":
-        self.snapshot = (await self._layers.update(self.layer_id, **changes)).snapshot
+    async def update(
+        self,
+        *,
+        name: str | None = None,
+        visible: bool | None = None,
+        opacity: float | None = None,
+        style: Mapping[str, Any] | None = None,
+        if_revision: int | None = None,
+    ) -> "AsyncLayer":
+        self.snapshot = (
+            await self._layers.update(
+                self.layer_id,
+                name=name,
+                visible=visible,
+                opacity=opacity,
+                style=style,
+                if_revision=if_revision,
+            )
+        ).snapshot
         return self
 
     async def remove(self) -> None:

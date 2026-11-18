@@ -44,6 +44,7 @@ from .errors import (
     RequestTimeoutError,
     remote_error_from_message,
 )
+from ._version import __version__
 from .models import DEFAULT_REQUESTED_CAPABILITIES, Hello
 from .async_events import AsyncEvents
 from .async_tasks import AsyncTasks
@@ -146,7 +147,7 @@ class AsyncClient:
         instance: Instance | str | None = None,
         timeout: float = 10.0,
         client_name: str = "odon-client",
-        client_version: str = "0.1.0",
+        client_version: str = __version__,
         requested_capabilities: Sequence[str] | None = None,
     ) -> "AsyncClient":
         if host is None and port is None:
@@ -234,7 +235,8 @@ class AsyncClient:
             response = await asyncio.wait_for(
                 future, timeout=self.timeout if timeout is None else timeout
             )
-        except TimeoutError as error:
+        # ``asyncio.TimeoutError`` only became the builtin ``TimeoutError`` in Python 3.11.
+        except asyncio.TimeoutError as error:
             raise RequestTimeoutError(
                 f"timed out waiting for Odon method {method!r}; the operation may still be running"
             ) from error
@@ -387,7 +389,7 @@ def connect_async(
     token: str | None = None,
     instance: Instance | str | None = None,
     client_name: str = "odon-client",
-    client_version: str = "0.1.0",
+    client_version: str = __version__,
     requested_capabilities: Sequence[str] | None = None,
 ) -> _AsyncConnector:
     """Return an awaitable and async-context-manager connection factory."""

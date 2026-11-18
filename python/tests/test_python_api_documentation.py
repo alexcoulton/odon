@@ -11,6 +11,12 @@ GENERATOR = ROOT / "scripts" / "generate_python_api_reference.py"
 
 
 class PythonApiDocumentationTests(unittest.TestCase):
+    # The reference embeds signatures as the interpreter renders them, which differs between
+    # Python versions. It is generated, and therefore only checked, with the version CI uses.
+    @unittest.skipUnless(
+        sys.version_info[:2] == (3, 11),
+        "the API reference is generated with Python 3.11",
+    )
     def test_generated_member_reference_is_current(self) -> None:
         result = subprocess.run(
             [sys.executable, str(GENERATOR), "--check"],

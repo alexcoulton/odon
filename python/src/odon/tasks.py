@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,12 @@ from .models import Event, TaskSnapshot
 
 if TYPE_CHECKING:
     from .client import Client
+
+
+# How often a waiting task re-reads its state from Odon. Completion is normally pushed as an
+# event; this is the safety net for an event that never arrives (for example one dropped
+# because a slow callback let the bounded event queue fill).
+COMPLETION_RECHECK_SECONDS = 5.0
 
 
 class Task:
@@ -53,12 +60,20 @@ class Task:
         try:
             if self.refresh().done:
                 return self._result()
-            if not completed.wait(timeout):
-                raise RequestTimeoutError(
-                    f"timed out waiting for task {self.task_id!r}; the retained Odon "
-                    "task may still be running (call task.cancel() explicitly to request "
-                    "cooperative cancellation)"
-                )
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while not completed.is_set():
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise RequestTimeoutError(
+                        f"timed out waiting for task {self.task_id!r}; the retained Odon "
+                        "task may still be running (call task.cancel() explicitly to request "
+                        "cooperative cancellation)"
+                    )
+                recheck = COMPLETION_RECHECK_SECONDS
+                if completed.wait(recheck if remaining is None else min(recheck, remaining)):
+                    break
+                if self.refresh().done:
+                    break
             return self._result()
         finally:
             self._tasks._client.events.remove_callback(receive)

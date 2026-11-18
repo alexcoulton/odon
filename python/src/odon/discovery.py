@@ -80,7 +80,10 @@ def list_instances(*, clean_stale: bool = True) -> list[Instance]:
             continue
         if _endpoint_is_live(instance):
             instances.append(instance)
-        elif clean_stale:
+        elif clean_stale and not _process_is_alive(instance.pid):
+            # Only a manifest whose process is gone is stale. One whose endpoint merely did
+            # not answer in time may belong to a busy instance, and deleting it would make
+            # that instance undiscoverable for the rest of its life.
             _unlink(path)
     return sorted(
         instances,
@@ -117,6 +120,39 @@ def _endpoint_is_live(instance: Instance) -> bool:
             return True
     except OSError:
         return False
+
+
+def _process_is_alive(pid: int) -> bool:
+    """Whether a process with this ID exists. Errs towards "alive" when it cannot tell."""
+
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            # ERROR_ACCESS_DENIED: the process exists but belongs to someone else.
+            return kernel32.GetLastError() == 5
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
 
 
 def _unlink(path: Path) -> None:

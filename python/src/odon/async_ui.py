@@ -24,6 +24,7 @@ from .ui import (
     ShellLayoutDocument,
     ShellLayoutProfile,
     ShellLayoutNode,
+    ShellOwnership,
     ShellSnapshot,
     _extension_layout_document,
     _extension_layout_name,
@@ -65,8 +66,21 @@ class AsyncContribution:
         return str(self.snapshot["contribution_id"])
 
     @property
+    def revision(self) -> int:
+        return int(self.snapshot["revision"])
+
+    @property
     def shell_mount(self) -> str:
         return str(self.snapshot["shell_mount"])
+
+    @property
+    def ownership(self) -> "ShellOwnership | None":
+        value = self.snapshot.get("ownership")
+        if value is None:
+            return None
+        return ShellOwnership.from_result(
+            _require_mapping(value, "contribution ownership")
+        )
 
     def mount(self, node_id: str, **kwargs: Any) -> ShellLayoutNode:
         """Create a keyed shell node that renders this contribution."""
@@ -105,6 +119,10 @@ class AsyncExtension:
     @property
     def id(self) -> str:
         return str(self.snapshot["id"])
+
+    @property
+    def granted_capabilities(self) -> frozenset[str]:
+        return frozenset(self.snapshot.get("granted_capabilities", ()))
 
     async def set_readiness(
         self, ready: bool, *, reason: str | None = None

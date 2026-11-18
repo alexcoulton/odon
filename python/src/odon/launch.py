@@ -11,8 +11,34 @@ from pathlib import Path
 
 from .client import Client
 from .async_client import AsyncClient
-from .discovery import list_instances
+from .discovery import Instance, list_instances
 from .errors import ConnectionClosedError, RequestTimeoutError
+
+
+def _launched_instance(
+    instances: Sequence[Instance],
+    pid: int,
+    known_before: set[str],
+    launched_at_unix_ms: int,
+) -> Instance | None:
+    """Pick the manifest published by the process this call started.
+
+    The child's own PID is authoritative. Some installations start Odon through a wrapper whose
+    PID differs from the application's, so as a fallback a manifest is accepted when it is the
+    only one that appeared after the launch began. If several appeared, none can be attributed
+    to this launch and the caller keeps waiting rather than attaching to someone else's viewer.
+    """
+
+    for instance in instances:
+        if instance.pid == pid:
+            return instance
+    appeared = [
+        instance
+        for instance in instances
+        if instance.instance_id not in known_before
+        and instance.started_at_unix_ms >= launched_at_unix_ms
+    ]
+    return appeared[0] if len(appeared) == 1 else None
 
 
 def launch(
@@ -33,6 +59,8 @@ def launch(
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
     before = {instance.instance_id for instance in list_instances()}
+    # Manifest timestamps come from the same clock; allow a little slack for its granularity.
+    launched_at_unix_ms = int(time.time() * 1000) - 1000
     process_env = os.environ.copy()
     if env is not None:
         process_env.update({str(key): str(value) for key, value in env.items()})
@@ -48,13 +76,8 @@ def launch(
                 raise ConnectionClosedError(
                     f"Odon exited with status {return_code} before publishing a control endpoint"
                 )
-            instances = list_instances()
-            selected = next(
-                (instance for instance in instances if instance.pid == process.pid),
-                None,
-            ) or next(
-                (instance for instance in instances if instance.instance_id not in before),
-                None,
+            selected = _launched_instance(
+                list_instances(), process.pid, before, launched_at_unix_ms
             )
             if selected is not None:
                 client = Client(instance=selected, timeout=timeout)
@@ -90,6 +113,7 @@ async def launch_async(
     before = {
         instance.instance_id for instance in await asyncio.to_thread(list_instances)
     }
+    launched_at_unix_ms = int(time.time() * 1000) - 1000
     process_env = os.environ.copy()
     if env is not None:
         process_env.update({str(key): str(value) for key, value in env.items()})
@@ -103,11 +127,11 @@ async def launch_async(
                 raise ConnectionClosedError(
                     f"Odon exited with status {process.returncode} before publishing a control endpoint"
                 )
-            instances = await asyncio.to_thread(list_instances)
-            selected = next(
-                (instance for instance in instances if instance.pid == process.pid), None
-            ) or next(
-                (instance for instance in instances if instance.instance_id not in before), None
+            selected = _launched_instance(
+                await asyncio.to_thread(list_instances),
+                process.pid,
+                before,
+                launched_at_unix_ms,
             )
             if selected is not None:
                 client = await AsyncClient.connect(instance=selected, timeout=timeout)
@@ -122,7 +146,7 @@ async def launch_async(
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), 2)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
         raise
