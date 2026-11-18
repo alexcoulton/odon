@@ -145,7 +145,7 @@ pub struct RenderProjection {
     pub mode: ModelMode,
     pub document_generation: u64,
     pub document: Option<Arc<RenderDocument>>,
-    pub project: ProjectModelSnapshot,
+    pub project: Arc<ProjectModelSnapshot>,
     pub project_object_preload: crate::model::ProjectObjectPreloadProjection,
     pub settings: AppSettings,
     pub command_surface: Value,

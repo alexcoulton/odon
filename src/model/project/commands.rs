@@ -219,7 +219,7 @@ impl ProjectModel {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         let load_generation = self.snapshot.load_generation.wrapping_add(1);
-        self.snapshot = if let Some(config) = config {
+        *self.snapshot = if let Some(config) = config {
             ProjectModelSnapshot {
                 rois: config.rois.clone(),
                 default_dataset: config.default_dataset.clone(),
@@ -603,25 +603,27 @@ impl ProjectModel {
     }
 
     pub(super) fn sync_persisted_project(&mut self) {
-        self.snapshot.config.rois.clone_from(&self.snapshot.rois);
-        self.snapshot
+        // One mutable access: the indexed fields and the persisted copies live in the same
+        // (possibly shared) snapshot, which is detached once here.
+        let snapshot = &mut *self.snapshot;
+        snapshot.config.rois.clone_from(&snapshot.rois);
+        snapshot
             .config
             .default_dataset
-            .clone_from(&self.snapshot.default_dataset);
-        self.snapshot
+            .clone_from(&snapshot.default_dataset);
+        snapshot
             .config
             .secondary_dataset
-            .clone_from(&self.snapshot.secondary_dataset);
-        self.snapshot
+            .clone_from(&snapshot.secondary_dataset);
+        snapshot
             .config
             .default_threshold_marker
-            .clone_from(&self.snapshot.default_threshold_marker);
-        self.snapshot
+            .clone_from(&snapshot.default_threshold_marker);
+        snapshot
             .config
             .mosaic_segmentation_search_roots
-            .clone_from(&self.snapshot.mosaic_segmentation_search_roots);
-        let state = self
-            .snapshot
+            .clone_from(&snapshot.mosaic_segmentation_search_roots);
+        let state = snapshot
             .state
             .as_object_mut()
             .expect("project state is normalized to an object");
@@ -632,7 +634,7 @@ impl ProjectModel {
             .expect("project browser state is normalized to an object");
         browser.insert(
             "focused".to_string(),
-            self.snapshot
+            snapshot
                 .focused_source_key
                 .clone()
                 .map(Value::String)
@@ -640,11 +642,11 @@ impl ProjectModel {
         );
         browser.insert(
             "selected".to_string(),
-            json!(self.snapshot.selected_source_keys),
+            json!(snapshot.selected_source_keys),
         );
         state.insert(
             "view_presets".to_string(),
-            Value::Array(self.snapshot.view_presets.clone()),
+            Value::Array(snapshot.view_presets.clone()),
         );
     }
 }

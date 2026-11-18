@@ -59,7 +59,30 @@ impl Default for ProjectModelSnapshot {
     }
 }
 
+/// The project snapshot, shared with every projection that was published from it.
+///
+/// Publishing a projection used to deep-copy the whole project (every ROI, its mask polygons,
+/// the saved views) for each state change, including each camera step. Handing out the same
+/// allocation costs nothing, and the copy is deferred to the next real project mutation: any
+/// mutable access detaches from the shared allocation first.
+#[derive(Debug, Clone, Default)]
+struct SharedProjectSnapshot(std::sync::Arc<ProjectModelSnapshot>);
+
+impl std::ops::Deref for SharedProjectSnapshot {
+    type Target = ProjectModelSnapshot;
+
+    fn deref(&self) -> &ProjectModelSnapshot {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SharedProjectSnapshot {
+    fn deref_mut(&mut self) -> &mut ProjectModelSnapshot {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProjectModel {
-    snapshot: ProjectModelSnapshot,
+    snapshot: SharedProjectSnapshot,
 }

@@ -100,7 +100,7 @@ impl AppModel {
                 .and_then(Value::as_bool)
                 .unwrap_or(true)
         {
-            request.project_path = self.project_snapshot().saved_path;
+            request.project_path = self.project_snapshot().saved_path.clone();
         }
         if params.get("roi").is_some() {
             request.roi = params

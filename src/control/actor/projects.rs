@@ -65,7 +65,7 @@ pub(super) fn begin_project_save(
         .get("path")
         .and_then(Value::as_str)
         .map(expand_path)
-        .or_else(|| model.project_snapshot().saved_path);
+        .or_else(|| model.project_snapshot().saved_path.clone());
     let Some(path) = path else {
         diagnostics
             .rejected_requests
@@ -180,6 +180,7 @@ pub(super) fn begin_samplesheet_import(
     let default_dataset = model
         .project_snapshot()
         .default_dataset
+        .clone()
         .unwrap_or_else(|| "default".to_string());
     let generation = model.begin_project_operation(format!("Importing {}", path.display()));
     match load_job_tx.try_send(LoadJob::SamplesheetImport {
@@ -220,7 +221,7 @@ pub(super) fn begin_samplesheet_export(
         .get("overwrite")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let rois = model.project_snapshot().rois;
+    let rois = model.project_snapshot().rois.clone();
     let generation = model.begin_project_operation(format!("Exporting {}", path.display()));
     match load_job_tx.try_send(LoadJob::SamplesheetExport {
         generation,

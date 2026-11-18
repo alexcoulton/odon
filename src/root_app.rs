@@ -663,7 +663,7 @@ impl RootApp {
                 Mode::Mosaic { mosaic, .. } => mosaic.take_project_space(),
                 Mode::Transition => ProjectSpace::default(),
             };
-            project_space.apply_control_actor_project_projection(&projection.project);
+            project_space.apply_control_actor_shared_project_projection(&projection.project);
             self.mode = Mode::Project { project_space };
             self.control_document_generation_applied = projection.document_generation;
             self.control_actor_mode_signature = Some("project".to_string());
@@ -706,7 +706,7 @@ impl RootApp {
                         ReturnToSingleState { dataset_root: None },
                     ),
                 };
-                project_space.apply_control_actor_project_projection(&projection.project);
+                project_space.apply_control_actor_shared_project_projection(&projection.project);
                 let mut mosaic =
                     match MosaicViewerApp::from_control_resource(ctx, self.gpu_available, resource)
                     {
@@ -739,7 +739,7 @@ impl RootApp {
             } else if let Mode::Mosaic { mosaic, .. } = &mut self.mode {
                 mosaic
                     .project_space_mut()
-                    .apply_control_actor_project_projection(&projection.project);
+                    .apply_control_actor_shared_project_projection(&projection.project);
                 if let Err(error) = mosaic.apply_control_actor_projection(
                     &projection.mosaic_state,
                     projection.memory_state.as_ref(),
@@ -779,7 +779,7 @@ impl RootApp {
                         actor_source.map(|source| format!("single:{source}"));
                     if let Mode::Single(app) = &mut self.mode {
                         app.project_space_mut()
-                            .apply_control_actor_project_projection(&projection.project);
+                            .apply_control_actor_shared_project_projection(&projection.project);
                     }
                     return self.apply_control_projection_workspace(
                         projection.workspace.as_ref(),
@@ -925,7 +925,7 @@ impl RootApp {
             app.sync_control_external_layers(&external_layers, &external_resources);
             self.control_external_revision = external_revision;
             app.project_space_mut()
-                .apply_control_actor_project_projection(&projection.project);
+                .apply_control_actor_shared_project_projection(&projection.project);
             app.apply_control_actor_screenshot_preferences(&projection.screenshot_preferences);
             if let Err(error) =
                 app.apply_control_actor_tile_loading_policy(&projection.tile_loading_policy)

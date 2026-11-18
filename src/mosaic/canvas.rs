@@ -35,11 +35,16 @@ impl MosaicViewerApp {
         if response.double_clicked() {
             if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
                 let world = self.camera.screen_to_world(pos, rect);
-                if let Some(it) = self.items.iter().find(|it| item_rect(it).contains(world)) {
-                    let roi_id = it.sample_id.clone();
+                // Items are kept in the actor's order, so the position addresses the clicked item
+                // exactly. A ROI name would not: several items can share one.
+                if let Some(index) = self
+                    .items
+                    .iter()
+                    .position(|it| item_rect(it).contains(world))
+                {
                     self.submit_native_control_intent(
                         "mosaic.focus.set",
-                        serde_json::json!({"roi_id":roi_id,"fit":true}),
+                        serde_json::json!({"index":index,"fit":true}),
                     );
                 }
             }

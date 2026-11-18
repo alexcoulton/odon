@@ -123,13 +123,13 @@ impl ProjectModel {
 
     pub(crate) fn replace(&mut self, mut snapshot: ProjectModelSnapshot) {
         normalize_snapshot_shape(&mut snapshot);
-        self.snapshot = snapshot;
+        *self.snapshot = snapshot;
         self.normalize_selection();
         self.sync_persisted_project();
     }
 
-    pub(crate) fn snapshot(&self) -> ProjectModelSnapshot {
-        self.snapshot.clone()
+    pub(crate) fn snapshot(&self) -> std::sync::Arc<ProjectModelSnapshot> {
+        std::sync::Arc::clone(&self.snapshot.0)
     }
 
     pub(crate) fn mask_layer_count_for_source(&self, source: &DatasetSource) -> Option<usize> {
@@ -314,7 +314,7 @@ impl ProjectModel {
             .cloned()
             .unwrap_or_default();
         let view_count = view_presets.len();
-        self.snapshot = ProjectModelSnapshot {
+        *self.snapshot = ProjectModelSnapshot {
             config,
             state,
             load_generation: next_load_generation,
@@ -510,5 +510,5 @@ pub(crate) fn normalized_loaded_project_snapshot(
 ) -> Result<ProjectModelSnapshot, ControlError> {
     let mut project = ProjectModel::default();
     project.install_loaded(path, config, state)?;
-    Ok(project.snapshot())
+    Ok((*project.snapshot()).clone())
 }

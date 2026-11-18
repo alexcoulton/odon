@@ -26,21 +26,44 @@ const LOG_FILE_PATH: &str = "odon.log";
 pub fn init(level: LogLevel, debug_io: bool) {
     let _ = START.set(Instant::now());
     let _ = CONFIG.set(LogConfig { level, debug_io });
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(LOG_FILE_PATH)
-        .ok();
-    let _ = LOG_FILE.set(Mutex::new(file));
-    if LOG_FILE
-        .get()
-        .and_then(|file| file.lock().ok())
-        .and_then(|file| file.as_ref().map(|_| ()))
-        .is_some()
-    {
-        eprintln!("[   0.000][thread][Info] writing logs to {LOG_FILE_PATH}");
+    // The working directory is the natural place when Odon is started from a terminal. An
+    // application launched from the Finder, Start menu or a desktop entry usually runs in a
+    // directory it cannot write to (`/` on macOS), where the log used to be lost silently; fall
+    // back to the per-user data directory so there is always a log to look at.
+    let opened = log_file_candidates().into_iter().find_map(|path| {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .ok()
+            .map(|file| (path, file))
+    });
+    match opened {
+        Some((path, file)) => {
+            let _ = LOG_FILE.set(Mutex::new(Some(file)));
+            eprintln!(
+                "[   0.000][thread][Info] writing logs to {}",
+                path.display()
+            );
+        }
+        None => {
+            let _ = LOG_FILE.set(Mutex::new(None));
+            eprintln!("[   0.000][thread][Warn] no writable location for {LOG_FILE_PATH}; logging to stderr only");
+        }
     }
+}
+
+fn log_file_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = vec![std::path::PathBuf::from(LOG_FILE_PATH)];
+    if let Some(directory) = dirs::data_local_dir() {
+        candidates.push(directory.join("odon").join("logs").join(LOG_FILE_PATH));
+    }
+    candidates.push(std::env::temp_dir().join(LOG_FILE_PATH));
+    candidates
 }
 
 pub fn config() -> LogConfig {

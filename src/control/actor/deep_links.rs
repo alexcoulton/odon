@@ -52,7 +52,7 @@ pub(super) fn begin_deep_link_application(
         model.begin_deep_link_apply(format!("Applying deep link {url}"));
     let spec = DeepLinkApplySpec {
         deep_link,
-        current_project,
+        current_project: (*current_project).clone(),
         cached_object,
         s3_session,
         current_document: render_document
@@ -143,7 +143,7 @@ pub(super) fn begin_deep_link_resolution(
         operation_scope: operation_scope.clone(),
         request,
         deep_link,
-        current_project,
+        current_project: (*current_project).clone(),
     }) {
         Ok(()) => {
             diagnostics.workers_started.fetch_add(1, Ordering::Relaxed);

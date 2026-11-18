@@ -170,7 +170,9 @@ impl AppModel {
         );
     }
 
-    pub fn project_snapshot(&self) -> ProjectModelSnapshot {
+    /// The current project, shared rather than copied. Clone a field (or the whole value) when
+    /// an owned copy is needed.
+    pub fn project_snapshot(&self) -> Arc<ProjectModelSnapshot> {
         self.project.snapshot()
     }
 

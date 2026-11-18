@@ -568,6 +568,8 @@ pub struct ProjectSpace {
     /// Last complete actor project replacement materialized into this renderer-side view model.
     /// Ordinary actor projections deliberately do not replace the complete persisted state.
     control_actor_load_generation: u64,
+    /// The shared actor project snapshot most recently applied in full.
+    applied_control_actor_project: Option<std::sync::Arc<odon::model::ProjectModelSnapshot>>,
     control_actor_owned: bool,
     pending_control_intents: Vec<ProjectControlIntent>,
 }

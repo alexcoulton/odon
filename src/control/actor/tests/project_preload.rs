@@ -429,3 +429,100 @@ fn project_object_preload_projects_progress_after_each_source() {
         let _ = std::fs::remove_file(source);
     }
 }
+
+#[test]
+fn project_object_preload_loads_sources_concurrently() {
+    struct OverlapLoader {
+        in_flight: AtomicU64,
+        peak: Arc<AtomicU64>,
+    }
+    impl ObjectResourceLoader for OverlapLoader {
+        fn load(
+            &self,
+            path: PathBuf,
+            downsample_factor: f32,
+        ) -> anyhow::Result<ControlObjectResource> {
+            let now = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+            self.peak.fetch_max(now, Ordering::AcqRel);
+            thread::sleep(Duration::from_millis(60));
+            self.in_flight.fetch_sub(1, Ordering::AcqRel);
+            Ok(ControlObjectResource {
+                source: path,
+                downsample_factor,
+                features: Arc::new(Vec::new()),
+                property_names: Arc::new(Vec::new()),
+                property_source: Arc::new(crate::model::EmptyControlObjectPropertySource),
+                numeric_summaries: Arc::new(Default::default()),
+                memory_diagnostics: Arc::new(Default::default()),
+                renderer_payload: None,
+            })
+        }
+    }
+
+    let peak = Arc::new(AtomicU64::new(0));
+    let events = EventHub::shared();
+    let resources = ResourceRegistry::shared(events);
+    let channels = spawn_control_actor_with_services(
+        Arc::new(|| {}),
+        resources,
+        Some(Arc::new(OverlapLoader {
+            in_flight: AtomicU64::new(0),
+            peak: Arc::clone(&peak),
+        })),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let (project_path, first_source) = temporary_preload_paths("concurrent");
+    let sources = (0..4)
+        .map(|index| first_source.with_extension(format!("{index}.parquet")))
+        .collect::<Vec<_>>();
+    let (create, create_rx) = request("project.create", json!({}));
+    channels.request_tx.send(create).unwrap();
+    create_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    for (index, source) in sources.iter().enumerate() {
+        std::fs::write(source, b"fixture").unwrap();
+        let (add, add_rx) = request(
+            "project.rois.add",
+            json!({
+                "id":format!("roi-{index}"),
+                "path":format!("/tmp/concurrent-roi-{index}.zarr"),
+                "segmentation_path":source,
+            }),
+        );
+        channels.request_tx.send(add).unwrap();
+        add_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+    let (save, save_rx) = request("project.save_as", json!({"path":project_path}));
+    channels.request_tx.send(save).unwrap();
+    save_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    let (start, start_rx) = request("project.objects.preload.start", json!({}));
+    channels.request_tx.send(start).unwrap();
+    let completed = start_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed["preload"]["cached"], 4);
+    assert!(
+        peak.load(Ordering::Acquire) >= 2,
+        "sources were loaded one at a time"
+    );
+
+    let _ = std::fs::remove_file(project_path);
+    for source in sources {
+        let _ = std::fs::remove_file(source);
+    }
+}

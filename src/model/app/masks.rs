@@ -245,7 +245,7 @@ impl AppModel {
             "dirty": dataset.masks.dirty(),
             "dataset_local": local_path.is_some(),
             "dataset_path": local_path.map(|path| path.to_string_lossy().into_owned()),
-            "project_path": self.project_snapshot().saved_path.map(|path| path.to_string_lossy().into_owned()),
+            "project_path": self.project_snapshot().saved_path.as_ref().map(|path| path.to_string_lossy().into_owned()),
             "live_layer_count": dataset.masks.export_layers(None)?.len(),
             "persisted_layer_count": self.project.mask_layer_count_for_source(&dataset.descriptor.source),
         }))

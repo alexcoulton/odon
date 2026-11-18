@@ -189,3 +189,54 @@ fn camera_moves_change_typed_navigation_but_not_the_workspace_fingerprint() {
     let unlinked = publish(&mut model);
     assert_ne!(unlinked.fingerprints.workspace, moved.fingerprints.workspace);
 }
+
+#[test]
+fn projections_share_the_project_snapshot_until_the_project_changes() {
+    let (dataset, _) = OmeZarrDataset::open_local(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/synthetic_5ch.ome.zarr"),
+    )
+    .expect("fixture");
+    let mut model = AppModel::project();
+    model.install_dataset(&dataset);
+    let (projection_tx, projection_rx) = crossbeam_channel::bounded(1);
+    let diagnostics = ActorDiagnostics::shared();
+    let wake: UiWake = Arc::new(|| {});
+    let publish = |model: &mut AppModel| {
+        publish_projection(
+            model,
+            None,
+            &projection_tx,
+            &projection_rx,
+            &wake,
+            &diagnostics,
+        );
+        projection_rx.recv().unwrap()
+    };
+
+    let before = publish(&mut model);
+    let viewport_id = before.navigation.viewports[0].viewport_id.clone();
+    model
+        .dispatch(
+            "viewer.viewports.camera.set",
+            &json!({"viewport_id":viewport_id,"center_world_lvl0":[1.0,2.0],"zoom":2.0}),
+        )
+        .unwrap()
+        .unwrap();
+    let moved = publish(&mut model);
+    assert!(
+        Arc::ptr_eq(&before.project, &moved.project),
+        "a camera step must not copy the project"
+    );
+
+    model
+        .dispatch(
+            "project.rois.add",
+            &json!({"id":"shared-snapshot","path":"/tmp/shared-snapshot.ome.zarr"}),
+        )
+        .unwrap()
+        .unwrap();
+    let edited = publish(&mut model);
+    assert!(!Arc::ptr_eq(&moved.project, &edited.project));
+    // The projection published earlier still sees the project as it was.
+    assert_eq!(moved.project.rois.len() + 1, edited.project.rois.len());
+}

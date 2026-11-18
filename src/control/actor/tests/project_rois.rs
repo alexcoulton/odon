@@ -86,7 +86,7 @@ fn duplicate_roi_ids_select_by_source_without_changing_project_records() {
     let projection = channels.presentation_rx.try_recv().unwrap();
     assert_eq!(projection.project.selected_source_keys, keys[1..].to_vec());
     assert_eq!(
-        serde_json::to_value(projection.project.rois).unwrap(),
+        serde_json::to_value(&projection.project.rois).unwrap(),
         serde_json::to_value(rois).unwrap()
     );
 }

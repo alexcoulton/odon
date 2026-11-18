@@ -48,7 +48,7 @@ pub(super) fn begin_lifecycle_request(
             reject_worker_submission(request, diagnostics);
             return;
         }
-        let Some(path) = model.project_snapshot().saved_path else {
+        let Some(path) = model.project_snapshot().saved_path.clone() else {
             reject_actor_request(
                 request,
                 diagnostics,

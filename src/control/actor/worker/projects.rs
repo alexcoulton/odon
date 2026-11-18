@@ -39,30 +39,46 @@ pub(in crate::control::actor) fn preload_project_objects(
             "project has no preload-eligible Parquet or GeoParquet segmentation paths on disk"
         );
     }
-    let mut resources = Vec::new();
-    let mut failures = Vec::new();
     let total = sources.len();
     report_progress(0, total);
-    for (index, source) in sources.iter().enumerate() {
-        if request
+
+    let cancelled = || {
+        request
             .task_id
             .as_deref()
             .and_then(|task_id| request.task_registry.get(task_id).ok())
             .is_some_and(|task| task.state == TaskState::Cancelled)
-        {
-            break;
-        }
-        match loader.load_with_options(source.path.clone(), 1.0, Some(settings.worker_options())) {
-            Ok(resource) => resources.push((source.path.clone(), resource)),
-            Err(error) => failures.push((source.path.clone(), error.to_string())),
-        }
-        report_progress(index + 1, total);
-        if let Some(task_id) = request.task_id.as_deref() {
-            let _ = request.task_registry.progress(
-                task_id,
-                Some((index + 1) as f64 / total as f64),
-                format!("preloaded {} of {total} project object sources", index + 1),
-            );
+    };
+    let paths = sources
+        .iter()
+        .map(|source| source.path.clone())
+        .collect::<Vec<_>>();
+    let outcomes = super::super::mosaics::load_object_sources_concurrently(
+        loader,
+        &paths,
+        1.0,
+        &settings.worker_options(),
+        &cancelled,
+        &mut |done| {
+            report_progress(done, total);
+            if let Some(task_id) = request.task_id.as_deref() {
+                let _ = request.task_registry.progress(
+                    task_id,
+                    Some(done as f64 / total as f64),
+                    format!("preloaded {done} of {total} project object sources"),
+                );
+            }
+        },
+    );
+
+    let mut resources = Vec::new();
+    let mut failures = Vec::new();
+    for (source, outcome) in sources.iter().zip(outcomes) {
+        match outcome {
+            Some(Ok(resource)) => resources.push((source.path.clone(), resource)),
+            Some(Err(error)) => failures.push((source.path.clone(), error.to_string())),
+            // Never started because the preload was cancelled.
+            None => {}
         }
     }
     Ok(ProjectObjectPreloadWorkerResult {

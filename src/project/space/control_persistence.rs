@@ -188,10 +188,34 @@ impl ProjectSpace {
         }
     }
 
+    /// Applies the project carried by a projection. The actor hands out the same shared
+    /// snapshot until the project actually changes, so a projection published for an unrelated
+    /// reason (a camera step, a contrast change) is recognised here and costs nothing.
+    pub fn apply_control_actor_shared_project_projection(
+        &mut self,
+        snapshot: &std::sync::Arc<odon::model::ProjectModelSnapshot>,
+    ) {
+        if self
+            .applied_control_actor_project
+            .as_ref()
+            .is_some_and(|applied| std::sync::Arc::ptr_eq(applied, snapshot))
+            // Guard against anything having touched the local copy since it was applied.
+            && self.config_generation == snapshot.config_generation
+            && self.config.rois.len() == snapshot.rois.len()
+        {
+            return;
+        }
+        self.apply_control_actor_project_projection(snapshot);
+        // Holding the snapshot keeps its allocation alive, so pointer identity stays meaningful.
+        self.applied_control_actor_project = Some(std::sync::Arc::clone(snapshot));
+    }
+
     pub fn apply_control_actor_project_projection(
         &mut self,
         snapshot: &odon::model::ProjectModelSnapshot,
     ) {
+        // A direct apply supersedes whatever shared snapshot was recorded as applied.
+        self.applied_control_actor_project = None;
         if snapshot.load_generation > self.control_actor_load_generation {
             match serde_json::from_value::<ProjectState>(snapshot.state.clone()) {
                 Ok(state) => {
